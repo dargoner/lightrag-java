@@ -19,12 +19,16 @@ public final class DocumentIngestor {
     private final DocumentStore documentStore;
     private final ChunkStore chunkStore;
     private final Chunker chunker;
+    private final RollbackCapableDocumentStore rollbackDocumentStore;
+    private final RollbackCapableChunkStore rollbackChunkStore;
 
     public DocumentIngestor(StorageProvider storageProvider, Chunker chunker) {
         var storage = Objects.requireNonNull(storageProvider, "storageProvider");
         this.documentStore = Objects.requireNonNull(storage.documentStore(), "storageProvider.documentStore()");
         this.chunkStore = Objects.requireNonNull(storage.chunkStore(), "storageProvider.chunkStore()");
         this.chunker = Objects.requireNonNull(chunker, "chunker");
+        this.rollbackDocumentStore = requireRollbackDocumentStore(documentStore);
+        this.rollbackChunkStore = requireRollbackChunkStore(chunkStore);
     }
 
     public List<Chunk> ingest(List<Document> documents) {
@@ -121,33 +125,31 @@ public final class DocumentIngestor {
     }
 
     private void restoreDocumentStore(List<DocumentStore.DocumentRecord> snapshot) {
-        if (documentStore instanceof RestorableDocumentStore restorableDocumentStore) {
-            restorableDocumentStore.restoreDocuments(snapshot);
-            return;
-        }
-        if (documentStore instanceof InMemoryDocumentStore inMemoryDocumentStore) {
-            replaceBackingMap(inMemoryDocumentStore, "documents", indexDocuments(snapshot));
-            return;
-        }
-        assertStoreMatchesSnapshot(documentStore.list(), snapshot, "documentStore");
+        rollbackDocumentStore.restoreDocuments(snapshot);
     }
 
     private void restoreChunkStore(List<ChunkStore.ChunkRecord> snapshot) {
-        if (chunkStore instanceof RestorableChunkStore restorableChunkStore) {
-            restorableChunkStore.restoreChunks(snapshot);
-            return;
-        }
-        if (chunkStore instanceof InMemoryChunkStore inMemoryChunkStore) {
-            replaceBackingMap(inMemoryChunkStore, "chunks", indexChunks(snapshot));
-            return;
-        }
-        assertStoreMatchesSnapshot(chunkStore.list(), snapshot, "chunkStore");
+        rollbackChunkStore.restoreChunks(snapshot);
     }
 
-    private static void assertStoreMatchesSnapshot(List<?> actual, List<?> snapshot, String storeName) {
-        if (!actual.equals(snapshot)) {
-            throw new IllegalStateException(storeName + " does not support rollback");
+    private static RollbackCapableDocumentStore requireRollbackDocumentStore(DocumentStore documentStore) {
+        if (documentStore instanceof RollbackCapableDocumentStore rollbackCapableDocumentStore) {
+            return rollbackCapableDocumentStore;
         }
+        if (documentStore instanceof InMemoryDocumentStore inMemoryDocumentStore) {
+            return new InMemoryRollbackDocumentStore(inMemoryDocumentStore);
+        }
+        throw new IllegalStateException("DocumentIngestor requires rollback-capable documentStore");
+    }
+
+    private static RollbackCapableChunkStore requireRollbackChunkStore(ChunkStore chunkStore) {
+        if (chunkStore instanceof RollbackCapableChunkStore rollbackCapableChunkStore) {
+            return rollbackCapableChunkStore;
+        }
+        if (chunkStore instanceof InMemoryChunkStore inMemoryChunkStore) {
+            return new InMemoryRollbackChunkStore(inMemoryChunkStore);
+        }
+        throw new IllegalStateException("DocumentIngestor requires rollback-capable chunkStore");
     }
 
     private static Map<String, DocumentStore.DocumentRecord> indexDocuments(List<DocumentStore.DocumentRecord> snapshot) {
@@ -179,11 +181,77 @@ public final class DocumentIngestor {
         }
     }
 
-    interface RestorableDocumentStore extends DocumentStore {
+    public interface RollbackCapableDocumentStore extends DocumentStore {
         void restoreDocuments(List<DocumentStore.DocumentRecord> snapshot);
     }
 
-    interface RestorableChunkStore extends ChunkStore {
+    public interface RollbackCapableChunkStore extends ChunkStore {
         void restoreChunks(List<ChunkStore.ChunkRecord> snapshot);
+    }
+
+    private static final class InMemoryRollbackDocumentStore implements RollbackCapableDocumentStore {
+        private final InMemoryDocumentStore delegate;
+
+        private InMemoryRollbackDocumentStore(InMemoryDocumentStore delegate) {
+            this.delegate = delegate;
+        }
+
+        @Override
+        public void save(DocumentStore.DocumentRecord document) {
+            delegate.save(document);
+        }
+
+        @Override
+        public java.util.Optional<DocumentStore.DocumentRecord> load(String documentId) {
+            return delegate.load(documentId);
+        }
+
+        @Override
+        public List<DocumentStore.DocumentRecord> list() {
+            return delegate.list();
+        }
+
+        @Override
+        public boolean contains(String documentId) {
+            return delegate.contains(documentId);
+        }
+
+        @Override
+        public void restoreDocuments(List<DocumentStore.DocumentRecord> snapshot) {
+            replaceBackingMap(delegate, "documents", indexDocuments(snapshot));
+        }
+    }
+
+    private static final class InMemoryRollbackChunkStore implements RollbackCapableChunkStore {
+        private final InMemoryChunkStore delegate;
+
+        private InMemoryRollbackChunkStore(InMemoryChunkStore delegate) {
+            this.delegate = delegate;
+        }
+
+        @Override
+        public void save(ChunkStore.ChunkRecord chunk) {
+            delegate.save(chunk);
+        }
+
+        @Override
+        public java.util.Optional<ChunkStore.ChunkRecord> load(String chunkId) {
+            return delegate.load(chunkId);
+        }
+
+        @Override
+        public List<ChunkStore.ChunkRecord> list() {
+            return delegate.list();
+        }
+
+        @Override
+        public List<ChunkStore.ChunkRecord> listByDocument(String documentId) {
+            return delegate.listByDocument(documentId);
+        }
+
+        @Override
+        public void restoreChunks(List<ChunkStore.ChunkRecord> snapshot) {
+            replaceBackingMap(delegate, "chunks", indexChunks(snapshot));
+        }
     }
 }
