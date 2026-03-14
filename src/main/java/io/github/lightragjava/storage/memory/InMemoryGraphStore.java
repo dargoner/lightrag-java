@@ -3,18 +3,23 @@ package io.github.lightragjava.storage.memory;
 import io.github.lightragjava.storage.GraphStore;
 
 import java.util.List;
+import java.util.Map;
 import java.util.Objects;
 import java.util.Optional;
 import java.util.Set;
-import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ConcurrentNavigableMap;
 import java.util.concurrent.ConcurrentSkipListMap;
-import java.util.concurrent.ConcurrentSkipListSet;
+import java.util.HashMap;
+import java.util.TreeMap;
+import java.util.TreeSet;
+import java.util.concurrent.locks.ReadWriteLock;
+import java.util.concurrent.locks.ReentrantReadWriteLock;
 
 public final class InMemoryGraphStore implements GraphStore {
     private final ConcurrentNavigableMap<String, EntityRecord> entities = new ConcurrentSkipListMap<>();
-    private final ConcurrentNavigableMap<String, RelationRecord> relations = new ConcurrentSkipListMap<>();
-    private final ConcurrentHashMap<String, Set<String>> relationIdsByEntity = new ConcurrentHashMap<>();
+    private final Map<String, RelationRecord> relations = new TreeMap<>();
+    private final Map<String, Set<String>> relationIdsByEntity = new HashMap<>();
+    private final ReadWriteLock relationLock = new ReentrantReadWriteLock();
 
     @Override
     public void saveEntity(EntityRecord entity) {
@@ -23,15 +28,21 @@ public final class InMemoryGraphStore implements GraphStore {
     }
 
     @Override
-    public synchronized void saveRelation(RelationRecord relation) {
+    public void saveRelation(RelationRecord relation) {
         var record = Objects.requireNonNull(relation, "relation");
-        var previous = relations.put(record.id(), record);
-        if (previous != null) {
-            removeRelationEndpoint(previous.sourceEntityId(), previous.id());
-            removeRelationEndpoint(previous.targetEntityId(), previous.id());
+        var writeLock = relationLock.writeLock();
+        writeLock.lock();
+        try {
+            var previous = relations.put(record.id(), record);
+            if (previous != null) {
+                removeRelationEndpoint(previous.sourceEntityId(), previous.id());
+                removeRelationEndpoint(previous.targetEntityId(), previous.id());
+            }
+            addRelationEndpoint(record.sourceEntityId(), record.id());
+            addRelationEndpoint(record.targetEntityId(), record.id());
+        } finally {
+            writeLock.unlock();
         }
-        addRelationEndpoint(record.sourceEntityId(), record.id());
-        addRelationEndpoint(record.targetEntityId(), record.id());
     }
 
     @Override
@@ -41,7 +52,13 @@ public final class InMemoryGraphStore implements GraphStore {
 
     @Override
     public Optional<RelationRecord> loadRelation(String relationId) {
-        return Optional.ofNullable(relations.get(Objects.requireNonNull(relationId, "relationId")));
+        var readLock = relationLock.readLock();
+        readLock.lock();
+        try {
+            return Optional.ofNullable(relations.get(Objects.requireNonNull(relationId, "relationId")));
+        } finally {
+            readLock.unlock();
+        }
     }
 
     @Override
@@ -51,30 +68,46 @@ public final class InMemoryGraphStore implements GraphStore {
 
     @Override
     public List<RelationRecord> allRelations() {
-        return List.copyOf(relations.values());
+        var readLock = relationLock.readLock();
+        readLock.lock();
+        try {
+            return List.copyOf(relations.values());
+        } finally {
+            readLock.unlock();
+        }
     }
 
     @Override
     public List<RelationRecord> findRelations(String entityId) {
         var targetEntityId = Objects.requireNonNull(entityId, "entityId");
-        var relationIds = relationIdsByEntity.get(targetEntityId);
-        if (relationIds == null || relationIds.isEmpty()) {
-            return List.of();
+        var readLock = relationLock.readLock();
+        readLock.lock();
+        try {
+            var relationIds = relationIdsByEntity.get(targetEntityId);
+            if (relationIds == null || relationIds.isEmpty()) {
+                return List.of();
+            }
+            return relationIds.stream()
+                .map(relations::get)
+                .filter(Objects::nonNull)
+                .toList();
+        } finally {
+            readLock.unlock();
         }
-        return relationIds.stream()
-            .map(relations::get)
-            .filter(Objects::nonNull)
-            .toList();
     }
 
     private void addRelationEndpoint(String entityId, String relationId) {
-        relationIdsByEntity.computeIfAbsent(entityId, ignored -> new ConcurrentSkipListSet<>()).add(relationId);
+        relationIdsByEntity.computeIfAbsent(entityId, ignored -> new TreeSet<>()).add(relationId);
     }
 
     private void removeRelationEndpoint(String entityId, String relationId) {
-        relationIdsByEntity.computeIfPresent(entityId, (ignored, relationIds) -> {
-            relationIds.remove(relationId);
-            return relationIds.isEmpty() ? null : relationIds;
-        });
+        var relationIds = relationIdsByEntity.get(entityId);
+        if (relationIds == null) {
+            return;
+        }
+        relationIds.remove(relationId);
+        if (relationIds.isEmpty()) {
+            relationIdsByEntity.remove(entityId);
+        }
     }
 }
