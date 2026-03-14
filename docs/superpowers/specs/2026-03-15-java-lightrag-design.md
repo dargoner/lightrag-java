@@ -91,7 +91,7 @@ Example shape:
 LightRag rag = LightRag.builder()
     .chatModel(chatModel)
     .embeddingModel(embeddingModel)
-    .storage(storage)
+    .storage(storageProvider)
     .build();
 
 rag.ingest(documents);
@@ -105,6 +105,8 @@ QueryResult result = rag.query(
 ```
 
 This layer must remain small and stable.
+
+The builder accepts a single `StorageProvider` rather than individual store instances. This keeps the facade small while preserving replaceable internal store contracts.
 
 ### Indexing Layer
 
@@ -159,6 +161,16 @@ The first version should ship with:
 - `InMemoryGraphStore`
 - `InMemoryVectorStore`
 - `FileSnapshotStore`
+
+The public builder should depend on a composite `StorageProvider` with the following contract:
+
+- `documentStore()`
+- `chunkStore()`
+- `graphStore()`
+- `vectorStore()`
+- `snapshotStore()`
+
+This resolves the facade boundary while keeping individual stores independently replaceable.
 
 ### Model Layer
 
@@ -269,6 +281,7 @@ The first version should define narrow interfaces for external dependencies and 
 
 ### Storage SPI
 
+- `StorageProvider`
 - `DocumentStore`
 - `ChunkStore`
 - `GraphStore`
@@ -276,6 +289,19 @@ The first version should define narrow interfaces for external dependencies and 
 - `SnapshotStore`
 
 The first version should not model every storage concern from Python LightRAG. It should only expose interfaces necessary for the Java SDK core path.
+
+## Ingestion Semantics
+
+The first version should make document identity behavior explicit and deterministic.
+
+Rules:
+
+- `Document.id` is required and must be unique within a repository snapshot.
+- `ingest()` rejects duplicate document IDs already present in storage.
+- `ingest()` rejects duplicate document IDs within the same request batch.
+- update, delete, and incremental re-index are out of scope for v1.
+
+This keeps indexing deterministic and matches the non-goal of incremental updates in the first version.
 
 ## Indexing Flow
 
@@ -301,6 +327,33 @@ The extraction contract should:
 - validate malformed model responses
 - keep raw extraction traces for debugging when enabled
 
+The extraction pipeline should define an explicit intermediate payload:
+
+`ExtractionResult`
+
+- `entities`
+- `relations`
+- `warnings`
+
+`ExtractedEntity`
+
+- required: `name`
+- optional: `type`, `description`, `aliases`
+
+`ExtractedRelation`
+
+- required: `sourceEntityName`, `targetEntityName`, `type`
+- optional: `description`, `weight`
+
+Normalization rules before graph merge:
+
+- trim whitespace
+- normalize case for merge keys, but preserve original casing for display
+- discard empty entity names
+- discard relations with missing endpoints or missing relation type
+- default missing descriptions to an empty string
+- default missing relation weight to `1.0`
+
 ### Step 5: Assemble and Merge Graph
 
 Merge extracted entities and relations into the graph.
@@ -321,6 +374,16 @@ Create summary text for entities and relations, then embed them for graph-orient
 
 Write in-memory state to a file snapshot to support restart and reload.
 
+Persistence lifecycle for v1:
+
+- `LightRagBuilder.loadFromSnapshot(path)` loads a repository snapshot during construction
+- successful `ingest()` automatically triggers snapshot save when snapshot persistence is configured
+- query execution never mutates snapshot state
+- snapshot writes use atomic replace semantics: write temp file, fsync if supported, then rename
+- each snapshot contains a manifest with schema version and creation timestamp
+
+The first version should treat snapshot persistence as repository-level checkpointing, not as a transaction log.
+
 ## Query Modes
 
 ### Local
@@ -333,6 +396,14 @@ Focus on entity-centric retrieval:
 
 Best for focused questions about specific concepts, actors, or objects.
 
+Retrieval contract:
+
+- search entity embeddings using the query embedding
+- take the top `topK` entities by vector score
+- expand one-hop graph neighbors for those entities
+- gather supporting chunks referenced by selected entities and relations
+- trim chunks to `chunkTopK` after score merge
+
 ### Global
 
 Focus on relation-centric or theme-centric retrieval:
@@ -343,15 +414,46 @@ Focus on relation-centric or theme-centric retrieval:
 
 Best for summarization or cross-document questions.
 
+Retrieval contract:
+
+- search relation embeddings using the query embedding
+- take the top `topK` relations by vector score
+- collect endpoint entities for those relations
+- gather supporting chunks referenced by the selected relations
+- trim chunks to `chunkTopK` after score merge
+
 ### Hybrid
 
 Combine local and global graph retrieval, then de-duplicate and trim context.
+
+Retrieval contract:
+
+- execute `local` and `global`
+- merge entities, relations, and chunks by ID
+- score merged items with max-score retention for v1
+- apply final trimming using `topK` for entities or relations and `chunkTopK` for chunks
 
 ### Mix
 
 Combine graph retrieval with chunk-level vector retrieval.
 
 This should be the default mode for v1 because it is the most generally useful and resilient.
+
+Retrieval contract:
+
+- execute `hybrid`
+- independently search chunk embeddings with the query embedding
+- merge graph-derived chunks and vector-retrieved chunks by chunk ID
+- keep graph entities and relations from `hybrid`
+- apply final chunk trimming using `chunkTopK`
+
+For v1, ranking signals should be kept simple and explicit:
+
+- entity score: entity embedding similarity
+- relation score: relation embedding similarity
+- chunk score from graph path: max contributing entity or relation score
+- chunk score from direct vector search: chunk embedding similarity
+- merged chunk score in `mix`: max of graph-derived and direct vector score
 
 ## Query Execution Flow
 
@@ -361,6 +463,13 @@ This should be the default mode for v1 because it is the most generally useful a
 4. Assemble context with token-budget-aware trimming.
 5. Generate the answer using the chat model.
 6. Return answer plus optional debugging metadata.
+
+Parameter semantics for v1:
+
+- `topK` means entity count in `local`
+- `topK` means relation count in `global`
+- `topK` applies to each branch before merge in `hybrid`
+- `chunkTopK` is the final retained chunk count after merge and trimming in all modes that return chunks
 
 ## Error Handling
 
