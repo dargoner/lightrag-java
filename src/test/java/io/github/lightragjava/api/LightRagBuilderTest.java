@@ -8,6 +8,8 @@ import io.github.lightragjava.storage.GraphStore;
 import io.github.lightragjava.storage.SnapshotStore;
 import io.github.lightragjava.storage.StorageProvider;
 import io.github.lightragjava.storage.VectorStore;
+import io.github.lightragjava.types.Document;
+import io.github.lightragjava.types.ExtractedRelation;
 import org.junit.jupiter.api.Test;
 
 import java.nio.file.Path;
@@ -143,6 +145,18 @@ class LightRagBuilderTest {
         assertThat(result.contexts()).containsExactly(new QueryResult.Context("chunk-1", "supporting context"));
         assertThatThrownBy(() -> result.contexts().add(new QueryResult.Context("chunk-2", "more context")))
             .isInstanceOf(UnsupportedOperationException.class);
+    }
+
+    @Test
+    void documentRequiresNonBlankId() {
+        assertThatThrownBy(() -> new Document(" ", "Title", "Body", Map.of()))
+            .isInstanceOf(IllegalArgumentException.class);
+    }
+
+    @Test
+    void extractedRelationRequiresSourceTargetAndType() {
+        assertThatThrownBy(() -> new ExtractedRelation("Alice", "", "works_with", "", null))
+            .isInstanceOf(IllegalArgumentException.class);
     }
 
     private static final class FakeChatModel implements ChatModel {
