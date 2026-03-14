@@ -1,5 +1,6 @@
 package io.github.lightragjava.api;
 
+import com.fasterxml.jackson.databind.ObjectMapper;
 import io.github.lightragjava.model.ChatModel;
 import io.github.lightragjava.model.EmbeddingModel;
 import io.github.lightragjava.storage.ChunkStore;
@@ -22,6 +23,8 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 class LightRagBuilderTest {
+    private static final ObjectMapper OBJECT_MAPPER = new ObjectMapper();
+
 
     @Test
     void buildsWithRequiredDependencies() {
@@ -157,6 +160,35 @@ class LightRagBuilderTest {
     void extractedRelationRequiresSourceTargetAndType() {
         assertThatThrownBy(() -> new ExtractedRelation("Alice", "", "works_with", "", null))
             .isInstanceOf(IllegalArgumentException.class);
+    }
+
+    @Test
+    void extractedRelationDefaultsMissingWeightWhenDeserialized() throws Exception {
+        var relation = OBJECT_MAPPER.readValue("""
+            {
+              "sourceEntityName": "Alice",
+              "targetEntityName": "Bob",
+              "type": "works_with",
+              "description": "collaboration"
+            }
+            """, ExtractedRelation.class);
+
+        assertThat(relation.weight()).isEqualTo(1.0d);
+    }
+
+    @Test
+    void extractedRelationPreservesExplicitZeroWeightWhenDeserialized() throws Exception {
+        var relation = OBJECT_MAPPER.readValue("""
+            {
+              "sourceEntityName": "Alice",
+              "targetEntityName": "Bob",
+              "type": "works_with",
+              "description": "collaboration",
+              "weight": 0.0
+            }
+            """, ExtractedRelation.class);
+
+        assertThat(relation.weight()).isEqualTo(0.0d);
     }
 
     private static final class FakeChatModel implements ChatModel {

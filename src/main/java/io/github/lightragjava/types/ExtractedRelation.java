@@ -7,26 +7,17 @@ public record ExtractedRelation(
     String targetEntityName,
     String type,
     String description,
-    double weight
+    Double weight
 ) {
     public ExtractedRelation {
         sourceEntityName = requireNonBlank(sourceEntityName, "sourceEntityName");
         targetEntityName = requireNonBlank(targetEntityName, "targetEntityName");
         type = requireNonBlank(type, "type");
         description = description == null ? "" : description.strip();
+        weight = weight == null ? 1.0d : weight;
         if (!Double.isFinite(weight)) {
             throw new IllegalArgumentException("weight must be finite");
         }
-    }
-
-    public ExtractedRelation(
-        String sourceEntityName,
-        String targetEntityName,
-        String type,
-        String description,
-        Double weight
-    ) {
-        this(sourceEntityName, targetEntityName, type, description, weight == null ? 1.0d : weight.doubleValue());
     }
 
     private static String requireNonBlank(String value, String fieldName) {
