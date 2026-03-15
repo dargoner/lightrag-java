@@ -38,6 +38,49 @@ System.out.println(result.answer());
 
 For tests, demos, and ephemeral runs, the in-memory provider is still the fastest option. For restart-safe ingestion and durable local state, use the PostgreSQL provider described below.
 
+## Rerank
+
+The Java SDK supports an optional second-stage chunk reranker aligned with upstream LightRAG's rerank concept.
+
+Configure it once on the builder:
+
+```java
+var rag = LightRag.builder()
+    .chatModel(chatModel)
+    .embeddingModel(embeddingModel)
+    .rerankModel(request -> request.candidates().stream()
+        .sorted(java.util.Comparator.comparing(RerankModel.RerankCandidate::id).reversed())
+        .map(candidate -> new RerankModel.RerankResult(candidate.id(), 1.0d))
+        .toList())
+    .storage(storage)
+    .build();
+```
+
+Rerank is enabled by default on each query request and reorders the final chunk contexts before answer generation:
+
+```java
+var result = rag.query(QueryRequest.builder()
+    .query("Who works with Bob?")
+    .chunkTopK(8)
+    .build());
+```
+
+Disable it per request when needed:
+
+```java
+var result = rag.query(QueryRequest.builder()
+    .query("Who works with Bob?")
+    .chunkTopK(8)
+    .enableRerank(false)
+    .build());
+```
+
+Notes:
+
+- rerank is especially useful with `MIX` queries because the engine expands the internal candidate window before reranking
+- rerank changes chunk order only; exposed context IDs/texts still come from the original retrieval records
+- if `enableRerank(true)` is used without configuring a rerank model, Java treats it as a deterministic no-op in this phase
+
 ## Document Status
 
 The SDK exposes per-document processing status through typed APIs on `LightRag`:
@@ -253,6 +296,7 @@ With the PostgreSQL and PostgreSQL+Neo4j backends, snapshots remain delegated to
 - Document-status APIs support querying per-document `PROCESSING`, `PROCESSED`, and `FAILED` outcomes.
 - Snapshot persistence still uses the `SnapshotStore` SPI and remains file-based by default.
 - Query modes supported today: `LOCAL`, `GLOBAL`, `HYBRID`, and `MIX`.
+- Optional builder-level rerank support can reorder retrieved chunk contexts before answer generation.
 - Extraction and graph merge rules are intentionally simple and deterministic.
 - OpenAI-compatible adapters support standard `/chat/completions` and `/embeddings` endpoints.
 - A pure Neo4j-only storage provider is not bundled in this phase.
