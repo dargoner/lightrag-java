@@ -93,6 +93,26 @@ class PostgresVectorStoreTest {
         }
     }
 
+    @Test
+    void returnsEmptyForNonPositiveTopKBeforeValidatingDimensions() {
+        try (
+            var container = newPostgresContainer();
+            var resources = newStoreResources(container);
+        ) {
+            assertThat(resources.store().search("chunks", List.of(1.0d, 0.0d), 0)).isEmpty();
+        }
+    }
+
+    @Test
+    void returnsEmptyForMissingNamespaceBeforeValidatingDimensions() {
+        try (
+            var container = newPostgresContainer();
+            var resources = newStoreResources(container);
+        ) {
+            assertThat(resources.store().search("missing", List.of(1.0d, 0.0d), 1)).isEmpty();
+        }
+    }
+
     private static PostgreSQLContainer<?> newPostgresContainer() {
         var image = DockerImageName.parse("pgvector/pgvector:pg16")
             .asCompatibleSubstituteFor("postgres");

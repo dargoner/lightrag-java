@@ -59,13 +59,17 @@ public final class PostgresVectorStore implements VectorStore {
     @Override
     public List<VectorMatch> search(String namespace, List<Double> queryVector, int topK) {
         var targetNamespace = Objects.requireNonNull(namespace, "namespace");
-        var query = toPgVector(Objects.requireNonNull(queryVector, "queryVector"));
         if (topK <= 0) {
             return List.of();
         }
 
         return connectionAccess.withConnection(connection -> {
+            if (!namespaceExists(connection, targetNamespace)) {
+                return List.of();
+            }
+
             PGvector.registerTypes(connection);
+            var query = toPgVector(Objects.requireNonNull(queryVector, "queryVector"));
             try (var statement = connection.prepareStatement(
                 """
                 SELECT vector_id, -(embedding <#> ?) AS score
@@ -125,6 +129,22 @@ public final class PostgresVectorStore implements VectorStore {
             resultSet.getString("vector_id"),
             toDoubleList(vector.toArray())
         );
+    }
+
+    private boolean namespaceExists(java.sql.Connection connection, String namespace) throws SQLException {
+        try (var statement = connection.prepareStatement(
+            """
+            SELECT 1
+            FROM %s
+            WHERE namespace = ?
+            LIMIT 1
+            """.formatted(tableName)
+        )) {
+            statement.setString(1, namespace);
+            try (var resultSet = statement.executeQuery()) {
+                return resultSet.next();
+            }
+        }
     }
 
     private PGvector toPgVector(List<Double> vector) {
