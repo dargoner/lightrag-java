@@ -67,7 +67,8 @@ public final class PostgresStorageProvider implements AtomicStorageProvider, Aut
 
     @Override
     public <T> T writeAtomically(AtomicOperation<T> operation) {
-        return Objects.requireNonNull(operation, "operation").execute(ATOMIC_VIEW);
+        Objects.requireNonNull(operation, "operation");
+        throw new UnsupportedOperationException("Atomic writes are not implemented yet");
     }
 
     @Override

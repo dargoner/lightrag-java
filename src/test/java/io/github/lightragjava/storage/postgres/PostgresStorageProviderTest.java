@@ -15,14 +15,13 @@ import java.util.ArrayList;
 import java.util.List;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 class PostgresStorageProviderTest {
     @Test
     @DisplayName("bootstraps the PostgreSQL schema and required tables")
     void bootstrapsSchemaAndRequiredTables() throws SQLException {
-        PostgreSQLContainer<?> container = new PostgreSQLContainer<>(
-            DockerImageName.parse("pgvector/pgvector:pg16").asCompatibleSubstituteFor("postgres")
-        );
+        PostgreSQLContainer<?> container = newPostgresContainer();
         container.start();
 
         PostgresStorageConfig config = new PostgresStorageConfig(
@@ -64,11 +63,121 @@ class PostgresStorageProviderTest {
     }
 
     @Test
+    void rejectsVectorDimensionDriftOnExistingSchema() {
+        PostgreSQLContainer<?> container = newPostgresContainer();
+        container.start();
+
+        SnapshotStore snapshotStore = new InMemorySnapshotStore();
+        PostgresStorageConfig original = new PostgresStorageConfig(
+            container.getJdbcUrl(),
+            container.getUsername(),
+            container.getPassword(),
+            "lightrag",
+            3,
+            "rag_"
+        );
+        PostgresStorageConfig drifted = new PostgresStorageConfig(
+            container.getJdbcUrl(),
+            container.getUsername(),
+            container.getPassword(),
+            "lightrag",
+            4,
+            "rag_"
+        );
+
+        try (container; PostgresStorageProvider ignored = new PostgresStorageProvider(original, snapshotStore)) {
+            assertThatThrownBy(() -> new PostgresStorageProvider(drifted, snapshotStore))
+                .isInstanceOf(IllegalStateException.class)
+                .hasMessageContaining("vector dimensions");
+        }
+    }
+
+    @Test
+    void rollsBackBootstrapWhenALaterStatementFails() throws SQLException {
+        PostgreSQLContainer<?> container = newPostgresContainer();
+        container.start();
+
+        PostgresStorageConfig config = new PostgresStorageConfig(
+            container.getJdbcUrl(),
+            container.getUsername(),
+            container.getPassword(),
+            "lightrag",
+            3,
+            "rag_"
+        );
+
+        try (container; HikariDataSource dataSource = newDataSource(config)) {
+            PostgresSchemaManager manager = new PostgresSchemaManager(
+                dataSource,
+                config,
+                List.of(
+                    "CREATE SCHEMA IF NOT EXISTS " + config.schemaName(),
+                    """
+                    CREATE TABLE IF NOT EXISTS %s (
+                        id TEXT PRIMARY KEY
+                    )
+                    """.formatted(config.qualifiedTableName("documents")),
+                    "SELECT missing_function()"
+                )
+            );
+
+            assertThatThrownBy(manager::bootstrap)
+                .isInstanceOf(IllegalStateException.class)
+                .hasMessageContaining("bootstrap");
+
+            try (var connection = DriverManager.getConnection(
+                config.jdbcUrl(),
+                config.username(),
+                config.password()
+            )) {
+                assertThat(existingTables(connection, config.schema())).isEmpty();
+            }
+        }
+    }
+
+    @Test
+    void writeAtomicallyRemainsUnavailableUntilTransactionalStoresExist() {
+        PostgreSQLContainer<?> container = newPostgresContainer();
+        container.start();
+
+        PostgresStorageConfig config = new PostgresStorageConfig(
+            container.getJdbcUrl(),
+            container.getUsername(),
+            container.getPassword(),
+            "lightrag",
+            3,
+            "rag_"
+        );
+
+        try (container; PostgresStorageProvider provider = new PostgresStorageProvider(config, new InMemorySnapshotStore())) {
+            assertThatThrownBy(() -> provider.writeAtomically(storage -> null))
+                .isInstanceOf(UnsupportedOperationException.class)
+                .hasMessageContaining("Atomic writes");
+        }
+    }
+
+    @Test
     void scaffoldsDependencyBackedHarness() {
         PostgreSQLContainer<?> container = null;
         HikariDataSource dataSource = null;
         PGvector vector = null;
         PostgresStorageProvider provider = null;
+    }
+
+    private static PostgreSQLContainer<?> newPostgresContainer() {
+        return new PostgreSQLContainer<>(
+            DockerImageName.parse("pgvector/pgvector:pg16").asCompatibleSubstituteFor("postgres")
+        );
+    }
+
+    private static HikariDataSource newDataSource(PostgresStorageConfig config) {
+        var hikariConfig = new com.zaxxer.hikari.HikariConfig();
+        hikariConfig.setJdbcUrl(config.jdbcUrl());
+        hikariConfig.setUsername(config.username());
+        hikariConfig.setPassword(config.password());
+        hikariConfig.setMaximumPoolSize(2);
+        hikariConfig.setMinimumIdle(0);
+        return new HikariDataSource(hikariConfig);
     }
 
     private static List<String> existingTables(java.sql.Connection connection, String schema) throws SQLException {
