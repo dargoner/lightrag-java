@@ -93,6 +93,8 @@ The mixed provider should internally compose:
 - a `Neo4jGraphStore` for top-level graph reads and graph projection writes
 - a stable graph facade that mirrors top-level graph writes into PostgreSQL and Neo4j while serving reads from Neo4j
 
+`PostgresNeo4jStorageProvider` should implement `AutoCloseable` and close both the PostgreSQL provider and the Neo4j driver-owned resources.
+
 ### Read And Write Contract
 
 Top-level store getters should behave like this:
@@ -107,7 +109,7 @@ The top-level graph facade must preserve current `GraphStore` behavior for calle
 
 Inside `writeAtomically(...)`, the provider should:
 
-1. capture a pre-write PostgreSQL snapshot for the LightRAG namespaces and graph rows
+1. capture a pre-write full provider snapshot from PostgreSQL, including documents, chunks, graph rows, and the `chunks`, `entities`, and `relations` vector namespaces
 2. capture a pre-write Neo4j graph snapshot
 3. execute the requested operation against an atomic view where:
    - document, chunk, and vector stores point to the PostgreSQL transaction-bound stores
@@ -117,6 +119,8 @@ Inside `writeAtomically(...)`, the provider should:
 6. if Neo4j projection fails, restore PostgreSQL and Neo4j from the captured snapshots and surface a failure
 
 This preserves the current SDK contract even though the implementation relies on compensation instead of a distributed commit protocol.
+
+Because compensation uses full-state restore, the provider must also serialize mixed-provider writes and restores with a JVM-local write lock. Without that serialization, a failed writer could roll back unrelated concurrent commits by truncating and restoring PostgreSQL after another writer has already committed.
 
 ### Neo4j Graph Model
 
@@ -152,12 +156,23 @@ The same rule applies to top-level graph facade writes that occur outside provid
 
 Residual risk remains if a compensating restore also fails. The provider should preserve the primary failure and suppress restore failures onto it, matching the defensive pattern already used in the PostgreSQL transaction code.
 
+### Concurrency Model
+
+The mixed provider should operate in single-writer mode inside one JVM instance:
+
+- `writeAtomically(...)` must take an exclusive provider-level write lock
+- top-level graph facade writes must take the same exclusive lock
+- `restore(Snapshot)` must take the same exclusive lock
+
+Read-only top-level store calls may remain unlocked or use the underlying store concurrency behavior. The critical rule is that no restore-based compensation can overlap another successful writer.
+
 ### Restore And Bootstrap
 
 `restore(Snapshot)` should:
 
 - call through to PostgreSQL restore for the full snapshot
 - rebuild Neo4j graph state from the restored graph rows
+- leave the top-level graph facade immediately readable after restore completes
 
 Bootstrap should ensure:
 
@@ -207,6 +222,7 @@ Required coverage:
 - mixed-provider successful ingest with PostgreSQL stores plus Neo4j graph reads
 - rollback when Neo4j projection fails after PostgreSQL commit
 - `restore(Snapshot)` rebuilding Neo4j from PostgreSQL-backed snapshot data
+- builder-driven `loadFromSnapshot(path)` restoring PostgreSQL and rebuilding Neo4j before first query
 - end-to-end query parity using Neo4j-backed graph reads
 
 Use Testcontainers-backed Neo4j integration tests:
