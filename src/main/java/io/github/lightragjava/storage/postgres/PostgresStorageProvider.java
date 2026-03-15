@@ -32,7 +32,12 @@ public final class PostgresStorageProvider implements AtomicStorageProvider, Aut
         Objects.requireNonNull(config, "config");
         this.snapshotStore = Objects.requireNonNull(snapshotStore, "snapshotStore");
         this.dataSource = createDataSource(config);
-        new PostgresSchemaManager(dataSource, config).bootstrap();
+        try {
+            new PostgresSchemaManager(dataSource, config).bootstrap();
+        } catch (RuntimeException exception) {
+            dataSource.close();
+            throw exception;
+        }
     }
 
     @Override
