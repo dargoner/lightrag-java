@@ -62,13 +62,13 @@ public final class PostgresSchemaManager {
             """
                 CREATE TABLE IF NOT EXISTS %s (
                     id TEXT PRIMARY KEY,
-                    document_id TEXT NOT NULL,
+                    document_id TEXT NOT NULL REFERENCES %s (id) ON DELETE CASCADE,
                     text TEXT NOT NULL,
                     token_count INTEGER NOT NULL,
                     chunk_order INTEGER NOT NULL,
                     metadata JSONB NOT NULL DEFAULT '{}'::jsonb
                 )
-                """.formatted(config.qualifiedTableName("chunks")),
+                """.formatted(config.qualifiedTableName("chunks"), config.qualifiedTableName("documents")),
             """
                 CREATE TABLE IF NOT EXISTS %s (
                     id TEXT PRIMARY KEY,
@@ -79,35 +79,47 @@ public final class PostgresSchemaManager {
                 """.formatted(config.qualifiedTableName("entities")),
             """
                 CREATE TABLE IF NOT EXISTS %s (
-                    entity_id TEXT NOT NULL,
+                    entity_id TEXT NOT NULL REFERENCES %s (id) ON DELETE CASCADE,
                     alias TEXT NOT NULL,
                     PRIMARY KEY (entity_id, alias)
                 )
-                """.formatted(config.qualifiedTableName("entity_aliases")),
+                """.formatted(config.qualifiedTableName("entity_aliases"), config.qualifiedTableName("entities")),
             """
                 CREATE TABLE IF NOT EXISTS %s (
-                    entity_id TEXT NOT NULL,
-                    chunk_id TEXT NOT NULL,
+                    entity_id TEXT NOT NULL REFERENCES %s (id) ON DELETE CASCADE,
+                    chunk_id TEXT NOT NULL REFERENCES %s (id) ON DELETE CASCADE,
                     PRIMARY KEY (entity_id, chunk_id)
                 )
-                """.formatted(config.qualifiedTableName("entity_chunks")),
+                """.formatted(
+                config.qualifiedTableName("entity_chunks"),
+                config.qualifiedTableName("entities"),
+                config.qualifiedTableName("chunks")
+            ),
             """
                 CREATE TABLE IF NOT EXISTS %s (
                     id TEXT PRIMARY KEY,
-                    source_entity_id TEXT NOT NULL,
-                    target_entity_id TEXT NOT NULL,
+                    source_entity_id TEXT NOT NULL REFERENCES %s (id) ON DELETE CASCADE,
+                    target_entity_id TEXT NOT NULL REFERENCES %s (id) ON DELETE CASCADE,
                     type TEXT NOT NULL,
                     description TEXT NOT NULL,
                     weight DOUBLE PRECISION NOT NULL
                 )
-                """.formatted(config.qualifiedTableName("relations")),
+                """.formatted(
+                config.qualifiedTableName("relations"),
+                config.qualifiedTableName("entities"),
+                config.qualifiedTableName("entities")
+            ),
             """
                 CREATE TABLE IF NOT EXISTS %s (
-                    relation_id TEXT NOT NULL,
-                    chunk_id TEXT NOT NULL,
+                    relation_id TEXT NOT NULL REFERENCES %s (id) ON DELETE CASCADE,
+                    chunk_id TEXT NOT NULL REFERENCES %s (id) ON DELETE CASCADE,
                     PRIMARY KEY (relation_id, chunk_id)
                 )
-                """.formatted(config.qualifiedTableName("relation_chunks")),
+                """.formatted(
+                config.qualifiedTableName("relation_chunks"),
+                config.qualifiedTableName("relations"),
+                config.qualifiedTableName("chunks")
+            ),
             """
                 CREATE TABLE IF NOT EXISTS %s (
                     namespace TEXT NOT NULL,

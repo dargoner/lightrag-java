@@ -3,6 +3,7 @@ package io.github.lightragjava.storage.postgres;
 import com.zaxxer.hikari.HikariConfig;
 import com.zaxxer.hikari.HikariDataSource;
 import io.github.lightragjava.storage.ChunkStore;
+import io.github.lightragjava.storage.DocumentStore;
 import org.junit.jupiter.api.Test;
 import org.testcontainers.containers.PostgreSQLContainer;
 import org.testcontainers.utility.DockerImageName;
@@ -18,6 +19,7 @@ class PostgresChunkStoreTest {
             var container = newPostgresContainer();
             var resources = newStoreResources(container);
         ) {
+            resources.documentStore().save(new DocumentStore.DocumentRecord("doc-1", "Title", "Body", Map.of()));
             var chunk = new ChunkStore.ChunkRecord(
                 "chunk-1",
                 "doc-1",
@@ -39,6 +41,7 @@ class PostgresChunkStoreTest {
             var container = newPostgresContainer();
             var resources = newStoreResources(container);
         ) {
+            resources.documentStore().save(new DocumentStore.DocumentRecord("doc-1", "Title", "Body", Map.of()));
             var second = new ChunkStore.ChunkRecord("chunk-2", "doc-1", "Second", 10, 1, Map.of("kind", "body"));
             var first = new ChunkStore.ChunkRecord("chunk-1", "doc-1", "First", 8, 0, Map.of("kind", "intro"));
 
@@ -55,6 +58,8 @@ class PostgresChunkStoreTest {
             var container = newPostgresContainer();
             var resources = newStoreResources(container);
         ) {
+            resources.documentStore().save(new DocumentStore.DocumentRecord("doc-1", "Doc 1", "Body 1", Map.of()));
+            resources.documentStore().save(new DocumentStore.DocumentRecord("doc-2", "Doc 2", "Body 2", Map.of()));
             var laterSameOrder = new ChunkStore.ChunkRecord("chunk-2", "doc-1", "Later", 9, 0, Map.of());
             var first = new ChunkStore.ChunkRecord("chunk-1", "doc-1", "First", 8, 0, Map.of());
             var second = new ChunkStore.ChunkRecord("chunk-3", "doc-1", "Second", 7, 1, Map.of());
@@ -87,7 +92,11 @@ class PostgresChunkStoreTest {
         );
         var dataSource = newDataSource(config);
         new PostgresSchemaManager(dataSource, config).bootstrap();
-        return new StoreResources(dataSource, new PostgresChunkStore(dataSource, config));
+        return new StoreResources(
+            dataSource,
+            new PostgresDocumentStore(dataSource, config),
+            new PostgresChunkStore(dataSource, config)
+        );
     }
 
     private static HikariDataSource newDataSource(PostgresStorageConfig config) {
@@ -100,7 +109,11 @@ class PostgresChunkStoreTest {
         return new HikariDataSource(hikariConfig);
     }
 
-    private record StoreResources(HikariDataSource dataSource, PostgresChunkStore store) implements AutoCloseable {
+    private record StoreResources(
+        HikariDataSource dataSource,
+        PostgresDocumentStore documentStore,
+        PostgresChunkStore store
+    ) implements AutoCloseable {
         @Override
         public void close() {
             dataSource.close();
