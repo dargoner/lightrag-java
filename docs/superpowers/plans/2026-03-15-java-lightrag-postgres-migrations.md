@@ -4,7 +4,7 @@
 
 **Goal:** Add transactional schema version tracking and SDK-managed migrations to the PostgreSQL provider while preserving current bootstrap behavior.
 
-**Architecture:** `PostgresSchemaManager` will own an ordered list of schema migrations and reconcile the configured schema to the latest supported version during provider startup. The first migration reuses the existing bootstrap SQL, while new metadata helpers baseline legacy unversioned schemas and reject unsupported newer versions.
+**Architecture:** `PostgresSchemaManager` will own an ordered list of schema migrations and reconcile the configured schema to the latest supported version during provider startup. The first migration reuses the existing bootstrap SQL, while new metadata helpers upgrade legacy unversioned schemas in place and reject unsupported newer versions.
 
 **Tech Stack:** Java 17, JDBC, HikariCP, PostgreSQL, Testcontainers, JUnit 5, AssertJ
 
@@ -70,14 +70,14 @@ Implement helpers to:
 - create the schema-version table
 - read the current version row
 - upsert version metadata
-- detect whether legacy application tables already exist
+- preserve idempotent migration replay for legacy unversioned schemas
 
 - [ ] **Step 3: Implement bootstrap reconciliation**
 
 Update `bootstrap()` so it:
 
 - creates schema + metadata table
-- baselines a valid legacy unversioned schema to `1`
+- upgrades legacy unversioned schemas to `1` by replaying the `v1` migration
 - applies missing migrations on fresh databases
 - rejects stored versions greater than the supported version
 
@@ -107,7 +107,7 @@ Extend the existing bootstrap-failure test so it also asserts `<prefix>schema_ve
 - [ ] **Step 2: Run the targeted rollback test to verify it fails**
 
 Run: `./gradlew test --tests io.github.lightragjava.storage.postgres.PostgresStorageProviderTest.rollsBackBootstrapWhenALaterStatementFails`
-Expected: FAIL because rollback coverage does not yet check migration metadata.
+Expected: PASS because the existing assertion that no schema tables remain after rollback now also covers the version table.
 
 - [ ] **Step 3: Adjust implementation only if rollback metadata is exposed**
 

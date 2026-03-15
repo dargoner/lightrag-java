@@ -7,8 +7,11 @@ import java.sql.SQLException;
 import java.sql.Statement;
 import java.util.List;
 import java.util.Objects;
+import java.util.Optional;
 
 public final class PostgresSchemaManager {
+    private static final String STORAGE_SCHEMA_KEY = "storage";
+
     private final DataSource dataSource;
     private final PostgresStorageConfig config;
     private final List<String> bootstrapStatements;
@@ -29,8 +32,21 @@ public final class PostgresSchemaManager {
             connection.setAutoCommit(false);
             try (Statement statement = connection.createStatement()) {
                 try {
-                    for (String sql : bootstrapStatements()) {
-                        statement.execute(sql);
+                    statement.execute("CREATE SCHEMA IF NOT EXISTS " + config.schemaName());
+                    ensureSchemaVersionTable(statement);
+
+                    Optional<Integer> currentVersion = loadCurrentVersion(connection);
+                    if (currentVersion.isEmpty()) {
+                        applyMissingMigrations(statement, 0);
+                    } else if (currentVersion.get() > latestSchemaVersion()) {
+                        throw new IllegalStateException(
+                            "Unsupported PostgreSQL schema version: found "
+                                + currentVersion.get()
+                                + " but this SDK supports up to "
+                                + latestSchemaVersion()
+                        );
+                    } else {
+                        applyMissingMigrations(statement, currentVersion.get());
                     }
                     validateVectorDimensions(connection);
                     connection.commit();
@@ -49,13 +65,32 @@ public final class PostgresSchemaManager {
         }
     }
 
-    private List<String> bootstrapStatements() {
+    private void applyMissingMigrations(Statement statement, int currentVersion) throws SQLException {
+        for (Migration migration : migrations()) {
+            if (migration.version() <= currentVersion) {
+                continue;
+            }
+            for (String sql : migration.statements()) {
+                statement.execute(sql);
+            }
+            storeSchemaVersion(statement.getConnection(), migration.version());
+        }
+    }
+
+    private List<Migration> migrations() {
+        return List.of(new Migration(1, versionOneStatements()));
+    }
+
+    private int latestSchemaVersion() {
+        return migrations().get(migrations().size() - 1).version();
+    }
+
+    private List<String> versionOneStatements() {
         if (bootstrapStatements != null) {
             return bootstrapStatements;
         }
         return List.of(
             "CREATE EXTENSION IF NOT EXISTS vector",
-            "CREATE SCHEMA IF NOT EXISTS " + config.schemaName(),
             """
                 CREATE TABLE IF NOT EXISTS %s (
                     id TEXT PRIMARY KEY,
@@ -132,6 +167,51 @@ public final class PostgresSchemaManager {
         );
     }
 
+    private void ensureSchemaVersionTable(Statement statement) throws SQLException {
+        statement.execute(
+            """
+                CREATE TABLE IF NOT EXISTS %s (
+                    schema_key TEXT PRIMARY KEY,
+                    version INTEGER NOT NULL,
+                    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+                )
+                """.formatted(config.qualifiedTableName("schema_version"))
+        );
+    }
+
+    private Optional<Integer> loadCurrentVersion(Connection connection) throws SQLException {
+        try (PreparedStatement statement = connection.prepareStatement(
+            """
+                SELECT version
+                FROM %s
+                WHERE schema_key = ?
+                """.formatted(config.qualifiedTableName("schema_version"))
+        )) {
+            statement.setString(1, STORAGE_SCHEMA_KEY);
+            try (var resultSet = statement.executeQuery()) {
+                if (!resultSet.next()) {
+                    return Optional.empty();
+                }
+                return Optional.of(resultSet.getInt("version"));
+            }
+        }
+    }
+
+    private void storeSchemaVersion(Connection connection, int version) throws SQLException {
+        try (PreparedStatement statement = connection.prepareStatement(
+            """
+                INSERT INTO %s (schema_key, version, updated_at)
+                VALUES (?, ?, NOW())
+                ON CONFLICT (schema_key)
+                DO UPDATE SET version = EXCLUDED.version, updated_at = EXCLUDED.updated_at
+                """.formatted(config.qualifiedTableName("schema_version"))
+        )) {
+            statement.setString(1, STORAGE_SCHEMA_KEY);
+            statement.setInt(2, version);
+            statement.executeUpdate();
+        }
+    }
+
     private void validateVectorDimensions(Connection connection) throws SQLException {
         try (PreparedStatement statement = connection.prepareStatement(
             """
@@ -189,5 +269,8 @@ public final class PostgresSchemaManager {
 
     private static String quoteIdentifier(String value) {
         return "\"" + value + "\"";
+    }
+
+    private record Migration(int version, List<String> statements) {
     }
 }

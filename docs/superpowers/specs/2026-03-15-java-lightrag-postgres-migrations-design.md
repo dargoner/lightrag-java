@@ -93,7 +93,7 @@ The table stores one logical row for the PostgreSQL storage schema, keyed by `st
 
 Define one current schema version:
 
-- `v1`: current documents, chunks, entities, relations, and vectors tables
+- `v1`: current `documents`, `chunks`, `entities`, `entity_aliases`, `entity_chunks`, `relations`, `relation_chunks`, and `vectors` tables, plus the `vector` extension bootstrap
 
 `PostgresSchemaManager` should keep migrations as an ordered list. Version `1` is implemented as the existing bootstrap SQL plus vector-dimension validation.
 
@@ -105,9 +105,7 @@ On `bootstrap()`:
 2. ensure the target schema exists
 3. ensure the schema-version table exists
 4. read the stored schema version row
-5. if no version row exists:
-   - if no application tables exist, run migrations from `v1`
-   - if legacy application tables already exist, validate the legacy schema and insert baseline version `1`
+5. if no version row exists, run migrations from `v1`
 6. if version row exists and is greater than the supported version, fail fast
 7. if version row exists and is less than the supported version, run each missing migration in order
 8. validate vector dimensions against the configured value
@@ -115,14 +113,11 @@ On `bootstrap()`:
 
 All steps stay inside one transaction so version metadata and schema objects move together.
 
-### Legacy Baseline Rules
+### Legacy Upgrade Rules
 
-An unversioned schema may be baselined to `v1` only when:
+An unversioned schema should be upgraded by replaying the idempotent `v1` migration statements and then recording version `1`.
 
-- the known application tables already exist in the configured schema
-- the vector column type matches the configured dimensions
-
-If the schema is partially present or fails validation, startup must fail rather than guessing how to repair it.
+This preserves the existing bootstrap behavior for legacy deployments that have only part of the current table set, such as earlier layouts that predate graph or vector tables. Explicit structural validation remains limited to vector-dimension checks in this phase; broader table-shape drift detection is deferred.
 
 ### Failure Semantics
 
@@ -148,12 +143,11 @@ Recommended additions inside `PostgresSchemaManager`:
 - a migration descriptor record or class containing `version` and SQL statements
 - helpers to:
   - create the metadata table
-  - detect application-table presence
   - read and write schema-version rows
   - apply migrations in order
-  - baseline validated legacy schemas
+  - record schema version after successful legacy upgrade
 
-The existing bootstrap SQL should become the `v1` migration body instead of a special-case code path.
+The existing bootstrap SQL, including `CREATE EXTENSION IF NOT EXISTS vector`, should become the `v1` migration body instead of a special-case code path. If the database user cannot create the extension, bootstrap should fail with the underlying SQL error wrapped as a schema-bootstrap failure.
 
 ## Testing Strategy
 
@@ -161,6 +155,7 @@ Required coverage:
 
 - fresh database creates application tables and schema-version metadata
 - existing unversioned schema is baselined to `v1`
+- existing partial legacy schemas are upgraded to `v1` and recorded
 - unsupported newer schema version fails fast
 - migration failure rolls back both schema objects and version metadata
 - existing vector-dimension drift detection still fails

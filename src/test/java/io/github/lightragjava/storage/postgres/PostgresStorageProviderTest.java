@@ -64,13 +64,95 @@ class PostgresStorageProviderTest {
                     "rag_entity_chunks",
                     "rag_relations",
                     "rag_relation_chunks",
+                    "rag_schema_version",
                     "rag_vectors"
                 );
+                assertThat(schemaVersion(connection, config)).contains(1);
             }
         }
     }
 
     @Test
+    void baselinesExistingLegacySchema() throws SQLException {
+        PostgreSQLContainer<?> container = newPostgresContainer();
+        container.start();
+
+        PostgresStorageConfig config = new PostgresStorageConfig(
+            container.getJdbcUrl(),
+            container.getUsername(),
+            container.getPassword(),
+            "lightrag",
+            3,
+            "rag_"
+        );
+
+        SnapshotStore snapshotStore = new InMemorySnapshotStore();
+
+        try (
+            container;
+            var connection = DriverManager.getConnection(
+                config.jdbcUrl(),
+                config.username(),
+                config.password()
+            )
+        ) {
+            createLegacySchema(connection, config);
+
+            try (PostgresStorageProvider ignored = new PostgresStorageProvider(config, snapshotStore)) {
+                assertThat(schemaVersion(connection, config)).contains(1);
+            }
+        }
+    }
+
+    @Test
+    void rejectsUnsupportedNewerSchemaVersion() throws SQLException {
+        PostgreSQLContainer<?> container = newPostgresContainer();
+        container.start();
+
+        PostgresStorageConfig config = new PostgresStorageConfig(
+            container.getJdbcUrl(),
+            container.getUsername(),
+            container.getPassword(),
+            "lightrag",
+            3,
+            "rag_"
+        );
+
+        SnapshotStore snapshotStore = new InMemorySnapshotStore();
+
+        try (
+            container;
+            var connection = DriverManager.getConnection(
+                config.jdbcUrl(),
+                config.username(),
+                config.password()
+            )
+        ) {
+            connection.createStatement().execute("CREATE SCHEMA IF NOT EXISTS " + config.schemaName());
+            connection.createStatement().execute(
+                """
+                CREATE TABLE IF NOT EXISTS %s (
+                    schema_key TEXT PRIMARY KEY,
+                    version INTEGER NOT NULL,
+                    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+                )
+                """.formatted(config.qualifiedTableName("schema_version"))
+            );
+            connection.createStatement().execute(
+                """
+                INSERT INTO %s (schema_key, version)
+                VALUES ('storage', 999)
+                """.formatted(config.qualifiedTableName("schema_version"))
+            );
+
+            assertThatThrownBy(() -> new PostgresStorageProvider(config, snapshotStore))
+                .isInstanceOf(IllegalStateException.class)
+                .hasMessageContaining("schema version")
+                .hasMessageContaining("999")
+                .hasMessageContaining("1");
+        }
+    }
+
     void rejectsVectorDimensionDriftOnExistingSchema() {
         PostgreSQLContainer<?> container = newPostgresContainer();
         container.start();
@@ -516,6 +598,109 @@ class PostgresStorageProviderTest {
                 return tables;
             }
         }
+    }
+
+    private static java.util.Optional<Integer> schemaVersion(java.sql.Connection connection, PostgresStorageConfig config) throws SQLException {
+        try (var statement = connection.prepareStatement(
+            """
+                SELECT version
+                FROM %s
+                WHERE schema_key = 'storage'
+                """.formatted(config.qualifiedTableName("schema_version"))
+        )) {
+            try (var resultSet = statement.executeQuery()) {
+                if (!resultSet.next()) {
+                    return java.util.Optional.empty();
+                }
+                return java.util.Optional.of(resultSet.getInt("version"));
+            }
+        }
+    }
+
+    private static void createLegacySchema(java.sql.Connection connection, PostgresStorageConfig config) throws SQLException {
+        connection.createStatement().execute("CREATE EXTENSION IF NOT EXISTS vector");
+        connection.createStatement().execute("CREATE SCHEMA IF NOT EXISTS " + config.schemaName());
+        connection.createStatement().execute(
+            """
+            CREATE TABLE IF NOT EXISTS %s (
+                id TEXT PRIMARY KEY,
+                title TEXT NOT NULL,
+                content TEXT NOT NULL,
+                metadata JSONB NOT NULL DEFAULT '{}'::jsonb
+            )
+            """.formatted(config.qualifiedTableName("documents"))
+        );
+        connection.createStatement().execute(
+            """
+            CREATE TABLE IF NOT EXISTS %s (
+                id TEXT PRIMARY KEY,
+                document_id TEXT NOT NULL,
+                text TEXT NOT NULL,
+                token_count INTEGER NOT NULL,
+                chunk_order INTEGER NOT NULL,
+                metadata JSONB NOT NULL DEFAULT '{}'::jsonb
+            )
+            """.formatted(config.qualifiedTableName("chunks"))
+        );
+        connection.createStatement().execute(
+            """
+            CREATE TABLE IF NOT EXISTS %s (
+                id TEXT PRIMARY KEY,
+                name TEXT NOT NULL,
+                type TEXT NOT NULL,
+                description TEXT NOT NULL
+            )
+            """.formatted(config.qualifiedTableName("entities"))
+        );
+        connection.createStatement().execute(
+            """
+            CREATE TABLE IF NOT EXISTS %s (
+                entity_id TEXT NOT NULL,
+                alias TEXT NOT NULL,
+                PRIMARY KEY (entity_id, alias)
+            )
+            """.formatted(config.qualifiedTableName("entity_aliases"))
+        );
+        connection.createStatement().execute(
+            """
+            CREATE TABLE IF NOT EXISTS %s (
+                entity_id TEXT NOT NULL,
+                chunk_id TEXT NOT NULL,
+                PRIMARY KEY (entity_id, chunk_id)
+            )
+            """.formatted(config.qualifiedTableName("entity_chunks"))
+        );
+        connection.createStatement().execute(
+            """
+            CREATE TABLE IF NOT EXISTS %s (
+                id TEXT PRIMARY KEY,
+                source_entity_id TEXT NOT NULL,
+                target_entity_id TEXT NOT NULL,
+                type TEXT NOT NULL,
+                description TEXT NOT NULL,
+                weight DOUBLE PRECISION NOT NULL
+            )
+            """.formatted(config.qualifiedTableName("relations"))
+        );
+        connection.createStatement().execute(
+            """
+            CREATE TABLE IF NOT EXISTS %s (
+                relation_id TEXT NOT NULL,
+                chunk_id TEXT NOT NULL,
+                PRIMARY KEY (relation_id, chunk_id)
+            )
+            """.formatted(config.qualifiedTableName("relation_chunks"))
+        );
+        connection.createStatement().execute(
+            """
+            CREATE TABLE IF NOT EXISTS %s (
+                namespace TEXT NOT NULL,
+                vector_id TEXT NOT NULL,
+                embedding vector(%d) NOT NULL,
+                PRIMARY KEY (namespace, vector_id)
+            )
+            """.formatted(config.qualifiedTableName("vectors"), config.vectorDimensions())
+        );
     }
 
     private static final class InMemorySnapshotStore implements SnapshotStore {
