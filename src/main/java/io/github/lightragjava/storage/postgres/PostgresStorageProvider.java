@@ -13,21 +13,30 @@ import io.github.lightragjava.storage.VectorStore;
 import java.sql.Connection;
 import java.sql.SQLException;
 import java.sql.Statement;
+import java.util.List;
 import java.util.Map;
 import java.util.Objects;
+import java.util.Optional;
+import java.util.concurrent.locks.ReentrantReadWriteLock;
 
 public final class PostgresStorageProvider implements AtomicStorageProvider, AutoCloseable {
+    private final ReentrantReadWriteLock lock;
     private final HikariDataSource dataSource;
     private final SnapshotStore snapshotStore;
     private final PostgresDocumentStore documentStore;
     private final PostgresChunkStore chunkStore;
     private final PostgresGraphStore graphStore;
     private final PostgresVectorStore vectorStore;
+    private final DocumentStore lockedDocumentStore;
+    private final ChunkStore lockedChunkStore;
+    private final GraphStore lockedGraphStore;
+    private final VectorStore lockedVectorStore;
     private final PostgresStorageConfig config;
 
     public PostgresStorageProvider(PostgresStorageConfig config, SnapshotStore snapshotStore) {
         this.config = Objects.requireNonNull(config, "config");
         this.snapshotStore = Objects.requireNonNull(snapshotStore, "snapshotStore");
+        this.lock = new ReentrantReadWriteLock(true);
         this.dataSource = createDataSource(config);
         try {
             new PostgresSchemaManager(dataSource, config).bootstrap();
@@ -35,6 +44,10 @@ public final class PostgresStorageProvider implements AtomicStorageProvider, Aut
             this.chunkStore = new PostgresChunkStore(dataSource, config);
             this.graphStore = new PostgresGraphStore(dataSource, config);
             this.vectorStore = new PostgresVectorStore(dataSource, config);
+            this.lockedDocumentStore = new LockedDocumentStore(documentStore);
+            this.lockedChunkStore = new LockedChunkStore(chunkStore);
+            this.lockedGraphStore = new LockedGraphStore(graphStore);
+            this.lockedVectorStore = new LockedVectorStore(vectorStore);
         } catch (RuntimeException exception) {
             dataSource.close();
             throw exception;
@@ -43,22 +56,22 @@ public final class PostgresStorageProvider implements AtomicStorageProvider, Aut
 
     @Override
     public DocumentStore documentStore() {
-        return documentStore;
+        return lockedDocumentStore;
     }
 
     @Override
     public ChunkStore chunkStore() {
-        return chunkStore;
+        return lockedChunkStore;
     }
 
     @Override
     public GraphStore graphStore() {
-        return graphStore;
+        return lockedGraphStore;
     }
 
     @Override
     public VectorStore vectorStore() {
-        return vectorStore;
+        return lockedVectorStore;
     }
 
     @Override
@@ -69,40 +82,52 @@ public final class PostgresStorageProvider implements AtomicStorageProvider, Aut
     @Override
     public <T> T writeAtomically(AtomicOperation<T> operation) {
         Objects.requireNonNull(operation, "operation");
-        try (var connection = dataSource.getConnection()) {
-            return withTransaction(connection, () -> operation.execute(newAtomicView(connection)));
-        } catch (SQLException exception) {
-            throw new StorageException("Failed to open PostgreSQL transaction", exception);
+        var writeLock = lock.writeLock();
+        writeLock.lock();
+        try {
+            try (var connection = dataSource.getConnection()) {
+                return withTransaction(connection, () -> operation.execute(newAtomicView(connection)));
+            } catch (SQLException exception) {
+                throw new StorageException("Failed to open PostgreSQL transaction", exception);
+            }
+        } finally {
+            writeLock.unlock();
         }
     }
 
     @Override
     public void restore(SnapshotStore.Snapshot snapshot) {
         var source = Objects.requireNonNull(snapshot, "snapshot");
-        try (var connection = dataSource.getConnection()) {
-            withTransaction(connection, () -> {
-                truncateAll(connection);
-                var stores = newAtomicView(connection);
+        var writeLock = lock.writeLock();
+        writeLock.lock();
+        try {
+            try (var connection = dataSource.getConnection()) {
+                withTransaction(connection, () -> {
+                    truncateAll(connection);
+                    var stores = newAtomicView(connection);
 
-                for (var document : source.documents()) {
-                    stores.documentStore().save(document);
-                }
-                for (var chunk : source.chunks()) {
-                    stores.chunkStore().save(chunk);
-                }
-                for (var entity : source.entities()) {
-                    stores.graphStore().saveEntity(entity);
-                }
-                for (var relation : source.relations()) {
-                    stores.graphStore().saveRelation(relation);
-                }
-                for (var namespaceEntry : source.vectors().entrySet()) {
-                    stores.vectorStore().saveAll(namespaceEntry.getKey(), namespaceEntry.getValue());
-                }
-                return null;
-            });
-        } catch (SQLException exception) {
-            throw new StorageException("Failed to open PostgreSQL transaction for restore", exception);
+                    for (var document : source.documents()) {
+                        stores.documentStore().save(document);
+                    }
+                    for (var chunk : source.chunks()) {
+                        stores.chunkStore().save(chunk);
+                    }
+                    for (var entity : source.entities()) {
+                        stores.graphStore().saveEntity(entity);
+                    }
+                    for (var relation : source.relations()) {
+                        stores.graphStore().saveRelation(relation);
+                    }
+                    for (var namespaceEntry : source.vectors().entrySet()) {
+                        stores.vectorStore().saveAll(namespaceEntry.getKey(), namespaceEntry.getValue());
+                    }
+                    return null;
+                });
+            } catch (SQLException exception) {
+                throw new StorageException("Failed to open PostgreSQL transaction for restore", exception);
+            }
+        } finally {
+            writeLock.unlock();
         }
     }
 
@@ -200,8 +225,155 @@ public final class PostgresStorageProvider implements AtomicStorageProvider, Aut
     ) implements AtomicStorageView {
     }
 
+    private final class LockedDocumentStore implements DocumentStore {
+        private final DocumentStore delegate;
+
+        private LockedDocumentStore(DocumentStore delegate) {
+            this.delegate = delegate;
+        }
+
+        @Override
+        public void save(DocumentRecord document) {
+            withWriteLock(() -> delegate.save(document));
+        }
+
+        @Override
+        public Optional<DocumentRecord> load(String documentId) {
+            return withReadLock(() -> delegate.load(documentId));
+        }
+
+        @Override
+        public List<DocumentRecord> list() {
+            return withReadLock(delegate::list);
+        }
+
+        @Override
+        public boolean contains(String documentId) {
+            return withReadLock(() -> delegate.contains(documentId));
+        }
+    }
+
+    private final class LockedChunkStore implements ChunkStore {
+        private final ChunkStore delegate;
+
+        private LockedChunkStore(ChunkStore delegate) {
+            this.delegate = delegate;
+        }
+
+        @Override
+        public void save(ChunkRecord chunk) {
+            withWriteLock(() -> delegate.save(chunk));
+        }
+
+        @Override
+        public Optional<ChunkRecord> load(String chunkId) {
+            return withReadLock(() -> delegate.load(chunkId));
+        }
+
+        @Override
+        public List<ChunkRecord> list() {
+            return withReadLock(delegate::list);
+        }
+
+        @Override
+        public List<ChunkRecord> listByDocument(String documentId) {
+            return withReadLock(() -> delegate.listByDocument(documentId));
+        }
+    }
+
+    private final class LockedGraphStore implements GraphStore {
+        private final GraphStore delegate;
+
+        private LockedGraphStore(GraphStore delegate) {
+            this.delegate = delegate;
+        }
+
+        @Override
+        public void saveEntity(EntityRecord entity) {
+            withWriteLock(() -> delegate.saveEntity(entity));
+        }
+
+        @Override
+        public void saveRelation(RelationRecord relation) {
+            withWriteLock(() -> delegate.saveRelation(relation));
+        }
+
+        @Override
+        public Optional<EntityRecord> loadEntity(String entityId) {
+            return withReadLock(() -> delegate.loadEntity(entityId));
+        }
+
+        @Override
+        public Optional<RelationRecord> loadRelation(String relationId) {
+            return withReadLock(() -> delegate.loadRelation(relationId));
+        }
+
+        @Override
+        public List<EntityRecord> allEntities() {
+            return withReadLock(delegate::allEntities);
+        }
+
+        @Override
+        public List<RelationRecord> allRelations() {
+            return withReadLock(delegate::allRelations);
+        }
+
+        @Override
+        public List<RelationRecord> findRelations(String entityId) {
+            return withReadLock(() -> delegate.findRelations(entityId));
+        }
+    }
+
+    private final class LockedVectorStore implements VectorStore {
+        private final VectorStore delegate;
+
+        private LockedVectorStore(VectorStore delegate) {
+            this.delegate = delegate;
+        }
+
+        @Override
+        public void saveAll(String namespace, List<VectorRecord> vectors) {
+            withWriteLock(() -> delegate.saveAll(namespace, vectors));
+        }
+
+        @Override
+        public List<VectorMatch> search(String namespace, List<Double> queryVector, int topK) {
+            return withReadLock(() -> delegate.search(namespace, queryVector, topK));
+        }
+
+        @Override
+        public List<VectorRecord> list(String namespace) {
+            return withReadLock(() -> delegate.list(namespace));
+        }
+    }
+
     @FunctionalInterface
     private interface SqlSupplier<T> {
         T get() throws SQLException;
+    }
+
+    @FunctionalInterface
+    private interface RuntimeSupplier<T> {
+        T get();
+    }
+
+    private <T> T withReadLock(RuntimeSupplier<T> supplier) {
+        var readLock = lock.readLock();
+        readLock.lock();
+        try {
+            return supplier.get();
+        } finally {
+            readLock.unlock();
+        }
+    }
+
+    private void withWriteLock(Runnable runnable) {
+        var writeLock = lock.writeLock();
+        writeLock.lock();
+        try {
+            runnable.run();
+        } finally {
+            writeLock.unlock();
+        }
     }
 }

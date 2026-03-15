@@ -18,6 +18,8 @@ import java.sql.SQLException;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicReference;
 
 import static org.assertj.core.api.Assertions.assertThat;
@@ -284,6 +286,66 @@ class PostgresStorageProviderTest {
     }
 
     @Test
+    void topLevelReadsWaitForAtomicWriteToFinish() throws Exception {
+        PostgreSQLContainer<?> container = newPostgresContainer();
+        container.start();
+
+        var config = new PostgresStorageConfig(
+            container.getJdbcUrl(),
+            container.getUsername(),
+            container.getPassword(),
+            "lightrag",
+            3,
+            "rag_"
+        );
+
+        try (container; PostgresStorageProvider provider = new PostgresStorageProvider(config, new InMemorySnapshotStore())) {
+            provider.documentStore().save(new DocumentStore.DocumentRecord("doc-0", "Existing", "seed", Map.of("seed", "true")));
+
+            var atomicEntered = new CountDownLatch(1);
+            var releaseAtomic = new CountDownLatch(1);
+            var readFinished = new CountDownLatch(1);
+            var failure = new AtomicReference<Throwable>();
+
+            Thread writer = new Thread(() -> {
+                try {
+                    provider.writeAtomically(storage -> {
+                        storage.documentStore().save(new DocumentStore.DocumentRecord("doc-1", "Incoming", "body", Map.of()));
+                        atomicEntered.countDown();
+                        await(releaseAtomic);
+                        return null;
+                    });
+                } catch (Throwable throwable) {
+                    failure.compareAndSet(null, throwable);
+                }
+            });
+
+            Thread reader = new Thread(() -> {
+                try {
+                    atomicEntered.await(5, TimeUnit.SECONDS);
+                    provider.documentStore().load("doc-0");
+                } catch (Throwable throwable) {
+                    failure.compareAndSet(null, throwable);
+                } finally {
+                    readFinished.countDown();
+                }
+            });
+
+            writer.start();
+            reader.start();
+
+            assertThat(atomicEntered.await(5, TimeUnit.SECONDS)).isTrue();
+            assertThat(readFinished.await(200, TimeUnit.MILLISECONDS)).isFalse();
+
+            releaseAtomic.countDown();
+            writer.join();
+            reader.join();
+
+            assertThat(failure.get()).isNull();
+        }
+    }
+
+    @Test
     void rollsBackAllStoresWhenAtomicWriteFails() {
         PostgreSQLContainer<?> container = newPostgresContainer();
         container.start();
@@ -469,6 +531,17 @@ class PostgresStorageProviderTest {
         @Override
         public List<Path> list() {
             return List.of();
+        }
+    }
+
+    private static void await(CountDownLatch latch) {
+        try {
+            if (!latch.await(5, TimeUnit.SECONDS)) {
+                throw new AssertionError("Timed out waiting on latch");
+            }
+        } catch (InterruptedException exception) {
+            Thread.currentThread().interrupt();
+            throw new AssertionError("Interrupted while waiting on latch", exception);
         }
     }
 }
