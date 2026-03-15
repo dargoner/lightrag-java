@@ -94,6 +94,37 @@ Notes:
 - rerank changes chunk order only; exposed context IDs/texts still come from the original retrieval records
 - if `enableRerank(true)` is used without configuring a rerank model, Java treats it as a deterministic no-op in this phase
 
+## Query Prompt Controls
+
+The Java SDK supports the upstream query-time prompt controls `userPrompt` and `conversationHistory`.
+
+Use `userPrompt` when you want to add answer-formatting or style instructions without changing retrieval:
+
+```java
+var result = rag.query(QueryRequest.builder()
+    .query("Who works with Bob?")
+    .userPrompt("Answer in bullet points.")
+    .build());
+```
+
+Use `conversationHistory` when your chat model should see prior turns as structured messages:
+
+```java
+var result = rag.query(QueryRequest.builder()
+    .query("Who works with Bob?")
+    .userPrompt("Answer in bullet points.")
+    .conversationHistory(List.of(
+        new ChatModel.ChatRequest.ConversationMessage("user", "We are discussing team structure."),
+        new ChatModel.ChatRequest.ConversationMessage("assistant", "Understood.")
+    ))
+    .build());
+```
+
+Notes:
+
+- retrieval mode selection, graph expansion, and rerank behavior are unchanged by these fields
+- `conversationHistory` is passed separately to the chat adapter; Java does not flatten those messages into the current-turn prompt
+
 ## Document Status
 
 The SDK exposes per-document processing status through typed APIs on `LightRag`:
