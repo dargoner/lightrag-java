@@ -25,16 +25,24 @@ public final class InMemoryStorageProvider implements AtomicStorageProvider {
     private final SnapshotStore snapshotStore;
 
     public InMemoryStorageProvider() {
+        this(new InMemorySnapshotStore());
+    }
+
+    public InMemoryStorageProvider(SnapshotStore snapshotStore) {
         this.lock = new ReentrantReadWriteLock(true);
         this.documentStore = new InMemoryDocumentStore(lock);
         this.chunkStore = new InMemoryChunkStore(lock);
         this.graphStore = new InMemoryGraphStore(lock);
         this.vectorStore = new InMemoryVectorStore(lock);
-        this.snapshotStore = new InMemorySnapshotStore();
+        this.snapshotStore = Objects.requireNonNull(snapshotStore, "snapshotStore");
     }
 
     public static InMemoryStorageProvider create() {
         return new InMemoryStorageProvider();
+    }
+
+    public static InMemoryStorageProvider create(SnapshotStore snapshotStore) {
+        return new InMemoryStorageProvider(snapshotStore);
     }
 
     @Override
@@ -77,6 +85,17 @@ public final class InMemoryStorageProvider implements AtomicStorageProvider {
         } catch (RuntimeException failure) {
             restore(snapshot, failure);
             throw failure;
+        } finally {
+            writeLock.unlock();
+        }
+    }
+
+    @Override
+    public void restore(SnapshotStore.Snapshot snapshot) {
+        var writeLock = lock.writeLock();
+        writeLock.lock();
+        try {
+            restoreStores(Objects.requireNonNull(snapshot, "snapshot"));
         } finally {
             writeLock.unlock();
         }
@@ -134,6 +153,13 @@ public final class InMemoryStorageProvider implements AtomicStorageProvider {
         if (rollbackFailure != null) {
             failure.addSuppressed(rollbackFailure);
         }
+    }
+
+    private void restoreStores(SnapshotStore.Snapshot snapshot) {
+        vectorStore.restore(snapshot.vectors());
+        graphStore.restore(snapshot.entities(), snapshot.relations());
+        chunkStore.restore(snapshot.chunks());
+        documentStore.restore(snapshot.documents());
     }
 
     private record AtomicView(

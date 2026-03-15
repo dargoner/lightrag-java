@@ -3,6 +3,8 @@ package io.github.lightragjava.storage;
 public interface AtomicStorageProvider extends StorageProvider {
     <T> T writeAtomically(AtomicOperation<T> operation);
 
+    void restore(SnapshotStore.Snapshot snapshot);
+
     interface AtomicStorageView {
         DocumentStore documentStore();
 

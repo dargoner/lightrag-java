@@ -275,6 +275,10 @@ class LightRagBuilderTest {
                 }
             });
         }
+
+        @Override
+        public void restore(SnapshotStore.Snapshot snapshot) {
+        }
     }
 
     private static final class PlainStorageProvider implements StorageProvider {

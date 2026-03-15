@@ -12,6 +12,7 @@ import io.github.lightragjava.storage.StorageProvider;
 import io.github.lightragjava.storage.VectorStore;
 
 import java.nio.file.Path;
+import java.util.NoSuchElementException;
 import java.util.Objects;
 
 public final class LightRagBuilder {
@@ -58,6 +59,7 @@ public final class LightRagBuilder {
         if (!(storageProvider instanceof AtomicStorageProvider atomicStorageProvider)) {
             throw new IllegalStateException("storageProvider must implement AtomicStorageProvider");
         }
+        restoreSnapshotIfPresent(atomicStorageProvider, snapshotPath);
 
         return new LightRag(new LightRagConfig(chatModel, embeddingModel, atomicStorageProvider, snapshotPath));
     }
@@ -67,5 +69,16 @@ public final class LightRagBuilder {
             throw new IllegalStateException(componentName + " is required");
         }
         return storeType.cast(store);
+    }
+
+    private void restoreSnapshotIfPresent(AtomicStorageProvider storageProvider, Path path) {
+        if (path == null) {
+            return;
+        }
+        try {
+            storageProvider.restore(storageProvider.snapshotStore().load(path));
+        } catch (NoSuchElementException ignored) {
+            // Missing snapshots are allowed so the same path can be used for first-time autosave.
+        }
     }
 }

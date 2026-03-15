@@ -186,6 +186,11 @@ class DocumentIngestorTest {
             }
         }
 
+        @Override
+        public void restore(io.github.lightragjava.storage.SnapshotStore.Snapshot snapshot) {
+            throw new UnsupportedOperationException("not used in test");
+        }
+
         void insertDocumentBeforeAtomicWrite(DocumentStore.DocumentRecord document) {
             documentToInsertBeforeWrite = document;
         }

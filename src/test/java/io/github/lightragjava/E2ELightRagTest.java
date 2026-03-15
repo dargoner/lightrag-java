@@ -5,11 +5,18 @@ import io.github.lightragjava.api.QueryRequest;
 import io.github.lightragjava.api.QueryResult;
 import io.github.lightragjava.model.ChatModel;
 import io.github.lightragjava.model.EmbeddingModel;
+import io.github.lightragjava.persistence.FileSnapshotStore;
+import io.github.lightragjava.storage.ChunkStore;
+import io.github.lightragjava.storage.DocumentStore;
+import io.github.lightragjava.storage.GraphStore;
 import io.github.lightragjava.storage.InMemoryStorageProvider;
+import io.github.lightragjava.storage.SnapshotStore;
 import io.github.lightragjava.storage.VectorStore;
 import io.github.lightragjava.types.Document;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.io.TempDir;
 
+import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.List;
 import java.util.Map;
@@ -49,8 +56,8 @@ class E2ELightRagTest {
 
     @Test
     void ingestPersistsSnapshotWhenConfigured() {
-        var storage = InMemoryStorageProvider.create();
-        var snapshotPath = Path.of("snapshots", "doc-1.json");
+        var storage = InMemoryStorageProvider.create(new FileSnapshotStore());
+        var snapshotPath = tempDir.resolve("doc-1.snapshot.json");
         var rag = LightRag.builder()
             .chatModel(new FakeChatModel())
             .embeddingModel(new FakeEmbeddingModel())
@@ -60,14 +67,61 @@ class E2ELightRagTest {
 
         rag.ingest(List.of(new Document("doc-1", "Title", "Alice works with Bob", Map.of())));
 
-        assertThat(storage.snapshotStore().list()).containsExactly(snapshotPath);
         var snapshot = storage.snapshotStore().load(snapshotPath);
         assertThat(snapshot.documents()).hasSize(1);
         assertThat(snapshot.chunks()).hasSize(1);
         assertThat(snapshot.entities()).hasSize(2);
         assertThat(snapshot.relations()).hasSize(1);
         assertThat(snapshot.vectors()).containsKeys("chunks", "entities", "relations");
+        assertThat(Files.exists(snapshotPath)).isTrue();
     }
+
+    @Test
+    void builderLoadFromSnapshotRestoresStorageBeforeBuild() {
+        var snapshotStore = new FileSnapshotStore();
+        var snapshotPath = tempDir.resolve("seed.snapshot.json");
+        snapshotStore.save(snapshotPath, new SnapshotStore.Snapshot(
+            List.of(new DocumentStore.DocumentRecord("doc-seed", "Seed", "Body", Map.of())),
+            List.of(new ChunkStore.ChunkRecord("doc-seed:0", "doc-seed", "Body", 4, 0, Map.of())),
+            List.of(new GraphStore.EntityRecord("entity:seed", "Seed", "person", "Seed entity", List.of(), List.of("doc-seed:0"))),
+            List.of(),
+            Map.of("chunks", List.of(new VectorStore.VectorRecord("doc-seed:0", List.of(1.0d, 0.0d))))
+        ));
+        var storage = InMemoryStorageProvider.create(snapshotStore);
+
+        var rag = LightRag.builder()
+            .chatModel(new FakeChatModel())
+            .embeddingModel(new FakeEmbeddingModel())
+            .storage(storage)
+            .loadFromSnapshot(snapshotPath)
+            .build();
+
+        assertThat(rag).isNotNull();
+        assertThat(storage.documentStore().load("doc-seed")).isPresent();
+        assertThat(storage.chunkStore().load("doc-seed:0")).isPresent();
+        assertThat(storage.graphStore().loadEntity("entity:seed")).isPresent();
+        assertThat(storage.vectorStore().list("chunks"))
+            .extracting(VectorStore.VectorRecord::id)
+            .containsExactly("doc-seed:0");
+    }
+
+    @Test
+    void successfulIngestAutoSavesOnlyWhenSnapshotPersistenceIsConfigured() {
+        var snapshotPath = tempDir.resolve("not-configured.snapshot.json");
+        var storage = InMemoryStorageProvider.create(new FileSnapshotStore());
+        var rag = LightRag.builder()
+            .chatModel(new FakeChatModel())
+            .embeddingModel(new FakeEmbeddingModel())
+            .storage(storage)
+            .build();
+
+        rag.ingest(List.of(new Document("doc-1", "Title", "Alice works with Bob", Map.of())));
+
+        assertThat(Files.exists(snapshotPath)).isFalse();
+    }
+
+    @TempDir
+    Path tempDir;
 
     @Test
     void queryUsesMixModeByDefaultAndCallsChatModelWithContext() {
