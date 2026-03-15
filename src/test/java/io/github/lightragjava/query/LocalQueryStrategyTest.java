@@ -116,6 +116,11 @@ class LocalQueryStrategyTest {
     }
 
     static void seedVectors(InMemoryStorageProvider storage) {
+        storage.vectorStore().saveAll("chunks", List.of(
+            new VectorStore.VectorRecord("chunk-1", List.of(1.0d, 0.0d)),
+            new VectorStore.VectorRecord("chunk-2", List.of(0.7d, 0.3d)),
+            new VectorStore.VectorRecord("chunk-3", List.of(0.0d, 1.0d))
+        ));
         storage.vectorStore().saveAll("entities", List.of(
             new VectorStore.VectorRecord("entity:alice", List.of(1.0d, 0.0d)),
             new VectorStore.VectorRecord("entity:bob", List.of(0.6d, 0.4d)),
