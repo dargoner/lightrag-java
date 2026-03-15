@@ -36,15 +36,39 @@ class QueryEngineTest {
             .extracting(context -> context.sourceId())
             .containsExactly("chunk-3", "chunk-2", "chunk-1");
         assertThat(chatModel.lastRequest().userPrompt())
-            .containsSubsequence("chunk-3", "chunk-2", "chunk-1");
+            .containsSubsequence("chunk-3", "chunk-2", "chunk-1")
+            .contains("- chunk-3 | 0.700 | Gamma chunk")
+            .contains("- chunk-2 | 0.800 | Beta chunk")
+            .contains("- chunk-1 | 0.900 | Alpha chunk");
+    }
+
+    @Test
+    void expandsChunkTopKWhenRerankIsEnabledAndModelIsConfigured() {
+        var strategy = new RecordingQueryStrategy(baseContext());
+        var engine = new QueryEngine(
+            new RecordingChatModel(),
+            new ContextAssembler(),
+            strategiesReturning(strategy),
+            new StubRerankModel(List.of(
+                new RerankModel.RerankResult("chunk-1", 0.99d),
+                new RerankModel.RerankResult("chunk-2", 0.88d),
+                new RerankModel.RerankResult("chunk-3", 0.77d)
+            ))
+        );
+
+        engine.query(baseRequest());
+
+        assertThat(strategy.lastRequest()).isNotNull();
+        assertThat(strategy.lastRequest().chunkTopK()).isEqualTo(6);
     }
 
     @Test
     void preservesRetrievalOrderWhenNoRerankModelIsConfigured() {
+        var strategy = new RecordingQueryStrategy(baseContext());
         var engine = new QueryEngine(
             new RecordingChatModel(),
             new ContextAssembler(),
-            strategiesReturning(baseContext()),
+            strategiesReturning(strategy),
             null
         );
 
@@ -53,14 +77,17 @@ class QueryEngineTest {
         assertThat(result.contexts())
             .extracting(context -> context.sourceId())
             .containsExactly("chunk-1", "chunk-2", "chunk-3");
+        assertThat(strategy.lastRequest()).isNotNull();
+        assertThat(strategy.lastRequest().chunkTopK()).isEqualTo(3);
     }
 
     @Test
     void bypassesRerankWhenQueryRequestDisablesIt() {
+        var strategy = new RecordingQueryStrategy(baseContext());
         var engine = new QueryEngine(
             new RecordingChatModel(),
             new ContextAssembler(),
-            strategiesReturning(baseContext()),
+            strategiesReturning(strategy),
             new StubRerankModel(List.of(
                 new RerankModel.RerankResult("chunk-3", 0.99d),
                 new RerankModel.RerankResult("chunk-2", 0.88d),
@@ -79,6 +106,8 @@ class QueryEngineTest {
         assertThat(result.contexts())
             .extracting(context -> context.sourceId())
             .containsExactly("chunk-1", "chunk-2", "chunk-3");
+        assertThat(strategy.lastRequest()).isNotNull();
+        assertThat(strategy.lastRequest().chunkTopK()).isEqualTo(3);
     }
 
     @Test
@@ -134,10 +163,14 @@ class QueryEngineTest {
         return new QueryContext(List.of(), List.of(), chunks, "stale assembled context");
     }
 
-    private static EnumMap<QueryMode, QueryStrategy> strategiesReturning(QueryContext context) {
+    private static EnumMap<QueryMode, QueryStrategy> strategiesReturning(QueryStrategy strategy) {
         var strategies = new EnumMap<QueryMode, QueryStrategy>(QueryMode.class);
-        strategies.put(QueryMode.LOCAL, request -> context);
+        strategies.put(QueryMode.LOCAL, strategy);
         return strategies;
+    }
+
+    private static EnumMap<QueryMode, QueryStrategy> strategiesReturning(QueryContext context) {
+        return strategiesReturning(new RecordingQueryStrategy(context));
     }
 
     private static ScoredChunk scoredChunk(String chunkId, String text, double score) {
@@ -148,6 +181,25 @@ class QueryEngineTest {
         @Override
         public List<RerankResult> rerank(RerankRequest request) {
             return results;
+        }
+    }
+
+    private static final class RecordingQueryStrategy implements QueryStrategy {
+        private final QueryContext context;
+        private QueryRequest lastRequest;
+
+        private RecordingQueryStrategy(QueryContext context) {
+            this.context = context;
+        }
+
+        @Override
+        public QueryContext retrieve(QueryRequest request) {
+            lastRequest = request;
+            return context;
+        }
+
+        QueryRequest lastRequest() {
+            return lastRequest;
         }
     }
 
