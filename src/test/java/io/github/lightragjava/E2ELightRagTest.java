@@ -883,6 +883,294 @@ class E2ELightRagTest {
     }
 
     @Test
+    void rejectsInvalidEntityMergeRequests() {
+        var storage = InMemoryStorageProvider.create();
+        var rag = LightRag.builder()
+            .chatModel(new FakeChatModel())
+            .embeddingModel(new FakeEmbeddingModel())
+            .storage(storage)
+            .build();
+
+        storage.graphStore().saveEntity(new GraphStore.EntityRecord(
+            "entity:alice",
+            "Alice",
+            "person",
+            "Researcher",
+            List.of("Shared"),
+            List.of()
+        ));
+        storage.graphStore().saveEntity(new GraphStore.EntityRecord(
+            "entity:alicia",
+            "Alicia",
+            "person",
+            "Engineer",
+            List.of("Shared"),
+            List.of()
+        ));
+        rag.createEntity(CreateEntityRequest.builder()
+            .name("Bob")
+            .type("person")
+            .description("Analyst")
+            .aliases(List.of("Robert Jr"))
+            .build());
+        rag.createEntity(CreateEntityRequest.builder()
+            .name("Robert")
+            .type("person")
+            .description("Principal investigator")
+            .aliases(List.of("Rob"))
+            .build());
+
+        assertThatThrownBy(() -> MergeEntitiesRequest.builder()
+            .sourceEntityNames(List.of())
+            .targetEntityName("Robert")
+            .build())
+            .isInstanceOf(IllegalArgumentException.class)
+            .hasMessageContaining("sourceEntityNames must not be empty");
+        assertThatThrownBy(() -> rag.mergeEntities(MergeEntitiesRequest.builder()
+            .sourceEntityNames(List.of("Shared"))
+            .targetEntityName("Robert")
+            .build()))
+            .isInstanceOf(IllegalArgumentException.class)
+            .hasMessageContaining("resolves ambiguously via alias");
+        assertThatThrownBy(() -> rag.mergeEntities(MergeEntitiesRequest.builder()
+            .sourceEntityNames(List.of("Bob", "Robert Jr"))
+            .targetEntityName("Robert")
+            .build()))
+            .isInstanceOf(IllegalArgumentException.class)
+            .hasMessageContaining("duplicate entities");
+        assertThatThrownBy(() -> rag.mergeEntities(MergeEntitiesRequest.builder()
+            .sourceEntityNames(List.of("Robert"))
+            .targetEntityName("Robert")
+            .build()))
+            .isInstanceOf(IllegalArgumentException.class)
+            .hasMessageContaining("target entity must not be included");
+        assertThatThrownBy(() -> rag.mergeEntities(MergeEntitiesRequest.builder()
+            .sourceEntityNames(List.of("Missing"))
+            .targetEntityName("Robert")
+            .build()))
+            .isInstanceOf(IllegalArgumentException.class)
+            .hasMessageContaining("does not match an existing entity");
+        assertThatThrownBy(() -> rag.mergeEntities(MergeEntitiesRequest.builder()
+            .sourceEntityNames(List.of("Bob"))
+            .targetEntityName("Missing")
+            .build()))
+            .isInstanceOf(IllegalArgumentException.class)
+            .hasMessageContaining("does not match an existing entity");
+
+        var merged = rag.mergeEntities(MergeEntitiesRequest.builder()
+            .sourceEntityNames(List.of("Bob"))
+            .targetEntityName("Robert")
+            .targetType("leader")
+            .targetDescription("Merged profile")
+            .targetAliases(List.of("Merged Bob", "Rob"))
+            .build());
+
+        assertThat(merged).isEqualTo(new GraphEntity(
+            "entity:robert",
+            "Robert",
+            "leader",
+            "Merged profile",
+            List.of("Merged Bob", "Rob"),
+            List.of()
+        ));
+    }
+
+    @Test
+    void mergeEntitiesPersistsSnapshotWhenConfigured() {
+        var storage = InMemoryStorageProvider.create(new FileSnapshotStore());
+        var snapshotPath = tempDir.resolve("entity-merge.snapshot.json");
+        var rag = LightRag.builder()
+            .chatModel(new FakeChatModel())
+            .embeddingModel(new FakeEmbeddingModel())
+            .storage(storage)
+            .loadFromSnapshot(snapshotPath)
+            .build();
+
+        rag.createEntity(CreateEntityRequest.builder()
+            .name("Alice")
+            .type("person")
+            .description("Researcher")
+            .build());
+        rag.createEntity(CreateEntityRequest.builder()
+            .name("Bob")
+            .type("person")
+            .description("Engineer")
+            .build());
+        rag.createEntity(CreateEntityRequest.builder()
+            .name("Robert")
+            .type("person")
+            .description("Principal investigator")
+            .build());
+        rag.createRelation(CreateRelationRequest.builder()
+            .sourceEntityName("Alice")
+            .targetEntityName("Bob")
+            .relationType("works_with")
+            .description("collaboration")
+            .weight(0.8d)
+            .build());
+
+        rag.mergeEntities(MergeEntitiesRequest.builder()
+            .sourceEntityNames(List.of("Bob"))
+            .targetEntityName("Robert")
+            .build());
+
+        var snapshot = storage.snapshotStore().load(snapshotPath);
+        assertThat(snapshot.entities())
+            .extracting(GraphStore.EntityRecord::id)
+            .containsExactly("entity:alice", "entity:robert");
+        assertThat(snapshot.relations())
+            .extracting(GraphStore.RelationRecord::id)
+            .containsExactly("relation:entity:alice|works_with|entity:robert");
+        assertThat(snapshot.vectors().get("entities"))
+            .extracting(VectorStore.VectorRecord::id)
+            .containsExactly("entity:alice", "entity:robert");
+    }
+
+    @Test
+    void postgresProviderSupportsEntityMerge() {
+        try (
+            var container = new PostgreSQLContainer<>(
+                DockerImageName.parse("pgvector/pgvector:pg16").asCompatibleSubstituteFor("postgres")
+            )
+        ) {
+            container.start();
+            var storage = new PostgresStorageProvider(
+                new PostgresStorageConfig(
+                    container.getJdbcUrl(),
+                    container.getUsername(),
+                    container.getPassword(),
+                    "lightrag",
+                    2,
+                    "rag_"
+                ),
+                new FileSnapshotStore()
+            );
+
+            try (storage) {
+                var rag = LightRag.builder()
+                    .chatModel(new FakeChatModel())
+                    .embeddingModel(new FakeEmbeddingModel())
+                    .storage(storage)
+                    .build();
+
+                rag.createEntity(CreateEntityRequest.builder()
+                    .name("Alice")
+                    .type("person")
+                    .description("Researcher")
+                    .build());
+                rag.createEntity(CreateEntityRequest.builder()
+                    .name("Bob")
+                    .type("person")
+                    .description("Engineer")
+                    .build());
+                rag.createEntity(CreateEntityRequest.builder()
+                    .name("Robert")
+                    .type("person")
+                    .description("Principal investigator")
+                    .build());
+                rag.createRelation(CreateRelationRequest.builder()
+                    .sourceEntityName("Alice")
+                    .targetEntityName("Bob")
+                    .relationType("works_with")
+                    .description("collaboration")
+                    .weight(0.8d)
+                    .build());
+
+                rag.mergeEntities(MergeEntitiesRequest.builder()
+                    .sourceEntityNames(List.of("Bob"))
+                    .targetEntityName("Robert")
+                    .build());
+
+                assertThat(storage.graphStore().allEntities())
+                    .extracting(GraphStore.EntityRecord::id)
+                    .containsExactly("entity:alice", "entity:robert");
+                assertThat(storage.graphStore().allRelations())
+                    .extracting(GraphStore.RelationRecord::id)
+                    .containsExactly("relation:entity:alice|works_with|entity:robert");
+                assertThat(storage.vectorStore().list("entities"))
+                    .extracting(VectorStore.VectorRecord::id)
+                    .containsExactly("entity:alice", "entity:robert");
+            }
+        }
+    }
+
+    @Test
+    void postgresNeo4jProviderSupportsEntityMerge() {
+        try (
+            var postgres = new PostgreSQLContainer<>(
+                DockerImageName.parse("pgvector/pgvector:pg16").asCompatibleSubstituteFor("postgres")
+            );
+            var neo4j = new Neo4jContainer<>("neo4j:5-community").withAdminPassword("password")
+        ) {
+            postgres.start();
+            neo4j.start();
+            var storage = new PostgresNeo4jStorageProvider(
+                new PostgresStorageConfig(
+                    postgres.getJdbcUrl(),
+                    postgres.getUsername(),
+                    postgres.getPassword(),
+                    "lightrag",
+                    2,
+                    "rag_"
+                ),
+                new Neo4jGraphConfig(
+                    neo4j.getBoltUrl(),
+                    "neo4j",
+                    neo4j.getAdminPassword(),
+                    "neo4j"
+                ),
+                new FileSnapshotStore()
+            );
+
+            try (storage) {
+                var rag = LightRag.builder()
+                    .chatModel(new FakeChatModel())
+                    .embeddingModel(new FakeEmbeddingModel())
+                    .storage(storage)
+                    .build();
+
+                rag.createEntity(CreateEntityRequest.builder()
+                    .name("Alice")
+                    .type("person")
+                    .description("Researcher")
+                    .build());
+                rag.createEntity(CreateEntityRequest.builder()
+                    .name("Bob")
+                    .type("person")
+                    .description("Engineer")
+                    .build());
+                rag.createEntity(CreateEntityRequest.builder()
+                    .name("Robert")
+                    .type("person")
+                    .description("Principal investigator")
+                    .build());
+                rag.createRelation(CreateRelationRequest.builder()
+                    .sourceEntityName("Alice")
+                    .targetEntityName("Bob")
+                    .relationType("works_with")
+                    .description("collaboration")
+                    .weight(0.8d)
+                    .build());
+
+                rag.mergeEntities(MergeEntitiesRequest.builder()
+                    .sourceEntityNames(List.of("Bob"))
+                    .targetEntityName("Robert")
+                    .build());
+
+                assertThat(storage.graphStore().allEntities())
+                    .extracting(GraphStore.EntityRecord::id)
+                    .containsExactly("entity:alice", "entity:robert");
+                assertThat(storage.graphStore().allRelations())
+                    .extracting(GraphStore.RelationRecord::id)
+                    .containsExactly("relation:entity:alice|works_with|entity:robert");
+                assertThat(storage.vectorStore().list("relations"))
+                    .extracting(VectorStore.VectorRecord::id)
+                    .containsExactly("relation:entity:alice|works_with|entity:robert");
+            }
+        }
+    }
+
+    @Test
     void graphManagementPersistsSnapshotWhenConfigured() {
         var storage = InMemoryStorageProvider.create(new FileSnapshotStore());
         var snapshotPath = tempDir.resolve("graph-management.snapshot.json");
