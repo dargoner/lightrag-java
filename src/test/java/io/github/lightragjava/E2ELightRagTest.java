@@ -1,6 +1,8 @@
 package io.github.lightragjava;
 
 import io.github.lightragjava.api.LightRag;
+import io.github.lightragjava.api.QueryRequest;
+import io.github.lightragjava.api.QueryResult;
 import io.github.lightragjava.model.ChatModel;
 import io.github.lightragjava.model.EmbeddingModel;
 import io.github.lightragjava.storage.InMemoryStorageProvider;
@@ -67,9 +69,40 @@ class E2ELightRagTest {
         assertThat(snapshot.vectors()).containsKeys("chunks", "entities", "relations");
     }
 
+    @Test
+    void queryUsesMixModeByDefaultAndCallsChatModelWithContext() {
+        var storage = InMemoryStorageProvider.create();
+        var chatModel = new FakeChatModel();
+        var rag = LightRag.builder()
+            .chatModel(chatModel)
+            .embeddingModel(new FakeEmbeddingModel())
+            .storage(storage)
+            .build();
+
+        rag.ingest(List.of(new Document("doc-1", "Title", "Alice works with Bob", Map.of())));
+
+        QueryResult result = rag.query(QueryRequest.builder()
+            .query("Who works with Bob?")
+            .build());
+
+        assertThat(result.answer()).isEqualTo("Alice works with Bob.");
+        assertThat(result.contexts())
+            .extracting(QueryResult.Context::sourceId)
+            .contains("doc-1:0");
+        assertThat(chatModel.lastQueryRequest()).isNotNull();
+        assertThat(chatModel.lastQueryRequest().userPrompt()).contains("Who works with Bob?");
+        assertThat(chatModel.lastQueryRequest().userPrompt()).contains("Alice");
+    }
+
     private static final class FakeChatModel implements ChatModel {
+        private ChatRequest lastQueryRequest;
+
         @Override
         public String generate(ChatRequest request) {
+            if (request.userPrompt().contains("Question:")) {
+                lastQueryRequest = request;
+                return "Alice works with Bob.";
+            }
             return """
                 {
                   "entities": [
@@ -97,6 +130,10 @@ class E2ELightRagTest {
                   ]
                 }
                 """;
+        }
+
+        ChatRequest lastQueryRequest() {
+            return lastQueryRequest;
         }
     }
 
