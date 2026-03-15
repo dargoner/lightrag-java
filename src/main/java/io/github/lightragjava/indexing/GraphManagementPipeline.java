@@ -2,17 +2,24 @@ package io.github.lightragjava.indexing;
 
 import io.github.lightragjava.api.CreateEntityRequest;
 import io.github.lightragjava.api.CreateRelationRequest;
+import io.github.lightragjava.api.EditEntityRequest;
+import io.github.lightragjava.api.EditRelationRequest;
 import io.github.lightragjava.api.GraphEntity;
 import io.github.lightragjava.api.GraphRelation;
 import io.github.lightragjava.storage.AtomicStorageProvider;
 import io.github.lightragjava.storage.GraphStore;
+import io.github.lightragjava.storage.SnapshotStore;
+import io.github.lightragjava.storage.VectorStore;
 import io.github.lightragjava.types.Entity;
 import io.github.lightragjava.types.Relation;
 
 import java.nio.file.Path;
+import java.util.ArrayList;
+import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Locale;
+import java.util.Map;
 import java.util.Objects;
 
 public final class GraphManagementPipeline {
@@ -33,7 +40,7 @@ public final class GraphManagementPipeline {
     public GraphEntity createEntity(CreateEntityRequest request) {
         var createRequest = Objects.requireNonNull(request, "request");
         var entityRecord = storageProvider.writeAtomically(storage -> {
-            validateCreateEntity(storage.graphStore().allEntities(), createRequest);
+            validateEntityIdentityNamespace(storage.graphStore().allEntities(), null, createRequest.name(), createRequest.aliases());
 
             var created = new GraphStore.EntityRecord(
                 entityId(createRequest.name()),
@@ -80,10 +87,140 @@ public final class GraphManagementPipeline {
         return toGraphRelation(relationRecord);
     }
 
-    private static void validateCreateEntity(List<GraphStore.EntityRecord> entities, CreateEntityRequest request) {
-        var requestedNameKey = normalizeKey(request.name());
-        var requestedAliasKeys = aliasKeys(request.aliases());
+    public GraphEntity editEntity(EditEntityRequest request) {
+        var editRequest = Objects.requireNonNull(request, "request");
+        var snapshot = StorageSnapshots.capture(storageProvider);
+        var existing = resolveEntity(snapshot.entities(), editRequest.entityName(), "entityName");
+        var renamed = editRequest.newName() != null && !normalizeKey(existing.name()).equals(normalizeKey(editRequest.newName()));
+        var effectiveName = renamed ? editRequest.newName() : existing.name();
+        var aliases = editRequest.aliases() == null
+            ? (renamed ? normalizeAliasesForName(effectiveName, existing.aliases()) : existing.aliases())
+            : normalizeAliasesForName(effectiveName, editRequest.aliases());
+        if (renamed) {
+            aliases = appendAliasIfMissing(aliases, existing.name(), effectiveName);
+        }
+
+        validateEntityIdentityNamespace(snapshot.entities(), existing.id(), effectiveName, aliases);
+
+        var updatedEntity = new GraphStore.EntityRecord(
+            entityId(effectiveName),
+            effectiveName,
+            editRequest.type() == null ? existing.type() : editRequest.type(),
+            editRequest.description() == null ? existing.description() : editRequest.description(),
+            aliases,
+            existing.sourceChunkIds()
+        );
+
+        var updatedRelations = renamed
+            ? migrateRelations(snapshot.relations(), existing.id(), updatedEntity.id())
+            : snapshot.relations();
+        var updatedVectors = new LinkedHashMap<>(snapshot.vectors());
+        updatedVectors.put(
+            StorageSnapshots.ENTITY_NAMESPACE,
+            replaceNamespaceVectors(
+                snapshot.vectors().getOrDefault(StorageSnapshots.ENTITY_NAMESPACE, List.of()),
+                List.of(existing.id()),
+                indexingPipeline.entityVectors(List.of(toEntity(updatedEntity)))
+            )
+        );
+        if (renamed) {
+            var previousRelationIds = snapshot.relations().stream()
+                .filter(relation -> relation.sourceEntityId().equals(existing.id()) || relation.targetEntityId().equals(existing.id()))
+                .map(GraphStore.RelationRecord::id)
+                .toList();
+            var replacementRelations = updatedRelations.stream()
+                .filter(relation -> relation.sourceEntityId().equals(updatedEntity.id()) || relation.targetEntityId().equals(updatedEntity.id()))
+                .map(GraphManagementPipeline::toRelation)
+                .toList();
+            updatedVectors.put(
+                StorageSnapshots.RELATION_NAMESPACE,
+                replaceNamespaceVectors(
+                    snapshot.vectors().getOrDefault(StorageSnapshots.RELATION_NAMESPACE, List.of()),
+                    previousRelationIds,
+                    indexingPipeline.relationVectors(replacementRelations)
+                )
+            );
+        }
+
+        storageProvider.restore(new SnapshotStore.Snapshot(
+            snapshot.documents(),
+            snapshot.chunks(),
+            replaceEntity(snapshot.entities(), existing.id(), updatedEntity),
+            updatedRelations,
+            Map.copyOf(updatedVectors)
+        ));
+        StorageSnapshots.persistIfConfigured(storageProvider, snapshotPath);
+        return toGraphEntity(updatedEntity);
+    }
+
+    public GraphRelation editRelation(EditRelationRequest request) {
+        var editRequest = Objects.requireNonNull(request, "request");
+        var snapshot = StorageSnapshots.capture(storageProvider);
+        var sourceEntity = resolveEntity(snapshot.entities(), editRequest.sourceEntityName(), "sourceEntityName");
+        var targetEntity = resolveEntity(snapshot.entities(), editRequest.targetEntityName(), "targetEntityName");
+        var currentRelationId = relationId(sourceEntity.id(), editRequest.currentRelationType(), targetEntity.id());
+        var existing = snapshot.relations().stream()
+            .filter(relation -> relation.id().equals(currentRelationId))
+            .findFirst()
+            .orElseThrow(() -> new IllegalArgumentException("relation does not exist: " + currentRelationId));
+
+        var updatedType = editRequest.newRelationType() == null ? existing.type() : editRequest.newRelationType();
+        var updatedRelation = new GraphStore.RelationRecord(
+            relationId(existing.sourceEntityId(), updatedType, existing.targetEntityId()),
+            existing.sourceEntityId(),
+            existing.targetEntityId(),
+            updatedType,
+            editRequest.description() == null ? existing.description() : editRequest.description(),
+            editRequest.weight() == null ? existing.weight() : editRequest.weight(),
+            existing.sourceChunkIds()
+        );
+        if (!updatedRelation.id().equals(existing.id())
+            && snapshot.relations().stream().anyMatch(relation -> relation.id().equals(updatedRelation.id()))) {
+            throw new IllegalArgumentException("relation already exists: " + updatedRelation.id());
+        }
+
+        var updatedVectors = new LinkedHashMap<>(snapshot.vectors());
+        updatedVectors.put(
+            StorageSnapshots.RELATION_NAMESPACE,
+            replaceNamespaceVectors(
+                snapshot.vectors().getOrDefault(StorageSnapshots.RELATION_NAMESPACE, List.of()),
+                List.of(existing.id()),
+                indexingPipeline.relationVectors(List.of(toRelation(updatedRelation)))
+            )
+        );
+
+        storageProvider.restore(new SnapshotStore.Snapshot(
+            snapshot.documents(),
+            snapshot.chunks(),
+            snapshot.entities(),
+            replaceRelation(snapshot.relations(), existing.id(), updatedRelation),
+            Map.copyOf(updatedVectors)
+        ));
+        StorageSnapshots.persistIfConfigured(storageProvider, snapshotPath);
+        return toGraphRelation(updatedRelation);
+    }
+
+    private static void validateCreateRelation(
+        List<GraphStore.RelationRecord> relations,
+        GraphStore.RelationRecord relationRecord
+    ) {
+        if (relations.stream().anyMatch(existing -> existing.id().equals(relationRecord.id()))) {
+            throw new IllegalArgumentException("relation already exists: " + relationRecord.id());
+        }
+    }
+
+    private static void validateEntityIdentityNamespace(
+        List<GraphStore.EntityRecord> entities,
+        String currentEntityId,
+        String effectiveName,
+        List<String> aliases
+    ) {
+        var requestedNameKey = normalizeKey(effectiveName);
+        var requestedAliasKeys = aliasKeys(aliases);
         for (var entity : entities) {
+            if (entity.id().equals(currentEntityId)) {
+                continue;
+            }
             var existingNameKey = normalizeKey(entity.name());
             if (requestedNameKey.equals(existingNameKey) || requestedAliasKeys.contains(existingNameKey)) {
                 throw new IllegalArgumentException("entity name or alias already exists: " + entity.name());
@@ -94,15 +231,6 @@ public final class GraphManagementPipeline {
                     throw new IllegalArgumentException("entity name or alias already exists: " + alias.strip());
                 }
             }
-        }
-    }
-
-    private static void validateCreateRelation(
-        List<GraphStore.RelationRecord> relations,
-        GraphStore.RelationRecord relationRecord
-    ) {
-        if (relations.stream().anyMatch(existing -> existing.id().equals(relationRecord.id()))) {
-            throw new IllegalArgumentException("relation already exists: " + relationRecord.id());
         }
     }
 
@@ -145,6 +273,32 @@ public final class GraphManagementPipeline {
             }
         }
         return List.copyOf(keys);
+    }
+
+    private static List<String> normalizeAliasesForName(String entityName, List<String> aliases) {
+        var normalizedName = normalizeKey(entityName);
+        var normalizedAliases = new LinkedHashMap<String, String>();
+        for (var alias : aliases) {
+            var normalizedAlias = normalizeOptionalKey(alias);
+            if (normalizedAlias == null || normalizedAlias.equals(normalizedName)) {
+                continue;
+            }
+            normalizedAliases.putIfAbsent(normalizedAlias, alias.strip());
+        }
+        return List.copyOf(normalizedAliases.values());
+    }
+
+    private static List<String> appendAliasIfMissing(List<String> aliases, String alias, String entityName) {
+        var normalizedAlias = normalizeOptionalKey(alias);
+        if (normalizedAlias == null || normalizedAlias.equals(normalizeKey(entityName))) {
+            return aliases;
+        }
+        var normalizedAliases = new LinkedHashMap<String, String>();
+        for (var existing : aliases) {
+            normalizedAliases.put(normalizeKey(existing), existing);
+        }
+        normalizedAliases.putIfAbsent(normalizedAlias, alias.strip());
+        return List.copyOf(normalizedAliases.values());
     }
 
     private static String entityId(String entityName) {
@@ -214,4 +368,74 @@ public final class GraphManagementPipeline {
         );
     }
 
+    private static List<GraphStore.EntityRecord> replaceEntity(
+        List<GraphStore.EntityRecord> entities,
+        String currentEntityId,
+        GraphStore.EntityRecord updatedEntity
+    ) {
+        var values = new ArrayList<GraphStore.EntityRecord>(entities.size());
+        for (var entity : entities) {
+            if (!entity.id().equals(currentEntityId)) {
+                values.add(entity);
+            }
+        }
+        values.add(updatedEntity);
+        return List.copyOf(values);
+    }
+
+    private static List<GraphStore.RelationRecord> replaceRelation(
+        List<GraphStore.RelationRecord> relations,
+        String currentRelationId,
+        GraphStore.RelationRecord updatedRelation
+    ) {
+        var values = new ArrayList<GraphStore.RelationRecord>(relations.size());
+        for (var relation : relations) {
+            if (!relation.id().equals(currentRelationId)) {
+                values.add(relation);
+            }
+        }
+        values.add(updatedRelation);
+        return List.copyOf(values);
+    }
+
+    private static List<GraphStore.RelationRecord> migrateRelations(
+        List<GraphStore.RelationRecord> relations,
+        String currentEntityId,
+        String updatedEntityId
+    ) {
+        return relations.stream()
+            .map(relation -> {
+                if (!relation.sourceEntityId().equals(currentEntityId) && !relation.targetEntityId().equals(currentEntityId)) {
+                    return relation;
+                }
+                var sourceEntityId = relation.sourceEntityId().equals(currentEntityId) ? updatedEntityId : relation.sourceEntityId();
+                var targetEntityId = relation.targetEntityId().equals(currentEntityId) ? updatedEntityId : relation.targetEntityId();
+                return new GraphStore.RelationRecord(
+                    relationId(sourceEntityId, relation.type(), targetEntityId),
+                    sourceEntityId,
+                    targetEntityId,
+                    relation.type(),
+                    relation.description(),
+                    relation.weight(),
+                    relation.sourceChunkIds()
+                );
+            })
+            .toList();
+    }
+
+    private static List<VectorStore.VectorRecord> replaceNamespaceVectors(
+        List<VectorStore.VectorRecord> existingVectors,
+        List<String> previousIds,
+        List<VectorStore.VectorRecord> replacementVectors
+    ) {
+        var removedIds = new LinkedHashSet<>(previousIds);
+        var values = new ArrayList<VectorStore.VectorRecord>(existingVectors.size() + replacementVectors.size());
+        for (var vector : existingVectors) {
+            if (!removedIds.contains(vector.id())) {
+                values.add(vector);
+            }
+        }
+        values.addAll(replacementVectors);
+        return List.copyOf(values);
+    }
 }

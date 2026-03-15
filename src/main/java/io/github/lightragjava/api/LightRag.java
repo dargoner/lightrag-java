@@ -69,6 +69,14 @@ public final class LightRag {
         return graphManagementPipeline.createRelation(request);
     }
 
+    public GraphEntity editEntity(EditEntityRequest request) {
+        return graphManagementPipeline.editEntity(request);
+    }
+
+    public GraphRelation editRelation(EditRelationRequest request) {
+        return graphManagementPipeline.editRelation(request);
+    }
+
     /**
      * Deletes the resolved entity from graph and vector storage while preserving source documents and chunks.
      * Use {@link #deleteByDocumentId(String)} to remove the originating text itself.

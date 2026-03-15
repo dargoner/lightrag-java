@@ -38,6 +38,58 @@ System.out.println(result.answer());
 
 For tests, demos, and ephemeral runs, the in-memory provider is still the fastest option. For restart-safe ingestion and durable local state, use the PostgreSQL provider described below.
 
+## Graph Management
+
+The Java SDK now supports manual graph mutations in addition to document ingest:
+
+- `createEntity(CreateEntityRequest request)`
+- `editEntity(EditEntityRequest request)`
+- `createRelation(CreateRelationRequest request)`
+- `editRelation(EditRelationRequest request)`
+
+```java
+var alice = rag.createEntity(CreateEntityRequest.builder()
+    .name("Alice")
+    .type("person")
+    .description("Researcher")
+    .aliases(List.of("Dr. Alice"))
+    .build());
+
+var bob = rag.createEntity(CreateEntityRequest.builder()
+    .name("Bob")
+    .type("person")
+    .description("Engineer")
+    .build());
+
+var worksWith = rag.createRelation(CreateRelationRequest.builder()
+    .sourceEntityName("Alice")
+    .targetEntityName("Bob")
+    .relationType("works_with")
+    .description("Cross-team collaboration")
+    .weight(0.8d)
+    .build());
+
+var robert = rag.editEntity(EditEntityRequest.builder()
+    .entityName("Bob")
+    .newName("Robert")
+    .description("Principal investigator")
+    .build());
+
+var reportsTo = rag.editRelation(EditRelationRequest.builder()
+    .sourceEntityName("Alice")
+    .targetEntityName("Robert")
+    .currentRelationType("works_with")
+    .newRelationType("reports_to")
+    .description("Formal reporting line")
+    .weight(0.9d)
+    .build());
+```
+
+Notes:
+- Entity lookup is deterministic: exact normalized names win, aliases are only used when they resolve to exactly one entity.
+- Entity names and aliases share one external lookup namespace, so a new name or alias cannot reuse another entity's name or alias.
+- Java relation operations require an explicit relation type because relation identity is `sourceEntityId + normalizedRelationType + targetEntityId`.
+
 ## PostgreSQL Storage
 
 `PostgresStorageProvider` stores documents, chunks, graph records, and vectors in PostgreSQL so the SDK can survive process restarts without relying on JSON snapshots as the primary data store.
@@ -167,6 +219,7 @@ With the PostgreSQL and PostgreSQL+Neo4j backends, snapshots remain delegated to
 - Bundled storage providers: in-memory, PostgreSQL, and PostgreSQL+Neo4j.
 - PostgreSQL is the current durable source of truth for documents, chunks, graph data, and vectors.
 - `PostgresNeo4jStorageProvider` adds Neo4j-backed graph reads on top of PostgreSQL durability.
+- Manual graph-management APIs support create/edit flows for entities and relations across all bundled providers.
 - Snapshot persistence still uses the `SnapshotStore` SPI and remains file-based by default.
 - Query modes supported today: `LOCAL`, `GLOBAL`, `HYBRID`, and `MIX`.
 - Extraction and graph merge rules are intentionally simple and deterministic.
