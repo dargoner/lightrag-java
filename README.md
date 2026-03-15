@@ -86,6 +86,60 @@ rag.ingest(List.of(
 
 `PostgresStorageProvider` bootstraps its schema automatically on startup. Ingest writes run atomically across document, chunk, graph, and vector storage.
 
+## PostgreSQL + Neo4j Storage
+
+`PostgresNeo4jStorageProvider` keeps PostgreSQL as the durable source of truth for documents, chunks, graph rows, and vectors, while projecting graph reads into Neo4j.
+
+### Prerequisites
+
+- PostgreSQL 16+ with the `vector` extension available
+- Neo4j 5+ with Bolt enabled
+- Database users that can create the required PostgreSQL tables and Neo4j constraints
+- A configured `SnapshotStore` for `loadFromSnapshot(...)` and autosave flows
+
+For local development and Testcontainers, the expected images are:
+
+- `pgvector/pgvector:pg16`
+- `neo4j:5-community`
+
+### Quick Start
+
+```java
+var storage = new PostgresNeo4jStorageProvider(
+    new PostgresStorageConfig(
+        "jdbc:postgresql://localhost:5432/lightrag",
+        "postgres",
+        "postgres",
+        "public",
+        1536,
+        "rag_"
+    ),
+    new Neo4jGraphConfig(
+        "bolt://localhost:7687",
+        "neo4j",
+        "password",
+        "neo4j"
+    ),
+    new FileSnapshotStore()
+);
+
+var rag = LightRag.builder()
+    .chatModel(new OpenAiCompatibleChatModel(
+        "https://api.openai.com/v1/",
+        "gpt-4o-mini",
+        System.getenv("OPENAI_API_KEY")
+    ))
+    .embeddingModel(new OpenAiCompatibleEmbeddingModel(
+        "https://api.openai.com/v1/",
+        "text-embedding-3-small",
+        System.getenv("OPENAI_API_KEY")
+    ))
+    .storage(storage)
+    .build();
+```
+
+This mixed provider uses a compensation-based rollback model: PostgreSQL remains the source of truth, Neo4j serves graph reads, and failed graph projection updates are rolled back to the pre-write snapshot so the SDK still presents provider-level atomic outcomes.
+
 ## Snapshot Usage
 
 ```java
@@ -106,14 +160,15 @@ rag.ingest(documents);
 - If the snapshot file already exists, it restores documents, chunks, graph data, and vectors before `build()`.
 - It also sets the autosave target used after successful `ingest(...)` calls.
 
-With the PostgreSQL backend, snapshots remain delegated to the configured `SnapshotStore`. PostgreSQL is the primary durable store for online data, while snapshot files are still used only when you explicitly load or autosave snapshots through the existing API.
+With the PostgreSQL and PostgreSQL+Neo4j backends, snapshots remain delegated to the configured `SnapshotStore`. PostgreSQL is the primary durable store for online data, while snapshot files are still used only when you explicitly load or autosave snapshots through the existing API.
 
 ## Current v1 Scope
 
-- Bundled storage providers: in-memory and PostgreSQL.
-- PostgreSQL is the current bundled durable backend for documents, chunks, graph data, and vectors.
+- Bundled storage providers: in-memory, PostgreSQL, and PostgreSQL+Neo4j.
+- PostgreSQL is the current durable source of truth for documents, chunks, graph data, and vectors.
+- `PostgresNeo4jStorageProvider` adds Neo4j-backed graph reads on top of PostgreSQL durability.
 - Snapshot persistence still uses the `SnapshotStore` SPI and remains file-based by default.
 - Query modes supported today: `LOCAL`, `GLOBAL`, `HYBRID`, and `MIX`.
 - Extraction and graph merge rules are intentionally simple and deterministic.
 - OpenAI-compatible adapters support standard `/chat/completions` and `/embeddings` endpoints.
-- Neo4j support is planned for the next storage phase and is not part of the current bundled implementation.
+- A pure Neo4j-only storage provider is not bundled in this phase.

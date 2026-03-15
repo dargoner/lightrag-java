@@ -12,9 +12,12 @@ import io.github.lightragjava.storage.GraphStore;
 import io.github.lightragjava.storage.InMemoryStorageProvider;
 import io.github.lightragjava.storage.SnapshotStore;
 import io.github.lightragjava.storage.VectorStore;
+import io.github.lightragjava.storage.neo4j.Neo4jGraphConfig;
+import io.github.lightragjava.storage.neo4j.PostgresNeo4jStorageProvider;
 import io.github.lightragjava.storage.postgres.PostgresStorageConfig;
 import io.github.lightragjava.storage.postgres.PostgresStorageProvider;
 import io.github.lightragjava.types.Document;
+import org.testcontainers.containers.Neo4jContainer;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 import org.testcontainers.containers.PostgreSQLContainer;
@@ -350,6 +353,135 @@ class E2ELightRagTest {
                 assertThat(storage.vectorStore().list("chunks")).isEmpty();
                 assertThat(storage.vectorStore().list("entities")).isEmpty();
                 assertThat(storage.vectorStore().list("relations")).isEmpty();
+            }
+        }
+    }
+
+    @Test
+    void postgresNeo4jProviderSupportsIngestAndQueryModes() {
+        try (
+            var postgres = new PostgreSQLContainer<>(
+                DockerImageName.parse("pgvector/pgvector:pg16").asCompatibleSubstituteFor("postgres")
+            );
+            var neo4j = new Neo4jContainer<>("neo4j:5-community").withAdminPassword("password")
+        ) {
+            postgres.start();
+            neo4j.start();
+            var storage = new PostgresNeo4jStorageProvider(
+                new PostgresStorageConfig(
+                    postgres.getJdbcUrl(),
+                    postgres.getUsername(),
+                    postgres.getPassword(),
+                    "lightrag",
+                    2,
+                    "rag_"
+                ),
+                new Neo4jGraphConfig(
+                    neo4j.getBoltUrl(),
+                    "neo4j",
+                    neo4j.getAdminPassword(),
+                    "neo4j"
+                ),
+                new FileSnapshotStore()
+            );
+
+            try (storage) {
+                var rag = LightRag.builder()
+                    .chatModel(new FakeChatModel())
+                    .embeddingModel(new FakeEmbeddingModel())
+                    .storage(storage)
+                    .build();
+
+                rag.ingest(List.of(
+                    new Document("doc-1", "Title", "Alice works with Bob", Map.of()),
+                    new Document("doc-2", "Title", "Bob reports to Carol", Map.of())
+                ));
+
+                assertThat(storage.documentStore().load("doc-1")).isPresent();
+                assertThat(storage.chunkStore().listByDocument("doc-1")).isNotEmpty();
+                assertThat(storage.graphStore().allEntities()).isNotEmpty();
+                assertThat(storage.graphStore().allRelations()).isNotEmpty();
+                assertThat(storage.vectorStore().list("chunks")).isNotEmpty();
+
+                var local = rag.query(QueryRequest.builder()
+                    .query("Who works with Bob?")
+                    .mode(io.github.lightragjava.api.QueryMode.LOCAL)
+                    .build());
+                var global = rag.query(QueryRequest.builder()
+                    .query("Who reports to Carol?")
+                    .mode(io.github.lightragjava.api.QueryMode.GLOBAL)
+                    .build());
+                var hybrid = rag.query(QueryRequest.builder()
+                    .query("Who works with Bob?")
+                    .mode(io.github.lightragjava.api.QueryMode.HYBRID)
+                    .build());
+                var mix = rag.query(QueryRequest.builder()
+                    .query("Who works with Bob?")
+                    .mode(io.github.lightragjava.api.QueryMode.MIX)
+                    .build());
+
+                assertThat(local.contexts()).isNotEmpty();
+                assertThat(global.contexts()).isNotEmpty();
+                assertThat(hybrid.contexts()).isNotEmpty();
+                assertThat(mix.contexts()).isNotEmpty();
+            }
+        }
+    }
+
+    @Test
+    void postgresNeo4jProviderRestoresFromSnapshotBeforeBuild() {
+        try (
+            var postgres = new PostgreSQLContainer<>(
+                DockerImageName.parse("pgvector/pgvector:pg16").asCompatibleSubstituteFor("postgres")
+            );
+            var neo4j = new Neo4jContainer<>("neo4j:5-community").withAdminPassword("password")
+        ) {
+            postgres.start();
+            neo4j.start();
+
+            var snapshotStore = new FileSnapshotStore();
+            var snapshotPath = tempDir.resolve("postgres-neo4j-seed.snapshot.json");
+            snapshotStore.save(snapshotPath, new SnapshotStore.Snapshot(
+                List.of(new DocumentStore.DocumentRecord("doc-seed", "Seed", "Body", Map.of())),
+                List.of(new ChunkStore.ChunkRecord("doc-seed:0", "doc-seed", "Body", 4, 0, Map.of())),
+                List.of(new GraphStore.EntityRecord("entity:seed", "Seed", "person", "Seed entity", List.of(), List.of("doc-seed:0"))),
+                List.of(),
+                Map.of("chunks", List.of(new VectorStore.VectorRecord("doc-seed:0", List.of(1.0d, 0.0d))))
+            ));
+
+            var storage = new PostgresNeo4jStorageProvider(
+                new PostgresStorageConfig(
+                    postgres.getJdbcUrl(),
+                    postgres.getUsername(),
+                    postgres.getPassword(),
+                    "lightrag",
+                    2,
+                    "rag_"
+                ),
+                new Neo4jGraphConfig(
+                    neo4j.getBoltUrl(),
+                    "neo4j",
+                    neo4j.getAdminPassword(),
+                    "neo4j"
+                ),
+                snapshotStore
+            );
+
+            try (storage) {
+                var rag = LightRag.builder()
+                    .chatModel(new FakeChatModel())
+                    .embeddingModel(new FakeEmbeddingModel())
+                    .storage(storage)
+                    .loadFromSnapshot(snapshotPath)
+                    .build();
+
+                assertThat(rag).isNotNull();
+                assertThat(storage.documentStore().load("doc-seed")).isPresent();
+                assertThat(storage.chunkStore().load("doc-seed:0")).isPresent();
+                assertThat(storage.graphStore().loadEntity("entity:seed")).isPresent();
+                assertThat(storage.vectorStore().list("chunks"))
+                    .extracting(VectorStore.VectorRecord::id)
+                    .containsExactly("doc-seed:0");
             }
         }
     }
