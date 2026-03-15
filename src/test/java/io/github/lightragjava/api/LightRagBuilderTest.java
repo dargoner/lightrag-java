@@ -3,6 +3,7 @@ package io.github.lightragjava.api;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import io.github.lightragjava.model.ChatModel;
 import io.github.lightragjava.model.EmbeddingModel;
+import io.github.lightragjava.model.RerankModel;
 import io.github.lightragjava.storage.AtomicStorageProvider;
 import io.github.lightragjava.storage.ChunkStore;
 import io.github.lightragjava.storage.DocumentStore;
@@ -58,6 +59,20 @@ class LightRagBuilderTest {
             .build();
 
         assertThat(rag.config().snapshotPath()).isEqualTo(snapshotPath);
+    }
+
+    @Test
+    void buildsWithOptionalRerankModel() {
+        var rerankModel = new FakeRerankModel();
+
+        var rag = LightRag.builder()
+            .chatModel(new FakeChatModel())
+            .embeddingModel(new FakeEmbeddingModel())
+            .storage(new FakeStorageProvider())
+            .rerankModel(rerankModel)
+            .build();
+
+        assertThat(rag.config().rerankModel()).isSameAs(rerankModel);
     }
 
     @Test
@@ -148,6 +163,7 @@ class LightRagBuilderTest {
         assertThat(request.topK()).isEqualTo(QueryRequest.DEFAULT_TOP_K);
         assertThat(request.chunkTopK()).isEqualTo(QueryRequest.DEFAULT_CHUNK_TOP_K);
         assertThat(request.responseType()).isEqualTo(QueryRequest.DEFAULT_RESPONSE_TYPE);
+        assertThat(request.enableRerank()).isTrue();
     }
 
     @Test
@@ -217,6 +233,15 @@ class LightRagBuilderTest {
         public List<List<Double>> embedAll(List<String> texts) {
             return texts.stream()
                 .map(text -> List.of((double) text.length()))
+                .toList();
+        }
+    }
+
+    private static final class FakeRerankModel implements RerankModel {
+        @Override
+        public List<RerankResult> rerank(RerankRequest request) {
+            return request.candidates().stream()
+                .map(candidate -> new RerankResult(candidate.id(), 1.0d))
                 .toList();
         }
     }
