@@ -201,6 +201,174 @@ class E2ELightRagTest {
     }
 
     @Test
+    void deletesEntityAndConnectedRelations() {
+        var storage = InMemoryStorageProvider.create();
+        var rag = LightRag.builder()
+            .chatModel(new FakeChatModel())
+            .embeddingModel(new FakeEmbeddingModel())
+            .storage(storage)
+            .build();
+
+        rag.ingest(List.of(new Document("doc-1", "Title", "Alice works with Bob", Map.of())));
+
+        rag.deleteByEntity("Alice");
+
+        assertThat(storage.documentStore().load("doc-1")).isPresent();
+        assertThat(storage.chunkStore().listByDocument("doc-1")).hasSize(1);
+        assertThat(storage.graphStore().loadEntity("entity:alice")).isEmpty();
+        assertThat(storage.graphStore().loadEntity("entity:bob")).isPresent();
+        assertThat(storage.graphStore().allRelations()).isEmpty();
+        assertThat(storage.vectorStore().list("chunks"))
+            .extracting(VectorStore.VectorRecord::id)
+            .containsExactly("doc-1:0");
+        assertThat(storage.vectorStore().list("entities"))
+            .extracting(VectorStore.VectorRecord::id)
+            .containsExactly("entity:bob");
+        assertThat(storage.vectorStore().list("relations")).isEmpty();
+    }
+
+    @Test
+    void deletesRelationButPreservesEntities() {
+        var storage = InMemoryStorageProvider.create();
+        var rag = LightRag.builder()
+            .chatModel(new FakeChatModel())
+            .embeddingModel(new FakeEmbeddingModel())
+            .storage(storage)
+            .build();
+
+        rag.ingest(List.of(new Document("doc-1", "Title", "Alice works with Bob", Map.of())));
+
+        rag.deleteByRelation("Alice", "Bob");
+
+        assertThat(storage.documentStore().load("doc-1")).isPresent();
+        assertThat(storage.chunkStore().listByDocument("doc-1")).hasSize(1);
+        assertThat(storage.graphStore().allRelations()).isEmpty();
+        assertThat(storage.graphStore().loadEntity("entity:alice")).isPresent();
+        assertThat(storage.graphStore().loadEntity("entity:bob")).isPresent();
+        assertThat(storage.vectorStore().list("chunks"))
+            .extracting(VectorStore.VectorRecord::id)
+            .containsExactly("doc-1:0");
+        assertThat(storage.vectorStore().list("entities"))
+            .extracting(VectorStore.VectorRecord::id)
+            .containsExactly("entity:alice", "entity:bob");
+        assertThat(storage.vectorStore().list("relations")).isEmpty();
+    }
+
+    @Test
+    void deletesDocumentAndRebuildsRemainingKnowledge() {
+        var storage = InMemoryStorageProvider.create();
+        var rag = LightRag.builder()
+            .chatModel(new FakeChatModel())
+            .embeddingModel(new FakeEmbeddingModel())
+            .storage(storage)
+            .build();
+
+        rag.ingest(List.of(
+            new Document("doc-1", "Title", "Alice works with Bob", Map.of()),
+            new Document("doc-2", "Title", "Bob reports to Carol", Map.of())
+        ));
+
+        rag.deleteByDocumentId("doc-1");
+
+        assertThat(storage.documentStore().load("doc-1")).isEmpty();
+        assertThat(storage.documentStore().load("doc-2")).isPresent();
+        assertThat(storage.chunkStore().list())
+            .extracting(ChunkStore.ChunkRecord::documentId)
+            .containsExactly("doc-2");
+        assertThat(storage.graphStore().allEntities())
+            .extracting(GraphStore.EntityRecord::id)
+            .containsExactly("entity:bob", "entity:carol");
+        assertThat(storage.graphStore().allRelations())
+            .extracting(GraphStore.RelationRecord::id)
+            .containsExactly("relation:entity:bob|reports_to|entity:carol");
+    }
+
+    @Test
+    void restoresOriginalStateWhenDocumentDeleteRebuildFails() {
+        var storage = InMemoryStorageProvider.create();
+        var seedRag = LightRag.builder()
+            .chatModel(new FakeChatModel())
+            .embeddingModel(new FakeEmbeddingModel())
+            .storage(storage)
+            .build();
+
+        seedRag.ingest(List.of(
+            new Document("doc-1", "Title", "Alice works with Bob", Map.of()),
+            new Document("doc-2", "Title", "Bob reports to Carol", Map.of())
+        ));
+
+        var rag = LightRag.builder()
+            .chatModel(new FailingExtractionChatModel())
+            .embeddingModel(new FakeEmbeddingModel())
+            .storage(storage)
+            .build();
+
+        assertThatThrownBy(() -> rag.deleteByDocumentId("doc-1"))
+            .isInstanceOf(IllegalStateException.class)
+            .hasMessage("extract failed");
+
+        assertThat(storage.documentStore().list())
+            .extracting(DocumentStore.DocumentRecord::id)
+            .containsExactly("doc-1", "doc-2");
+        assertThat(storage.graphStore().allEntities())
+            .extracting(GraphStore.EntityRecord::id)
+            .containsExactly("entity:alice", "entity:bob", "entity:carol");
+        assertThat(storage.graphStore().allRelations())
+            .extracting(GraphStore.RelationRecord::id)
+            .containsExactly(
+                "relation:entity:alice|works_with|entity:bob",
+                "relation:entity:bob|reports_to|entity:carol"
+            );
+    }
+
+    @Test
+    void deletingMissingEntityOrRelationIsNoOp() {
+        var storage = InMemoryStorageProvider.create();
+        var rag = LightRag.builder()
+            .chatModel(new FakeChatModel())
+            .embeddingModel(new FakeEmbeddingModel())
+            .storage(storage)
+            .build();
+
+        rag.ingest(List.of(new Document("doc-1", "Title", "Alice works with Bob", Map.of())));
+
+        rag.deleteByEntity("Missing");
+        rag.deleteByRelation("Missing", "Bob");
+
+        assertThat(storage.documentStore().list())
+            .extracting(DocumentStore.DocumentRecord::id)
+            .containsExactly("doc-1");
+        assertThat(storage.graphStore().allEntities())
+            .extracting(GraphStore.EntityRecord::id)
+            .containsExactly("entity:alice", "entity:bob");
+        assertThat(storage.graphStore().allRelations())
+            .extracting(GraphStore.RelationRecord::id)
+            .containsExactly("relation:entity:alice|works_with|entity:bob");
+    }
+
+    @Test
+    void deleteOperationsPersistSnapshotWhenConfigured() {
+        var storage = InMemoryStorageProvider.create(new FileSnapshotStore());
+        var snapshotPath = tempDir.resolve("delete.snapshot.json");
+        var rag = LightRag.builder()
+            .chatModel(new FakeChatModel())
+            .embeddingModel(new FakeEmbeddingModel())
+            .storage(storage)
+            .loadFromSnapshot(snapshotPath)
+            .build();
+
+        rag.ingest(List.of(new Document("doc-1", "Title", "Alice works with Bob", Map.of())));
+        rag.deleteByRelation("Alice", "Bob");
+
+        var snapshot = storage.snapshotStore().load(snapshotPath);
+        assertThat(snapshot.documents())
+            .extracting(DocumentStore.DocumentRecord::id)
+            .containsExactly("doc-1");
+        assertThat(snapshot.relations()).isEmpty();
+        assertThat(snapshot.vectors().get("relations")).isEmpty();
+    }
+
+    @Test
     void postgresProviderSupportsIngestAndQueryModes() {
         try (
             var container = new PostgreSQLContainer<>(

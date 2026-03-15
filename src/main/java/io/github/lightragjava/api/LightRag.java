@@ -1,6 +1,7 @@
 package io.github.lightragjava.api;
 
 import io.github.lightragjava.config.LightRagConfig;
+import io.github.lightragjava.indexing.DeletionPipeline;
 import io.github.lightragjava.indexing.IndexingPipeline;
 import io.github.lightragjava.query.ContextAssembler;
 import io.github.lightragjava.query.GlobalQueryStrategy;
@@ -16,6 +17,7 @@ import java.util.List;
 public final class LightRag {
     private final LightRagConfig config;
     private final IndexingPipeline indexingPipeline;
+    private final DeletionPipeline deletionPipeline;
     private final QueryEngine queryEngine;
 
     LightRag(LightRagConfig config) {
@@ -24,6 +26,11 @@ public final class LightRag {
             config.chatModel(),
             config.embeddingModel(),
             config.storageProvider(),
+            config.snapshotPath()
+        );
+        this.deletionPipeline = new DeletionPipeline(
+            config.storageProvider(),
+            indexingPipeline,
             config.snapshotPath()
         );
         var contextAssembler = new ContextAssembler();
@@ -45,6 +52,30 @@ public final class LightRag {
 
     public void ingest(List<Document> documents) {
         indexingPipeline.ingest(documents);
+    }
+
+    /**
+     * Deletes the resolved entity from graph and vector storage while preserving source documents and chunks.
+     * Use {@link #deleteByDocumentId(String)} to remove the originating text itself.
+     */
+    public void deleteByEntity(String entityName) {
+        deletionPipeline.deleteByEntity(entityName);
+    }
+
+    /**
+     * Deletes all relations between the resolved endpoint entities from graph and relation-vector storage.
+     * Source documents and chunks remain available until removed by document deletion.
+     */
+    public void deleteByRelation(String sourceEntityName, String targetEntityName) {
+        deletionPipeline.deleteByRelation(sourceEntityName, targetEntityName);
+    }
+
+    /**
+     * Deletes a document by clearing storage and rebuilding all remaining documents through the current
+     * LightRag indexing pipeline.
+     */
+    public void deleteByDocumentId(String documentId) {
+        deletionPipeline.deleteByDocumentId(documentId);
     }
 
     public QueryResult query(QueryRequest request) {
