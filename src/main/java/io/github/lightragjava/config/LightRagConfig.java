@@ -2,6 +2,7 @@ package io.github.lightragjava.config;
 
 import io.github.lightragjava.model.ChatModel;
 import io.github.lightragjava.model.EmbeddingModel;
+import io.github.lightragjava.model.RerankModel;
 import io.github.lightragjava.storage.AtomicStorageProvider;
 import io.github.lightragjava.storage.DocumentStatusStore;
 
@@ -13,7 +14,8 @@ public record LightRagConfig(
     EmbeddingModel embeddingModel,
     AtomicStorageProvider storageProvider,
     DocumentStatusStore documentStatusStore,
-    Path snapshotPath
+    Path snapshotPath,
+    RerankModel rerankModel
 ) {
     public LightRagConfig {
         chatModel = Objects.requireNonNull(chatModel, "chatModel");

@@ -51,7 +51,7 @@ public final class LightRag {
         strategies.put(QueryMode.GLOBAL, global);
         strategies.put(QueryMode.HYBRID, hybrid);
         strategies.put(QueryMode.MIX, mix);
-        this.queryEngine = new QueryEngine(config.chatModel(), contextAssembler, strategies);
+        this.queryEngine = new QueryEngine(config.chatModel(), contextAssembler, strategies, config.rerankModel());
     }
 
     public static LightRagBuilder builder() {

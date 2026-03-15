@@ -4,6 +4,7 @@ import io.github.lightragjava.api.QueryMode;
 import io.github.lightragjava.api.QueryRequest;
 import io.github.lightragjava.api.QueryResult;
 import io.github.lightragjava.model.ChatModel;
+import io.github.lightragjava.model.RerankModel;
 import io.github.lightragjava.types.QueryContext;
 
 import java.util.EnumMap;
@@ -16,11 +17,18 @@ public final class QueryEngine {
     private final ChatModel chatModel;
     private final ContextAssembler contextAssembler;
     private final Map<QueryMode, QueryStrategy> strategies;
+    private final RerankModel rerankModel;
 
-    public QueryEngine(ChatModel chatModel, ContextAssembler contextAssembler, Map<QueryMode, QueryStrategy> strategies) {
+    public QueryEngine(
+        ChatModel chatModel,
+        ContextAssembler contextAssembler,
+        Map<QueryMode, QueryStrategy> strategies,
+        RerankModel rerankModel
+    ) {
         this.chatModel = Objects.requireNonNull(chatModel, "chatModel");
         this.contextAssembler = Objects.requireNonNull(contextAssembler, "contextAssembler");
         this.strategies = Map.copyOf(new EnumMap<>(Objects.requireNonNull(strategies, "strategies")));
+        this.rerankModel = rerankModel;
     }
 
     public QueryResult query(QueryRequest request) {

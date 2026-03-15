@@ -3,6 +3,7 @@ package io.github.lightragjava.api;
 import io.github.lightragjava.config.LightRagConfig;
 import io.github.lightragjava.model.ChatModel;
 import io.github.lightragjava.model.EmbeddingModel;
+import io.github.lightragjava.model.RerankModel;
 import io.github.lightragjava.storage.AtomicStorageProvider;
 import io.github.lightragjava.storage.ChunkStore;
 import io.github.lightragjava.storage.DocumentStore;
@@ -21,6 +22,7 @@ public final class LightRagBuilder {
     private EmbeddingModel embeddingModel;
     private StorageProvider storageProvider;
     private Path snapshotPath;
+    private RerankModel rerankModel;
 
     public LightRagBuilder chatModel(ChatModel chatModel) {
         this.chatModel = Objects.requireNonNull(chatModel, "chatModel");
@@ -34,6 +36,15 @@ public final class LightRagBuilder {
 
     public LightRagBuilder storage(StorageProvider storageProvider) {
         this.storageProvider = Objects.requireNonNull(storageProvider, "storageProvider");
+        return this;
+    }
+
+    /**
+     * Configures an optional second-stage chunk reranker. If queries keep rerank enabled but no model is configured,
+     * Java treats that as a deterministic no-op and does not emit upstream-style warnings in this phase.
+     */
+    public LightRagBuilder rerankModel(RerankModel rerankModel) {
+        this.rerankModel = Objects.requireNonNull(rerankModel, "rerankModel");
         return this;
     }
 
@@ -68,7 +79,8 @@ public final class LightRagBuilder {
             embeddingModel,
             atomicStorageProvider,
             storageProvider.documentStatusStore(),
-            snapshotPath
+            snapshotPath,
+            rerankModel
         ));
     }
 

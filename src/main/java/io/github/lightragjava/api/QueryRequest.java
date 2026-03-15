@@ -7,7 +7,8 @@ public record QueryRequest(
     QueryMode mode,
     int topK,
     int chunkTopK,
-    String responseType
+    String responseType,
+    boolean enableRerank
 ) {
     public static final QueryMode DEFAULT_MODE = QueryMode.MIX;
     public static final int DEFAULT_TOP_K = 10;
@@ -36,6 +37,7 @@ public record QueryRequest(
         private int topK = DEFAULT_TOP_K;
         private int chunkTopK = DEFAULT_CHUNK_TOP_K;
         private String responseType = DEFAULT_RESPONSE_TYPE;
+        private boolean enableRerank = true;
 
         public Builder query(String query) {
             this.query = query;
@@ -62,8 +64,13 @@ public record QueryRequest(
             return this;
         }
 
+        public Builder enableRerank(boolean enableRerank) {
+            this.enableRerank = enableRerank;
+            return this;
+        }
+
         public QueryRequest build() {
-            return new QueryRequest(query, mode, topK, chunkTopK, responseType);
+            return new QueryRequest(query, mode, topK, chunkTopK, responseType, enableRerank);
         }
     }
 }
