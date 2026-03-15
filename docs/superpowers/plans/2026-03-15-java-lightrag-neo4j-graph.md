@@ -147,10 +147,12 @@ Expected: FAIL because the mixed provider does not exist.
 Requirements:
 
 - internally compose `PostgresStorageProvider` and `Neo4jGraphStore`
+- implement `AutoCloseable` and close both delegates
 - use PostgreSQL for top-level document/chunk/vector access
 - expose a stable top-level graph facade that reads from Neo4j and mirrors writes into PostgreSQL and Neo4j
-- capture pre-write PostgreSQL snapshot for `chunks`, `entities`, and `relations` vector namespaces plus graph rows
+- capture a full pre-write PostgreSQL provider snapshot including documents, chunks, graph rows, and the `chunks`, `entities`, and `relations` vector namespaces
 - capture pre-write Neo4j graph snapshot
+- serialize `writeAtomically(...)`, top-level graph writes, and `restore(snapshot)` with one provider-level write lock
 - on successful PostgreSQL write, synchronize the graph projection into Neo4j
 - on Neo4j projection failure, restore both stores and preserve the original failure
 
@@ -179,6 +181,7 @@ Add tests for:
 - ingest + query using `PostgresNeo4jStorageProvider`
 - rollback when Neo4j graph projection fails after PostgreSQL data was persisted
 - graph reads after `restore(snapshot)` use rebuilt Neo4j state
+- `LightRag.builder().loadFromSnapshot(path)` restores Neo4j-backed graph reads before first query
 
 - [ ] **Step 2: Run the E2E and provider rollback tests**
 
