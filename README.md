@@ -83,12 +83,20 @@ var reportsTo = rag.editRelation(EditRelationRequest.builder()
     .description("Formal reporting line")
     .weight(0.9d)
     .build());
+
+var merged = rag.mergeEntities(MergeEntitiesRequest.builder()
+    .sourceEntityNames(List.of("Bob"))
+    .targetEntityName("Robert")
+    .targetDescription("Principal investigator leading the merged profile")
+    .targetAliases(List.of("Rob"))
+    .build());
 ```
 
 Notes:
 - Entity lookup is deterministic: exact normalized names win, aliases are only used when they resolve to exactly one entity.
 - Entity names and aliases share one external lookup namespace, so a new name or alias cannot reuse another entity's name or alias.
 - Java relation operations require an explicit relation type because relation identity is `sourceEntityId + normalizedRelationType + targetEntityId`.
+- `mergeEntities(...)` merges existing source entities into an existing target entity, redirects source relations, folds duplicate rewritten relations, and drops self-loops created by the merge.
 
 ## PostgreSQL Storage
 
