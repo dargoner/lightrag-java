@@ -90,7 +90,10 @@ public final class PostgresSchemaManager {
     }
 
     private List<Migration> migrations() {
-        return List.of(new Migration(1, versionOneStatements()));
+        return List.of(
+            new Migration(1, versionOneStatements()),
+            new Migration(2, versionTwoStatements())
+        );
     }
 
     private int latestSchemaVersion() {
@@ -176,6 +179,19 @@ public final class PostgresSchemaManager {
                     PRIMARY KEY (namespace, vector_id)
                 )
                 """.formatted(config.qualifiedTableName("vectors"), config.vectorDimensions())
+        );
+    }
+
+    private List<String> versionTwoStatements() {
+        return List.of(
+            """
+                CREATE TABLE IF NOT EXISTS %s (
+                    document_id TEXT PRIMARY KEY,
+                    status TEXT NOT NULL,
+                    summary TEXT NOT NULL DEFAULT '',
+                    error_message TEXT
+                )
+                """.formatted(config.qualifiedTableName("document_status"))
         );
     }
 

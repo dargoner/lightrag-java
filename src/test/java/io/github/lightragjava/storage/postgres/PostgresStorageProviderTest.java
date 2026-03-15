@@ -2,7 +2,9 @@ package io.github.lightragjava.storage.postgres;
 
 import com.pgvector.PGvector;
 import com.zaxxer.hikari.HikariDataSource;
+import io.github.lightragjava.api.DocumentStatus;
 import io.github.lightragjava.storage.ChunkStore;
+import io.github.lightragjava.storage.DocumentStatusStore;
 import io.github.lightragjava.storage.DocumentStore;
 import io.github.lightragjava.storage.GraphStore;
 import io.github.lightragjava.storage.SnapshotStore;
@@ -60,6 +62,7 @@ class PostgresStorageProviderTest {
                 assertThat(existingTables(connection, config.schema())).containsExactlyInAnyOrder(
                     "rag_documents",
                     "rag_chunks",
+                    "rag_document_status",
                     "rag_entities",
                     "rag_entity_aliases",
                     "rag_entity_chunks",
@@ -68,7 +71,7 @@ class PostgresStorageProviderTest {
                     "rag_schema_version",
                     "rag_vectors"
                 );
-                assertThat(schemaVersion(connection, config)).contains(1);
+                assertThat(schemaVersion(connection, config)).contains(2);
             }
         }
     }
@@ -100,7 +103,8 @@ class PostgresStorageProviderTest {
             createLegacySchema(connection, config);
 
             try (PostgresStorageProvider ignored = new PostgresStorageProvider(config, snapshotStore)) {
-                assertThat(schemaVersion(connection, config)).contains(1);
+                assertThat(schemaVersion(connection, config)).contains(2);
+                assertThat(existingTables(connection, config.schema())).contains("rag_document_status");
             }
         }
     }
@@ -150,7 +154,7 @@ class PostgresStorageProviderTest {
                 .isInstanceOf(IllegalStateException.class)
                 .hasMessageContaining("schema version")
                 .hasMessageContaining("999")
-                .hasMessageContaining("1");
+                .hasMessageContaining("2");
         }
     }
 
@@ -179,7 +183,7 @@ class PostgresStorageProviderTest {
                 )) {
                     connection.createStatement().execute("DROP TABLE " + config.qualifiedTableName("documents"));
                     assertThat(existingTables(connection, config.schema())).doesNotContain("rag_documents");
-                    assertThat(schemaVersion(connection, config)).contains(1);
+                    assertThat(schemaVersion(connection, config)).contains(2);
                 }
             }
 
@@ -192,8 +196,52 @@ class PostgresStorageProviderTest {
                 )
             ) {
                 assertThat(existingTables(connection, config.schema())).contains("rag_documents");
-                assertThat(schemaVersion(connection, config)).contains(1);
+                assertThat(existingTables(connection, config.schema())).contains("rag_document_status");
+                assertThat(schemaVersion(connection, config)).contains(2);
             }
+        }
+    }
+
+    @Test
+    void persistsDocumentStatusesAcrossProviderInstances() {
+        PostgreSQLContainer<?> container = newPostgresContainer();
+        container.start();
+
+        PostgresStorageConfig config = new PostgresStorageConfig(
+            container.getJdbcUrl(),
+            container.getUsername(),
+            container.getPassword(),
+            "lightrag",
+            3,
+            "rag_"
+        );
+
+        try (
+            container;
+            PostgresStorageProvider writer = new PostgresStorageProvider(config, new InMemorySnapshotStore());
+            PostgresStorageProvider reader = new PostgresStorageProvider(config, new InMemorySnapshotStore())
+        ) {
+            writer.documentStatusStore().save(new DocumentStatusStore.StatusRecord(
+                "doc-1",
+                DocumentStatus.PROCESSED,
+                "processed 1 chunks",
+                null
+            ));
+
+            assertThat(reader.documentStatusStore().load("doc-1"))
+                .contains(new DocumentStatusStore.StatusRecord(
+                    "doc-1",
+                    DocumentStatus.PROCESSED,
+                    "processed 1 chunks",
+                    null
+                ));
+            assertThat(reader.documentStatusStore().list())
+                .containsExactly(new DocumentStatusStore.StatusRecord(
+                    "doc-1",
+                    DocumentStatus.PROCESSED,
+                    "processed 1 chunks",
+                    null
+                ));
         }
     }
 

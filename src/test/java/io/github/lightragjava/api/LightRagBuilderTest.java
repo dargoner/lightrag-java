@@ -6,10 +6,12 @@ import io.github.lightragjava.model.EmbeddingModel;
 import io.github.lightragjava.storage.AtomicStorageProvider;
 import io.github.lightragjava.storage.ChunkStore;
 import io.github.lightragjava.storage.DocumentStore;
+import io.github.lightragjava.storage.DocumentStatusStore;
 import io.github.lightragjava.storage.GraphStore;
 import io.github.lightragjava.storage.SnapshotStore;
 import io.github.lightragjava.storage.StorageProvider;
 import io.github.lightragjava.storage.VectorStore;
+import io.github.lightragjava.storage.memory.InMemoryDocumentStatusStore;
 import io.github.lightragjava.types.Document;
 import io.github.lightragjava.types.ExtractedRelation;
 import org.junit.jupiter.api.Test;
@@ -224,6 +226,7 @@ class LightRagBuilderTest {
         private final ChunkStore chunkStore = new FakeChunkStore();
         private final GraphStore graphStore = new FakeGraphStore();
         private final VectorStore vectorStore = new FakeVectorStore();
+        private final DocumentStatusStore documentStatusStore = new InMemoryDocumentStatusStore();
         private final SnapshotStore snapshotStore = new FakeSnapshotStore();
 
         @Override
@@ -244,6 +247,11 @@ class LightRagBuilderTest {
         @Override
         public VectorStore vectorStore() {
             return vectorStore;
+        }
+
+        @Override
+        public DocumentStatusStore documentStatusStore() {
+            return documentStatusStore;
         }
 
         @Override
@@ -272,6 +280,11 @@ class LightRagBuilderTest {
                 @Override
                 public VectorStore vectorStore() {
                     return vectorStore;
+                }
+
+                @Override
+                public DocumentStatusStore documentStatusStore() {
+                    return documentStatusStore;
                 }
             });
         }
@@ -302,6 +315,11 @@ class LightRagBuilderTest {
         @Override
         public VectorStore vectorStore() {
             return delegate.vectorStore();
+        }
+
+        @Override
+        public DocumentStatusStore documentStatusStore() {
+            return delegate.documentStatusStore();
         }
 
         @Override

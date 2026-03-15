@@ -9,5 +9,7 @@ public interface StorageProvider {
 
     VectorStore vectorStore();
 
+    DocumentStatusStore documentStatusStore();
+
     SnapshotStore snapshotStore();
 }

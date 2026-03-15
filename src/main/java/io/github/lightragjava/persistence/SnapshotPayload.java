@@ -2,6 +2,7 @@ package io.github.lightragjava.persistence;
 
 import io.github.lightragjava.storage.ChunkStore;
 import io.github.lightragjava.storage.DocumentStore;
+import io.github.lightragjava.storage.DocumentStatusStore;
 import io.github.lightragjava.storage.GraphStore;
 import io.github.lightragjava.storage.SnapshotStore;
 import io.github.lightragjava.storage.VectorStore;
@@ -16,7 +17,8 @@ public record SnapshotPayload(
     List<ChunkStore.ChunkRecord> chunks,
     List<GraphStore.EntityRecord> entities,
     List<GraphStore.RelationRecord> relations,
-    Map<String, List<VectorStore.VectorRecord>> vectors
+    Map<String, List<VectorStore.VectorRecord>> vectors,
+    List<DocumentStatusStore.StatusRecord> documentStatuses
 ) {
     public SnapshotPayload {
         documents = List.copyOf(Objects.requireNonNull(documents, "documents"));
@@ -24,6 +26,7 @@ public record SnapshotPayload(
         entities = List.copyOf(Objects.requireNonNull(entities, "entities"));
         relations = List.copyOf(Objects.requireNonNull(relations, "relations"));
         Objects.requireNonNull(vectors, "vectors");
+        documentStatuses = documentStatuses == null ? List.of() : List.copyOf(documentStatuses);
         var copy = new LinkedHashMap<String, List<VectorStore.VectorRecord>>();
         for (var entry : vectors.entrySet()) {
             copy.put(entry.getKey(), List.copyOf(entry.getValue()));
@@ -38,11 +41,12 @@ public record SnapshotPayload(
             source.chunks(),
             source.entities(),
             source.relations(),
-            source.vectors()
+            source.vectors(),
+            source.documentStatuses()
         );
     }
 
     public SnapshotStore.Snapshot toSnapshot() {
-        return new SnapshotStore.Snapshot(documents, chunks, entities, relations, vectors);
+        return new SnapshotStore.Snapshot(documents, chunks, entities, relations, vectors, documentStatuses);
     }
 }

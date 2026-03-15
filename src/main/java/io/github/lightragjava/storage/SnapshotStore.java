@@ -18,7 +18,8 @@ public interface SnapshotStore {
         List<ChunkStore.ChunkRecord> chunks,
         List<GraphStore.EntityRecord> entities,
         List<GraphStore.RelationRecord> relations,
-        Map<String, List<VectorStore.VectorRecord>> vectors
+        Map<String, List<VectorStore.VectorRecord>> vectors,
+        List<DocumentStatusStore.StatusRecord> documentStatuses
     ) {
         public Snapshot {
             documents = List.copyOf(Objects.requireNonNull(documents, "documents"));
@@ -27,6 +28,17 @@ public interface SnapshotStore {
             relations = List.copyOf(Objects.requireNonNull(relations, "relations"));
             Objects.requireNonNull(vectors, "vectors");
             vectors = copyVectors(vectors);
+            documentStatuses = List.copyOf(Objects.requireNonNull(documentStatuses, "documentStatuses"));
+        }
+
+        public Snapshot(
+            List<DocumentStore.DocumentRecord> documents,
+            List<ChunkStore.ChunkRecord> chunks,
+            List<GraphStore.EntityRecord> entities,
+            List<GraphStore.RelationRecord> relations,
+            Map<String, List<VectorStore.VectorRecord>> vectors
+        ) {
+            this(documents, chunks, entities, relations, vectors, List.of());
         }
 
         private static Map<String, List<VectorStore.VectorRecord>> copyVectors(

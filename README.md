@@ -38,6 +38,28 @@ System.out.println(result.answer());
 
 For tests, demos, and ephemeral runs, the in-memory provider is still the fastest option. For restart-safe ingestion and durable local state, use the PostgreSQL provider described below.
 
+## Document Status
+
+The SDK exposes per-document processing status through typed APIs on `LightRag`:
+
+```java
+rag.ingest(List.of(
+    new Document("doc-1", "Title", "Alice works with Bob", Map.of("source", "demo"))
+));
+
+var status = rag.getDocumentStatus("doc-1");
+var allStatuses = rag.listDocumentStatuses();
+```
+
+For the current synchronous ingest flow:
+
+- a document becomes `PROCESSING` when its ingest attempt starts
+- it becomes `PROCESSED` on success, with a short summary such as processed chunk count
+- it becomes `FAILED` on ingest failure, with the top-level error message
+- `deleteByDocumentId(...)` removes the persisted status entry when deletion succeeds
+
+There is no background queue in this phase, so status visibility is per synchronous document ingest attempt rather than async job orchestration.
+
 ## Graph Management
 
 The Java SDK now supports manual graph mutations in addition to document ingest:
@@ -100,7 +122,7 @@ Notes:
 
 ## PostgreSQL Storage
 
-`PostgresStorageProvider` stores documents, chunks, graph records, and vectors in PostgreSQL so the SDK can survive process restarts without relying on JSON snapshots as the primary data store.
+`PostgresStorageProvider` stores documents, chunks, graph records, vectors, and document processing statuses in PostgreSQL so the SDK can survive process restarts without relying on JSON snapshots as the primary data store.
 
 ### Prerequisites
 
@@ -144,11 +166,11 @@ rag.ingest(List.of(
 ));
 ```
 
-`PostgresStorageProvider` bootstraps its schema automatically on startup. Ingest writes run atomically across document, chunk, graph, and vector storage.
+`PostgresStorageProvider` bootstraps its schema automatically on startup. Ingest writes run atomically across document, chunk, graph, vector, and document-status storage.
 
 ## PostgreSQL + Neo4j Storage
 
-`PostgresNeo4jStorageProvider` keeps PostgreSQL as the durable source of truth for documents, chunks, graph rows, and vectors, while projecting graph reads into Neo4j.
+`PostgresNeo4jStorageProvider` keeps PostgreSQL as the durable source of truth for documents, chunks, graph rows, vectors, and document statuses, while projecting graph reads into Neo4j.
 
 ### Prerequisites
 
@@ -217,17 +239,18 @@ rag.ingest(documents);
 ```
 
 `loadFromSnapshot(...)` does two things:
-- If the snapshot file already exists, it restores documents, chunks, graph data, and vectors before `build()`.
+- If the snapshot file already exists, it restores documents, chunks, graph data, vectors, and document statuses before `build()`.
 - It also sets the autosave target used after successful `ingest(...)` calls.
 
-With the PostgreSQL and PostgreSQL+Neo4j backends, snapshots remain delegated to the configured `SnapshotStore`. PostgreSQL is the primary durable store for online data, while snapshot files are still used only when you explicitly load or autosave snapshots through the existing API.
+With the PostgreSQL and PostgreSQL+Neo4j backends, snapshots remain delegated to the configured `SnapshotStore`. PostgreSQL is the primary durable store for online data and document statuses, while snapshot files are still used only when you explicitly load or autosave snapshots through the existing API.
 
 ## Current v1 Scope
 
 - Bundled storage providers: in-memory, PostgreSQL, and PostgreSQL+Neo4j.
-- PostgreSQL is the current durable source of truth for documents, chunks, graph data, and vectors.
+- PostgreSQL is the current durable source of truth for documents, chunks, graph data, vectors, and document statuses.
 - `PostgresNeo4jStorageProvider` adds Neo4j-backed graph reads on top of PostgreSQL durability.
 - Manual graph-management APIs support create/edit flows for entities and relations across all bundled providers.
+- Document-status APIs support querying per-document `PROCESSING`, `PROCESSED`, and `FAILED` outcomes.
 - Snapshot persistence still uses the `SnapshotStore` SPI and remains file-based by default.
 - Query modes supported today: `LOCAL`, `GLOBAL`, `HYBRID`, and `MIX`.
 - Extraction and graph merge rules are intentionally simple and deterministic.

@@ -5,6 +5,8 @@ import io.github.lightragjava.api.CreateEntityRequest;
 import io.github.lightragjava.api.CreateRelationRequest;
 import io.github.lightragjava.api.EditEntityRequest;
 import io.github.lightragjava.api.EditRelationRequest;
+import io.github.lightragjava.api.DocumentProcessingStatus;
+import io.github.lightragjava.api.DocumentStatus;
 import io.github.lightragjava.api.GraphEntity;
 import io.github.lightragjava.api.GraphRelation;
 import io.github.lightragjava.api.MergeEntitiesRequest;
@@ -121,6 +123,73 @@ class E2ELightRagTest {
     }
 
     @Test
+    void builderLoadFromSnapshotRestoresLegacyPayloadWithoutDocumentStatuses() throws Exception {
+        var snapshotPath = tempDir.resolve("legacy-seed.snapshot.json");
+        Files.writeString(snapshotPath, """
+            {
+              "schemaVersion": 1,
+              "createdAt": "2026-03-15T00:00:00Z",
+              "payloadFile": "legacy-seed.payload.json"
+            }
+            """);
+        Files.writeString(snapshotPath.resolveSibling("legacy-seed.payload.json"), """
+            {
+              "documents": [
+                {
+                  "id": "doc-seed",
+                  "title": "Seed",
+                  "content": "Body",
+                  "metadata": {}
+                }
+              ],
+              "chunks": [
+                {
+                  "id": "doc-seed:0",
+                  "documentId": "doc-seed",
+                  "text": "Body",
+                  "tokenCount": 4,
+                  "order": 0,
+                  "metadata": {}
+                }
+              ],
+              "entities": [
+                {
+                  "id": "entity:seed",
+                  "name": "Seed",
+                  "type": "person",
+                  "description": "Seed entity",
+                  "aliases": [],
+                  "sourceChunkIds": ["doc-seed:0"]
+                }
+              ],
+              "relations": [],
+              "vectors": {
+                "chunks": [
+                  {
+                    "id": "doc-seed:0",
+                    "vector": [1.0, 0.0]
+                  }
+                ]
+              }
+            }
+            """);
+        var storage = InMemoryStorageProvider.create(new FileSnapshotStore());
+
+        var rag = LightRag.builder()
+            .chatModel(new FakeChatModel())
+            .embeddingModel(new FakeEmbeddingModel())
+            .storage(storage)
+            .loadFromSnapshot(snapshotPath)
+            .build();
+
+        assertThat(rag).isNotNull();
+        assertThat(storage.documentStore().load("doc-seed")).isPresent();
+        assertThat(storage.chunkStore().load("doc-seed:0")).isPresent();
+        assertThat(storage.graphStore().loadEntity("entity:seed")).isPresent();
+        assertThat(rag.listDocumentStatuses()).isEmpty();
+    }
+
+    @Test
     void successfulIngestAutoSavesOnlyWhenSnapshotPersistenceIsConfigured() {
         var snapshotPath = tempDir.resolve("not-configured.snapshot.json");
         var storage = InMemoryStorageProvider.create(new FileSnapshotStore());
@@ -133,6 +202,323 @@ class E2ELightRagTest {
         rag.ingest(List.of(new Document("doc-1", "Title", "Alice works with Bob", Map.of())));
 
         assertThat(Files.exists(snapshotPath)).isFalse();
+    }
+
+    @Test
+    void ingestPersistsProcessedDocumentStatus() {
+        var storage = InMemoryStorageProvider.create();
+        var rag = LightRag.builder()
+            .chatModel(new FakeChatModel())
+            .embeddingModel(new FakeEmbeddingModel())
+            .storage(storage)
+            .build();
+
+        rag.ingest(List.of(new Document("doc-1", "Title", "Alice works with Bob", Map.of())));
+
+        assertThat(rag.getDocumentStatus("doc-1"))
+            .isEqualTo(new DocumentProcessingStatus("doc-1", DocumentStatus.PROCESSED, "processed 1 chunks", null));
+        assertThat(rag.listDocumentStatuses())
+            .containsExactly(new DocumentProcessingStatus("doc-1", DocumentStatus.PROCESSED, "processed 1 chunks", null));
+    }
+
+    @Test
+    void failedIngestPersistsFailedDocumentStatus() {
+        var storage = InMemoryStorageProvider.create();
+        var seedRag = LightRag.builder()
+            .chatModel(new FakeChatModel())
+            .embeddingModel(new FakeEmbeddingModel())
+            .storage(storage)
+            .build();
+        var failingRag = LightRag.builder()
+            .chatModel(new SelectiveFailingExtractionChatModel("doc-2"))
+            .embeddingModel(new FakeEmbeddingModel())
+            .storage(storage)
+            .build();
+
+        seedRag.ingest(List.of(new Document("doc-0", "Title", "Alice works with Bob", Map.of())));
+
+        assertThatThrownBy(() -> failingRag.ingest(List.of(
+            new Document("doc-1", "Title", "Alice works with Bob", Map.of()),
+            new Document("doc-2", "Title", "Bob reports to Carol", Map.of())
+        )))
+            .isInstanceOf(IllegalStateException.class)
+            .hasMessage("extract failed for doc-2");
+
+        assertThat(storage.documentStore().load("doc-1")).isPresent();
+        assertThat(storage.documentStore().load("doc-2")).isEmpty();
+        assertThat(failingRag.getDocumentStatus("doc-1"))
+            .isEqualTo(new DocumentProcessingStatus("doc-1", DocumentStatus.PROCESSED, "processed 1 chunks", null));
+        assertThat(failingRag.getDocumentStatus("doc-2"))
+            .isEqualTo(new DocumentProcessingStatus("doc-2", DocumentStatus.FAILED, "", "extract failed for doc-2"));
+    }
+
+    @Test
+    void deleteByDocumentRemovesDocumentStatus() {
+        var storage = InMemoryStorageProvider.create();
+        var rag = LightRag.builder()
+            .chatModel(new FakeChatModel())
+            .embeddingModel(new FakeEmbeddingModel())
+            .storage(storage)
+            .build();
+
+        rag.ingest(List.of(new Document("doc-1", "Title", "Alice works with Bob", Map.of())));
+        rag.deleteByDocumentId("doc-1");
+
+        assertThatThrownBy(() -> rag.getDocumentStatus("doc-1"))
+            .isInstanceOf(java.util.NoSuchElementException.class)
+            .hasMessageContaining("document status does not exist");
+        assertThat(rag.listDocumentStatuses()).isEmpty();
+    }
+
+    @Test
+    void deleteByDocumentPreservesOtherFailedStatusesAndPersistsSnapshot() {
+        var storage = InMemoryStorageProvider.create(new FileSnapshotStore());
+        var snapshotPath = tempDir.resolve("delete-doc-status.snapshot.json");
+        var seedRag = LightRag.builder()
+            .chatModel(new FakeChatModel())
+            .embeddingModel(new FakeEmbeddingModel())
+            .storage(storage)
+            .loadFromSnapshot(snapshotPath)
+            .build();
+        var failingRag = LightRag.builder()
+            .chatModel(new SelectiveFailingExtractionChatModel("doc-3"))
+            .embeddingModel(new FakeEmbeddingModel())
+            .storage(storage)
+            .loadFromSnapshot(snapshotPath)
+            .build();
+
+        seedRag.ingest(List.of(new Document("doc-1", "Title", "Alice works with Bob", Map.of())));
+
+        assertThatThrownBy(() -> failingRag.ingest(List.of(
+            new Document("doc-2", "Title", "Bob reports to Carol", Map.of()),
+            new Document("doc-3", "Title", "Carol mentors Dave", Map.of())
+        )))
+            .isInstanceOf(IllegalStateException.class)
+            .hasMessage("extract failed for doc-3");
+
+        seedRag.deleteByDocumentId("doc-1");
+
+        assertThat(seedRag.listDocumentStatuses())
+            .containsExactly(
+                new DocumentProcessingStatus("doc-2", DocumentStatus.PROCESSED, "processed 1 chunks", null),
+                new DocumentProcessingStatus("doc-3", DocumentStatus.FAILED, "", "extract failed for doc-3")
+            );
+
+        var snapshot = storage.snapshotStore().load(snapshotPath);
+        assertThat(snapshot.documents())
+            .extracting(DocumentStore.DocumentRecord::id)
+            .containsExactly("doc-2");
+        assertThat(snapshot.documentStatuses())
+            .containsExactly(
+                new io.github.lightragjava.storage.DocumentStatusStore.StatusRecord(
+                    "doc-2",
+                    DocumentStatus.PROCESSED,
+                    "processed 1 chunks",
+                    null
+                ),
+                new io.github.lightragjava.storage.DocumentStatusStore.StatusRecord(
+                    "doc-3",
+                    DocumentStatus.FAILED,
+                    "",
+                    "extract failed for doc-3"
+                )
+            );
+    }
+
+    @Test
+    void ingestPersistsDocumentStatusesWhenConfigured() {
+        var storage = InMemoryStorageProvider.create(new FileSnapshotStore());
+        var snapshotPath = tempDir.resolve("doc-status.snapshot.json");
+        var rag = LightRag.builder()
+            .chatModel(new FakeChatModel())
+            .embeddingModel(new FakeEmbeddingModel())
+            .storage(storage)
+            .loadFromSnapshot(snapshotPath)
+            .build();
+
+        rag.ingest(List.of(new Document("doc-1", "Title", "Alice works with Bob", Map.of())));
+
+        var snapshot = storage.snapshotStore().load(snapshotPath);
+        assertThat(snapshot.documentStatuses())
+            .containsExactly(new io.github.lightragjava.storage.DocumentStatusStore.StatusRecord(
+                "doc-1",
+                DocumentStatus.PROCESSED,
+                "processed 1 chunks",
+                null
+            ));
+    }
+
+    @Test
+    void failedIngestPersistsSnapshotWithDocumentStatusesWhenConfigured() {
+        var storage = InMemoryStorageProvider.create(new FileSnapshotStore());
+        var snapshotPath = tempDir.resolve("failed-doc-status.snapshot.json");
+        var rag = LightRag.builder()
+            .chatModel(new SelectiveFailingExtractionChatModel("doc-2"))
+            .embeddingModel(new FakeEmbeddingModel())
+            .storage(storage)
+            .loadFromSnapshot(snapshotPath)
+            .build();
+
+        assertThatThrownBy(() -> rag.ingest(List.of(
+            new Document("doc-1", "Title", "Alice works with Bob", Map.of()),
+            new Document("doc-2", "Title", "Bob reports to Carol", Map.of())
+        )))
+            .isInstanceOf(IllegalStateException.class)
+            .hasMessage("extract failed for doc-2");
+
+        var snapshot = storage.snapshotStore().load(snapshotPath);
+        assertThat(snapshot.documents())
+            .extracting(DocumentStore.DocumentRecord::id)
+            .containsExactly("doc-1");
+        assertThat(snapshot.documentStatuses())
+            .containsExactly(
+                new io.github.lightragjava.storage.DocumentStatusStore.StatusRecord(
+                    "doc-1",
+                    DocumentStatus.PROCESSED,
+                    "processed 1 chunks",
+                    null
+                ),
+                new io.github.lightragjava.storage.DocumentStatusStore.StatusRecord(
+                    "doc-2",
+                    DocumentStatus.FAILED,
+                    "",
+                    "extract failed for doc-2"
+                )
+            );
+    }
+
+    @Test
+    void postgresProviderPersistsDocumentStatus() {
+        try (
+            var container = new PostgreSQLContainer<>(
+                DockerImageName.parse("pgvector/pgvector:pg16").asCompatibleSubstituteFor("postgres")
+            )
+        ) {
+            container.start();
+            var storage = new PostgresStorageProvider(
+                new PostgresStorageConfig(
+                    container.getJdbcUrl(),
+                    container.getUsername(),
+                    container.getPassword(),
+                    "lightrag",
+                    2,
+                    "rag_"
+                ),
+                new FileSnapshotStore()
+            );
+
+            try (storage) {
+                var rag = LightRag.builder()
+                    .chatModel(new FakeChatModel())
+                    .embeddingModel(new FakeEmbeddingModel())
+                    .storage(storage)
+                    .build();
+
+                rag.ingest(List.of(new Document("doc-1", "Title", "Alice works with Bob", Map.of())));
+
+                assertThat(rag.getDocumentStatus("doc-1"))
+                    .isEqualTo(new DocumentProcessingStatus("doc-1", DocumentStatus.PROCESSED, "processed 1 chunks", null));
+                assertThat(storage.documentStatusStore().load("doc-1"))
+                    .contains(new io.github.lightragjava.storage.DocumentStatusStore.StatusRecord(
+                        "doc-1",
+                        DocumentStatus.PROCESSED,
+                        "processed 1 chunks",
+                        null
+                    ));
+            }
+        }
+    }
+
+    @Test
+    void postgresProviderPersistsFailedDocumentStatus() {
+        try (
+            var container = new PostgreSQLContainer<>(
+                DockerImageName.parse("pgvector/pgvector:pg16").asCompatibleSubstituteFor("postgres")
+            )
+        ) {
+            container.start();
+            var storage = new PostgresStorageProvider(
+                new PostgresStorageConfig(
+                    container.getJdbcUrl(),
+                    container.getUsername(),
+                    container.getPassword(),
+                    "lightrag",
+                    2,
+                    "rag_"
+                ),
+                new FileSnapshotStore()
+            );
+
+            try (storage) {
+                var rag = LightRag.builder()
+                    .chatModel(new SelectiveFailingExtractionChatModel("doc-2"))
+                    .embeddingModel(new FakeEmbeddingModel())
+                    .storage(storage)
+                    .build();
+
+                assertThatThrownBy(() -> rag.ingest(List.of(
+                    new Document("doc-1", "Title", "Alice works with Bob", Map.of()),
+                    new Document("doc-2", "Title", "Bob reports to Carol", Map.of())
+                )))
+                    .isInstanceOf(IllegalStateException.class)
+                    .hasMessage("extract failed for doc-2");
+
+                assertThat(rag.getDocumentStatus("doc-1"))
+                    .isEqualTo(new DocumentProcessingStatus("doc-1", DocumentStatus.PROCESSED, "processed 1 chunks", null));
+                assertThat(rag.getDocumentStatus("doc-2"))
+                    .isEqualTo(new DocumentProcessingStatus("doc-2", DocumentStatus.FAILED, "", "extract failed for doc-2"));
+            }
+        }
+    }
+
+    @Test
+    void postgresNeo4jProviderPersistsDocumentStatus() {
+        try (
+            var postgres = new PostgreSQLContainer<>(
+                DockerImageName.parse("pgvector/pgvector:pg16").asCompatibleSubstituteFor("postgres")
+            );
+            var neo4j = new Neo4jContainer<>("neo4j:5-community").withAdminPassword("password")
+        ) {
+            postgres.start();
+            neo4j.start();
+            var storage = new PostgresNeo4jStorageProvider(
+                new PostgresStorageConfig(
+                    postgres.getJdbcUrl(),
+                    postgres.getUsername(),
+                    postgres.getPassword(),
+                    "lightrag",
+                    2,
+                    "rag_"
+                ),
+                new Neo4jGraphConfig(
+                    neo4j.getBoltUrl(),
+                    "neo4j",
+                    neo4j.getAdminPassword(),
+                    "neo4j"
+                ),
+                new FileSnapshotStore()
+            );
+
+            try (storage) {
+                var rag = LightRag.builder()
+                    .chatModel(new FakeChatModel())
+                    .embeddingModel(new FakeEmbeddingModel())
+                    .storage(storage)
+                    .build();
+
+                rag.ingest(List.of(new Document("doc-1", "Title", "Alice works with Bob", Map.of())));
+
+                assertThat(rag.getDocumentStatus("doc-1"))
+                    .isEqualTo(new DocumentProcessingStatus("doc-1", DocumentStatus.PROCESSED, "processed 1 chunks", null));
+                assertThat(storage.documentStatusStore().load("doc-1"))
+                    .contains(new io.github.lightragjava.storage.DocumentStatusStore.StatusRecord(
+                        "doc-1",
+                        DocumentStatus.PROCESSED,
+                        "processed 1 chunks",
+                        null
+                    ));
+            }
+        }
     }
 
     @Test
@@ -2004,6 +2390,25 @@ class E2ELightRagTest {
         }
     }
 
+    private static final class SelectiveFailingExtractionChatModel implements ChatModel {
+        private final String failingDocumentId;
+
+        private SelectiveFailingExtractionChatModel(String failingDocumentId) {
+            this.failingDocumentId = failingDocumentId;
+        }
+
+        @Override
+        public String generate(ChatRequest request) {
+            if (request.userPrompt().contains("Question:")) {
+                return "unreachable";
+            }
+            if (request.userPrompt().contains(failingDocumentId)) {
+                throw new IllegalStateException("extract failed for " + failingDocumentId);
+            }
+            return new FakeChatModel().generate(request);
+        }
+    }
+
     private static final class AtomicOnlyStorageProvider implements io.github.lightragjava.storage.AtomicStorageProvider {
         private final InMemoryStorageProvider delegate = InMemoryStorageProvider.create();
         private int restoreCalls;
@@ -2037,6 +2442,11 @@ class E2ELightRagTest {
         @Override
         public VectorStore vectorStore() {
             return delegate.vectorStore();
+        }
+
+        @Override
+        public io.github.lightragjava.storage.DocumentStatusStore documentStatusStore() {
+            return delegate.documentStatusStore();
         }
 
         @Override

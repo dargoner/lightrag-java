@@ -2,8 +2,10 @@ package io.github.lightragjava.indexing;
 
 import io.github.lightragjava.storage.ChunkStore;
 import io.github.lightragjava.storage.DocumentStore;
+import io.github.lightragjava.storage.DocumentStatusStore;
 import io.github.lightragjava.storage.AtomicStorageProvider;
 import io.github.lightragjava.storage.InMemoryStorageProvider;
+import io.github.lightragjava.storage.memory.InMemoryDocumentStatusStore;
 import io.github.lightragjava.storage.postgres.PostgresStorageConfig;
 import io.github.lightragjava.storage.postgres.PostgresStorageProvider;
 import io.github.lightragjava.types.Chunk;
@@ -200,6 +202,7 @@ class DocumentIngestorTest {
     private static final class AtomicFailureStorageProvider implements AtomicStorageProvider {
         private final AtomicTestDocumentStore documentStore = new AtomicTestDocumentStore();
         private final AtomicTestChunkStore chunkStore = new AtomicTestChunkStore();
+        private final DocumentStatusStore documentStatusStore = new InMemoryDocumentStatusStore();
         private DocumentStore.DocumentRecord documentToInsertBeforeWrite;
 
         @Override
@@ -220,6 +223,11 @@ class DocumentIngestorTest {
         @Override
         public io.github.lightragjava.storage.VectorStore vectorStore() {
             throw new UnsupportedOperationException("not used in test");
+        }
+
+        @Override
+        public DocumentStatusStore documentStatusStore() {
+            return documentStatusStore;
         }
 
         @Override
@@ -255,6 +263,11 @@ class DocumentIngestorTest {
                     @Override
                     public io.github.lightragjava.storage.VectorStore vectorStore() {
                         throw new UnsupportedOperationException("not used in test");
+                    }
+
+                    @Override
+                    public DocumentStatusStore documentStatusStore() {
+                        return documentStatusStore;
                     }
                 });
             } catch (RuntimeException failure) {

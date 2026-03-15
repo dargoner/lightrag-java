@@ -3,6 +3,7 @@ package io.github.lightragjava.storage.neo4j;
 import io.github.lightragjava.storage.AtomicStorageProvider;
 import io.github.lightragjava.storage.ChunkStore;
 import io.github.lightragjava.storage.DocumentStore;
+import io.github.lightragjava.storage.DocumentStatusStore;
 import io.github.lightragjava.storage.GraphStore;
 import io.github.lightragjava.storage.SnapshotStore;
 import io.github.lightragjava.storage.VectorStore;
@@ -71,6 +72,11 @@ public final class PostgresNeo4jStorageProvider implements AtomicStorageProvider
     }
 
     @Override
+    public DocumentStatusStore documentStatusStore() {
+        return postgresProvider.documentStatusStore();
+    }
+
+    @Override
     public SnapshotStore snapshotStore() {
         return postgresProvider.snapshotStore();
     }
@@ -89,7 +95,8 @@ public final class PostgresNeo4jStorageProvider implements AtomicStorageProvider
                     storage.documentStore(),
                     storage.chunkStore(),
                     new ProjectionStagingGraphStore(storage.graphStore(), stagedEntities, stagedRelations),
-                    storage.vectorStore()
+                    storage.vectorStore(),
+                    storage.documentStatusStore()
                 )));
                 projectionApplier.apply(stagedEntities.values(), stagedRelations.values());
                 return result;
@@ -155,7 +162,8 @@ public final class PostgresNeo4jStorageProvider implements AtomicStorageProvider
                 "chunks", postgresProvider.vectorStore().list("chunks"),
                 "entities", postgresProvider.vectorStore().list("entities"),
                 "relations", postgresProvider.vectorStore().list("relations")
-            )
+            ),
+            postgresProvider.documentStatusStore().list()
         );
     }
 
@@ -253,7 +261,8 @@ public final class PostgresNeo4jStorageProvider implements AtomicStorageProvider
         DocumentStore documentStore,
         ChunkStore chunkStore,
         GraphStore graphStore,
-        VectorStore vectorStore
+        VectorStore vectorStore,
+        DocumentStatusStore documentStatusStore
     ) implements AtomicStorageView {
     }
 

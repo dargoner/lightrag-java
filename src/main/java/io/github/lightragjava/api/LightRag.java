@@ -14,6 +14,7 @@ import io.github.lightragjava.types.Document;
 
 import java.util.EnumMap;
 import java.util.List;
+import java.util.NoSuchElementException;
 
 public final class LightRag {
     private final LightRagConfig config;
@@ -109,7 +110,31 @@ public final class LightRag {
         return queryEngine.query(request);
     }
 
+    public DocumentProcessingStatus getDocumentStatus(String documentId) {
+        return config.documentStatusStore()
+            .load(documentId)
+            .map(LightRag::toDocumentProcessingStatus)
+            .orElseThrow(() -> new NoSuchElementException("document status does not exist: " + documentId));
+    }
+
+    public List<DocumentProcessingStatus> listDocumentStatuses() {
+        return config.documentStatusStore().list().stream()
+            .map(LightRag::toDocumentProcessingStatus)
+            .toList();
+    }
+
     LightRagConfig config() {
         return config;
+    }
+
+    private static DocumentProcessingStatus toDocumentProcessingStatus(
+        io.github.lightragjava.storage.DocumentStatusStore.StatusRecord statusRecord
+    ) {
+        return new DocumentProcessingStatus(
+            statusRecord.documentId(),
+            statusRecord.status(),
+            statusRecord.summary(),
+            statusRecord.errorMessage()
+        );
     }
 }

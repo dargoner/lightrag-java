@@ -13,6 +13,8 @@ public interface AtomicStorageProvider extends StorageProvider {
         GraphStore graphStore();
 
         VectorStore vectorStore();
+
+        DocumentStatusStore documentStatusStore();
     }
 
     @FunctionalInterface

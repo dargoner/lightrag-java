@@ -2,6 +2,7 @@ package io.github.lightragjava.storage;
 
 import io.github.lightragjava.storage.memory.InMemoryChunkStore;
 import io.github.lightragjava.storage.memory.InMemoryDocumentStore;
+import io.github.lightragjava.storage.memory.InMemoryDocumentStatusStore;
 import io.github.lightragjava.storage.memory.InMemoryGraphStore;
 import io.github.lightragjava.storage.memory.InMemoryVectorStore;
 
@@ -22,6 +23,7 @@ public final class InMemoryStorageProvider implements AtomicStorageProvider {
     private final InMemoryChunkStore chunkStore;
     private final InMemoryGraphStore graphStore;
     private final InMemoryVectorStore vectorStore;
+    private final InMemoryDocumentStatusStore documentStatusStore;
     private final SnapshotStore snapshotStore;
 
     public InMemoryStorageProvider() {
@@ -34,6 +36,7 @@ public final class InMemoryStorageProvider implements AtomicStorageProvider {
         this.chunkStore = new InMemoryChunkStore(lock);
         this.graphStore = new InMemoryGraphStore(lock);
         this.vectorStore = new InMemoryVectorStore(lock);
+        this.documentStatusStore = new InMemoryDocumentStatusStore(lock);
         this.snapshotStore = Objects.requireNonNull(snapshotStore, "snapshotStore");
     }
 
@@ -66,6 +69,11 @@ public final class InMemoryStorageProvider implements AtomicStorageProvider {
     }
 
     @Override
+    public DocumentStatusStore documentStatusStore() {
+        return documentStatusStore;
+    }
+
+    @Override
     public SnapshotStore snapshotStore() {
         return snapshotStore;
     }
@@ -80,7 +88,8 @@ public final class InMemoryStorageProvider implements AtomicStorageProvider {
                 documentStore,
                 chunkStore,
                 graphStore,
-                vectorStore
+                vectorStore,
+                documentStatusStore
             ));
         } catch (RuntimeException failure) {
             restore(snapshot, failure);
@@ -107,7 +116,8 @@ public final class InMemoryStorageProvider implements AtomicStorageProvider {
             chunkStore.snapshot(),
             graphStore.snapshotEntities(),
             graphStore.snapshotRelations(),
-            vectorStore.snapshot()
+            vectorStore.snapshot(),
+            documentStatusStore.snapshot()
         );
     }
 
@@ -150,6 +160,16 @@ public final class InMemoryStorageProvider implements AtomicStorageProvider {
             }
         }
 
+        try {
+            documentStatusStore.restore(snapshot.documentStatuses());
+        } catch (RuntimeException exception) {
+            if (rollbackFailure == null) {
+                rollbackFailure = exception;
+            } else {
+                rollbackFailure.addSuppressed(exception);
+            }
+        }
+
         if (rollbackFailure != null) {
             failure.addSuppressed(rollbackFailure);
         }
@@ -160,13 +180,15 @@ public final class InMemoryStorageProvider implements AtomicStorageProvider {
         graphStore.restore(snapshot.entities(), snapshot.relations());
         chunkStore.restore(snapshot.chunks());
         documentStore.restore(snapshot.documents());
+        documentStatusStore.restore(snapshot.documentStatuses());
     }
 
     private record AtomicView(
         DocumentStore documentStore,
         ChunkStore chunkStore,
         GraphStore graphStore,
-        VectorStore vectorStore
+        VectorStore vectorStore,
+        DocumentStatusStore documentStatusStore
     ) implements AtomicStorageView {
     }
 
@@ -206,7 +228,8 @@ public final class InMemoryStorageProvider implements AtomicStorageProvider {
                 source.chunks(),
                 source.entities(),
                 source.relations(),
-                Map.copyOf(source.vectors())
+                Map.copyOf(source.vectors()),
+                source.documentStatuses()
             );
         }
     }

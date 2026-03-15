@@ -26,7 +26,8 @@ final class StorageSnapshots {
                 CHUNK_NAMESPACE, provider.vectorStore().list(CHUNK_NAMESPACE),
                 ENTITY_NAMESPACE, provider.vectorStore().list(ENTITY_NAMESPACE),
                 RELATION_NAMESPACE, provider.vectorStore().list(RELATION_NAMESPACE)
-            )
+            ),
+            provider.documentStatusStore().list()
         );
     }
 
@@ -43,7 +44,8 @@ final class StorageSnapshots {
             java.util.List.of(),
             java.util.List.of(),
             java.util.List.of(),
-            Map.of()
+            Map.of(),
+            java.util.List.of()
         );
     }
 }

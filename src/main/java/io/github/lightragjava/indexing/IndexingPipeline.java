@@ -1,8 +1,10 @@
 package io.github.lightragjava.indexing;
 
+import io.github.lightragjava.api.DocumentStatus;
 import io.github.lightragjava.model.ChatModel;
 import io.github.lightragjava.model.EmbeddingModel;
 import io.github.lightragjava.storage.AtomicStorageProvider;
+import io.github.lightragjava.storage.DocumentStatusStore;
 import io.github.lightragjava.storage.GraphStore;
 import io.github.lightragjava.storage.SnapshotStore;
 import io.github.lightragjava.storage.VectorStore;
@@ -42,26 +44,61 @@ public final class IndexingPipeline {
     }
 
     public void ingest(List<Document> documents) {
-        var prepared = documentIngestor.prepare(documents);
-        var chunks = prepared.chunks();
-        var chunkVectors = chunkVectors(chunks);
+        for (var document : List.copyOf(Objects.requireNonNull(documents, "documents"))) {
+            try {
+                ingestOne(document);
+                persistSnapshotIfConfigured();
+            } catch (RuntimeException | Error failure) {
+                persistSnapshotIfConfigured();
+                throw failure;
+            }
+        }
+    }
 
-        var graph = graphAssembler.assemble(chunks.stream()
-            .map(chunk -> new GraphAssembler.ChunkExtraction(chunk.id(), knowledgeExtractor.extract(chunk)))
-            .toList());
-        var entityVectors = entityVectors(graph.entities());
-        var relationVectors = relationVectors(graph.relations());
+    private void ingestOne(Document document) {
+        var source = Objects.requireNonNull(document, "document");
+        saveStatus(new DocumentStatusStore.StatusRecord(source.id(), DocumentStatus.PROCESSING, "", null));
+        try {
+            var prepared = documentIngestor.prepare(List.of(source));
+            var chunks = prepared.chunks();
+            var chunkVectors = chunkVectors(chunks);
 
+            var graph = graphAssembler.assemble(chunks.stream()
+                .map(chunk -> new GraphAssembler.ChunkExtraction(chunk.id(), knowledgeExtractor.extract(chunk)))
+                .toList());
+            var entityVectors = entityVectors(graph.entities());
+            var relationVectors = relationVectors(graph.relations());
+
+            storageProvider.writeAtomically(storage -> {
+                saveDocumentsAndChunks(prepared, storage);
+                saveVectors(StorageSnapshots.CHUNK_NAMESPACE, chunkVectors, storage.vectorStore());
+                saveGraph(graph.entities(), graph.relations(), storage);
+                saveVectors(StorageSnapshots.ENTITY_NAMESPACE, entityVectors, storage.vectorStore());
+                saveVectors(StorageSnapshots.RELATION_NAMESPACE, relationVectors, storage.vectorStore());
+                storage.documentStatusStore().save(new DocumentStatusStore.StatusRecord(
+                    source.id(),
+                    DocumentStatus.PROCESSED,
+                    "processed %d chunks".formatted(chunks.size()),
+                    null
+                ));
+                return null;
+            });
+        } catch (RuntimeException | Error failure) {
+            saveStatus(new DocumentStatusStore.StatusRecord(
+                source.id(),
+                DocumentStatus.FAILED,
+                "",
+                failure.getMessage()
+            ));
+            throw failure;
+        }
+    }
+
+    private void saveStatus(DocumentStatusStore.StatusRecord statusRecord) {
         storageProvider.writeAtomically(storage -> {
-            saveDocumentsAndChunks(prepared, storage);
-            saveVectors(StorageSnapshots.CHUNK_NAMESPACE, chunkVectors, storage.vectorStore());
-            saveGraph(graph.entities(), graph.relations(), storage);
-            saveVectors(StorageSnapshots.ENTITY_NAMESPACE, entityVectors, storage.vectorStore());
-            saveVectors(StorageSnapshots.RELATION_NAMESPACE, relationVectors, storage.vectorStore());
+            storage.documentStatusStore().save(statusRecord);
             return null;
         });
-
-        persistSnapshotIfConfigured();
     }
 
     private void saveDocumentsAndChunks(

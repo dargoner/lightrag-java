@@ -99,6 +99,13 @@ public final class DeletionPipeline {
             .filter(document -> !document.id().equals(targetId))
             .map(DeletionPipeline::toDocument)
             .toList();
+        var remainingDocumentIds = remainingDocuments.stream()
+            .map(Document::id)
+            .collect(java.util.stream.Collectors.toCollection(LinkedHashSet::new));
+        var preservedStatuses = beforeSnapshot.documentStatuses().stream()
+            .filter(statusRecord -> !statusRecord.documentId().equals(targetId))
+            .filter(statusRecord -> !remainingDocumentIds.contains(statusRecord.documentId()))
+            .toList();
         if (remainingDocuments.size() == beforeSnapshot.documents().size()) {
             return;
         }
@@ -106,10 +113,13 @@ public final class DeletionPipeline {
         try {
             storageProvider.restore(StorageSnapshots.empty());
             if (remainingDocuments.isEmpty()) {
+                restoreStatuses(preservedStatuses);
                 StorageSnapshots.persistIfConfigured(storageProvider, snapshotPath);
                 return;
             }
             indexingPipeline.ingest(remainingDocuments);
+            restoreStatuses(preservedStatuses);
+            StorageSnapshots.persistIfConfigured(storageProvider, snapshotPath);
         } catch (RuntimeException | Error failure) {
             try {
                 storageProvider.restore(beforeSnapshot);
@@ -158,6 +168,12 @@ public final class DeletionPipeline {
 
     private static Document toDocument(DocumentStore.DocumentRecord record) {
         return new Document(record.id(), record.title(), record.content(), record.metadata());
+    }
+
+    private void restoreStatuses(List<io.github.lightragjava.storage.DocumentStatusStore.StatusRecord> statusRecords) {
+        for (var statusRecord : statusRecords) {
+            storageProvider.documentStatusStore().save(statusRecord);
+        }
     }
 
     private static String normalize(String value) {

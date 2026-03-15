@@ -6,6 +6,7 @@ import io.github.lightragjava.exception.StorageException;
 import io.github.lightragjava.storage.AtomicStorageProvider;
 import io.github.lightragjava.storage.ChunkStore;
 import io.github.lightragjava.storage.DocumentStore;
+import io.github.lightragjava.storage.DocumentStatusStore;
 import io.github.lightragjava.storage.GraphStore;
 import io.github.lightragjava.storage.SnapshotStore;
 import io.github.lightragjava.storage.VectorStore;
@@ -28,10 +29,12 @@ public final class PostgresStorageProvider implements AtomicStorageProvider, Aut
     private final PostgresAdvisoryLockManager advisoryLockManager;
     private final ThreadLocal<Boolean> exclusiveAdvisoryLockHeld;
     private final SnapshotStore snapshotStore;
+    private final DocumentStatusStore documentStatusStore;
     private final PostgresDocumentStore documentStore;
     private final PostgresChunkStore chunkStore;
     private final PostgresGraphStore graphStore;
     private final PostgresVectorStore vectorStore;
+    private final DocumentStatusStore lockedDocumentStatusStore;
     private final DocumentStore lockedDocumentStore;
     private final ChunkStore lockedChunkStore;
     private final GraphStore lockedGraphStore;
@@ -52,6 +55,8 @@ public final class PostgresStorageProvider implements AtomicStorageProvider, Aut
             this.chunkStore = new PostgresChunkStore(dataSource, config);
             this.graphStore = new PostgresGraphStore(dataSource, config);
             this.vectorStore = new PostgresVectorStore(dataSource, config);
+            this.documentStatusStore = new PostgresDocumentStatusStore(dataSource, config);
+            this.lockedDocumentStatusStore = new LockedDocumentStatusStore(documentStatusStore);
             this.lockedDocumentStore = new LockedDocumentStore(documentStore);
             this.lockedChunkStore = new LockedChunkStore(chunkStore);
             this.lockedGraphStore = new LockedGraphStore(graphStore);
@@ -81,6 +86,11 @@ public final class PostgresStorageProvider implements AtomicStorageProvider, Aut
     @Override
     public VectorStore vectorStore() {
         return lockedVectorStore;
+    }
+
+    @Override
+    public DocumentStatusStore documentStatusStore() {
+        return lockedDocumentStatusStore;
     }
 
     @Override
@@ -127,6 +137,9 @@ public final class PostgresStorageProvider implements AtomicStorageProvider, Aut
                         for (var namespaceEntry : source.vectors().entrySet()) {
                             stores.vectorStore().saveAll(namespaceEntry.getKey(), namespaceEntry.getValue());
                         }
+                        for (var statusRecord : source.documentStatuses()) {
+                            stores.documentStatusStore().save(statusRecord);
+                        }
                         return null;
                     });
                 } catch (SQLException exception) {
@@ -150,7 +163,8 @@ public final class PostgresStorageProvider implements AtomicStorageProvider, Aut
             new PostgresDocumentStore(connectionAccess, config),
             new PostgresChunkStore(connectionAccess, config),
             new PostgresGraphStore(connectionAccess, config),
-            new PostgresVectorStore(connectionAccess, config)
+            new PostgresVectorStore(connectionAccess, config),
+            new PostgresDocumentStatusStore(connectionAccess, config)
         );
     }
 
@@ -197,6 +211,7 @@ public final class PostgresStorageProvider implements AtomicStorageProvider, Aut
             statement.execute("TRUNCATE TABLE " + config.qualifiedTableName("relations"));
             statement.execute("TRUNCATE TABLE " + config.qualifiedTableName("relation_chunks"));
             statement.execute("TRUNCATE TABLE " + config.qualifiedTableName("vectors"));
+            statement.execute("TRUNCATE TABLE " + config.qualifiedTableName("document_status"));
         }
     }
 
@@ -229,7 +244,8 @@ public final class PostgresStorageProvider implements AtomicStorageProvider, Aut
         DocumentStore documentStore,
         ChunkStore chunkStore,
         GraphStore graphStore,
-        VectorStore vectorStore
+        VectorStore vectorStore,
+        DocumentStatusStore documentStatusStore
     ) implements AtomicStorageView {
     }
 
@@ -352,6 +368,34 @@ public final class PostgresStorageProvider implements AtomicStorageProvider, Aut
         @Override
         public List<VectorRecord> list(String namespace) {
             return withReadLock(() -> delegate.list(namespace));
+        }
+    }
+
+    private final class LockedDocumentStatusStore implements DocumentStatusStore {
+        private final DocumentStatusStore delegate;
+
+        private LockedDocumentStatusStore(DocumentStatusStore delegate) {
+            this.delegate = delegate;
+        }
+
+        @Override
+        public void save(StatusRecord statusRecord) {
+            withWriteLock(() -> delegate.save(statusRecord));
+        }
+
+        @Override
+        public Optional<StatusRecord> load(String documentId) {
+            return withReadLock(() -> delegate.load(documentId));
+        }
+
+        @Override
+        public List<StatusRecord> list() {
+            return withReadLock(delegate::list);
+        }
+
+        @Override
+        public void delete(String documentId) {
+            withWriteLock(() -> delegate.delete(documentId));
         }
     }
 
