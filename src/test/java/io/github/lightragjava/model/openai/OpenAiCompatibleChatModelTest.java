@@ -7,6 +7,8 @@ import okhttp3.mockwebserver.MockResponse;
 import okhttp3.mockwebserver.MockWebServer;
 import org.junit.jupiter.api.Test;
 
+import java.util.List;
+
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
@@ -43,6 +45,45 @@ class OpenAiCompatibleChatModelTest {
             assertThat(payload.path("messages").get(0).path("content").asText()).isEqualTo("System prompt");
             assertThat(payload.path("messages").get(1).path("role").asText()).isEqualTo("user");
             assertThat(payload.path("messages").get(1).path("content").asText()).isEqualTo("User prompt");
+        }
+    }
+
+    @Test
+    void chatAdapterSendsConversationHistoryBeforeCurrentUserMessage() throws Exception {
+        try (var server = new MockWebServer()) {
+            server.enqueue(new MockResponse().setBody("""
+                {
+                  "choices": [
+                    {
+                      "message": {
+                        "content": "Answer"
+                      }
+                    }
+                  ]
+                }
+                """));
+            server.start();
+            var model = new OpenAiCompatibleChatModel(server.url("/v1/").toString(), "gpt-test", "secret");
+
+            model.generate(new ChatModel.ChatRequest(
+                "System prompt",
+                "Current user prompt",
+                List.of(
+                    new ChatModel.ChatRequest.ConversationMessage("user", "Earlier question"),
+                    new ChatModel.ChatRequest.ConversationMessage("assistant", "Earlier answer")
+                )
+            ));
+
+            var request = server.takeRequest();
+            var payload = OBJECT_MAPPER.readTree(request.getBody().readUtf8());
+            assertThat(payload.path("messages")).hasSize(4);
+            assertThat(payload.path("messages").get(0).path("role").asText()).isEqualTo("system");
+            assertThat(payload.path("messages").get(1).path("role").asText()).isEqualTo("user");
+            assertThat(payload.path("messages").get(1).path("content").asText()).isEqualTo("Earlier question");
+            assertThat(payload.path("messages").get(2).path("role").asText()).isEqualTo("assistant");
+            assertThat(payload.path("messages").get(2).path("content").asText()).isEqualTo("Earlier answer");
+            assertThat(payload.path("messages").get(3).path("role").asText()).isEqualTo("user");
+            assertThat(payload.path("messages").get(3).path("content").asText()).isEqualTo("Current user prompt");
         }
     }
 

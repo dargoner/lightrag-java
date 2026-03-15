@@ -1781,6 +1781,38 @@ class E2ELightRagTest {
     }
 
     @Test
+    void querySupportsUserPromptAndConversationHistory() {
+        var storage = InMemoryStorageProvider.create();
+        var chatModel = new FakeChatModel();
+        var rag = LightRag.builder()
+            .chatModel(chatModel)
+            .embeddingModel(new FakeEmbeddingModel())
+            .storage(storage)
+            .build();
+
+        rag.ingest(List.of(new Document("doc-1", "Title", "Alice works with Bob", Map.of())));
+
+        var result = rag.query(QueryRequest.builder()
+            .query("Who works with Bob?")
+            .userPrompt("Answer in bullet points.")
+            .conversationHistory(List.of(
+                new ChatModel.ChatRequest.ConversationMessage("user", "Earlier question"),
+                new ChatModel.ChatRequest.ConversationMessage("assistant", "Earlier answer")
+            ))
+            .build());
+
+        assertThat(result.answer()).isEqualTo("Alice works with Bob.");
+        assertThat(chatModel.lastQueryRequest()).isNotNull();
+        assertThat(chatModel.lastQueryRequest().userPrompt()).contains("Additional Instructions:");
+        assertThat(chatModel.lastQueryRequest().userPrompt()).contains("Answer in bullet points.");
+        assertThat(chatModel.lastQueryRequest().conversationHistory())
+            .containsExactly(
+                new ChatModel.ChatRequest.ConversationMessage("user", "Earlier question"),
+                new ChatModel.ChatRequest.ConversationMessage("assistant", "Earlier answer")
+            );
+    }
+
+    @Test
     void queryReranksFinalContextsWhenConfigured() {
         var storage = InMemoryStorageProvider.create();
         var rag = LightRag.builder()

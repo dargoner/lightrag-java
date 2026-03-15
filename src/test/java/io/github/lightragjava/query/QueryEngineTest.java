@@ -43,6 +43,83 @@ class QueryEngineTest {
     }
 
     @Test
+    void appendsUserPromptToFinalCurrentTurnPrompt() {
+        var chatModel = new RecordingChatModel();
+        var engine = new QueryEngine(
+            chatModel,
+            new ContextAssembler(),
+            strategiesReturning(baseContext()),
+            null
+        );
+
+        engine.query(QueryRequest.builder()
+            .query("which chunk?")
+            .mode(QueryMode.LOCAL)
+            .chunkTopK(3)
+            .userPrompt("Answer in one sentence.")
+            .build());
+
+        assertThat(chatModel.lastRequest().userPrompt())
+            .contains("Question:")
+            .contains("which chunk?")
+            .contains("Additional Instructions:")
+            .contains("Answer in one sentence.");
+    }
+
+    @Test
+    void forwardsConversationHistoryIntoChatRequest() {
+        var chatModel = new RecordingChatModel();
+        var engine = new QueryEngine(
+            chatModel,
+            new ContextAssembler(),
+            strategiesReturning(baseContext()),
+            null
+        );
+
+        var history = List.of(
+            new ChatModel.ChatRequest.ConversationMessage("user", "Earlier question"),
+            new ChatModel.ChatRequest.ConversationMessage("assistant", "Earlier answer")
+        );
+
+        engine.query(QueryRequest.builder()
+            .query("which chunk?")
+            .mode(QueryMode.LOCAL)
+            .chunkTopK(3)
+            .conversationHistory(history)
+            .build());
+
+        assertThat(chatModel.lastRequest().conversationHistory()).containsExactlyElementsOf(history);
+    }
+
+    @Test
+    void doesNotAppendAdditionalInstructionsOrFlattenHistoryWhenUserPromptIsBlank() {
+        var chatModel = new RecordingChatModel();
+        var engine = new QueryEngine(
+            chatModel,
+            new ContextAssembler(),
+            strategiesReturning(baseContext()),
+            null
+        );
+
+        engine.query(QueryRequest.builder()
+            .query("which chunk?")
+            .mode(QueryMode.LOCAL)
+            .chunkTopK(3)
+            .conversationHistory(List.of(
+                new ChatModel.ChatRequest.ConversationMessage("user", "Earlier question"),
+                new ChatModel.ChatRequest.ConversationMessage("assistant", "Earlier answer")
+            ))
+            .build());
+
+        assertThat(chatModel.lastRequest().userPrompt())
+            .contains("Question:")
+            .contains("which chunk?")
+            .doesNotContain("Additional Instructions:")
+            .doesNotContain("Earlier question")
+            .doesNotContain("Earlier answer");
+    }
+
+    @Test
     void expandsChunkTopKWhenRerankIsEnabledAndModelIsConfigured() {
         var strategy = new RecordingQueryStrategy(baseContext());
         var engine = new QueryEngine(
@@ -60,6 +137,39 @@ class QueryEngineTest {
 
         assertThat(strategy.lastRequest()).isNotNull();
         assertThat(strategy.lastRequest().chunkTopK()).isEqualTo(6);
+    }
+
+    @Test
+    void preservesPromptCustomizationWhenRerankExpandsChunkRequest() {
+        var history = List.of(
+            new ChatModel.ChatRequest.ConversationMessage("user", "Earlier question"),
+            new ChatModel.ChatRequest.ConversationMessage("assistant", "Earlier answer")
+        );
+        var strategy = new RecordingQueryStrategy(baseContext());
+        var engine = new QueryEngine(
+            new RecordingChatModel(),
+            new ContextAssembler(),
+            strategiesReturning(strategy),
+            new StubRerankModel(List.of(
+                new RerankModel.RerankResult("chunk-1", 0.99d),
+                new RerankModel.RerankResult("chunk-2", 0.88d),
+                new RerankModel.RerankResult("chunk-3", 0.77d)
+            ))
+        );
+
+        engine.query(QueryRequest.builder()
+            .query("which chunk?")
+            .mode(QueryMode.LOCAL)
+            .topK(3)
+            .chunkTopK(3)
+            .userPrompt("Answer in one sentence.")
+            .conversationHistory(history)
+            .build());
+
+        assertThat(strategy.lastRequest()).isNotNull();
+        assertThat(strategy.lastRequest().chunkTopK()).isEqualTo(6);
+        assertThat(strategy.lastRequest().userPrompt()).isEqualTo("Answer in one sentence.");
+        assertThat(strategy.lastRequest().conversationHistory()).containsExactlyElementsOf(history);
     }
 
     @Test
