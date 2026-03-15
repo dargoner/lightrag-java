@@ -164,6 +164,27 @@ class LightRagBuilderTest {
         assertThat(request.chunkTopK()).isEqualTo(QueryRequest.DEFAULT_CHUNK_TOP_K);
         assertThat(request.responseType()).isEqualTo(QueryRequest.DEFAULT_RESPONSE_TYPE);
         assertThat(request.enableRerank()).isTrue();
+        assertThat(request.userPrompt()).isEmpty();
+        assertThat(request.conversationHistory()).isEmpty();
+    }
+
+    @Test
+    void queryRequestCopiesConversationHistory() {
+        var history = new ArrayList<ChatModel.ChatRequest.ConversationMessage>();
+        history.add(new ChatModel.ChatRequest.ConversationMessage("user", "Earlier question"));
+
+        var request = QueryRequest.builder()
+            .query("Where is the evidence?")
+            .conversationHistory(history)
+            .build();
+        history.clear();
+
+        assertThat(request.conversationHistory())
+            .containsExactly(new ChatModel.ChatRequest.ConversationMessage("user", "Earlier question"));
+        assertThatThrownBy(() -> request.conversationHistory().add(
+            new ChatModel.ChatRequest.ConversationMessage("assistant", "Earlier answer")
+        ))
+            .isInstanceOf(UnsupportedOperationException.class);
     }
 
     @Test

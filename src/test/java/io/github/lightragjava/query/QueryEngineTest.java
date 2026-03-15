@@ -43,6 +43,55 @@ class QueryEngineTest {
     }
 
     @Test
+    void appendsUserPromptToFinalCurrentTurnPrompt() {
+        var chatModel = new RecordingChatModel();
+        var engine = new QueryEngine(
+            chatModel,
+            new ContextAssembler(),
+            strategiesReturning(baseContext()),
+            null
+        );
+
+        engine.query(QueryRequest.builder()
+            .query("which chunk?")
+            .mode(QueryMode.LOCAL)
+            .chunkTopK(3)
+            .userPrompt("Answer in one sentence.")
+            .build());
+
+        assertThat(chatModel.lastRequest().userPrompt())
+            .contains("Question:")
+            .contains("which chunk?")
+            .contains("Additional Instructions:")
+            .contains("Answer in one sentence.");
+    }
+
+    @Test
+    void forwardsConversationHistoryIntoChatRequest() {
+        var chatModel = new RecordingChatModel();
+        var engine = new QueryEngine(
+            chatModel,
+            new ContextAssembler(),
+            strategiesReturning(baseContext()),
+            null
+        );
+
+        var history = List.of(
+            new ChatModel.ChatRequest.ConversationMessage("user", "Earlier question"),
+            new ChatModel.ChatRequest.ConversationMessage("assistant", "Earlier answer")
+        );
+
+        engine.query(QueryRequest.builder()
+            .query("which chunk?")
+            .mode(QueryMode.LOCAL)
+            .chunkTopK(3)
+            .conversationHistory(history)
+            .build());
+
+        assertThat(chatModel.lastRequest().conversationHistory()).containsExactlyElementsOf(history);
+    }
+
+    @Test
     void expandsChunkTopKWhenRerankIsEnabledAndModelIsConfigured() {
         var strategy = new RecordingQueryStrategy(baseContext());
         var engine = new QueryEngine(
