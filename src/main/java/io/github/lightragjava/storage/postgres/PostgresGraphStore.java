@@ -1,0 +1,342 @@
+package io.github.lightragjava.storage.postgres;
+
+import io.github.lightragjava.exception.StorageException;
+import io.github.lightragjava.storage.GraphStore;
+
+import javax.sql.DataSource;
+import java.sql.Connection;
+import java.sql.ResultSet;
+import java.sql.SQLException;
+import java.util.List;
+import java.util.Objects;
+import java.util.Optional;
+
+public final class PostgresGraphStore implements GraphStore {
+    private final JdbcConnectionAccess connectionAccess;
+    private final String entitiesTable;
+    private final String entityAliasesTable;
+    private final String entityChunksTable;
+    private final String relationsTable;
+    private final String relationChunksTable;
+
+    public PostgresGraphStore(DataSource dataSource, PostgresStorageConfig config) {
+        this(JdbcConnectionAccess.forDataSource(dataSource), config);
+    }
+
+    PostgresGraphStore(JdbcConnectionAccess connectionAccess, PostgresStorageConfig config) {
+        this.connectionAccess = Objects.requireNonNull(connectionAccess, "connectionAccess");
+        var storageConfig = Objects.requireNonNull(config, "config");
+        this.entitiesTable = storageConfig.qualifiedTableName("entities");
+        this.entityAliasesTable = storageConfig.qualifiedTableName("entity_aliases");
+        this.entityChunksTable = storageConfig.qualifiedTableName("entity_chunks");
+        this.relationsTable = storageConfig.qualifiedTableName("relations");
+        this.relationChunksTable = storageConfig.qualifiedTableName("relation_chunks");
+    }
+
+    @Override
+    public void saveEntity(EntityRecord entity) {
+        var record = Objects.requireNonNull(entity, "entity");
+        connectionAccess.withConnection(connection -> {
+            inTransaction(connection, () -> {
+                upsertEntity(connection, record);
+                replaceEntityAliases(connection, record);
+                replaceEntityChunkIds(connection, record);
+            });
+            return null;
+        });
+    }
+
+    @Override
+    public void saveRelation(RelationRecord relation) {
+        var record = Objects.requireNonNull(relation, "relation");
+        connectionAccess.withConnection(connection -> {
+            inTransaction(connection, () -> {
+                upsertRelation(connection, record);
+                replaceRelationChunkIds(connection, record);
+            });
+            return null;
+        });
+    }
+
+    @Override
+    public Optional<EntityRecord> loadEntity(String entityId) {
+        var id = Objects.requireNonNull(entityId, "entityId");
+        return connectionAccess.withConnection(connection -> loadEntity(connection, id));
+    }
+
+    @Override
+    public Optional<RelationRecord> loadRelation(String relationId) {
+        var id = Objects.requireNonNull(relationId, "relationId");
+        return connectionAccess.withConnection(connection -> loadRelation(connection, id));
+    }
+
+    @Override
+    public List<EntityRecord> allEntities() {
+        return connectionAccess.withConnection(connection -> {
+            try (var statement = connection.prepareStatement(
+                """
+                SELECT id, name, type, description
+                FROM %s
+                ORDER BY id
+                """.formatted(entitiesTable)
+            ); var resultSet = statement.executeQuery()) {
+                var entities = new java.util.ArrayList<EntityRecord>();
+                while (resultSet.next()) {
+                    entities.add(readEntity(connection, resultSet));
+                }
+                return List.copyOf(entities);
+            }
+        });
+    }
+
+    @Override
+    public List<RelationRecord> allRelations() {
+        return connectionAccess.withConnection(connection -> {
+            try (var statement = connection.prepareStatement(
+                """
+                SELECT id, source_entity_id, target_entity_id, type, description, weight
+                FROM %s
+                ORDER BY id
+                """.formatted(relationsTable)
+            ); var resultSet = statement.executeQuery()) {
+                var relations = new java.util.ArrayList<RelationRecord>();
+                while (resultSet.next()) {
+                    relations.add(readRelation(connection, resultSet));
+                }
+                return List.copyOf(relations);
+            }
+        });
+    }
+
+    @Override
+    public List<RelationRecord> findRelations(String entityId) {
+        var id = Objects.requireNonNull(entityId, "entityId");
+        return connectionAccess.withConnection(connection -> {
+            try (var statement = connection.prepareStatement(
+                """
+                SELECT id, source_entity_id, target_entity_id, type, description, weight
+                FROM %s
+                WHERE source_entity_id = ? OR target_entity_id = ?
+                ORDER BY id
+                """.formatted(relationsTable)
+            )) {
+                statement.setString(1, id);
+                statement.setString(2, id);
+                try (var resultSet = statement.executeQuery()) {
+                    var relations = new java.util.ArrayList<RelationRecord>();
+                    while (resultSet.next()) {
+                        relations.add(readRelation(connection, resultSet));
+                    }
+                    return List.copyOf(relations);
+                }
+            }
+        });
+    }
+
+    private Optional<EntityRecord> loadEntity(Connection connection, String entityId) throws SQLException {
+        try (var statement = connection.prepareStatement(
+            """
+            SELECT id, name, type, description
+            FROM %s
+            WHERE id = ?
+            """.formatted(entitiesTable)
+        )) {
+            statement.setString(1, entityId);
+            try (var resultSet = statement.executeQuery()) {
+                if (!resultSet.next()) {
+                    return Optional.empty();
+                }
+                return Optional.of(readEntity(connection, resultSet));
+            }
+        }
+    }
+
+    private Optional<RelationRecord> loadRelation(Connection connection, String relationId) throws SQLException {
+        try (var statement = connection.prepareStatement(
+            """
+            SELECT id, source_entity_id, target_entity_id, type, description, weight
+            FROM %s
+            WHERE id = ?
+            """.formatted(relationsTable)
+        )) {
+            statement.setString(1, relationId);
+            try (var resultSet = statement.executeQuery()) {
+                if (!resultSet.next()) {
+                    return Optional.empty();
+                }
+                return Optional.of(readRelation(connection, resultSet));
+            }
+        }
+    }
+
+    private EntityRecord readEntity(Connection connection, ResultSet resultSet) throws SQLException {
+        var entityId = resultSet.getString("id");
+        return new EntityRecord(
+            entityId,
+            resultSet.getString("name"),
+            resultSet.getString("type"),
+            resultSet.getString("description"),
+            selectStringList(connection, entityAliasesTable, "entity_id", entityId, "alias"),
+            selectStringList(connection, entityChunksTable, "entity_id", entityId, "chunk_id")
+        );
+    }
+
+    private RelationRecord readRelation(Connection connection, ResultSet resultSet) throws SQLException {
+        var relationId = resultSet.getString("id");
+        return new RelationRecord(
+            relationId,
+            resultSet.getString("source_entity_id"),
+            resultSet.getString("target_entity_id"),
+            resultSet.getString("type"),
+            resultSet.getString("description"),
+            resultSet.getDouble("weight"),
+            selectStringList(connection, relationChunksTable, "relation_id", relationId, "chunk_id")
+        );
+    }
+
+    private List<String> selectStringList(
+        Connection connection,
+        String tableName,
+        String idColumn,
+        String idValue,
+        String valueColumn
+    ) throws SQLException {
+        try (var statement = connection.prepareStatement(
+            """
+            SELECT %s
+            FROM %s
+            WHERE %s = ?
+            ORDER BY %s
+            """.formatted(valueColumn, tableName, idColumn, valueColumn)
+        )) {
+            statement.setString(1, idValue);
+            try (var resultSet = statement.executeQuery()) {
+                var values = new java.util.ArrayList<String>();
+                while (resultSet.next()) {
+                    values.add(resultSet.getString(valueColumn));
+                }
+                return List.copyOf(values);
+            }
+        }
+    }
+
+    private void upsertEntity(Connection connection, EntityRecord entity) throws SQLException {
+        try (var statement = connection.prepareStatement(
+            """
+            INSERT INTO %s (id, name, type, description)
+            VALUES (?, ?, ?, ?)
+            ON CONFLICT (id) DO UPDATE
+            SET name = EXCLUDED.name,
+                type = EXCLUDED.type,
+                description = EXCLUDED.description
+            """.formatted(entitiesTable)
+        )) {
+            statement.setString(1, entity.id());
+            statement.setString(2, entity.name());
+            statement.setString(3, entity.type());
+            statement.setString(4, entity.description());
+            statement.executeUpdate();
+        }
+    }
+
+    private void replaceEntityAliases(Connection connection, EntityRecord entity) throws SQLException {
+        deleteById(connection, entityAliasesTable, "entity_id", entity.id());
+        insertStringValues(connection, entityAliasesTable, "entity_id", entity.id(), "alias", entity.aliases());
+    }
+
+    private void replaceEntityChunkIds(Connection connection, EntityRecord entity) throws SQLException {
+        deleteById(connection, entityChunksTable, "entity_id", entity.id());
+        insertStringValues(connection, entityChunksTable, "entity_id", entity.id(), "chunk_id", entity.sourceChunkIds());
+    }
+
+    private void upsertRelation(Connection connection, RelationRecord relation) throws SQLException {
+        try (var statement = connection.prepareStatement(
+            """
+            INSERT INTO %s (id, source_entity_id, target_entity_id, type, description, weight)
+            VALUES (?, ?, ?, ?, ?, ?)
+            ON CONFLICT (id) DO UPDATE
+            SET source_entity_id = EXCLUDED.source_entity_id,
+                target_entity_id = EXCLUDED.target_entity_id,
+                type = EXCLUDED.type,
+                description = EXCLUDED.description,
+                weight = EXCLUDED.weight
+            """.formatted(relationsTable)
+        )) {
+            statement.setString(1, relation.id());
+            statement.setString(2, relation.sourceEntityId());
+            statement.setString(3, relation.targetEntityId());
+            statement.setString(4, relation.type());
+            statement.setString(5, relation.description());
+            statement.setDouble(6, relation.weight());
+            statement.executeUpdate();
+        }
+    }
+
+    private void replaceRelationChunkIds(Connection connection, RelationRecord relation) throws SQLException {
+        deleteById(connection, relationChunksTable, "relation_id", relation.id());
+        insertStringValues(connection, relationChunksTable, "relation_id", relation.id(), "chunk_id", relation.sourceChunkIds());
+    }
+
+    private void deleteById(Connection connection, String tableName, String idColumn, String idValue) throws SQLException {
+        try (var statement = connection.prepareStatement(
+            "DELETE FROM " + tableName + " WHERE " + idColumn + " = ?"
+        )) {
+            statement.setString(1, idValue);
+            statement.executeUpdate();
+        }
+    }
+
+    private void insertStringValues(
+        Connection connection,
+        String tableName,
+        String idColumn,
+        String idValue,
+        String valueColumn,
+        List<String> values
+    ) throws SQLException {
+        if (values.isEmpty()) {
+            return;
+        }
+        try (var statement = connection.prepareStatement(
+            "INSERT INTO " + tableName + " (" + idColumn + ", " + valueColumn + ") VALUES (?, ?)"
+        )) {
+            for (var value : values) {
+                statement.setString(1, idValue);
+                statement.setString(2, value);
+                statement.addBatch();
+            }
+            statement.executeBatch();
+        }
+    }
+
+    private void inTransaction(Connection connection, SqlWork work) {
+        try {
+            boolean originalAutoCommit = connection.getAutoCommit();
+            if (originalAutoCommit) {
+                connection.setAutoCommit(false);
+            }
+            try {
+                work.execute();
+                if (originalAutoCommit) {
+                    connection.commit();
+                }
+            } catch (SQLException exception) {
+                if (originalAutoCommit) {
+                    connection.rollback();
+                }
+                throw new StorageException("Graph store write failed", exception);
+            } finally {
+                if (originalAutoCommit && connection.getAutoCommit() != originalAutoCommit) {
+                    connection.setAutoCommit(originalAutoCommit);
+                }
+            }
+        } catch (SQLException exception) {
+            throw new StorageException("Graph store write failed", exception);
+        }
+    }
+
+    @FunctionalInterface
+    private interface SqlWork {
+        void execute() throws SQLException;
+    }
+}
