@@ -17,9 +17,6 @@ import java.util.Map;
 import java.util.Objects;
 
 public final class IndexingPipeline {
-    private static final String CHUNK_NAMESPACE = "chunks";
-    private static final String ENTITY_NAMESPACE = "entities";
-    private static final String RELATION_NAMESPACE = "relations";
     private static final int DEFAULT_CHUNK_WINDOW = 1_000;
     private static final int DEFAULT_CHUNK_OVERLAP = 100;
 
@@ -57,10 +54,10 @@ public final class IndexingPipeline {
 
         storageProvider.writeAtomically(storage -> {
             saveDocumentsAndChunks(prepared, storage);
-            saveVectors(CHUNK_NAMESPACE, chunkVectors, storage.vectorStore());
+            saveVectors(StorageSnapshots.CHUNK_NAMESPACE, chunkVectors, storage.vectorStore());
             saveGraph(graph.entities(), graph.relations(), storage);
-            saveVectors(ENTITY_NAMESPACE, entityVectors, storage.vectorStore());
-            saveVectors(RELATION_NAMESPACE, relationVectors, storage.vectorStore());
+            saveVectors(StorageSnapshots.ENTITY_NAMESPACE, entityVectors, storage.vectorStore());
+            saveVectors(StorageSnapshots.RELATION_NAMESPACE, relationVectors, storage.vectorStore());
             return null;
         });
 
@@ -103,24 +100,7 @@ public final class IndexingPipeline {
     }
 
     private void persistSnapshotIfConfigured() {
-        if (snapshotPath == null) {
-            return;
-        }
-
-        storageProvider.snapshotStore().save(
-            snapshotPath,
-            new SnapshotStore.Snapshot(
-                storageProvider.documentStore().list(),
-                storageProvider.chunkStore().list(),
-                storageProvider.graphStore().allEntities(),
-                storageProvider.graphStore().allRelations(),
-                Map.of(
-                    CHUNK_NAMESPACE, storageProvider.vectorStore().list(CHUNK_NAMESPACE),
-                    ENTITY_NAMESPACE, storageProvider.vectorStore().list(ENTITY_NAMESPACE),
-                    RELATION_NAMESPACE, storageProvider.vectorStore().list(RELATION_NAMESPACE)
-                )
-            )
-        );
+        StorageSnapshots.persistIfConfigured(storageProvider, snapshotPath);
     }
 
     private static List<VectorStore.VectorRecord> toVectorRecords(List<String> ids, List<List<Double>> embeddings) {

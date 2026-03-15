@@ -61,6 +61,7 @@ Benefits:
 
 Trade-offs:
 
+- delete operations are only safe under a single-writer discipline because the current SPI does not offer atomic snapshot read-modify-write
 - document deletion is O(all remaining documents), not incremental
 - deletes rebuild more state than strictly necessary
 
@@ -123,6 +124,7 @@ Responsibilities:
 - persist autosnapshot if configured
 
 This keeps delete-specific logic out of `LightRag`.
+It also makes the concurrency boundary explicit: with the current SPI, the coordinator assumes a single writer is mutating storage while a delete operation is in progress.
 
 ### Entity Delete Semantics
 
@@ -136,6 +138,7 @@ This keeps delete-specific logic out of `LightRag`.
 6. restore the replacement snapshot
 
 If the entity is not found, the operation should be a no-op.
+This operation does not delete source documents, chunks, or chunk vectors; it aligns with upstream graph-focused delete semantics. Removing the underlying text requires `deleteByDocumentId(...)`.
 
 ### Relation Delete Semantics
 
@@ -148,6 +151,7 @@ If the entity is not found, the operation should be a no-op.
 5. restore the replacement snapshot
 
 Entities and unrelated relations remain unchanged.
+Source documents, chunks, and chunk vectors also remain unchanged; only the graph edge and relation vectors are removed.
 
 If either entity is not found, the operation should be a no-op.
 
@@ -169,6 +173,9 @@ This is intentionally heavier than upstream’s incremental rebuild, but it matc
 - shared knowledge is reconstructed from remaining documents
 - entity/relation vectors are regenerated from the rebuilt graph
 
+The clear-and-rebuild path is not atomically visible to concurrent readers. During step 4 and the rebuild window, readers can observe an empty or partially rebuilt store before the remaining documents finish re-ingesting.
+The rebuild also uses the current `LightRag` instance's configured chunking, extraction, and embedding pipeline, which matches upstream's rebuild-oriented delete model.
+
 ### Snapshot Utilities
 
 The Java SDK already has multiple places that materialize snapshots from storage. This delete work should centralize that behavior in a small helper so snapshot capture and autosnapshot persistence are not duplicated again.
@@ -181,6 +188,7 @@ Recommended helpers:
 ### Failure Semantics
 
 Entity and relation deletion should be all-or-nothing because they apply through `restore(...)`.
+That guarantee only holds relative to a single writer. Concurrent writers can still race between snapshot capture and restore.
 
 Document deletion must protect against rebuild failure:
 
@@ -199,6 +207,6 @@ Required coverage:
 - deleting a missing entity or relation is a no-op
 - deleting a document rebuilds remaining documents and preserves shared knowledge
 - document delete rollback restores original state when rebuild fails
-- autosnapshot continues to reflect the post-delete state when configured
+- autosnapshot continues to reflect the post-delete state when configured for relation and document deletes
 
 Verification should include focused unit/integration tests plus full `./gradlew test`.

@@ -4,7 +4,7 @@
 
 **Goal:** Add upstream-aligned delete operations to the Java LightRAG SDK for entity, relation, and document deletion.
 
-**Architecture:** `LightRag` will delegate delete operations to a new `DeletionPipeline` that captures provider snapshots, computes replacement state in memory, and applies it through `AtomicStorageProvider.restore(...)`. Entity and relation deletes mutate the current snapshot directly; document delete clears storage and rebuilds all remaining documents through the existing indexing pipeline components so graph and vector state stay coherent.
+**Architecture:** `LightRag` will delegate delete operations to a new `DeletionPipeline` that captures provider snapshots, computes replacement state in memory, and applies it through `AtomicStorageProvider.restore(...)`. Entity and relation deletes mutate the current snapshot directly; document delete clears storage and rebuilds all remaining documents through the existing indexing pipeline components so graph and vector state stay coherent. This plan assumes a single writer while delete operations run because the current SPI does not provide atomic snapshot read-modify-write semantics across capture and restore.
 
 **Tech Stack:** Java 17, existing `AtomicStorageProvider` SPI, in-memory storage, PostgreSQL storage, JUnit 5, AssertJ
 
@@ -143,7 +143,19 @@ If rebuild fails, restore the captured pre-delete snapshot and surface the origi
 Run: `./gradlew test --tests io.github.lightragjava.E2ELightRagTest.deletesDocumentAndRebuildsRemainingKnowledge --tests io.github.lightragjava.E2ELightRagTest.restoresOriginalStateWhenDocumentDeleteRebuildFails`
 Expected: PASS.
 
-- [ ] **Step 6: Commit**
+- [ ] **Step 6: Add no-op and autosnapshot coverage**
+
+Add targeted end-to-end tests for:
+
+- deleting a missing entity or relation as a no-op
+- persisting the updated snapshot after delete when snapshot autosave is configured
+
+- [ ] **Step 7: Run the added coverage**
+
+Run: `./gradlew test --tests io.github.lightragjava.E2ELightRagTest.deletingMissingEntityOrRelationIsNoOp --tests io.github.lightragjava.E2ELightRagTest.deleteOperationsPersistSnapshotWhenConfigured`
+Expected: PASS.
+
+- [ ] **Step 8: Commit**
 
 ```bash
 git add src/main/java/io/github/lightragjava/indexing/DeletionPipeline.java src/test/java/io/github/lightragjava/E2ELightRagTest.java
@@ -160,7 +172,12 @@ git commit -m "feat: add LightRAG document deletion rebuild"
 
 - [ ] **Step 1: Update docs if implementation differs**
 
-Keep the design and plan aligned with the final delete API and rebuild strategy.
+Keep the design and plan aligned with the final delete API and rebuild strategy, including:
+
+- single-writer assumptions around snapshot capture and restore
+- transient empty or partially rebuilt visibility during `deleteByDocumentId(...)`
+- no-op coverage for missing entity/relation deletes
+- autosnapshot coverage for delete flows
 
 - [ ] **Step 2: Run full verification**
 
