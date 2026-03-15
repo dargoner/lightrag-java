@@ -6,8 +6,11 @@ import io.github.lightragjava.api.QueryResult;
 import io.github.lightragjava.model.ChatModel;
 import io.github.lightragjava.model.RerankModel;
 import io.github.lightragjava.types.QueryContext;
+import io.github.lightragjava.types.ScoredChunk;
 
 import java.util.EnumMap;
+import java.util.LinkedHashMap;
+import java.util.List;
 import java.util.Map;
 import java.util.Objects;
 
@@ -38,7 +41,24 @@ public final class QueryEngine {
             throw new IllegalStateException("No query strategy configured for mode: " + query.mode());
         }
 
-        QueryContext context = strategy.retrieve(query);
+        var retrievalRequest = rerankEnabled(query) ? expandChunkRequest(query) : query;
+        var retrievedContext = strategy.retrieve(retrievalRequest);
+        var finalChunks = rerankEnabled(query)
+            ? rerankChunks(query, retrievedContext.matchedChunks())
+            : retrievedContext.matchedChunks();
+        var finalContext = new QueryContext(
+            retrievedContext.matchedEntities(),
+            retrievedContext.matchedRelations(),
+            finalChunks,
+            ""
+        );
+        var assembledContext = contextAssembler.assemble(finalContext);
+        var assembledQueryContext = new QueryContext(
+            finalContext.matchedEntities(),
+            finalContext.matchedRelations(),
+            finalContext.matchedChunks(),
+            assembledContext
+        );
         var answer = chatModel.generate(new ChatModel.ChatRequest(
             SYSTEM_PROMPT,
             """
@@ -47,8 +67,50 @@ public final class QueryEngine {
 
             Question:
             %s
-            """.formatted(context.assembledContext(), query.query())
+            """.formatted(assembledContext, query.query())
         ));
-        return new QueryResult(answer, contextAssembler.toContexts(context));
+        return new QueryResult(answer, contextAssembler.toContexts(assembledQueryContext));
+    }
+
+    private boolean rerankEnabled(QueryRequest request) {
+        return request.enableRerank() && rerankModel != null;
+    }
+
+    private static QueryRequest expandChunkRequest(QueryRequest request) {
+        long expandedChunkTopK = Math.max((long) request.chunkTopK() * 2L, request.chunkTopK());
+        return new QueryRequest(
+            request.query(),
+            request.mode(),
+            request.topK(),
+            (int) Math.min(Integer.MAX_VALUE, expandedChunkTopK),
+            request.responseType(),
+            request.enableRerank()
+        );
+    }
+
+    private List<ScoredChunk> rerankChunks(QueryRequest request, List<ScoredChunk> matchedChunks) {
+        var originalById = new LinkedHashMap<String, ScoredChunk>();
+        for (var chunk : matchedChunks) {
+            originalById.put(chunk.chunkId(), chunk);
+        }
+
+        var rerankResults = Objects.requireNonNull(rerankModel, "rerankModel").rerank(new RerankModel.RerankRequest(
+            request.query(),
+            matchedChunks.stream()
+                .map(chunk -> new RerankModel.RerankCandidate(chunk.chunkId(), chunk.chunk().text()))
+                .toList()
+        ));
+
+        var ordered = new java.util.ArrayList<ScoredChunk>(matchedChunks.size());
+        for (var result : rerankResults) {
+            var chunk = originalById.remove(result.id());
+            if (chunk != null) {
+                ordered.add(chunk);
+            }
+        }
+        ordered.addAll(originalById.values());
+        return ordered.stream()
+            .limit(request.chunkTopK())
+            .toList();
     }
 }
