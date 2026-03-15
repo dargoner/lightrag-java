@@ -3,6 +3,8 @@ package io.github.lightragjava.indexing;
 import io.github.lightragjava.storage.ChunkStore;
 import io.github.lightragjava.storage.DocumentStore;
 import io.github.lightragjava.storage.InMemoryStorageProvider;
+import io.github.lightragjava.storage.RollbackCapableChunkStore;
+import io.github.lightragjava.storage.RollbackCapableDocumentStore;
 import io.github.lightragjava.storage.StorageProvider;
 import io.github.lightragjava.types.Chunk;
 import io.github.lightragjava.types.Document;
@@ -145,7 +147,7 @@ class DocumentIngestorTest {
         }
     }
 
-    private static final class RollbackAwareDocumentStore implements DocumentIngestor.RollbackCapableDocumentStore {
+    private static final class RollbackAwareDocumentStore implements RollbackCapableDocumentStore {
         private final Map<String, DocumentStore.DocumentRecord> documents = new LinkedHashMap<>();
 
         @Override
@@ -177,7 +179,7 @@ class DocumentIngestorTest {
         }
     }
 
-    private static final class FailingRollbackAwareChunkStore implements DocumentIngestor.RollbackCapableChunkStore {
+    private static final class FailingRollbackAwareChunkStore implements RollbackCapableChunkStore {
         private final Map<String, ChunkStore.ChunkRecord> chunks = new LinkedHashMap<>();
         private int saveAttempts;
 

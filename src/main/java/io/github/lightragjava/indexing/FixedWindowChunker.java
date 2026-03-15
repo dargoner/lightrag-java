@@ -39,7 +39,8 @@ public final class FixedWindowChunker implements Chunker {
         var order = 0;
 
         while (start < content.length()) {
-            var end = Math.min(content.length(), start + windowSize);
+            start = normalizeStart(content, start);
+            var end = normalizeEnd(content, Math.min(content.length(), start + windowSize));
             var text = content.substring(start, end);
             chunks.add(new Chunk(
                 composeChunkId(source.id(), order),
@@ -61,5 +62,25 @@ public final class FixedWindowChunker implements Chunker {
 
     private static String composeChunkId(String documentId, int order) {
         return documentId + ":" + order;
+    }
+
+    private static int normalizeStart(String content, int start) {
+        if (start > 0
+            && start < content.length()
+            && Character.isLowSurrogate(content.charAt(start))
+            && Character.isHighSurrogate(content.charAt(start - 1))) {
+            return start - 1;
+        }
+        return start;
+    }
+
+    private static int normalizeEnd(String content, int end) {
+        if (end > 0
+            && end < content.length()
+            && Character.isHighSurrogate(content.charAt(end - 1))
+            && Character.isLowSurrogate(content.charAt(end))) {
+            return end + 1;
+        }
+        return end;
     }
 }

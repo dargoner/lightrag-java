@@ -43,4 +43,36 @@ class FixedWindowChunkerTest {
         assertThat(chunks.get(0).text().substring(3)).isEqualTo(chunks.get(1).text().substring(0, 2));
         assertThat(chunks.get(1).text().substring(3)).isEqualTo(chunks.get(2).text().substring(0, 2));
     }
+
+    @Test
+    void doesNotSplitSurrogatePairsAcrossChunkBoundaries() {
+        var chunker = new FixedWindowChunker(4, 1);
+        var document = new Document("doc-emoji", "Title", "ab😀cd😀ef", Map.of());
+
+        var chunks = chunker.chunk(document);
+
+        assertThat(chunks)
+            .extracting(Chunk::text)
+            .allSatisfy(text -> assertThat(hasIsolatedSurrogate(text)).isFalse());
+        assertThat(chunks)
+            .extracting(Chunk::text)
+            .containsExactly("ab😀", "😀cd", "d😀e", "ef");
+    }
+
+    private static boolean hasIsolatedSurrogate(String text) {
+        for (var index = 0; index < text.length(); index++) {
+            var current = text.charAt(index);
+            if (Character.isHighSurrogate(current)) {
+                if (index + 1 >= text.length() || !Character.isLowSurrogate(text.charAt(index + 1))) {
+                    return true;
+                }
+                index++;
+                continue;
+            }
+            if (Character.isLowSurrogate(current)) {
+                return true;
+            }
+        }
+        return false;
+    }
 }

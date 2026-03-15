@@ -2,17 +2,15 @@ package io.github.lightragjava.indexing;
 
 import io.github.lightragjava.storage.ChunkStore;
 import io.github.lightragjava.storage.DocumentStore;
+import io.github.lightragjava.storage.RollbackCapableChunkStore;
+import io.github.lightragjava.storage.RollbackCapableDocumentStore;
 import io.github.lightragjava.storage.StorageProvider;
-import io.github.lightragjava.storage.memory.InMemoryChunkStore;
-import io.github.lightragjava.storage.memory.InMemoryDocumentStore;
 import io.github.lightragjava.types.Chunk;
 import io.github.lightragjava.types.Document;
 
 import java.util.ArrayList;
 import java.util.HashSet;
-import java.util.LinkedHashMap;
 import java.util.List;
-import java.util.Map;
 import java.util.Objects;
 
 public final class DocumentIngestor {
@@ -136,9 +134,6 @@ public final class DocumentIngestor {
         if (documentStore instanceof RollbackCapableDocumentStore rollbackCapableDocumentStore) {
             return rollbackCapableDocumentStore;
         }
-        if (documentStore instanceof InMemoryDocumentStore inMemoryDocumentStore) {
-            return new InMemoryRollbackDocumentStore(inMemoryDocumentStore);
-        }
         throw new IllegalStateException("DocumentIngestor requires rollback-capable documentStore");
     }
 
@@ -146,112 +141,6 @@ public final class DocumentIngestor {
         if (chunkStore instanceof RollbackCapableChunkStore rollbackCapableChunkStore) {
             return rollbackCapableChunkStore;
         }
-        if (chunkStore instanceof InMemoryChunkStore inMemoryChunkStore) {
-            return new InMemoryRollbackChunkStore(inMemoryChunkStore);
-        }
         throw new IllegalStateException("DocumentIngestor requires rollback-capable chunkStore");
-    }
-
-    private static Map<String, DocumentStore.DocumentRecord> indexDocuments(List<DocumentStore.DocumentRecord> snapshot) {
-        var indexed = new LinkedHashMap<String, DocumentStore.DocumentRecord>(snapshot.size());
-        for (var document : snapshot) {
-            indexed.put(document.id(), document);
-        }
-        return indexed;
-    }
-
-    private static Map<String, ChunkStore.ChunkRecord> indexChunks(List<ChunkStore.ChunkRecord> snapshot) {
-        var indexed = new LinkedHashMap<String, ChunkStore.ChunkRecord>(snapshot.size());
-        for (var chunk : snapshot) {
-            indexed.put(chunk.id(), chunk);
-        }
-        return indexed;
-    }
-
-    @SuppressWarnings("unchecked")
-    private static <T> void replaceBackingMap(Object store, String fieldName, Map<String, T> snapshot) {
-        try {
-            var field = store.getClass().getDeclaredField(fieldName);
-            field.setAccessible(true);
-            var map = (Map<String, T>) field.get(store);
-            map.clear();
-            map.putAll(snapshot);
-        } catch (ReflectiveOperationException exception) {
-            throw new IllegalStateException("Failed to restore " + store.getClass().getSimpleName(), exception);
-        }
-    }
-
-    public interface RollbackCapableDocumentStore extends DocumentStore {
-        void restoreDocuments(List<DocumentStore.DocumentRecord> snapshot);
-    }
-
-    public interface RollbackCapableChunkStore extends ChunkStore {
-        void restoreChunks(List<ChunkStore.ChunkRecord> snapshot);
-    }
-
-    private static final class InMemoryRollbackDocumentStore implements RollbackCapableDocumentStore {
-        private final InMemoryDocumentStore delegate;
-
-        private InMemoryRollbackDocumentStore(InMemoryDocumentStore delegate) {
-            this.delegate = delegate;
-        }
-
-        @Override
-        public void save(DocumentStore.DocumentRecord document) {
-            delegate.save(document);
-        }
-
-        @Override
-        public java.util.Optional<DocumentStore.DocumentRecord> load(String documentId) {
-            return delegate.load(documentId);
-        }
-
-        @Override
-        public List<DocumentStore.DocumentRecord> list() {
-            return delegate.list();
-        }
-
-        @Override
-        public boolean contains(String documentId) {
-            return delegate.contains(documentId);
-        }
-
-        @Override
-        public void restoreDocuments(List<DocumentStore.DocumentRecord> snapshot) {
-            replaceBackingMap(delegate, "documents", indexDocuments(snapshot));
-        }
-    }
-
-    private static final class InMemoryRollbackChunkStore implements RollbackCapableChunkStore {
-        private final InMemoryChunkStore delegate;
-
-        private InMemoryRollbackChunkStore(InMemoryChunkStore delegate) {
-            this.delegate = delegate;
-        }
-
-        @Override
-        public void save(ChunkStore.ChunkRecord chunk) {
-            delegate.save(chunk);
-        }
-
-        @Override
-        public java.util.Optional<ChunkStore.ChunkRecord> load(String chunkId) {
-            return delegate.load(chunkId);
-        }
-
-        @Override
-        public List<ChunkStore.ChunkRecord> list() {
-            return delegate.list();
-        }
-
-        @Override
-        public List<ChunkStore.ChunkRecord> listByDocument(String documentId) {
-            return delegate.listByDocument(documentId);
-        }
-
-        @Override
-        public void restoreChunks(List<ChunkStore.ChunkRecord> snapshot) {
-            replaceBackingMap(delegate, "chunks", indexChunks(snapshot));
-        }
     }
 }
