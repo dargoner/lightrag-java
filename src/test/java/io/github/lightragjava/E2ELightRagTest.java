@@ -148,6 +148,50 @@ class E2ELightRagTest {
         assertThat(chatModel.lastQueryRequest().userPrompt()).contains("Alice");
     }
 
+    @Test
+    void queryModesExposeNonEmptyContextsForSuccessfulQueries() {
+        var storage = InMemoryStorageProvider.create();
+        var rag = LightRag.builder()
+            .chatModel(new FakeChatModel())
+            .embeddingModel(new FakeEmbeddingModel())
+            .storage(storage)
+            .build();
+
+        rag.ingest(List.of(
+            new Document("doc-1", "Title", "Alice works with Bob", Map.of()),
+            new Document("doc-2", "Title", "Bob reports to Carol", Map.of())
+        ));
+
+        var local = rag.query(QueryRequest.builder()
+            .query("Who works with Bob?")
+            .mode(io.github.lightragjava.api.QueryMode.LOCAL)
+            .build());
+        var global = rag.query(QueryRequest.builder()
+            .query("Who reports to Carol?")
+            .mode(io.github.lightragjava.api.QueryMode.GLOBAL)
+            .build());
+        var hybrid = rag.query(QueryRequest.builder()
+            .query("Who works with Bob?")
+            .mode(io.github.lightragjava.api.QueryMode.HYBRID)
+            .build());
+        var mix = rag.query(QueryRequest.builder()
+            .query("Who works with Bob?")
+            .mode(io.github.lightragjava.api.QueryMode.MIX)
+            .build());
+
+        assertThat(local.contexts()).isNotEmpty();
+        assertThat(local.contexts()).extracting(QueryResult.Context::sourceId).contains("doc-1:0");
+
+        assertThat(global.contexts()).isNotEmpty();
+        assertThat(global.contexts()).extracting(QueryResult.Context::sourceId).contains("doc-2:0");
+
+        assertThat(hybrid.contexts()).isNotEmpty();
+        assertThat(hybrid.contexts()).extracting(QueryResult.Context::sourceId).contains("doc-1:0");
+
+        assertThat(mix.contexts()).isNotEmpty();
+        assertThat(mix.contexts()).extracting(QueryResult.Context::sourceId).contains("doc-1:0");
+    }
+
     private static final class FakeChatModel implements ChatModel {
         private ChatRequest lastQueryRequest;
 
@@ -156,6 +200,35 @@ class E2ELightRagTest {
             if (request.userPrompt().contains("Question:")) {
                 lastQueryRequest = request;
                 return "Alice works with Bob.";
+            }
+            if (request.userPrompt().contains("Bob reports to Carol")) {
+                return """
+                    {
+                      "entities": [
+                        {
+                          "name": "Bob",
+                          "type": "person",
+                          "description": "Engineer",
+                          "aliases": ["Robert"]
+                        },
+                        {
+                          "name": "Carol",
+                          "type": "person",
+                          "description": "Manager",
+                          "aliases": []
+                        }
+                      ],
+                      "relations": [
+                        {
+                          "sourceEntityName": "Bob",
+                          "targetEntityName": "Carol",
+                          "type": "reports_to",
+                          "description": "reporting line",
+                          "weight": 0.9
+                        }
+                      ]
+                    }
+                    """;
             }
             return """
                 {
@@ -194,9 +267,28 @@ class E2ELightRagTest {
     private static final class FakeEmbeddingModel implements EmbeddingModel {
         @Override
         public List<List<Double>> embedAll(List<String> texts) {
-            return java.util.stream.IntStream.range(0, texts.size())
-                .mapToObj(index -> List.of((double) texts.get(index).length(), (double) index))
+            return texts.stream()
+                .map(FakeEmbeddingModel::vectorFor)
                 .toList();
+        }
+
+        private static List<Double> vectorFor(String text) {
+            if (text.contains("Who works with Bob?") || text.contains("Alice works with Bob") || text.contains("works_with")) {
+                return List.of(1.0d, 0.0d);
+            }
+            if (text.contains("Who reports to Carol?") || text.contains("Bob reports to Carol") || text.contains("reports_to")) {
+                return List.of(0.0d, 1.0d);
+            }
+            if (text.contains("Alice")) {
+                return List.of(1.0d, 0.0d);
+            }
+            if (text.contains("Carol")) {
+                return List.of(0.0d, 1.0d);
+            }
+            if (text.contains("Bob")) {
+                return List.of(0.6d, 0.4d);
+            }
+            return List.of(0.1d, 0.1d);
         }
     }
 }
