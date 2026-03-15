@@ -18,7 +18,12 @@ dependencies {
     testImplementation("org.assertj:assertj-core:3.27.3")
     implementation("com.fasterxml.jackson.core:jackson-databind:2.18.3")
     implementation("com.squareup.okhttp3:okhttp:4.12.0")
+    implementation("org.postgresql:postgresql:42.7.10")
+    implementation("com.zaxxer:HikariCP:7.0.2")
+    implementation("com.pgvector:pgvector:0.1.6")
     testImplementation("com.squareup.okhttp3:mockwebserver:4.12.0")
+    testImplementation("org.testcontainers:junit-jupiter:1.21.4")
+    testImplementation("org.testcontainers:postgresql:1.21.4")
 }
 
 tasks.test {
