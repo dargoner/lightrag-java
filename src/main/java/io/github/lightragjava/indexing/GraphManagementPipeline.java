@@ -6,6 +6,7 @@ import io.github.lightragjava.api.EditEntityRequest;
 import io.github.lightragjava.api.EditRelationRequest;
 import io.github.lightragjava.api.GraphEntity;
 import io.github.lightragjava.api.GraphRelation;
+import io.github.lightragjava.api.MergeEntitiesRequest;
 import io.github.lightragjava.storage.AtomicStorageProvider;
 import io.github.lightragjava.storage.GraphStore;
 import io.github.lightragjava.storage.SnapshotStore;
@@ -202,6 +203,60 @@ public final class GraphManagementPipeline {
         return toGraphRelation(updatedRelation);
     }
 
+    public GraphEntity mergeEntities(MergeEntitiesRequest request) {
+        var mergeRequest = Objects.requireNonNull(request, "request");
+        var snapshot = StorageSnapshots.capture(storageProvider);
+        var target = resolveEntity(snapshot.entities(), mergeRequest.targetEntityName(), "targetEntityName");
+        var sources = resolveMergeSources(snapshot.entities(), target.id(), mergeRequest.sourceEntityNames());
+        var sourceIds = sources.stream()
+            .map(GraphStore.EntityRecord::id)
+            .collect(java.util.stream.Collectors.toCollection(LinkedHashSet::new));
+
+        var mergedTarget = new GraphStore.EntityRecord(
+            target.id(),
+            target.name(),
+            mergeRequest.targetType() == null ? target.type() : mergeRequest.targetType(),
+            mergeRequest.targetDescription() == null
+                ? mergeDescriptions(concatDescriptions(target.description(), sources))
+                : mergeRequest.targetDescription(),
+            mergeRequest.targetAliases() == null
+                ? mergedAliases(target, sources)
+                : normalizeAliasesForName(target.name(), mergeRequest.targetAliases()),
+            mergeSourceChunkIds(target, sources)
+        );
+        validateEntityIdentityNamespace(
+            snapshot.entities().stream()
+                .filter(entity -> !sourceIds.contains(entity.id()))
+                .toList(),
+            target.id(),
+            mergedTarget.name(),
+            mergedTarget.aliases()
+        );
+
+        var updatedRelations = mergeRelations(snapshot.relations(), sourceIds, target.id());
+        var updatedEntities = mergeEntities(snapshot.entities(), target.id(), sourceIds, mergedTarget);
+
+        var updatedVectors = new LinkedHashMap<>(snapshot.vectors());
+        updatedVectors.put(
+            StorageSnapshots.ENTITY_NAMESPACE,
+            indexingPipeline.entityVectors(updatedEntities.stream().map(GraphManagementPipeline::toEntity).toList())
+        );
+        updatedVectors.put(
+            StorageSnapshots.RELATION_NAMESPACE,
+            indexingPipeline.relationVectors(updatedRelations.stream().map(GraphManagementPipeline::toRelation).toList())
+        );
+
+        storageProvider.restore(new SnapshotStore.Snapshot(
+            snapshot.documents(),
+            snapshot.chunks(),
+            updatedEntities,
+            updatedRelations,
+            Map.copyOf(updatedVectors)
+        ));
+        StorageSnapshots.persistIfConfigured(storageProvider, snapshotPath);
+        return toGraphEntity(mergedTarget);
+    }
+
     private static void validateCreateRelation(
         List<GraphStore.RelationRecord> relations,
         GraphStore.RelationRecord relationRecord
@@ -310,6 +365,142 @@ public final class GraphManagementPipeline {
         }
         normalizedAliases.putIfAbsent(normalizedAlias, alias.strip());
         return List.copyOf(normalizedAliases.values());
+    }
+
+    private static List<GraphStore.EntityRecord> resolveMergeSources(
+        List<GraphStore.EntityRecord> entities,
+        String targetEntityId,
+        List<String> sourceEntityNames
+    ) {
+        var values = new ArrayList<GraphStore.EntityRecord>();
+        var sourceIds = new LinkedHashSet<String>();
+        for (var sourceEntityName : sourceEntityNames) {
+            var source = resolveEntity(entities, sourceEntityName, "sourceEntityName");
+            if (source.id().equals(targetEntityId)) {
+                throw new IllegalArgumentException("target entity must not be included in sourceEntityNames");
+            }
+            if (!sourceIds.add(source.id())) {
+                throw new IllegalArgumentException("sourceEntityNames resolves to duplicate entities");
+            }
+            values.add(source);
+        }
+        return List.copyOf(values);
+    }
+
+    private static List<String> concatDescriptions(String targetDescription, List<GraphStore.EntityRecord> sources) {
+        var descriptions = new ArrayList<String>();
+        descriptions.add(targetDescription);
+        for (var source : sources) {
+            descriptions.add(source.description());
+        }
+        return List.copyOf(descriptions);
+    }
+
+    private static String mergeDescriptions(List<String> descriptions) {
+        var values = new LinkedHashSet<String>();
+        for (var description : descriptions) {
+            if (description == null) {
+                continue;
+            }
+            var normalized = description.strip();
+            if (!normalized.isEmpty()) {
+                values.add(normalized);
+            }
+        }
+        return String.join("\n\n", values);
+    }
+
+    private static List<String> mergedAliases(
+        GraphStore.EntityRecord target,
+        List<GraphStore.EntityRecord> sources
+    ) {
+        var aliases = new ArrayList<String>();
+        aliases.addAll(target.aliases());
+        for (var source : sources) {
+            aliases.addAll(source.aliases());
+            aliases.add(source.name());
+        }
+        return normalizeAliasesForName(target.name(), aliases);
+    }
+
+    private static List<String> mergeSourceChunkIds(
+        GraphStore.EntityRecord target,
+        List<GraphStore.EntityRecord> sources
+    ) {
+        var sourceChunkIds = new LinkedHashSet<String>();
+        sourceChunkIds.addAll(target.sourceChunkIds());
+        for (var source : sources) {
+            sourceChunkIds.addAll(source.sourceChunkIds());
+        }
+        return List.copyOf(sourceChunkIds);
+    }
+
+    private static List<GraphStore.EntityRecord> mergeEntities(
+        List<GraphStore.EntityRecord> entities,
+        String targetEntityId,
+        LinkedHashSet<String> sourceIds,
+        GraphStore.EntityRecord mergedTarget
+    ) {
+        var values = new ArrayList<GraphStore.EntityRecord>(entities.size() - sourceIds.size());
+        for (var entity : entities) {
+            if (sourceIds.contains(entity.id())) {
+                continue;
+            }
+            if (entity.id().equals(targetEntityId)) {
+                values.add(mergedTarget);
+            } else {
+                values.add(entity);
+            }
+        }
+        return List.copyOf(values);
+    }
+
+    private static List<GraphStore.RelationRecord> mergeRelations(
+        List<GraphStore.RelationRecord> relations,
+        LinkedHashSet<String> sourceIds,
+        String targetEntityId
+    ) {
+        var merged = new LinkedHashMap<String, GraphStore.RelationRecord>();
+        for (var relation : relations) {
+            var sourceEntityId = sourceIds.contains(relation.sourceEntityId()) ? targetEntityId : relation.sourceEntityId();
+            var targetRelationEntityId = sourceIds.contains(relation.targetEntityId()) ? targetEntityId : relation.targetEntityId();
+            if (sourceEntityId.equals(targetRelationEntityId)) {
+                continue;
+            }
+            var rewritten = new GraphStore.RelationRecord(
+                relationId(sourceEntityId, relation.type(), targetRelationEntityId),
+                sourceEntityId,
+                targetRelationEntityId,
+                relation.type(),
+                relation.description(),
+                relation.weight(),
+                relation.sourceChunkIds()
+            );
+            merged.merge(rewritten.id(), rewritten, GraphManagementPipeline::mergeRelationRecord);
+        }
+        return List.copyOf(merged.values());
+    }
+
+    private static GraphStore.RelationRecord mergeRelationRecord(
+        GraphStore.RelationRecord current,
+        GraphStore.RelationRecord incoming
+    ) {
+        return new GraphStore.RelationRecord(
+            current.id(),
+            current.sourceEntityId(),
+            current.targetEntityId(),
+            current.type(),
+            mergeDescriptions(List.of(current.description(), incoming.description())),
+            Math.max(current.weight(), incoming.weight()),
+            mergeSourceChunkIds(current.sourceChunkIds(), incoming.sourceChunkIds())
+        );
+    }
+
+    private static List<String> mergeSourceChunkIds(List<String> current, List<String> incoming) {
+        var values = new LinkedHashSet<String>();
+        values.addAll(current);
+        values.addAll(incoming);
+        return List.copyOf(values);
     }
 
     private static String entityId(String entityName) {
