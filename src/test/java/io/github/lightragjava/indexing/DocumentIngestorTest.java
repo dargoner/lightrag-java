@@ -2,10 +2,10 @@ package io.github.lightragjava.indexing;
 
 import io.github.lightragjava.storage.ChunkStore;
 import io.github.lightragjava.storage.DocumentStore;
+import io.github.lightragjava.storage.IngestStorageProvider;
 import io.github.lightragjava.storage.InMemoryStorageProvider;
 import io.github.lightragjava.storage.RollbackCapableChunkStore;
 import io.github.lightragjava.storage.RollbackCapableDocumentStore;
-import io.github.lightragjava.storage.StorageProvider;
 import io.github.lightragjava.types.Chunk;
 import io.github.lightragjava.types.Document;
 import org.junit.jupiter.api.Test;
@@ -105,29 +105,17 @@ class DocumentIngestorTest {
         assertThat(storage.chunkStore().list()).isEmpty();
     }
 
-    @Test
-    void rejectsNonRollbackCapableStoresBeforeAnyMutation() {
-        var storage = new NonRollbackAwareStorageProvider();
-
-        assertThatThrownBy(() -> new DocumentIngestor(storage, new FixedWindowChunker(4, 1)))
-            .isInstanceOf(IllegalStateException.class)
-            .hasMessageContaining("rollback");
-
-        assertThat(storage.documentStore().list()).isEmpty();
-        assertThat(storage.chunkStore().list()).isEmpty();
-    }
-
-    private static final class RollbackAwareStorageProvider implements StorageProvider {
+    private static final class RollbackAwareStorageProvider implements IngestStorageProvider {
         private final RollbackAwareDocumentStore documentStore = new RollbackAwareDocumentStore();
         private final FailingRollbackAwareChunkStore chunkStore = new FailingRollbackAwareChunkStore();
 
         @Override
-        public DocumentStore documentStore() {
+        public RollbackCapableDocumentStore documentStore() {
             return documentStore;
         }
 
         @Override
-        public ChunkStore chunkStore() {
+        public RollbackCapableChunkStore chunkStore() {
             return chunkStore;
         }
 
@@ -219,83 +207,4 @@ class DocumentIngestorTest {
         }
     }
 
-    private static final class NonRollbackAwareStorageProvider implements StorageProvider {
-        private final PlainDocumentStore documentStore = new PlainDocumentStore();
-        private final PlainChunkStore chunkStore = new PlainChunkStore();
-
-        @Override
-        public DocumentStore documentStore() {
-            return documentStore;
-        }
-
-        @Override
-        public ChunkStore chunkStore() {
-            return chunkStore;
-        }
-
-        @Override
-        public io.github.lightragjava.storage.GraphStore graphStore() {
-            throw new UnsupportedOperationException("not used in test");
-        }
-
-        @Override
-        public io.github.lightragjava.storage.VectorStore vectorStore() {
-            throw new UnsupportedOperationException("not used in test");
-        }
-
-        @Override
-        public io.github.lightragjava.storage.SnapshotStore snapshotStore() {
-            throw new UnsupportedOperationException("not used in test");
-        }
-    }
-
-    private static final class PlainDocumentStore implements DocumentStore {
-        private final Map<String, DocumentStore.DocumentRecord> documents = new LinkedHashMap<>();
-
-        @Override
-        public void save(DocumentStore.DocumentRecord document) {
-            documents.put(document.id(), document);
-        }
-
-        @Override
-        public Optional<DocumentStore.DocumentRecord> load(String documentId) {
-            return Optional.ofNullable(documents.get(documentId));
-        }
-
-        @Override
-        public List<DocumentStore.DocumentRecord> list() {
-            return List.copyOf(documents.values());
-        }
-
-        @Override
-        public boolean contains(String documentId) {
-            return documents.containsKey(documentId);
-        }
-    }
-
-    private static final class PlainChunkStore implements ChunkStore {
-        private final Map<String, ChunkStore.ChunkRecord> chunks = new LinkedHashMap<>();
-
-        @Override
-        public void save(ChunkStore.ChunkRecord chunk) {
-            chunks.put(chunk.id(), chunk);
-        }
-
-        @Override
-        public Optional<ChunkStore.ChunkRecord> load(String chunkId) {
-            return Optional.ofNullable(chunks.get(chunkId));
-        }
-
-        @Override
-        public List<ChunkStore.ChunkRecord> list() {
-            return List.copyOf(chunks.values());
-        }
-
-        @Override
-        public List<ChunkStore.ChunkRecord> listByDocument(String documentId) {
-            return chunks.values().stream()
-                .filter(chunk -> chunk.documentId().equals(documentId))
-                .toList();
-        }
-    }
 }

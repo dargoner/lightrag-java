@@ -2,9 +2,9 @@ package io.github.lightragjava.indexing;
 
 import io.github.lightragjava.storage.ChunkStore;
 import io.github.lightragjava.storage.DocumentStore;
+import io.github.lightragjava.storage.IngestStorageProvider;
 import io.github.lightragjava.storage.RollbackCapableChunkStore;
 import io.github.lightragjava.storage.RollbackCapableDocumentStore;
-import io.github.lightragjava.storage.StorageProvider;
 import io.github.lightragjava.types.Chunk;
 import io.github.lightragjava.types.Document;
 
@@ -20,13 +20,13 @@ public final class DocumentIngestor {
     private final RollbackCapableDocumentStore rollbackDocumentStore;
     private final RollbackCapableChunkStore rollbackChunkStore;
 
-    public DocumentIngestor(StorageProvider storageProvider, Chunker chunker) {
+    public DocumentIngestor(IngestStorageProvider storageProvider, Chunker chunker) {
         var storage = Objects.requireNonNull(storageProvider, "storageProvider");
-        this.documentStore = Objects.requireNonNull(storage.documentStore(), "storageProvider.documentStore()");
-        this.chunkStore = Objects.requireNonNull(storage.chunkStore(), "storageProvider.chunkStore()");
+        this.rollbackDocumentStore = Objects.requireNonNull(storage.documentStore(), "storageProvider.documentStore()");
+        this.rollbackChunkStore = Objects.requireNonNull(storage.chunkStore(), "storageProvider.chunkStore()");
+        this.documentStore = rollbackDocumentStore;
+        this.chunkStore = rollbackChunkStore;
         this.chunker = Objects.requireNonNull(chunker, "chunker");
-        this.rollbackDocumentStore = requireRollbackDocumentStore(documentStore);
-        this.rollbackChunkStore = requireRollbackChunkStore(chunkStore);
     }
 
     public List<Chunk> ingest(List<Document> documents) {
@@ -130,17 +130,4 @@ public final class DocumentIngestor {
         rollbackChunkStore.restoreChunks(snapshot);
     }
 
-    private static RollbackCapableDocumentStore requireRollbackDocumentStore(DocumentStore documentStore) {
-        if (documentStore instanceof RollbackCapableDocumentStore rollbackCapableDocumentStore) {
-            return rollbackCapableDocumentStore;
-        }
-        throw new IllegalStateException("DocumentIngestor requires rollback-capable documentStore");
-    }
-
-    private static RollbackCapableChunkStore requireRollbackChunkStore(ChunkStore chunkStore) {
-        if (chunkStore instanceof RollbackCapableChunkStore rollbackCapableChunkStore) {
-            return rollbackCapableChunkStore;
-        }
-        throw new IllegalStateException("DocumentIngestor requires rollback-capable chunkStore");
-    }
 }

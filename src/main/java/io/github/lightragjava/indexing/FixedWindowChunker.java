@@ -32,26 +32,27 @@ public final class FixedWindowChunker implements Chunker {
             return List.of();
         }
 
+        var codePointBoundaries = codePointBoundaries(source.content());
+        var codePointCount = codePointBoundaries.length - 1;
         var chunks = new ArrayList<Chunk>();
-        var content = source.content();
         var start = 0;
         var order = 0;
 
-        while (start < content.length()) {
-            var end = normalizeEnd(content, Math.min(content.length(), start + windowSize));
-            var text = content.substring(start, end);
+        while (start < codePointCount) {
+            var end = Math.min(codePointCount, start + windowSize);
+            var text = sliceByCodePoint(source.content(), codePointBoundaries, start, end);
             chunks.add(new Chunk(
                 composeChunkId(source.id(), order),
                 source.id(),
                 text,
-                text.length(),
+                text.codePointCount(0, text.length()),
                 order,
                 source.metadata()
             ));
-            if (end == content.length()) {
+            if (end == codePointCount) {
                 break;
             }
-            start = nextStart(content, start, end, overlap);
+            start = end - overlap;
             order++;
         }
 
@@ -62,27 +63,22 @@ public final class FixedWindowChunker implements Chunker {
         return documentId + ":" + order;
     }
 
-    private static int normalizeEnd(String content, int end) {
-        if (end > 0
-            && end < content.length()
-            && Character.isHighSurrogate(content.charAt(end - 1))
-            && Character.isLowSurrogate(content.charAt(end))) {
-            return end + 1;
-        }
-        return end;
+    private static String sliceByCodePoint(String content, int[] boundaries, int start, int end) {
+        return content.substring(boundaries[start], boundaries[end]);
     }
 
-    private static int nextStart(String content, int currentStart, int end, int overlap) {
-        var nextStart = end - overlap;
-        if (nextStart > 0
-            && nextStart < content.length()
-            && Character.isLowSurrogate(content.charAt(nextStart))
-            && Character.isHighSurrogate(content.charAt(nextStart - 1))) {
-            nextStart--;
+    private static int[] codePointBoundaries(String content) {
+        var codePointCount = content.codePointCount(0, content.length());
+        var boundaries = new int[codePointCount + 1];
+        var charIndex = 0;
+        var codePointIndex = 0;
+
+        while (charIndex < content.length()) {
+            boundaries[codePointIndex] = charIndex;
+            charIndex += Character.charCount(content.codePointAt(charIndex));
+            codePointIndex++;
         }
-        if (nextStart <= currentStart) {
-            return end;
-        }
-        return nextStart;
+        boundaries[codePointIndex] = content.length();
+        return boundaries;
     }
 }

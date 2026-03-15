@@ -14,9 +14,9 @@ import java.util.Objects;
 import java.util.concurrent.ConcurrentNavigableMap;
 import java.util.concurrent.ConcurrentSkipListMap;
 
-public final class InMemoryStorageProvider implements StorageProvider {
-    private final DocumentStore documentStore;
-    private final ChunkStore chunkStore;
+public final class InMemoryStorageProvider implements IngestStorageProvider {
+    private final RollbackCapableDocumentStore documentStore;
+    private final RollbackCapableChunkStore chunkStore;
     private final GraphStore graphStore;
     private final VectorStore vectorStore;
     private final SnapshotStore snapshotStore;
@@ -34,12 +34,12 @@ public final class InMemoryStorageProvider implements StorageProvider {
     }
 
     @Override
-    public DocumentStore documentStore() {
+    public RollbackCapableDocumentStore documentStore() {
         return documentStore;
     }
 
     @Override
-    public ChunkStore chunkStore() {
+    public RollbackCapableChunkStore chunkStore() {
         return chunkStore;
     }
 
