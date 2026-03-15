@@ -169,6 +169,27 @@ class LightRagBuilderTest {
     }
 
     @Test
+    void queryRequestLegacyConstructorDefaultsPromptControls() {
+        var request = new QueryRequest(
+            "Where is the evidence?",
+            QueryMode.LOCAL,
+            5,
+            7,
+            "text",
+            false
+        );
+
+        assertThat(request.query()).isEqualTo("Where is the evidence?");
+        assertThat(request.mode()).isEqualTo(QueryMode.LOCAL);
+        assertThat(request.topK()).isEqualTo(5);
+        assertThat(request.chunkTopK()).isEqualTo(7);
+        assertThat(request.responseType()).isEqualTo("text");
+        assertThat(request.enableRerank()).isFalse();
+        assertThat(request.userPrompt()).isEmpty();
+        assertThat(request.conversationHistory()).isEmpty();
+    }
+
+    @Test
     void queryRequestCopiesConversationHistory() {
         var history = new ArrayList<ChatModel.ChatRequest.ConversationMessage>();
         history.add(new ChatModel.ChatRequest.ConversationMessage("user", "Earlier question"));
@@ -177,6 +198,22 @@ class LightRagBuilderTest {
             .query("Where is the evidence?")
             .conversationHistory(history)
             .build();
+        history.clear();
+
+        assertThat(request.conversationHistory())
+            .containsExactly(new ChatModel.ChatRequest.ConversationMessage("user", "Earlier question"));
+        assertThatThrownBy(() -> request.conversationHistory().add(
+            new ChatModel.ChatRequest.ConversationMessage("assistant", "Earlier answer")
+        ))
+            .isInstanceOf(UnsupportedOperationException.class);
+    }
+
+    @Test
+    void chatRequestCopiesConversationHistory() {
+        var history = new ArrayList<ChatModel.ChatRequest.ConversationMessage>();
+        history.add(new ChatModel.ChatRequest.ConversationMessage("user", "Earlier question"));
+
+        var request = new ChatModel.ChatRequest("System prompt", "Current user prompt", history);
         history.clear();
 
         assertThat(request.conversationHistory())

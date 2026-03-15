@@ -32,12 +32,15 @@ public final class OpenAiCompatibleChatModel implements ChatModel {
     @Override
     public String generate(ChatRequest request) {
         Objects.requireNonNull(request, "request");
+        var messages = new java.util.ArrayList<Map<String, String>>();
+        messages.add(Map.of("role", "system", "content", request.systemPrompt()));
+        for (var message : request.conversationHistory()) {
+            messages.add(Map.of("role", message.role(), "content", message.content()));
+        }
+        messages.add(Map.of("role", "user", "content", request.userPrompt()));
         var payload = Map.of(
             "model", modelName,
-            "messages", List.of(
-                Map.of("role", "system", "content", request.systemPrompt()),
-                Map.of("role", "user", "content", request.userPrompt())
-            )
+            "messages", List.copyOf(messages)
         );
 
         try {

@@ -61,13 +61,8 @@ public final class QueryEngine {
         );
         var answer = chatModel.generate(new ChatModel.ChatRequest(
             SYSTEM_PROMPT,
-            """
-            Context:
-            %s
-
-            Question:
-            %s
-            """.formatted(assembledContext, query.query())
+            buildUserPrompt(assembledContext, query),
+            query.conversationHistory()
         ));
         return new QueryResult(answer, contextAssembler.toContexts(assembledQueryContext));
     }
@@ -84,8 +79,29 @@ public final class QueryEngine {
             request.topK(),
             (int) Math.min(Integer.MAX_VALUE, expandedChunkTopK),
             request.responseType(),
-            request.enableRerank()
+            request.enableRerank(),
+            request.userPrompt(),
+            request.conversationHistory()
         );
+    }
+
+    private static String buildUserPrompt(String assembledContext, QueryRequest query) {
+        var basePrompt = """
+            Context:
+            %s
+
+            Question:
+            %s
+            """.formatted(assembledContext, query.query());
+        if (query.userPrompt().isBlank()) {
+            return basePrompt;
+        }
+        return """
+            %s
+
+            Additional Instructions:
+            %s
+            """.formatted(basePrompt, query.userPrompt());
     }
 
     private List<ScoredChunk> rerankChunks(QueryRequest request, List<ScoredChunk> matchedChunks) {
