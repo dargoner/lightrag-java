@@ -68,7 +68,12 @@ public final class InMemoryStorageProvider implements AtomicStorageProvider {
         writeLock.lock();
         var snapshot = snapshot();
         try {
-            return Objects.requireNonNull(operation, "operation").execute(this);
+            return Objects.requireNonNull(operation, "operation").execute(new AtomicView(
+                documentStore,
+                chunkStore,
+                graphStore,
+                vectorStore
+            ));
         } catch (RuntimeException failure) {
             restore(snapshot, failure);
             throw failure;
@@ -129,6 +134,14 @@ public final class InMemoryStorageProvider implements AtomicStorageProvider {
         if (rollbackFailure != null) {
             failure.addSuppressed(rollbackFailure);
         }
+    }
+
+    private record AtomicView(
+        DocumentStore documentStore,
+        ChunkStore chunkStore,
+        GraphStore graphStore,
+        VectorStore vectorStore
+    ) implements AtomicStorageView {
     }
 
     private static final class InMemorySnapshotStore implements SnapshotStore {

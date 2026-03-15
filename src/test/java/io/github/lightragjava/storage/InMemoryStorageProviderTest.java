@@ -4,6 +4,8 @@ import org.junit.jupiter.api.Test;
 
 import java.util.List;
 import java.util.Map;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.atomic.AtomicReference;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
@@ -81,5 +83,64 @@ class InMemoryStorageProviderTest {
         assertThat(provider.graphStore().allEntities()).containsExactly(originalEntity);
         assertThat(provider.graphStore().allRelations()).containsExactly(originalRelation);
         assertThat(provider.vectorStore().list("chunks")).containsExactly(originalVector);
+    }
+
+    @Test
+    void readersDoNotObservePartialStateDuringAtomicWrite() throws Exception {
+        var provider = InMemoryStorageProvider.create();
+        var documentSaved = new CountDownLatch(1);
+        var readerAttemptedRead = new CountDownLatch(1);
+        var continueWriter = new CountDownLatch(1);
+        var readerDocuments = new AtomicReference<List<DocumentStore.DocumentRecord>>();
+        var readerChunks = new AtomicReference<List<ChunkStore.ChunkRecord>>();
+        var failure = new AtomicReference<Throwable>();
+        var document = new DocumentStore.DocumentRecord("doc-1", "Title", "body", Map.of());
+        var chunk = new ChunkStore.ChunkRecord("doc-1:0", "doc-1", "body", 4, 0, Map.of());
+
+        var writer = new Thread(() -> {
+            try {
+                provider.writeAtomically(storage -> {
+                    storage.documentStore().save(document);
+                    documentSaved.countDown();
+                    await(continueWriter);
+                    storage.chunkStore().save(chunk);
+                    return null;
+                });
+            } catch (Throwable throwable) {
+                failure.compareAndSet(null, throwable);
+            }
+        });
+
+        writer.start();
+        await(documentSaved);
+
+        var reader = new Thread(() -> {
+            try {
+                readerAttemptedRead.countDown();
+                readerDocuments.set(provider.documentStore().list());
+                readerChunks.set(provider.chunkStore().list());
+            } catch (Throwable throwable) {
+                failure.compareAndSet(null, throwable);
+            }
+        });
+
+        reader.start();
+        await(readerAttemptedRead);
+        continueWriter.countDown();
+        writer.join();
+        reader.join();
+
+        assertThat(failure.get()).isNull();
+        assertThat(readerDocuments.get()).containsExactly(document);
+        assertThat(readerChunks.get()).containsExactly(chunk);
+    }
+
+    private static void await(CountDownLatch latch) {
+        try {
+            latch.await();
+        } catch (InterruptedException exception) {
+            Thread.currentThread().interrupt();
+            throw new AssertionError("Test interrupted", exception);
+        }
     }
 }

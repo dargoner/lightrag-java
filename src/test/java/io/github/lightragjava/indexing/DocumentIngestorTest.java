@@ -158,7 +158,27 @@ class DocumentIngestorTest {
             var documentsBefore = documentStore.snapshot();
             var chunksBefore = chunkStore.snapshot();
             try {
-                return operation.execute(this);
+                return operation.execute(new AtomicStorageView() {
+                    @Override
+                    public DocumentStore documentStore() {
+                        return documentStore;
+                    }
+
+                    @Override
+                    public ChunkStore chunkStore() {
+                        return chunkStore;
+                    }
+
+                    @Override
+                    public io.github.lightragjava.storage.GraphStore graphStore() {
+                        throw new UnsupportedOperationException("not used in test");
+                    }
+
+                    @Override
+                    public io.github.lightragjava.storage.VectorStore vectorStore() {
+                        throw new UnsupportedOperationException("not used in test");
+                    }
+                });
             } catch (RuntimeException failure) {
                 chunkStore.restore(chunksBefore);
                 documentStore.restore(documentsBefore);

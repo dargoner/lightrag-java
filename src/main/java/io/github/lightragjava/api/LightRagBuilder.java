@@ -3,6 +3,7 @@ package io.github.lightragjava.api;
 import io.github.lightragjava.config.LightRagConfig;
 import io.github.lightragjava.model.ChatModel;
 import io.github.lightragjava.model.EmbeddingModel;
+import io.github.lightragjava.storage.AtomicStorageProvider;
 import io.github.lightragjava.storage.ChunkStore;
 import io.github.lightragjava.storage.DocumentStore;
 import io.github.lightragjava.storage.GraphStore;
@@ -54,8 +55,11 @@ public final class LightRagBuilder {
         requireStore("graphStore", storageProvider.graphStore(), GraphStore.class);
         requireStore("vectorStore", storageProvider.vectorStore(), VectorStore.class);
         requireStore("snapshotStore", storageProvider.snapshotStore(), SnapshotStore.class);
+        if (!(storageProvider instanceof AtomicStorageProvider atomicStorageProvider)) {
+            throw new IllegalStateException("storageProvider must implement AtomicStorageProvider");
+        }
 
-        return new LightRag(new LightRagConfig(chatModel, embeddingModel, storageProvider, snapshotPath));
+        return new LightRag(new LightRagConfig(chatModel, embeddingModel, atomicStorageProvider, snapshotPath));
     }
 
     private static <T> T requireStore(String componentName, T store, Class<T> storeType) {

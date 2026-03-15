@@ -3,6 +3,7 @@ package io.github.lightragjava.api;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import io.github.lightragjava.model.ChatModel;
 import io.github.lightragjava.model.EmbeddingModel;
+import io.github.lightragjava.storage.AtomicStorageProvider;
 import io.github.lightragjava.storage.ChunkStore;
 import io.github.lightragjava.storage.DocumentStore;
 import io.github.lightragjava.storage.GraphStore;
@@ -124,6 +125,17 @@ class LightRagBuilderTest {
     }
 
     @Test
+    void rejectsNonAtomicStorageProvider() {
+        assertThatThrownBy(() -> LightRag.builder()
+            .chatModel(new FakeChatModel())
+            .embeddingModel(new FakeEmbeddingModel())
+            .storage(new PlainStorageProvider())
+            .build())
+            .isInstanceOf(IllegalStateException.class)
+            .hasMessageContaining("AtomicStorageProvider");
+    }
+
+    @Test
     void queryRequestDefaultsToMixMode() {
         var request = QueryRequest.builder()
             .query("Where is the evidence?")
@@ -207,7 +219,7 @@ class LightRagBuilderTest {
         }
     }
 
-    private static class FakeStorageProvider implements StorageProvider {
+    private static class FakeStorageProvider implements AtomicStorageProvider {
         private final DocumentStore documentStore = new FakeDocumentStore();
         private final ChunkStore chunkStore = new FakeChunkStore();
         private final GraphStore graphStore = new FakeGraphStore();
@@ -237,6 +249,60 @@ class LightRagBuilderTest {
         @Override
         public SnapshotStore snapshotStore() {
             return snapshotStore;
+        }
+
+        @Override
+        public <T> T writeAtomically(AtomicOperation<T> operation) {
+            return operation.execute(new AtomicStorageView() {
+                @Override
+                public DocumentStore documentStore() {
+                    return documentStore;
+                }
+
+                @Override
+                public ChunkStore chunkStore() {
+                    return chunkStore;
+                }
+
+                @Override
+                public GraphStore graphStore() {
+                    return graphStore;
+                }
+
+                @Override
+                public VectorStore vectorStore() {
+                    return vectorStore;
+                }
+            });
+        }
+    }
+
+    private static final class PlainStorageProvider implements StorageProvider {
+        private final FakeStorageProvider delegate = new FakeStorageProvider();
+
+        @Override
+        public DocumentStore documentStore() {
+            return delegate.documentStore();
+        }
+
+        @Override
+        public ChunkStore chunkStore() {
+            return delegate.chunkStore();
+        }
+
+        @Override
+        public GraphStore graphStore() {
+            return delegate.graphStore();
+        }
+
+        @Override
+        public VectorStore vectorStore() {
+            return delegate.vectorStore();
+        }
+
+        @Override
+        public SnapshotStore snapshotStore() {
+            return delegate.snapshotStore();
         }
     }
 
