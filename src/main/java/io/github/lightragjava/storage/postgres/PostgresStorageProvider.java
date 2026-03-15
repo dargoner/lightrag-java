@@ -122,6 +122,7 @@ public final class PostgresStorageProvider implements AtomicStorageProvider, Aut
     }
 
     private <T> T withTransaction(Connection connection, SqlSupplier<T> supplier) {
+        Throwable primaryFailure = null;
         try {
             boolean originalAutoCommit = connection.getAutoCommit();
             connection.setAutoCommit(false);
@@ -130,13 +131,23 @@ public final class PostgresStorageProvider implements AtomicStorageProvider, Aut
                 connection.commit();
                 return result;
             } catch (RuntimeException | Error failure) {
+                primaryFailure = failure;
                 rollback(connection, failure);
                 throw failure;
             } catch (SQLException exception) {
+                primaryFailure = exception;
                 rollback(connection, exception);
                 throw new StorageException("PostgreSQL transaction failed", exception);
             } finally {
-                restoreAutoCommit(connection, originalAutoCommit);
+                try {
+                    restoreAutoCommit(connection, originalAutoCommit);
+                } catch (SQLException exception) {
+                    if (primaryFailure != null) {
+                        primaryFailure.addSuppressed(exception);
+                    } else {
+                        throw new StorageException("Failed to restore PostgreSQL connection state", exception);
+                    }
+                }
             }
         } catch (SQLException exception) {
             throw new StorageException("Failed to configure PostgreSQL transaction", exception);

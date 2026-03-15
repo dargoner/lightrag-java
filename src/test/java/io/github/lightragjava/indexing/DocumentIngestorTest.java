@@ -158,6 +158,45 @@ class DocumentIngestorTest {
         }
     }
 
+    @Test
+    void rollsBackPostgresDocumentWriteWhenChunkPersistenceFails() throws Exception {
+        var image = DockerImageName.parse("pgvector/pgvector:pg16").asCompatibleSubstituteFor("postgres");
+        try (var container = new PostgreSQLContainer<>(image)) {
+            container.start();
+
+            var storage = new PostgresStorageProvider(new PostgresStorageConfig(
+                container.getJdbcUrl(),
+                container.getUsername(),
+                container.getPassword(),
+                "lightrag",
+                3,
+                "rag_"
+            ), new PostgresSnapshotStore());
+
+            try (storage) {
+                try (
+                    var connection = java.sql.DriverManager.getConnection(
+                        container.getJdbcUrl(),
+                        container.getUsername(),
+                        container.getPassword()
+                    );
+                    var statement = connection.createStatement()
+                ) {
+                    statement.execute("DROP TABLE \"lightrag\".\"rag_chunks\"");
+                }
+
+                var ingestor = new DocumentIngestor(storage, new FixedWindowChunker(4, 1));
+                var document = new Document("doc-1", "Title", "abcdefghij", Map.of("source", "unit-test"));
+
+                assertThatThrownBy(() -> ingestor.ingest(List.of(document)))
+                    .isInstanceOf(io.github.lightragjava.exception.StorageException.class)
+                    .hasMessageContaining("JDBC operation failed");
+
+                assertThat(storage.documentStore().list()).isEmpty();
+            }
+        }
+    }
+
     private static final class AtomicFailureStorageProvider implements AtomicStorageProvider {
         private final AtomicTestDocumentStore documentStore = new AtomicTestDocumentStore();
         private final AtomicTestChunkStore chunkStore = new AtomicTestChunkStore();

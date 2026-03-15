@@ -18,6 +18,7 @@ import java.sql.SQLException;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
+import java.util.concurrent.atomic.AtomicReference;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
@@ -243,6 +244,7 @@ class PostgresStorageProviderTest {
     void exposesConsistentTopLevelStoreInstances() {
         PostgreSQLContainer<?> container = newPostgresContainer();
         container.start();
+        var snapshotStore = new InMemorySnapshotStore();
 
         var config = new PostgresStorageConfig(
             container.getJdbcUrl(),
@@ -253,12 +255,31 @@ class PostgresStorageProviderTest {
             "rag_"
         );
 
-        try (container; PostgresStorageProvider provider = new PostgresStorageProvider(config, new InMemorySnapshotStore())) {
+        try (container; PostgresStorageProvider provider = new PostgresStorageProvider(config, snapshotStore)) {
             assertThat(provider.documentStore()).isSameAs(provider.documentStore());
             assertThat(provider.chunkStore()).isSameAs(provider.chunkStore());
             assertThat(provider.graphStore()).isSameAs(provider.graphStore());
             assertThat(provider.vectorStore()).isSameAs(provider.vectorStore());
             assertThat(provider.snapshotStore()).isSameAs(provider.snapshotStore());
+            assertThat(provider.snapshotStore()).isSameAs(snapshotStore);
+
+            var atomicDocumentStore = new AtomicReference<DocumentStore>();
+            var atomicChunkStore = new AtomicReference<ChunkStore>();
+            var atomicGraphStore = new AtomicReference<GraphStore>();
+            var atomicVectorStore = new AtomicReference<VectorStore>();
+
+            provider.writeAtomically(storage -> {
+                atomicDocumentStore.set(storage.documentStore());
+                atomicChunkStore.set(storage.chunkStore());
+                atomicGraphStore.set(storage.graphStore());
+                atomicVectorStore.set(storage.vectorStore());
+                return null;
+            });
+
+            assertThat(atomicDocumentStore.get()).isNotSameAs(provider.documentStore());
+            assertThat(atomicChunkStore.get()).isNotSameAs(provider.chunkStore());
+            assertThat(atomicGraphStore.get()).isNotSameAs(provider.graphStore());
+            assertThat(atomicVectorStore.get()).isNotSameAs(provider.vectorStore());
         }
     }
 
