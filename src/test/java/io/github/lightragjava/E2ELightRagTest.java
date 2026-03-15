@@ -646,6 +646,96 @@ class E2ELightRagTest {
     }
 
     @Test
+    void editsEntityDisplayNameWhenNormalizedIdIsUnchanged() {
+        var storage = InMemoryStorageProvider.create();
+        var rag = LightRag.builder()
+            .chatModel(new FakeChatModel())
+            .embeddingModel(new FakeEmbeddingModel())
+            .storage(storage)
+            .build();
+
+        rag.createEntity(CreateEntityRequest.builder()
+            .name("Bob")
+            .type("person")
+            .description("Engineer")
+            .build());
+
+        var renamed = rag.editEntity(EditEntityRequest.builder()
+            .entityName("Bob")
+            .newName("BOB")
+            .build());
+
+        assertThat(renamed).isEqualTo(new GraphEntity(
+            "entity:bob",
+            "BOB",
+            "person",
+            "Engineer",
+            List.of(),
+            List.of()
+        ));
+        assertThat(storage.graphStore().loadEntity("entity:bob"))
+            .contains(new GraphStore.EntityRecord(
+                "entity:bob",
+                "BOB",
+                "person",
+                "Engineer",
+                List.of(),
+                List.of()
+            ));
+    }
+
+    @Test
+    void renameRejectsRelationIdCollisionDuringMigration() {
+        var storage = InMemoryStorageProvider.create();
+        storage.graphStore().saveEntity(new GraphStore.EntityRecord(
+            "entity:alice",
+            "Alice",
+            "person",
+            "Researcher",
+            List.of(),
+            List.of()
+        ));
+        storage.graphStore().saveEntity(new GraphStore.EntityRecord(
+            "entity:bob",
+            "Bob",
+            "person",
+            "Engineer",
+            List.of(),
+            List.of()
+        ));
+        storage.graphStore().saveRelation(new GraphStore.RelationRecord(
+            "relation:entity:alice|works_with|entity:bob",
+            "entity:alice",
+            "entity:bob",
+            "works_with",
+            "Current",
+            0.8d,
+            List.of()
+        ));
+        storage.graphStore().saveRelation(new GraphStore.RelationRecord(
+            "relation:entity:alice|works_with|entity:robert",
+            "entity:alice",
+            "entity:robert",
+            "works_with",
+            "Dangling",
+            0.7d,
+            List.of()
+        ));
+        var rag = LightRag.builder()
+            .chatModel(new FakeChatModel())
+            .embeddingModel(new FakeEmbeddingModel())
+            .storage(storage)
+            .build();
+
+        assertThatThrownBy(() -> rag.editEntity(EditEntityRequest.builder()
+            .entityName("Bob")
+            .newName("Robert")
+            .build()))
+            .isInstanceOf(IllegalArgumentException.class)
+            .hasMessageContaining("relation already exists");
+    }
+
+    @Test
     void graphManagementPersistsSnapshotWhenConfigured() {
         var storage = InMemoryStorageProvider.create(new FileSnapshotStore());
         var snapshotPath = tempDir.resolve("graph-management.snapshot.json");

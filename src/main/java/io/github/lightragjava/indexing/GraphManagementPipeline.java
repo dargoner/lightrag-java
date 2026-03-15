@@ -91,12 +91,13 @@ public final class GraphManagementPipeline {
         var editRequest = Objects.requireNonNull(request, "request");
         var snapshot = StorageSnapshots.capture(storageProvider);
         var existing = resolveEntity(snapshot.entities(), editRequest.entityName(), "entityName");
+        var nameUpdated = editRequest.newName() != null && !existing.name().equals(editRequest.newName());
         var renamed = editRequest.newName() != null && !normalizeKey(existing.name()).equals(normalizeKey(editRequest.newName()));
-        var effectiveName = renamed ? editRequest.newName() : existing.name();
+        var effectiveName = editRequest.newName() == null ? existing.name() : editRequest.newName();
         var aliases = editRequest.aliases() == null
-            ? (renamed ? normalizeAliasesForName(effectiveName, existing.aliases()) : existing.aliases())
+            ? (nameUpdated ? normalizeAliasesForName(effectiveName, existing.aliases()) : existing.aliases())
             : normalizeAliasesForName(effectiveName, editRequest.aliases());
-        if (renamed) {
+        if (nameUpdated) {
             aliases = appendAliasIfMissing(aliases, existing.name(), effectiveName);
         }
 
@@ -114,6 +115,7 @@ public final class GraphManagementPipeline {
         var updatedRelations = renamed
             ? migrateRelations(snapshot.relations(), existing.id(), updatedEntity.id())
             : snapshot.relations();
+        validateRelationIdsUnique(updatedRelations);
         var updatedVectors = new LinkedHashMap<>(snapshot.vectors());
         updatedVectors.put(
             StorageSnapshots.ENTITY_NAMESPACE,
@@ -206,6 +208,15 @@ public final class GraphManagementPipeline {
     ) {
         if (relations.stream().anyMatch(existing -> existing.id().equals(relationRecord.id()))) {
             throw new IllegalArgumentException("relation already exists: " + relationRecord.id());
+        }
+    }
+
+    private static void validateRelationIdsUnique(List<GraphStore.RelationRecord> relations) {
+        var relationIds = new LinkedHashSet<String>();
+        for (var relation : relations) {
+            if (!relationIds.add(relation.id())) {
+                throw new IllegalArgumentException("relation already exists: " + relation.id());
+            }
         }
     }
 
