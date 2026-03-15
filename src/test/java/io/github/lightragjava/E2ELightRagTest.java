@@ -14,6 +14,7 @@ import io.github.lightragjava.api.QueryRequest;
 import io.github.lightragjava.api.QueryResult;
 import io.github.lightragjava.model.ChatModel;
 import io.github.lightragjava.model.EmbeddingModel;
+import io.github.lightragjava.model.RerankModel;
 import io.github.lightragjava.persistence.FileSnapshotStore;
 import io.github.lightragjava.storage.ChunkStore;
 import io.github.lightragjava.storage.DocumentStore;
@@ -1780,6 +1781,59 @@ class E2ELightRagTest {
     }
 
     @Test
+    void queryReranksFinalContextsWhenConfigured() {
+        var storage = InMemoryStorageProvider.create();
+        var rag = LightRag.builder()
+            .chatModel(new FakeChatModel())
+            .embeddingModel(new FakeEmbeddingModel())
+            .rerankModel(new ReverseChunkIdRerankModel())
+            .storage(storage)
+            .build();
+
+        rag.ingest(List.of(
+            new Document("doc-1", "Title", "Alice works with Bob", Map.of()),
+            new Document("doc-2", "Title", "Alice works with Bob near Carol", Map.of()),
+            new Document("doc-3", "Title", "Alice works with Bob in Zurich", Map.of())
+        ));
+
+        var result = rag.query(QueryRequest.builder()
+            .query("Who works with Bob?")
+            .chunkTopK(3)
+            .build());
+
+        assertThat(result.contexts())
+            .extracting(QueryResult.Context::sourceId)
+            .containsExactly("doc-3:0", "doc-2:0", "doc-1:0");
+    }
+
+    @Test
+    void queryBypassesConfiguredRerankWhenDisabledPerRequest() {
+        var storage = InMemoryStorageProvider.create();
+        var rag = LightRag.builder()
+            .chatModel(new FakeChatModel())
+            .embeddingModel(new FakeEmbeddingModel())
+            .rerankModel(new ReverseChunkIdRerankModel())
+            .storage(storage)
+            .build();
+
+        rag.ingest(List.of(
+            new Document("doc-1", "Title", "Alice works with Bob", Map.of()),
+            new Document("doc-2", "Title", "Alice works with Bob near Carol", Map.of()),
+            new Document("doc-3", "Title", "Alice works with Bob in Zurich", Map.of())
+        ));
+
+        var result = rag.query(QueryRequest.builder()
+            .query("Who works with Bob?")
+            .chunkTopK(3)
+            .enableRerank(false)
+            .build());
+
+        assertThat(result.contexts())
+            .extracting(QueryResult.Context::sourceId)
+            .containsExactly("doc-1:0", "doc-2:0", "doc-3:0");
+    }
+
+    @Test
     void queryModesExposeNonEmptyContextsForSuccessfulQueries() {
         var storage = InMemoryStorageProvider.create();
         var rag = LightRag.builder()
@@ -2387,6 +2441,17 @@ class E2ELightRagTest {
                 return "unreachable";
             }
             throw new IllegalStateException("extract failed");
+        }
+    }
+
+    private static final class ReverseChunkIdRerankModel implements RerankModel {
+        @Override
+        public List<RerankResult> rerank(RerankRequest request) {
+            return request.candidates().stream()
+                .map(RerankCandidate::id)
+                .sorted(java.util.Comparator.reverseOrder())
+                .map(id -> new RerankResult(id, 1.0d))
+                .toList();
         }
     }
 
