@@ -6,7 +6,7 @@
 
 **Architecture:** Implement a new `storage.postgres` backend package that satisfies the existing `AtomicStorageProvider` SPI. Use PostgreSQL as the single transactional source of truth for documents, chunks, graph records, vectors, and snapshot restore operations. Keep the graph model relational in this phase so one database transaction can still cover a full ingest operation.
 
-**Tech Stack:** Java 21, Gradle Kotlin DSL, JUnit 5, AssertJ, Jackson, PostgreSQL JDBC, HikariCP, pgvector-java, Testcontainers PostgreSQL
+**Tech Stack:** Java 17, Gradle Kotlin DSL, JUnit 5, AssertJ, Jackson, PostgreSQL JDBC, HikariCP, pgvector-java, Testcontainers PostgreSQL
 
 ---
 

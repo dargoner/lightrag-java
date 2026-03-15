@@ -6,13 +6,13 @@
 
 **Architecture:** Use a single Gradle Java project with a small public facade and internal packages for types, storage, indexing, query, model adapters, and persistence. Keep storage and model dependencies behind narrow SPI interfaces so later database and service integrations do not force API redesign.
 
-**Tech Stack:** Java 21, Gradle Kotlin DSL, JUnit 5, AssertJ, Jackson, OkHttp, MockWebServer
+**Tech Stack:** Java 17, Gradle Kotlin DSL, JUnit 5, AssertJ, Jackson, OkHttp, MockWebServer
 
 ---
 
 ## Prerequisites
 
-- A local Java 21 JDK must be available on `PATH`.
+- A local Java 17 JDK must be available on `PATH`.
 - A local Gradle 8.14.3 installation is required once to generate the wrapper. After `gradlew` exists, all remaining commands in this plan must use the wrapper instead of a system Gradle.
 
 ## File Structure
@@ -130,7 +130,7 @@ plugins {
 
 java {
     toolchain {
-        languageVersion.set(JavaLanguageVersion.of(21))
+        languageVersion.set(JavaLanguageVersion.of(17))
     }
 }
 

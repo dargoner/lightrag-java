@@ -6,7 +6,7 @@
 
 **Architecture:** Implement a `storage.neo4j` package for the native Neo4j graph store, then add a mixed provider that composes the existing PostgreSQL provider with Neo4j graph projection and compensation-based rollback. Keep the public builder and query APIs unchanged.
 
-**Tech Stack:** Java 21, Gradle Kotlin DSL, JUnit 5, AssertJ, PostgreSQL JDBC, HikariCP, pgvector-java, Neo4j Java Driver, Testcontainers PostgreSQL, Testcontainers Neo4j
+**Tech Stack:** Java 17, Gradle Kotlin DSL, JUnit 5, AssertJ, PostgreSQL JDBC, HikariCP, pgvector-java, Neo4j Java Driver, Testcontainers PostgreSQL, Testcontainers Neo4j
 
 ---
 
