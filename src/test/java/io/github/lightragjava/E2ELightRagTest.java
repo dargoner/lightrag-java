@@ -1,6 +1,10 @@
 package io.github.lightragjava;
 
 import io.github.lightragjava.api.LightRag;
+import io.github.lightragjava.api.CreateEntityRequest;
+import io.github.lightragjava.api.CreateRelationRequest;
+import io.github.lightragjava.api.GraphEntity;
+import io.github.lightragjava.api.GraphRelation;
 import io.github.lightragjava.api.QueryRequest;
 import io.github.lightragjava.api.QueryResult;
 import io.github.lightragjava.model.ChatModel;
@@ -126,6 +130,135 @@ class E2ELightRagTest {
         rag.ingest(List.of(new Document("doc-1", "Title", "Alice works with Bob", Map.of())));
 
         assertThat(Files.exists(snapshotPath)).isFalse();
+    }
+
+    @Test
+    void createsEntityWithoutDocumentsOrChunks() {
+        var storage = InMemoryStorageProvider.create();
+        var rag = LightRag.builder()
+            .chatModel(new FakeChatModel())
+            .embeddingModel(new FakeEmbeddingModel())
+            .storage(storage)
+            .build();
+
+        var entity = rag.createEntity(CreateEntityRequest.builder()
+            .name("Alice")
+            .type("person")
+            .description("Researcher")
+            .aliases(List.of("Ally"))
+            .build());
+
+        assertThat(entity).isEqualTo(new GraphEntity(
+            "entity:alice",
+            "Alice",
+            "person",
+            "Researcher",
+            List.of("Ally"),
+            List.of()
+        ));
+
+        assertThat(storage.graphStore().loadEntity("entity:alice"))
+            .contains(new GraphStore.EntityRecord(
+                "entity:alice",
+                "Alice",
+                "person",
+                "Researcher",
+                List.of("Ally"),
+                List.of()
+            ));
+        assertThat(storage.documentStore().list()).isEmpty();
+        assertThat(storage.chunkStore().list()).isEmpty();
+        assertThat(storage.graphStore().allRelations()).isEmpty();
+        assertThat(storage.vectorStore().list("chunks")).isEmpty();
+        assertThat(storage.vectorStore().list("entities"))
+            .extracting(VectorStore.VectorRecord::id)
+            .containsExactly("entity:alice");
+        assertThat(storage.vectorStore().list("relations")).isEmpty();
+    }
+
+    @Test
+    void createsRelationBetweenExistingEntities() {
+        var storage = InMemoryStorageProvider.create();
+        var rag = LightRag.builder()
+            .chatModel(new FakeChatModel())
+            .embeddingModel(new FakeEmbeddingModel())
+            .storage(storage)
+            .build();
+
+        rag.createEntity(CreateEntityRequest.builder()
+            .name("Alice")
+            .type("person")
+            .description("Researcher")
+            .build());
+        rag.createEntity(CreateEntityRequest.builder()
+            .name("Bob")
+            .type("person")
+            .description("Engineer")
+            .aliases(List.of("Robert"))
+            .build());
+
+        var relation = rag.createRelation(CreateRelationRequest.builder()
+            .sourceEntityName("Alice")
+            .targetEntityName("Robert")
+            .relationType("works_with")
+            .description("collaboration")
+            .weight(0.8d)
+            .build());
+
+        assertThat(relation).isEqualTo(new GraphRelation(
+            "relation:entity:alice|works_with|entity:bob",
+            "entity:alice",
+            "entity:bob",
+            "works_with",
+            "collaboration",
+            0.8d,
+            List.of()
+        ));
+
+        assertThat(storage.graphStore().loadRelation("relation:entity:alice|works_with|entity:bob"))
+            .contains(new GraphStore.RelationRecord(
+                "relation:entity:alice|works_with|entity:bob",
+                "entity:alice",
+                "entity:bob",
+                "works_with",
+                "collaboration",
+                0.8d,
+                List.of()
+            ));
+        assertThat(storage.vectorStore().list("entities"))
+            .extracting(VectorStore.VectorRecord::id)
+            .containsExactly("entity:alice", "entity:bob");
+        assertThat(storage.vectorStore().list("relations"))
+            .extracting(VectorStore.VectorRecord::id)
+            .containsExactly("relation:entity:alice|works_with|entity:bob");
+    }
+
+    @Test
+    void createEntityPrefersExactNameOverExistingAliasMatches() {
+        var storage = InMemoryStorageProvider.create();
+        var rag = LightRag.builder()
+            .chatModel(new FakeChatModel())
+            .embeddingModel(new FakeEmbeddingModel())
+            .storage(storage)
+            .build();
+
+        rag.createEntity(CreateEntityRequest.builder()
+            .name("Bob")
+            .type("person")
+            .description("Engineer")
+            .aliases(List.of("Robert"))
+            .build());
+
+        var entity = rag.createEntity(CreateEntityRequest.builder()
+            .name("Robert")
+            .type("person")
+            .description("Architect")
+            .build());
+
+        assertThat(entity.id()).isEqualTo("entity:robert");
+        assertThat(storage.graphStore().allEntities())
+            .extracting(GraphStore.EntityRecord::id)
+            .containsExactly("entity:bob", "entity:robert");
     }
 
     @TempDir

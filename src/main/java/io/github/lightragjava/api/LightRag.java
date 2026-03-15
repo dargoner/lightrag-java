@@ -2,6 +2,7 @@ package io.github.lightragjava.api;
 
 import io.github.lightragjava.config.LightRagConfig;
 import io.github.lightragjava.indexing.DeletionPipeline;
+import io.github.lightragjava.indexing.GraphManagementPipeline;
 import io.github.lightragjava.indexing.IndexingPipeline;
 import io.github.lightragjava.query.ContextAssembler;
 import io.github.lightragjava.query.GlobalQueryStrategy;
@@ -18,6 +19,7 @@ public final class LightRag {
     private final LightRagConfig config;
     private final IndexingPipeline indexingPipeline;
     private final DeletionPipeline deletionPipeline;
+    private final GraphManagementPipeline graphManagementPipeline;
     private final QueryEngine queryEngine;
 
     LightRag(LightRagConfig config) {
@@ -29,6 +31,11 @@ public final class LightRag {
             config.snapshotPath()
         );
         this.deletionPipeline = new DeletionPipeline(
+            config.storageProvider(),
+            indexingPipeline,
+            config.snapshotPath()
+        );
+        this.graphManagementPipeline = new GraphManagementPipeline(
             config.storageProvider(),
             indexingPipeline,
             config.snapshotPath()
@@ -52,6 +59,14 @@ public final class LightRag {
 
     public void ingest(List<Document> documents) {
         indexingPipeline.ingest(documents);
+    }
+
+    public GraphEntity createEntity(CreateEntityRequest request) {
+        return graphManagementPipeline.createEntity(request);
+    }
+
+    public GraphRelation createRelation(CreateRelationRequest request) {
+        return graphManagementPipeline.createRelation(request);
     }
 
     /**

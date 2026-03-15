@@ -121,7 +121,7 @@ public final class IndexingPipeline {
         return toVectorRecords(chunks.stream().map(io.github.lightragjava.types.Chunk::id).toList(), embeddings);
     }
 
-    private List<VectorStore.VectorRecord> entityVectors(List<Entity> entities) {
+    List<VectorStore.VectorRecord> entityVectors(List<Entity> entities) {
         if (entities.isEmpty()) {
             return List.of();
         }
@@ -129,7 +129,7 @@ public final class IndexingPipeline {
         return toVectorRecords(entities.stream().map(Entity::id).toList(), embeddings);
     }
 
-    private List<VectorStore.VectorRecord> relationVectors(List<Relation> relations) {
+    List<VectorStore.VectorRecord> relationVectors(List<Relation> relations) {
         if (relations.isEmpty()) {
             return List.of();
         }
