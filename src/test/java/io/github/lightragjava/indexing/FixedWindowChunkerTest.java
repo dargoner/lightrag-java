@@ -59,6 +59,18 @@ class FixedWindowChunkerTest {
             .containsExactly("ab😀", "😀cd", "d😀e", "ef");
     }
 
+    @Test
+    void advancesPastSurrogateOverlapWithoutLoopingForever() {
+        var chunker = new FixedWindowChunker(2, 1);
+        var document = new Document("doc-emoji-tight", "Title", "😀😀", Map.of());
+
+        var chunks = chunker.chunk(document);
+
+        assertThat(chunks)
+            .extracting(Chunk::text)
+            .containsExactly("😀", "😀");
+    }
+
     private static boolean hasIsolatedSurrogate(String text) {
         for (var index = 0; index < text.length(); index++) {
             var current = text.charAt(index);

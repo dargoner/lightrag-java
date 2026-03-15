@@ -32,14 +32,12 @@ public final class FixedWindowChunker implements Chunker {
             return List.of();
         }
 
-        var step = windowSize - overlap;
         var chunks = new ArrayList<Chunk>();
         var content = source.content();
         var start = 0;
         var order = 0;
 
         while (start < content.length()) {
-            start = normalizeStart(content, start);
             var end = normalizeEnd(content, Math.min(content.length(), start + windowSize));
             var text = content.substring(start, end);
             chunks.add(new Chunk(
@@ -53,7 +51,7 @@ public final class FixedWindowChunker implements Chunker {
             if (end == content.length()) {
                 break;
             }
-            start += step;
+            start = nextStart(content, start, end, overlap);
             order++;
         }
 
@@ -64,16 +62,6 @@ public final class FixedWindowChunker implements Chunker {
         return documentId + ":" + order;
     }
 
-    private static int normalizeStart(String content, int start) {
-        if (start > 0
-            && start < content.length()
-            && Character.isLowSurrogate(content.charAt(start))
-            && Character.isHighSurrogate(content.charAt(start - 1))) {
-            return start - 1;
-        }
-        return start;
-    }
-
     private static int normalizeEnd(String content, int end) {
         if (end > 0
             && end < content.length()
@@ -82,5 +70,19 @@ public final class FixedWindowChunker implements Chunker {
             return end + 1;
         }
         return end;
+    }
+
+    private static int nextStart(String content, int currentStart, int end, int overlap) {
+        var nextStart = end - overlap;
+        if (nextStart > 0
+            && nextStart < content.length()
+            && Character.isLowSurrogate(content.charAt(nextStart))
+            && Character.isHighSurrogate(content.charAt(nextStart - 1))) {
+            nextStart--;
+        }
+        if (nextStart <= currentStart) {
+            return end;
+        }
+        return nextStart;
     }
 }
