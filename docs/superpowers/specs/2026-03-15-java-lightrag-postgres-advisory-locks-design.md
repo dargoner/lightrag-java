@@ -116,6 +116,13 @@ The provider should therefore create:
 
 The lock pool prevents self-deadlock where a thread acquires a lock session and then blocks forever waiting for a second connection from the same exhausted pool to perform the actual store operation.
 
+This also increases per-provider connection budget because each active operation can now consume:
+
+- one data session
+- one lock session
+
+The lock pool should therefore be sized with the primary pool in mind rather than treated as negligible overhead.
+
 ### Lock Manager Shape
 
 Add a small backend-local helper such as:
@@ -140,6 +147,7 @@ This keeps lock SQL out of `PostgresStorageProvider`.
 - close the lock pool when the provider closes
 - wrap top-level facade operations with both local and advisory locks
 - wrap `writeAtomically(...)` and `restore(...)` with the same exclusive advisory lock
+- skip advisory-lock reacquisition when the same thread is already inside an exclusive provider operation
 
 The order should be consistent everywhere:
 
@@ -150,6 +158,12 @@ The order should be consistent everywhere:
 5. release the local JVM lock
 
 Using one order avoids lock inversion inside a single process.
+
+### Reentrancy Guard
+
+Session-scoped advisory locks are reentrant only on the same PostgreSQL session. Top-level provider methods, `writeAtomically(...)`, and `restore(...)` each acquire advisory locks through separate lock-pool connections.
+
+That means a thread already inside an exclusive advisory-locked operation must not re-enter a top-level provider method and attempt to reacquire the advisory lock on a second session. The provider should keep a thread-local exclusive-lock guard so nested top-level reads and writes inside `writeAtomically(...)` or `restore(...)` reuse the current exclusive advisory scope instead of deadlocking on themselves.
 
 ### Failure Semantics
 
@@ -166,7 +180,11 @@ Required coverage:
 
 - two provider instances against the same schema serialize atomic writes
 - a read on one provider blocks while another provider holds an atomic write
+- a read on one provider blocks while another provider is inside `restore(...)`
+- nested top-level provider calls inside `writeAtomically(...)` do not self-deadlock
 - existing same-process lock behavior continues to pass
 - existing PostgreSQL provider tests continue to pass
+
+Concurrency assertions should use an explicit "attempt started" signal before checking that the competing operation has not yet finished, rather than relying on thread scheduling alone.
 
 Verification should include targeted `PostgresStorageProviderTest` coverage and full `./gradlew test`.

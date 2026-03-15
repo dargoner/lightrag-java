@@ -20,8 +20,13 @@ import java.util.Optional;
 import java.util.concurrent.locks.ReentrantReadWriteLock;
 
 public final class PostgresStorageProvider implements AtomicStorageProvider, AutoCloseable {
+    private static final int DEFAULT_POOL_SIZE = 4;
+
     private final ReentrantReadWriteLock lock;
     private final HikariDataSource dataSource;
+    private final HikariDataSource lockDataSource;
+    private final PostgresAdvisoryLockManager advisoryLockManager;
+    private final ThreadLocal<Boolean> exclusiveAdvisoryLockHeld;
     private final SnapshotStore snapshotStore;
     private final PostgresDocumentStore documentStore;
     private final PostgresChunkStore chunkStore;
@@ -37,7 +42,10 @@ public final class PostgresStorageProvider implements AtomicStorageProvider, Aut
         this.config = Objects.requireNonNull(config, "config");
         this.snapshotStore = Objects.requireNonNull(snapshotStore, "snapshotStore");
         this.lock = new ReentrantReadWriteLock(true);
-        this.dataSource = createDataSource(config);
+        this.dataSource = createDataSource(config, "lightrag-postgres");
+        this.lockDataSource = createDataSource(config, "lightrag-postgres-locks");
+        this.advisoryLockManager = new PostgresAdvisoryLockManager(lockDataSource, config);
+        this.exclusiveAdvisoryLockHeld = ThreadLocal.withInitial(() -> Boolean.FALSE);
         try {
             new PostgresSchemaManager(dataSource, config).bootstrap();
             this.documentStore = new PostgresDocumentStore(dataSource, config);
@@ -49,6 +57,7 @@ public final class PostgresStorageProvider implements AtomicStorageProvider, Aut
             this.lockedGraphStore = new LockedGraphStore(graphStore);
             this.lockedVectorStore = new LockedVectorStore(vectorStore);
         } catch (RuntimeException exception) {
+            lockDataSource.close();
             dataSource.close();
             throw exception;
         }
@@ -82,58 +91,57 @@ public final class PostgresStorageProvider implements AtomicStorageProvider, Aut
     @Override
     public <T> T writeAtomically(AtomicOperation<T> operation) {
         Objects.requireNonNull(operation, "operation");
-        var writeLock = lock.writeLock();
-        writeLock.lock();
-        try {
-            try (var connection = dataSource.getConnection()) {
-                return withTransaction(connection, () -> operation.execute(newAtomicView(connection)));
-            } catch (SQLException exception) {
-                throw new StorageException("Failed to open PostgreSQL transaction", exception);
-            }
-        } finally {
-            writeLock.unlock();
-        }
+        return withExclusiveProviderLock(() -> {
+            return advisoryLockManager.withExclusiveLock(() -> withExclusiveAdvisoryScope(() -> {
+                try (var connection = dataSource.getConnection()) {
+                    return withTransaction(connection, () -> operation.execute(newAtomicView(connection)));
+                } catch (SQLException exception) {
+                    throw new StorageException("Failed to open PostgreSQL transaction", exception);
+                }
+            }));
+        });
     }
 
     @Override
     public void restore(SnapshotStore.Snapshot snapshot) {
         var source = Objects.requireNonNull(snapshot, "snapshot");
-        var writeLock = lock.writeLock();
-        writeLock.lock();
-        try {
-            try (var connection = dataSource.getConnection()) {
-                withTransaction(connection, () -> {
-                    truncateAll(connection);
-                    var stores = newAtomicView(connection);
+        withExclusiveProviderLock(() -> {
+            advisoryLockManager.withExclusiveLock(() -> withExclusiveAdvisoryScope(() -> {
+                try (var connection = dataSource.getConnection()) {
+                    withTransaction(connection, () -> {
+                        truncateAll(connection);
+                        var stores = newAtomicView(connection);
 
-                    for (var document : source.documents()) {
-                        stores.documentStore().save(document);
-                    }
-                    for (var chunk : source.chunks()) {
-                        stores.chunkStore().save(chunk);
-                    }
-                    for (var entity : source.entities()) {
-                        stores.graphStore().saveEntity(entity);
-                    }
-                    for (var relation : source.relations()) {
-                        stores.graphStore().saveRelation(relation);
-                    }
-                    for (var namespaceEntry : source.vectors().entrySet()) {
-                        stores.vectorStore().saveAll(namespaceEntry.getKey(), namespaceEntry.getValue());
-                    }
-                    return null;
-                });
-            } catch (SQLException exception) {
-                throw new StorageException("Failed to open PostgreSQL transaction for restore", exception);
-            }
-        } finally {
-            writeLock.unlock();
-        }
+                        for (var document : source.documents()) {
+                            stores.documentStore().save(document);
+                        }
+                        for (var chunk : source.chunks()) {
+                            stores.chunkStore().save(chunk);
+                        }
+                        for (var entity : source.entities()) {
+                            stores.graphStore().saveEntity(entity);
+                        }
+                        for (var relation : source.relations()) {
+                            stores.graphStore().saveRelation(relation);
+                        }
+                        for (var namespaceEntry : source.vectors().entrySet()) {
+                            stores.vectorStore().saveAll(namespaceEntry.getKey(), namespaceEntry.getValue());
+                        }
+                        return null;
+                    });
+                } catch (SQLException exception) {
+                    throw new StorageException("Failed to open PostgreSQL transaction for restore", exception);
+                }
+                return null;
+            }));
+            return null;
+        });
     }
 
     @Override
     public void close() {
         dataSource.close();
+        lockDataSource.close();
     }
 
     private AtomicStorageView newAtomicView(Connection connection) {
@@ -206,14 +214,14 @@ public final class PostgresStorageProvider implements AtomicStorageProvider, Aut
         }
     }
 
-    private static HikariDataSource createDataSource(PostgresStorageConfig config) {
+    private static HikariDataSource createDataSource(PostgresStorageConfig config, String poolName) {
         HikariConfig hikariConfig = new HikariConfig();
         hikariConfig.setJdbcUrl(config.jdbcUrl());
         hikariConfig.setUsername(config.username());
         hikariConfig.setPassword(config.password());
-        hikariConfig.setMaximumPoolSize(4);
+        hikariConfig.setMaximumPoolSize(DEFAULT_POOL_SIZE);
         hikariConfig.setMinimumIdle(0);
-        hikariConfig.setPoolName("lightrag-postgres");
+        hikariConfig.setPoolName(poolName);
         return new HikariDataSource(hikariConfig);
     }
 
@@ -352,28 +360,58 @@ public final class PostgresStorageProvider implements AtomicStorageProvider, Aut
         T get() throws SQLException;
     }
 
-    @FunctionalInterface
-    private interface RuntimeSupplier<T> {
-        T get();
-    }
-
     private <T> T withReadLock(RuntimeSupplier<T> supplier) {
         var readLock = lock.readLock();
         readLock.lock();
         try {
-            return supplier.get();
+            if (exclusiveAdvisoryLockHeld.get()) {
+                return supplier.get();
+            }
+            return advisoryLockManager.withSharedLock(supplier::get);
         } finally {
             readLock.unlock();
         }
     }
 
     private void withWriteLock(Runnable runnable) {
+        withExclusiveProviderLock(() -> {
+            advisoryLockManager.withExclusiveLock(() -> withExclusiveAdvisoryScope(() -> {
+                runnable.run();
+                return null;
+            }));
+            return null;
+        });
+    }
+
+    private <T> T withExclusiveProviderLock(RuntimeSupplier<T> supplier) {
         var writeLock = lock.writeLock();
         writeLock.lock();
         try {
-            runnable.run();
+            if (exclusiveAdvisoryLockHeld.get()) {
+                return supplier.get();
+            }
+            return supplier.get();
         } finally {
             writeLock.unlock();
         }
+    }
+
+    private <T> T withExclusiveAdvisoryScope(RuntimeSupplier<T> supplier) {
+        boolean previous = exclusiveAdvisoryLockHeld.get();
+        exclusiveAdvisoryLockHeld.set(true);
+        try {
+            return supplier.get();
+        } finally {
+            if (previous) {
+                exclusiveAdvisoryLockHeld.set(true);
+            } else {
+                exclusiveAdvisoryLockHeld.remove();
+            }
+        }
+    }
+
+    @FunctionalInterface
+    private interface RuntimeSupplier<T> {
+        T get();
     }
 }

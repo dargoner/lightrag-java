@@ -4,7 +4,7 @@
 
 **Goal:** Add PostgreSQL advisory-lock coordination so `PostgresStorageProvider` preserves its read/write consistency guarantees across multiple JVM instances.
 
-**Architecture:** `PostgresStorageProvider` will keep its current local `ReentrantReadWriteLock`, and layer a dedicated `PostgresAdvisoryLockManager` on top to acquire shared locks for reads and exclusive locks for writes, atomic writes, and restores. Advisory locks will use a separate Hikari pool so lock sessions never starve the pool needed for real store operations.
+**Architecture:** `PostgresStorageProvider` will keep its current local `ReentrantReadWriteLock`, and layer a dedicated `PostgresAdvisoryLockManager` on top to acquire shared locks for reads and exclusive locks for writes, atomic writes, and restores. Advisory locks will use a separate Hikari pool so lock sessions never starve the pool needed for real store operations, and a thread-local exclusive guard will prevent nested top-level provider calls from self-deadlocking inside `writeAtomically(...)` or `restore(...)`.
 
 **Tech Stack:** Java 17, JDBC, HikariCP, PostgreSQL advisory locks, Testcontainers, JUnit 5, AssertJ
 
@@ -24,6 +24,7 @@ Add an integration test that:
 - creates two `PostgresStorageProvider` instances with the same config
 - starts `providerA.writeAtomically(...)` and blocks it with a latch
 - calls `providerB.documentStore().load(...)`
+- signals that the contending read has actually started before asserting it is still blocked
 - asserts the read does not finish before the write is released
 
 - [ ] **Step 2: Run the targeted test to verify it fails**
@@ -38,6 +39,7 @@ Add an integration test that:
 - creates two providers with the same config
 - blocks `providerA.writeAtomically(...)`
 - starts `providerB.writeAtomically(...)`
+- signals that the second writer has actually started before asserting it is still blocked
 - asserts the second writer does not complete before the first is released
 
 - [ ] **Step 4: Run the targeted test to verify it fails**
@@ -83,11 +85,12 @@ Update:
 - top-level write facades to use exclusive advisory locks
 - `writeAtomically(...)` to use exclusive advisory lock
 - `restore(...)` to use exclusive advisory lock
+- nested top-level provider calls inside exclusive operations to skip redundant advisory-lock reacquisition
 
 - [ ] **Step 4: Run targeted provider tests**
 
 Run: `./gradlew test --tests io.github.lightragjava.storage.postgres.PostgresStorageProviderTest`
-Expected: PASS for cross-provider advisory locking plus existing provider regression coverage.
+Expected: PASS for cross-provider advisory locking, restore locking, nested-call reentrancy, and existing provider regression coverage.
 
 - [ ] **Step 5: Commit**
 

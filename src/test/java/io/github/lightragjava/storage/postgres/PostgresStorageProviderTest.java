@@ -15,6 +15,7 @@ import org.testcontainers.utility.DockerImageName;
 import java.nio.file.Path;
 import java.sql.DriverManager;
 import java.sql.SQLException;
+import java.util.Arrays;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
@@ -430,6 +431,7 @@ class PostgresStorageProviderTest {
 
             var atomicEntered = new CountDownLatch(1);
             var releaseAtomic = new CountDownLatch(1);
+            var readAttempted = new CountDownLatch(1);
             var readFinished = new CountDownLatch(1);
             var failure = new AtomicReference<Throwable>();
 
@@ -449,6 +451,7 @@ class PostgresStorageProviderTest {
             Thread reader = new Thread(() -> {
                 try {
                     atomicEntered.await(5, TimeUnit.SECONDS);
+                    readAttempted.countDown();
                     provider.documentStore().load("doc-0");
                 } catch (Throwable throwable) {
                     failure.compareAndSet(null, throwable);
@@ -461,10 +464,266 @@ class PostgresStorageProviderTest {
             reader.start();
 
             assertThat(atomicEntered.await(5, TimeUnit.SECONDS)).isTrue();
+            assertThat(readAttempted.await(5, TimeUnit.SECONDS)).isTrue();
             assertThat(readFinished.await(200, TimeUnit.MILLISECONDS)).isFalse();
 
             releaseAtomic.countDown();
             writer.join();
+            reader.join();
+
+            assertThat(failure.get()).isNull();
+        }
+    }
+
+    @Test
+    void crossProviderReadsWaitForAtomicWriteToFinish() throws Exception {
+        PostgreSQLContainer<?> container = newPostgresContainer();
+        container.start();
+
+        var config = new PostgresStorageConfig(
+            container.getJdbcUrl(),
+            container.getUsername(),
+            container.getPassword(),
+            "lightrag",
+            3,
+            "rag_"
+        );
+
+        try (
+            container;
+            PostgresStorageProvider writerProvider = new PostgresStorageProvider(config, new InMemorySnapshotStore());
+            PostgresStorageProvider readerProvider = new PostgresStorageProvider(config, new InMemorySnapshotStore())
+        ) {
+            readerProvider.documentStore().save(new DocumentStore.DocumentRecord("doc-0", "Existing", "seed", Map.of("seed", "true")));
+
+            var atomicEntered = new CountDownLatch(1);
+            var releaseAtomic = new CountDownLatch(1);
+            var readAttempted = new CountDownLatch(1);
+            var readFinished = new CountDownLatch(1);
+            var failure = new AtomicReference<Throwable>();
+
+            Thread writer = new Thread(() -> {
+                try {
+                    writerProvider.writeAtomically(storage -> {
+                        storage.documentStore().save(new DocumentStore.DocumentRecord("doc-1", "Incoming", "body", Map.of()));
+                        atomicEntered.countDown();
+                        await(releaseAtomic);
+                        return null;
+                    });
+                } catch (Throwable throwable) {
+                    failure.compareAndSet(null, throwable);
+                }
+            });
+
+            Thread reader = new Thread(() -> {
+                try {
+                    atomicEntered.await(5, TimeUnit.SECONDS);
+                    readAttempted.countDown();
+                    readerProvider.documentStore().load("doc-0");
+                } catch (Throwable throwable) {
+                    failure.compareAndSet(null, throwable);
+                } finally {
+                    readFinished.countDown();
+                }
+            });
+
+            writer.start();
+            reader.start();
+
+            assertThat(atomicEntered.await(5, TimeUnit.SECONDS)).isTrue();
+            assertThat(readAttempted.await(5, TimeUnit.SECONDS)).isTrue();
+            assertThat(readFinished.await(200, TimeUnit.MILLISECONDS)).isFalse();
+
+            releaseAtomic.countDown();
+            writer.join();
+            reader.join();
+
+            assertThat(failure.get()).isNull();
+        }
+    }
+
+    @Test
+    void topLevelReadsInsideAtomicWriteDoNotDeadlockSameThread() throws Exception {
+        PostgreSQLContainer<?> container = newPostgresContainer();
+        container.start();
+
+        var config = new PostgresStorageConfig(
+            container.getJdbcUrl(),
+            container.getUsername(),
+            container.getPassword(),
+            "lightrag",
+            3,
+            "rag_"
+        );
+
+        try (container; PostgresStorageProvider provider = new PostgresStorageProvider(config, new InMemorySnapshotStore())) {
+            provider.documentStore().save(new DocumentStore.DocumentRecord("doc-0", "Existing", "seed", Map.of("seed", "true")));
+
+            var finished = new CountDownLatch(1);
+            var failure = new AtomicReference<Throwable>();
+
+            Thread worker = new Thread(() -> {
+                try {
+                    provider.writeAtomically(storage -> {
+                        provider.documentStore().load("doc-0");
+                        return null;
+                    });
+                } catch (Throwable throwable) {
+                    failure.compareAndSet(null, throwable);
+                } finally {
+                    finished.countDown();
+                }
+            });
+
+            worker.start();
+
+            assertThat(finished.await(500, TimeUnit.MILLISECONDS)).isTrue();
+
+            worker.join();
+            assertThat(failure.get()).isNull();
+        }
+    }
+
+    @Test
+    void crossProviderWritesSerialize() throws Exception {
+        PostgreSQLContainer<?> container = newPostgresContainer();
+        container.start();
+
+        var config = new PostgresStorageConfig(
+            container.getJdbcUrl(),
+            container.getUsername(),
+            container.getPassword(),
+            "lightrag",
+            3,
+            "rag_"
+        );
+
+        try (
+            container;
+            PostgresStorageProvider firstProvider = new PostgresStorageProvider(config, new InMemorySnapshotStore());
+            PostgresStorageProvider secondProvider = new PostgresStorageProvider(config, new InMemorySnapshotStore())
+        ) {
+            var firstEntered = new CountDownLatch(1);
+            var releaseFirst = new CountDownLatch(1);
+            var secondAttempted = new CountDownLatch(1);
+            var secondFinished = new CountDownLatch(1);
+            var failure = new AtomicReference<Throwable>();
+
+            Thread firstWriter = new Thread(() -> {
+                try {
+                    firstProvider.writeAtomically(storage -> {
+                        storage.documentStore().save(new DocumentStore.DocumentRecord("doc-1", "First", "body", Map.of()));
+                        firstEntered.countDown();
+                        await(releaseFirst);
+                        return null;
+                    });
+                } catch (Throwable throwable) {
+                    failure.compareAndSet(null, throwable);
+                }
+            });
+
+            Thread secondWriter = new Thread(() -> {
+                try {
+                    firstEntered.await(5, TimeUnit.SECONDS);
+                    secondAttempted.countDown();
+                    secondProvider.writeAtomically(storage -> {
+                        storage.documentStore().save(new DocumentStore.DocumentRecord("doc-2", "Second", "body", Map.of()));
+                        return null;
+                    });
+                } catch (Throwable throwable) {
+                    failure.compareAndSet(null, throwable);
+                } finally {
+                    secondFinished.countDown();
+                }
+            });
+
+            firstWriter.start();
+            secondWriter.start();
+
+            assertThat(firstEntered.await(5, TimeUnit.SECONDS)).isTrue();
+            assertThat(secondAttempted.await(5, TimeUnit.SECONDS)).isTrue();
+            assertThat(secondFinished.await(200, TimeUnit.MILLISECONDS)).isFalse();
+
+            releaseFirst.countDown();
+            firstWriter.join();
+            secondWriter.join();
+
+            assertThat(failure.get()).isNull();
+            assertThat(firstProvider.documentStore().load("doc-1")).isPresent();
+            assertThat(secondProvider.documentStore().load("doc-2")).isPresent();
+        }
+    }
+
+    @Test
+    void crossProviderReadsWaitForRestoreToFinish() throws Exception {
+        PostgreSQLContainer<?> container = newPostgresContainer();
+        container.start();
+
+        var config = new PostgresStorageConfig(
+            container.getJdbcUrl(),
+            container.getUsername(),
+            container.getPassword(),
+            "lightrag",
+            3,
+            "rag_"
+        );
+
+        try (
+            container;
+            PostgresStorageProvider restoringProvider = new PostgresStorageProvider(config, new InMemorySnapshotStore());
+            PostgresStorageProvider readingProvider = new PostgresStorageProvider(config, new InMemorySnapshotStore());
+            var blockingConnection = DriverManager.getConnection(
+                config.jdbcUrl(),
+                config.username(),
+                config.password()
+            )
+        ) {
+            readingProvider.documentStore().save(new DocumentStore.DocumentRecord("doc-0", "Existing", "seed", Map.of("seed", "true")));
+            blockingConnection.setAutoCommit(false);
+            blockingConnection.createStatement().execute(
+                "LOCK TABLE " + config.qualifiedTableName("documents") + " IN ACCESS EXCLUSIVE MODE"
+            );
+
+            var readAttempted = new CountDownLatch(1);
+            var readFinished = new CountDownLatch(1);
+            var failure = new AtomicReference<Throwable>();
+
+            var snapshot = new SnapshotStore.Snapshot(
+                List.of(new DocumentStore.DocumentRecord("doc-restore", "Snapshot", "body", Map.of("source", "snapshot"))),
+                List.of(),
+                List.of(),
+                List.of(),
+                Map.of()
+            );
+
+            Thread restoreThread = new Thread(() -> {
+                try {
+                    restoringProvider.restore(snapshot);
+                } catch (Throwable throwable) {
+                    failure.compareAndSet(null, throwable);
+                }
+            });
+
+            Thread reader = new Thread(() -> {
+                try {
+                    readAttempted.countDown();
+                    readingProvider.documentStore().load("doc-0");
+                } catch (Throwable throwable) {
+                    failure.compareAndSet(null, throwable);
+                } finally {
+                    readFinished.countDown();
+                }
+            });
+
+            restoreThread.start();
+
+            assertThat(waitForExclusiveAdvisoryLock(config)).isTrue();
+            reader.start();
+            assertThat(readAttempted.await(5, TimeUnit.SECONDS)).isTrue();
+            assertThat(readFinished.await(200, TimeUnit.MILLISECONDS)).isFalse();
+
+            blockingConnection.rollback();
+            restoreThread.join();
             reader.join();
 
             assertThat(failure.get()).isNull();
@@ -760,6 +1019,51 @@ class PostgresStorageProviderTest {
         @Override
         public List<Path> list() {
             return List.of();
+        }
+    }
+
+    private static boolean waitForExclusiveAdvisoryLock(PostgresStorageConfig config) throws SQLException, InterruptedException {
+        long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(5);
+        while (System.nanoTime() < deadline) {
+            if (exclusiveAdvisoryLockIsHeld(config)) {
+                return true;
+            }
+            Thread.sleep(50);
+        }
+        return false;
+    }
+
+    private static boolean exclusiveAdvisoryLockIsHeld(PostgresStorageConfig config) throws SQLException {
+        try (var connection = DriverManager.getConnection(
+            config.jdbcUrl(),
+            config.username(),
+            config.password()
+        )) {
+            try (var statement = connection.prepareStatement("SELECT pg_try_advisory_lock_shared(?)")) {
+                statement.setLong(1, deriveLockKey(config));
+                try (var resultSet = statement.executeQuery()) {
+                    resultSet.next();
+                    boolean acquired = resultSet.getBoolean(1);
+                    if (acquired) {
+                        try (var unlock = connection.prepareStatement("SELECT pg_advisory_unlock_shared(?)")) {
+                            unlock.setLong(1, deriveLockKey(config));
+                            unlock.executeQuery();
+                        }
+                        return false;
+                    }
+                    return true;
+                }
+            }
+        }
+    }
+
+    private static long deriveLockKey(PostgresStorageConfig config) {
+        try {
+            byte[] digest = java.security.MessageDigest.getInstance("SHA-256")
+                .digest((config.schema() + ":" + config.tablePrefix()).getBytes(java.nio.charset.StandardCharsets.UTF_8));
+            return java.nio.ByteBuffer.wrap(Arrays.copyOf(digest, Long.BYTES)).getLong();
+        } catch (java.security.NoSuchAlgorithmException exception) {
+            throw new IllegalStateException("SHA-256 digest is unavailable", exception);
         }
     }
 
