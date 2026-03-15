@@ -24,20 +24,25 @@ public final class PostgresSchemaManager {
     }
 
     public void bootstrap() {
-        try (var connection = dataSource.getConnection(); Statement statement = connection.createStatement()) {
+        try (var connection = dataSource.getConnection()) {
+            boolean originalAutoCommit = connection.getAutoCommit();
             connection.setAutoCommit(false);
-            try {
-                for (String sql : bootstrapStatements()) {
-                    statement.execute(sql);
+            try (Statement statement = connection.createStatement()) {
+                try {
+                    for (String sql : bootstrapStatements()) {
+                        statement.execute(sql);
+                    }
+                    validateVectorDimensions(connection);
+                    connection.commit();
+                } catch (RuntimeException exception) {
+                    rollback(connection, exception);
+                    throw exception;
+                } catch (SQLException exception) {
+                    rollback(connection, exception);
+                    throw new IllegalStateException("Failed to bootstrap PostgreSQL schema", exception);
                 }
-                validateVectorDimensions(connection);
-                connection.commit();
-            } catch (RuntimeException exception) {
-                rollback(connection, exception);
-                throw exception;
-            } catch (SQLException exception) {
-                rollback(connection, exception);
-                throw new IllegalStateException("Failed to bootstrap PostgreSQL schema", exception);
+            } finally {
+                restoreAutoCommit(connection, originalAutoCommit);
             }
         } catch (SQLException exception) {
             throw new IllegalStateException("Failed to bootstrap PostgreSQL schema", exception);
@@ -62,13 +67,13 @@ public final class PostgresSchemaManager {
             """
                 CREATE TABLE IF NOT EXISTS %s (
                     id TEXT PRIMARY KEY,
-                    document_id TEXT NOT NULL REFERENCES %s (id) ON DELETE CASCADE,
+                    document_id TEXT NOT NULL,
                     text TEXT NOT NULL,
                     token_count INTEGER NOT NULL,
                     chunk_order INTEGER NOT NULL,
                     metadata JSONB NOT NULL DEFAULT '{}'::jsonb
                 )
-                """.formatted(config.qualifiedTableName("chunks"), config.qualifiedTableName("documents")),
+                """.formatted(config.qualifiedTableName("chunks")),
             """
                 CREATE TABLE IF NOT EXISTS %s (
                     id TEXT PRIMARY KEY,
@@ -79,47 +84,43 @@ public final class PostgresSchemaManager {
                 """.formatted(config.qualifiedTableName("entities")),
             """
                 CREATE TABLE IF NOT EXISTS %s (
-                    entity_id TEXT NOT NULL REFERENCES %s (id) ON DELETE CASCADE,
+                    entity_id TEXT NOT NULL,
                     alias TEXT NOT NULL,
                     PRIMARY KEY (entity_id, alias)
                 )
-                """.formatted(config.qualifiedTableName("entity_aliases"), config.qualifiedTableName("entities")),
+                """.formatted(config.qualifiedTableName("entity_aliases")),
             """
                 CREATE TABLE IF NOT EXISTS %s (
-                    entity_id TEXT NOT NULL REFERENCES %s (id) ON DELETE CASCADE,
-                    chunk_id TEXT NOT NULL REFERENCES %s (id) ON DELETE CASCADE,
+                    entity_id TEXT NOT NULL,
+                    chunk_id TEXT NOT NULL,
                     PRIMARY KEY (entity_id, chunk_id)
                 )
-                """.formatted(
-                config.qualifiedTableName("entity_chunks"),
-                config.qualifiedTableName("entities"),
-                config.qualifiedTableName("chunks")
-            ),
+                """.formatted(config.qualifiedTableName("entity_chunks")),
             """
                 CREATE TABLE IF NOT EXISTS %s (
                     id TEXT PRIMARY KEY,
-                    source_entity_id TEXT NOT NULL REFERENCES %s (id) ON DELETE CASCADE,
-                    target_entity_id TEXT NOT NULL REFERENCES %s (id) ON DELETE CASCADE,
+                    source_entity_id TEXT NOT NULL,
+                    target_entity_id TEXT NOT NULL,
                     type TEXT NOT NULL,
                     description TEXT NOT NULL,
                     weight DOUBLE PRECISION NOT NULL
                 )
-                """.formatted(
-                config.qualifiedTableName("relations"),
-                config.qualifiedTableName("entities"),
-                config.qualifiedTableName("entities")
-            ),
+                """.formatted(config.qualifiedTableName("relations")),
             """
                 CREATE TABLE IF NOT EXISTS %s (
-                    relation_id TEXT NOT NULL REFERENCES %s (id) ON DELETE CASCADE,
-                    chunk_id TEXT NOT NULL REFERENCES %s (id) ON DELETE CASCADE,
+                    relation_id TEXT NOT NULL,
+                    chunk_id TEXT NOT NULL,
                     PRIMARY KEY (relation_id, chunk_id)
                 )
-                """.formatted(
-                config.qualifiedTableName("relation_chunks"),
-                config.qualifiedTableName("relations"),
-                config.qualifiedTableName("chunks")
-            ),
+                """.formatted(config.qualifiedTableName("relation_chunks")),
+            dropConstraintSql("chunks", config.tableName("chunks") + "_document_id_fkey"),
+            dropConstraintSql("entity_aliases", config.tableName("entity_aliases") + "_entity_id_fkey"),
+            dropConstraintSql("entity_chunks", config.tableName("entity_chunks") + "_entity_id_fkey"),
+            dropConstraintSql("entity_chunks", config.tableName("entity_chunks") + "_chunk_id_fkey"),
+            dropConstraintSql("relations", config.tableName("relations") + "_source_entity_id_fkey"),
+            dropConstraintSql("relations", config.tableName("relations") + "_target_entity_id_fkey"),
+            dropConstraintSql("relation_chunks", config.tableName("relation_chunks") + "_relation_id_fkey"),
+            dropConstraintSql("relation_chunks", config.tableName("relation_chunks") + "_chunk_id_fkey"),
             """
                 CREATE TABLE IF NOT EXISTS %s (
                     namespace TEXT NOT NULL,
@@ -165,11 +166,28 @@ public final class PostgresSchemaManager {
         }
     }
 
+    private String dropConstraintSql(String tableBaseName, String constraintName) {
+        return "ALTER TABLE "
+            + config.qualifiedTableName(tableBaseName)
+            + " DROP CONSTRAINT IF EXISTS "
+            + quoteIdentifier(constraintName);
+    }
+
     private static void rollback(Connection connection, Exception original) {
         try {
             connection.rollback();
         } catch (SQLException rollbackFailure) {
             original.addSuppressed(rollbackFailure);
         }
+    }
+
+    private static void restoreAutoCommit(Connection connection, boolean originalAutoCommit) throws SQLException {
+        if (connection.getAutoCommit() != originalAutoCommit) {
+            connection.setAutoCommit(originalAutoCommit);
+        }
+    }
+
+    private static String quoteIdentifier(String value) {
+        return "\"" + value + "\"";
     }
 }

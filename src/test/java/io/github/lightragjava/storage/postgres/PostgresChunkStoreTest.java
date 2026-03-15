@@ -3,11 +3,11 @@ package io.github.lightragjava.storage.postgres;
 import com.zaxxer.hikari.HikariConfig;
 import com.zaxxer.hikari.HikariDataSource;
 import io.github.lightragjava.storage.ChunkStore;
-import io.github.lightragjava.storage.DocumentStore;
 import org.junit.jupiter.api.Test;
 import org.testcontainers.containers.PostgreSQLContainer;
 import org.testcontainers.utility.DockerImageName;
 
+import java.sql.DriverManager;
 import java.util.Map;
 
 import static org.assertj.core.api.Assertions.assertThat;
@@ -19,7 +19,6 @@ class PostgresChunkStoreTest {
             var container = newPostgresContainer();
             var resources = newStoreResources(container);
         ) {
-            resources.documentStore().save(new DocumentStore.DocumentRecord("doc-1", "Title", "Body", Map.of()));
             var chunk = new ChunkStore.ChunkRecord(
                 "chunk-1",
                 "doc-1",
@@ -41,7 +40,6 @@ class PostgresChunkStoreTest {
             var container = newPostgresContainer();
             var resources = newStoreResources(container);
         ) {
-            resources.documentStore().save(new DocumentStore.DocumentRecord("doc-1", "Title", "Body", Map.of()));
             var second = new ChunkStore.ChunkRecord("chunk-2", "doc-1", "Second", 10, 1, Map.of("kind", "body"));
             var first = new ChunkStore.ChunkRecord("chunk-1", "doc-1", "First", 8, 0, Map.of("kind", "intro"));
 
@@ -58,8 +56,6 @@ class PostgresChunkStoreTest {
             var container = newPostgresContainer();
             var resources = newStoreResources(container);
         ) {
-            resources.documentStore().save(new DocumentStore.DocumentRecord("doc-1", "Doc 1", "Body 1", Map.of()));
-            resources.documentStore().save(new DocumentStore.DocumentRecord("doc-2", "Doc 2", "Body 2", Map.of()));
             var laterSameOrder = new ChunkStore.ChunkRecord("chunk-2", "doc-1", "Later", 9, 0, Map.of());
             var first = new ChunkStore.ChunkRecord("chunk-1", "doc-1", "First", 8, 0, Map.of());
             var second = new ChunkStore.ChunkRecord("chunk-3", "doc-1", "Second", 7, 1, Map.of());
@@ -71,6 +67,61 @@ class PostgresChunkStoreTest {
             resources.store().save(first);
 
             assertThat(resources.store().listByDocument("doc-1")).containsExactly(first, laterSameOrder, second);
+        }
+    }
+
+    @Test
+    void bootstrapRemovesLegacyChunkForeignKeyConstraint() throws Exception {
+        try (var container = newPostgresContainer()) {
+            container.start();
+            var config = new PostgresStorageConfig(
+                container.getJdbcUrl(),
+                container.getUsername(),
+                container.getPassword(),
+                "lightrag",
+                3,
+                "rag_"
+            );
+
+            try (
+                var connection = DriverManager.getConnection(
+                    container.getJdbcUrl(),
+                    container.getUsername(),
+                    container.getPassword()
+                )
+            ) {
+                connection.createStatement().execute("CREATE SCHEMA IF NOT EXISTS " + config.schemaName());
+                connection.createStatement().execute(
+                    """
+                    CREATE TABLE IF NOT EXISTS %s (
+                        id TEXT PRIMARY KEY,
+                        title TEXT NOT NULL,
+                        content TEXT NOT NULL,
+                        metadata JSONB NOT NULL DEFAULT '{}'::jsonb
+                    )
+                    """.formatted(config.qualifiedTableName("documents"))
+                );
+                connection.createStatement().execute(
+                    """
+                    CREATE TABLE IF NOT EXISTS %s (
+                        id TEXT PRIMARY KEY,
+                        document_id TEXT NOT NULL REFERENCES %s (id) ON DELETE CASCADE,
+                        text TEXT NOT NULL,
+                        token_count INTEGER NOT NULL,
+                        chunk_order INTEGER NOT NULL,
+                        metadata JSONB NOT NULL DEFAULT '{}'::jsonb
+                    )
+                    """.formatted(config.qualifiedTableName("chunks"), config.qualifiedTableName("documents"))
+                );
+            }
+
+            try (var resources = newStoreResources(container)) {
+                var orphanChunk = new ChunkStore.ChunkRecord("chunk-legacy", "missing-doc", "Legacy", 5, 0, Map.of());
+
+                resources.store().save(orphanChunk);
+
+                assertThat(resources.store().load("chunk-legacy")).contains(orphanChunk);
+            }
         }
     }
 
@@ -92,11 +143,7 @@ class PostgresChunkStoreTest {
         );
         var dataSource = newDataSource(config);
         new PostgresSchemaManager(dataSource, config).bootstrap();
-        return new StoreResources(
-            dataSource,
-            new PostgresDocumentStore(dataSource, config),
-            new PostgresChunkStore(dataSource, config)
-        );
+        return new StoreResources(dataSource, new PostgresChunkStore(dataSource, config));
     }
 
     private static HikariDataSource newDataSource(PostgresStorageConfig config) {
@@ -109,11 +156,7 @@ class PostgresChunkStoreTest {
         return new HikariDataSource(hikariConfig);
     }
 
-    private record StoreResources(
-        HikariDataSource dataSource,
-        PostgresDocumentStore documentStore,
-        PostgresChunkStore store
-    ) implements AutoCloseable {
+    private record StoreResources(HikariDataSource dataSource, PostgresChunkStore store) implements AutoCloseable {
         @Override
         public void close() {
             dataSource.close();
