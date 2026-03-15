@@ -38,6 +38,18 @@ System.out.println(result.answer());
 
 For tests, demos, and ephemeral runs, the in-memory provider is still the fastest option. For restart-safe ingestion and durable local state, use the PostgreSQL provider described below.
 
+## Query Modes
+
+The Java SDK currently supports five query modes:
+
+- `NAIVE`: direct chunk-vector retrieval only; ignores graph expansion and uses `chunkTopK` as the effective retrieval limit
+- `LOCAL`: entity-first graph expansion around locally similar entities
+- `GLOBAL`: relation-first graph expansion around globally similar relations
+- `HYBRID`: merged local + global graph retrieval
+- `MIX`: hybrid graph retrieval plus direct chunk-vector retrieval
+
+Use `NAIVE` when you want the simplest upstream-aligned chunk search path or when your data quality favors direct vector similarity over graph structure.
+
 ## Rerank
 
 The Java SDK supports an optional second-stage chunk reranker aligned with upstream LightRAG's rerank concept.
@@ -77,6 +89,7 @@ var result = rag.query(QueryRequest.builder()
 
 Notes:
 
+- `NAIVE` also participates in rerank through the shared `QueryEngine`; rerank is not specific to graph-aware modes
 - rerank is especially useful with `MIX` queries because the engine expands the internal candidate window before reranking
 - rerank changes chunk order only; exposed context IDs/texts still come from the original retrieval records
 - if `enableRerank(true)` is used without configuring a rerank model, Java treats it as a deterministic no-op in this phase
@@ -295,7 +308,7 @@ With the PostgreSQL and PostgreSQL+Neo4j backends, snapshots remain delegated to
 - Manual graph-management APIs support create/edit flows for entities and relations across all bundled providers.
 - Document-status APIs support querying per-document `PROCESSING`, `PROCESSED`, and `FAILED` outcomes.
 - Snapshot persistence still uses the `SnapshotStore` SPI and remains file-based by default.
-- Query modes supported today: `LOCAL`, `GLOBAL`, `HYBRID`, and `MIX`.
+- Query modes supported today: `NAIVE`, `LOCAL`, `GLOBAL`, `HYBRID`, and `MIX`.
 - Optional builder-level rerank support can reorder retrieved chunk contexts before answer generation.
 - Extraction and graph merge rules are intentionally simple and deterministic.
 - OpenAI-compatible adapters support standard `/chat/completions` and `/embeddings` endpoints.
