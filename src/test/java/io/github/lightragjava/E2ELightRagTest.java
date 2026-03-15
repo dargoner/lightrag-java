@@ -1834,6 +1834,33 @@ class E2ELightRagTest {
     }
 
     @Test
+    void naiveQueryReranksFinalContextsWhenConfigured() {
+        var storage = InMemoryStorageProvider.create();
+        var rag = LightRag.builder()
+            .chatModel(new FakeChatModel())
+            .embeddingModel(new FakeEmbeddingModel())
+            .rerankModel(new ReverseChunkIdRerankModel())
+            .storage(storage)
+            .build();
+
+        rag.ingest(List.of(
+            new Document("doc-1", "Title", "Alice works with Bob", Map.of()),
+            new Document("doc-2", "Title", "Alice works with Bob near Carol", Map.of()),
+            new Document("doc-3", "Title", "Alice works with Bob in Zurich", Map.of())
+        ));
+
+        var result = rag.query(QueryRequest.builder()
+            .query("Who works with Bob?")
+            .mode(io.github.lightragjava.api.QueryMode.NAIVE)
+            .chunkTopK(3)
+            .build());
+
+        assertThat(result.contexts())
+            .extracting(QueryResult.Context::sourceId)
+            .containsExactly("doc-3:0", "doc-2:0", "doc-1:0");
+    }
+
+    @Test
     void queryModesExposeNonEmptyContextsForSuccessfulQueries() {
         var storage = InMemoryStorageProvider.create();
         var rag = LightRag.builder()
@@ -2106,11 +2133,16 @@ class E2ELightRagTest {
                     .query("Who works with Bob?")
                     .mode(io.github.lightragjava.api.QueryMode.MIX)
                     .build());
+                var naive = rag.query(QueryRequest.builder()
+                    .query("Who works with Bob?")
+                    .mode(io.github.lightragjava.api.QueryMode.NAIVE)
+                    .build());
 
                 assertThat(local.contexts()).isNotEmpty();
                 assertThat(global.contexts()).isNotEmpty();
                 assertThat(hybrid.contexts()).isNotEmpty();
                 assertThat(mix.contexts()).isNotEmpty();
+                assertThat(naive.contexts()).isNotEmpty();
             }
         }
     }
@@ -2271,11 +2303,16 @@ class E2ELightRagTest {
                     .query("Who works with Bob?")
                     .mode(io.github.lightragjava.api.QueryMode.MIX)
                     .build());
+                var naive = rag.query(QueryRequest.builder()
+                    .query("Who works with Bob?")
+                    .mode(io.github.lightragjava.api.QueryMode.NAIVE)
+                    .build());
 
                 assertThat(local.contexts()).isNotEmpty();
                 assertThat(global.contexts()).isNotEmpty();
                 assertThat(hybrid.contexts()).isNotEmpty();
                 assertThat(mix.contexts()).isNotEmpty();
+                assertThat(naive.contexts()).isNotEmpty();
             }
         }
     }

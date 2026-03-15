@@ -9,6 +9,7 @@ import io.github.lightragjava.query.GlobalQueryStrategy;
 import io.github.lightragjava.query.HybridQueryStrategy;
 import io.github.lightragjava.query.LocalQueryStrategy;
 import io.github.lightragjava.query.MixQueryStrategy;
+import io.github.lightragjava.query.NaiveQueryStrategy;
 import io.github.lightragjava.query.QueryEngine;
 import io.github.lightragjava.types.Document;
 
@@ -42,11 +43,13 @@ public final class LightRag {
             config.snapshotPath()
         );
         var contextAssembler = new ContextAssembler();
+        var naive = new NaiveQueryStrategy(config.embeddingModel(), config.storageProvider(), contextAssembler);
         var local = new LocalQueryStrategy(config.embeddingModel(), config.storageProvider(), contextAssembler);
         var global = new GlobalQueryStrategy(config.embeddingModel(), config.storageProvider(), contextAssembler);
         var hybrid = new HybridQueryStrategy(local, global, contextAssembler);
         var mix = new MixQueryStrategy(config.embeddingModel(), config.storageProvider(), hybrid, contextAssembler);
         var strategies = new EnumMap<QueryMode, io.github.lightragjava.query.QueryStrategy>(QueryMode.class);
+        strategies.put(QueryMode.NAIVE, naive);
         strategies.put(QueryMode.LOCAL, local);
         strategies.put(QueryMode.GLOBAL, global);
         strategies.put(QueryMode.HYBRID, hybrid);
