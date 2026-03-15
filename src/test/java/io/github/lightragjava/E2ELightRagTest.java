@@ -234,7 +234,7 @@ class E2ELightRagTest {
     }
 
     @Test
-    void createEntityPrefersExactNameOverExistingAliasMatches() {
+    void createEntityRejectsNameThatCollidesWithExistingAlias() {
         var storage = InMemoryStorageProvider.create();
         var rag = LightRag.builder()
             .chatModel(new FakeChatModel())
@@ -249,16 +249,47 @@ class E2ELightRagTest {
             .aliases(List.of("Robert"))
             .build());
 
-        var entity = rag.createEntity(CreateEntityRequest.builder()
+        assertThatThrownBy(() -> rag.createEntity(CreateEntityRequest.builder()
             .name("Robert")
             .type("person")
             .description("Architect")
+            .build()))
+            .isInstanceOf(IllegalArgumentException.class)
+            .hasMessageContaining("already exists");
+    }
+
+    @Test
+    void createOperationsUseAtomicWritesWithoutSnapshotRestore() {
+        var storage = new AtomicOnlyStorageProvider();
+        var rag = LightRag.builder()
+            .chatModel(new FakeChatModel())
+            .embeddingModel(new FakeEmbeddingModel())
+            .storage(storage)
+            .build();
+
+        rag.createEntity(CreateEntityRequest.builder()
+            .name("Alice")
+            .type("person")
+            .description("Researcher")
             .build());
 
-        assertThat(entity.id()).isEqualTo("entity:robert");
-        assertThat(storage.graphStore().allEntities())
-            .extracting(GraphStore.EntityRecord::id)
-            .containsExactly("entity:bob", "entity:robert");
+        rag.createEntity(CreateEntityRequest.builder()
+            .name("Bob")
+            .type("person")
+            .description("Engineer")
+            .build());
+
+        rag.createRelation(CreateRelationRequest.builder()
+            .sourceEntityName("Alice")
+            .targetEntityName("Bob")
+            .relationType("works_with")
+            .description("collaboration")
+            .weight(0.8d)
+            .build());
+
+        assertThat(storage.restoreCalls()).isZero();
+        assertThat(storage.graphStore().loadEntity("entity:alice")).isPresent();
+        assertThat(storage.graphStore().loadRelation("relation:entity:alice|works_with|entity:bob")).isPresent();
     }
 
     @TempDir
@@ -894,6 +925,51 @@ class E2ELightRagTest {
                 return "unreachable";
             }
             throw new IllegalStateException("extract failed");
+        }
+    }
+
+    private static final class AtomicOnlyStorageProvider implements io.github.lightragjava.storage.AtomicStorageProvider {
+        private final InMemoryStorageProvider delegate = InMemoryStorageProvider.create();
+        private int restoreCalls;
+
+        @Override
+        public <T> T writeAtomically(AtomicOperation<T> operation) {
+            return delegate.writeAtomically(operation);
+        }
+
+        @Override
+        public void restore(SnapshotStore.Snapshot snapshot) {
+            restoreCalls++;
+            throw new UnsupportedOperationException("restore should not be called");
+        }
+
+        @Override
+        public DocumentStore documentStore() {
+            return delegate.documentStore();
+        }
+
+        @Override
+        public ChunkStore chunkStore() {
+            return delegate.chunkStore();
+        }
+
+        @Override
+        public GraphStore graphStore() {
+            return delegate.graphStore();
+        }
+
+        @Override
+        public VectorStore vectorStore() {
+            return delegate.vectorStore();
+        }
+
+        @Override
+        public SnapshotStore snapshotStore() {
+            return delegate.snapshotStore();
+        }
+
+        int restoreCalls() {
+            return restoreCalls;
         }
     }
 }

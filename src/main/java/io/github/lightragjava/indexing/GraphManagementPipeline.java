@@ -6,13 +6,10 @@ import io.github.lightragjava.api.GraphEntity;
 import io.github.lightragjava.api.GraphRelation;
 import io.github.lightragjava.storage.AtomicStorageProvider;
 import io.github.lightragjava.storage.GraphStore;
-import io.github.lightragjava.storage.SnapshotStore;
-import io.github.lightragjava.storage.VectorStore;
 import io.github.lightragjava.types.Entity;
 import io.github.lightragjava.types.Relation;
 
 import java.nio.file.Path;
-import java.util.ArrayList;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Locale;
@@ -35,69 +32,50 @@ public final class GraphManagementPipeline {
 
     public GraphEntity createEntity(CreateEntityRequest request) {
         var createRequest = Objects.requireNonNull(request, "request");
-        var snapshot = StorageSnapshots.capture(storageProvider);
-        validateCreateEntity(snapshot.entities(), createRequest);
+        var entityRecord = storageProvider.writeAtomically(storage -> {
+            validateCreateEntity(storage.graphStore().allEntities(), createRequest);
 
-        var entityRecord = new GraphStore.EntityRecord(
-            entityId(createRequest.name()),
-            createRequest.name(),
-            createRequest.type(),
-            createRequest.description(),
-            createRequest.aliases(),
-            List.of()
-        );
-        var entityVectors = appendAll(
-            snapshot.vectors().getOrDefault(StorageSnapshots.ENTITY_NAMESPACE, List.of()),
-            indexingPipeline.entityVectors(List.of(toEntity(entityRecord)))
-        );
-
-        storageProvider.restore(new SnapshotStore.Snapshot(
-            snapshot.documents(),
-            snapshot.chunks(),
-            append(snapshot.entities(), entityRecord),
-            snapshot.relations(),
-            java.util.Map.of(
-                StorageSnapshots.CHUNK_NAMESPACE, snapshot.vectors().getOrDefault(StorageSnapshots.CHUNK_NAMESPACE, List.of()),
-                StorageSnapshots.ENTITY_NAMESPACE, entityVectors,
-                StorageSnapshots.RELATION_NAMESPACE, snapshot.vectors().getOrDefault(StorageSnapshots.RELATION_NAMESPACE, List.of())
-            )
-        ));
+            var created = new GraphStore.EntityRecord(
+                entityId(createRequest.name()),
+                createRequest.name(),
+                createRequest.type(),
+                createRequest.description(),
+                createRequest.aliases(),
+                List.of()
+            );
+            storage.graphStore().saveEntity(created);
+            storage.vectorStore().saveAll(
+                StorageSnapshots.ENTITY_NAMESPACE,
+                indexingPipeline.entityVectors(List.of(toEntity(created)))
+            );
+            return created;
+        });
         StorageSnapshots.persistIfConfigured(storageProvider, snapshotPath);
         return toGraphEntity(entityRecord);
     }
 
     public GraphRelation createRelation(CreateRelationRequest request) {
         var createRequest = Objects.requireNonNull(request, "request");
-        var snapshot = StorageSnapshots.capture(storageProvider);
-        var sourceEntity = resolveEntity(snapshot.entities(), createRequest.sourceEntityName(), "sourceEntityName");
-        var targetEntity = resolveEntity(snapshot.entities(), createRequest.targetEntityName(), "targetEntityName");
-        var relationRecord = new GraphStore.RelationRecord(
-            relationId(sourceEntity.id(), createRequest.relationType(), targetEntity.id()),
-            sourceEntity.id(),
-            targetEntity.id(),
-            createRequest.relationType(),
-            createRequest.description(),
-            createRequest.weight(),
-            List.of()
-        );
-        validateCreateRelation(snapshot.relations(), relationRecord);
-
-        var relationVectors = appendAll(
-            snapshot.vectors().getOrDefault(StorageSnapshots.RELATION_NAMESPACE, List.of()),
-            indexingPipeline.relationVectors(List.of(toRelation(relationRecord)))
-        );
-
-        storageProvider.restore(new SnapshotStore.Snapshot(
-            snapshot.documents(),
-            snapshot.chunks(),
-            snapshot.entities(),
-            append(snapshot.relations(), relationRecord),
-            java.util.Map.of(
-                StorageSnapshots.CHUNK_NAMESPACE, snapshot.vectors().getOrDefault(StorageSnapshots.CHUNK_NAMESPACE, List.of()),
-                StorageSnapshots.ENTITY_NAMESPACE, snapshot.vectors().getOrDefault(StorageSnapshots.ENTITY_NAMESPACE, List.of()),
-                StorageSnapshots.RELATION_NAMESPACE, relationVectors
-            )
-        ));
+        var relationRecord = storageProvider.writeAtomically(storage -> {
+            var sourceEntity = resolveEntity(storage.graphStore().allEntities(), createRequest.sourceEntityName(), "sourceEntityName");
+            var targetEntity = resolveEntity(storage.graphStore().allEntities(), createRequest.targetEntityName(), "targetEntityName");
+            var created = new GraphStore.RelationRecord(
+                relationId(sourceEntity.id(), createRequest.relationType(), targetEntity.id()),
+                sourceEntity.id(),
+                targetEntity.id(),
+                createRequest.relationType(),
+                createRequest.description(),
+                createRequest.weight(),
+                List.of()
+            );
+            validateCreateRelation(storage.graphStore().allRelations(), created);
+            storage.graphStore().saveRelation(created);
+            storage.vectorStore().saveAll(
+                StorageSnapshots.RELATION_NAMESPACE,
+                indexingPipeline.relationVectors(List.of(toRelation(created)))
+            );
+            return created;
+        });
         StorageSnapshots.persistIfConfigured(storageProvider, snapshotPath);
         return toGraphRelation(relationRecord);
     }
@@ -112,7 +90,7 @@ public final class GraphManagementPipeline {
             }
             for (var alias : entity.aliases()) {
                 var aliasKey = normalizeOptionalKey(alias);
-                if (aliasKey != null && requestedAliasKeys.contains(aliasKey)) {
+                if (aliasKey != null && (requestedNameKey.equals(aliasKey) || requestedAliasKeys.contains(aliasKey))) {
                     throw new IllegalArgumentException("entity name or alias already exists: " + alias.strip());
                 }
             }
@@ -236,23 +214,4 @@ public final class GraphManagementPipeline {
         );
     }
 
-    private static <T> List<T> append(List<T> existing, T item) {
-        var values = new ArrayList<T>(existing.size() + 1);
-        values.addAll(existing);
-        values.add(item);
-        return List.copyOf(values);
-    }
-
-    private static List<VectorStore.VectorRecord> appendAll(
-        List<VectorStore.VectorRecord> existing,
-        List<VectorStore.VectorRecord> additions
-    ) {
-        if (additions.isEmpty()) {
-            return List.copyOf(existing);
-        }
-        var values = new ArrayList<VectorStore.VectorRecord>(existing.size() + additions.size());
-        values.addAll(existing);
-        values.addAll(additions);
-        return List.copyOf(values);
-    }
 }
