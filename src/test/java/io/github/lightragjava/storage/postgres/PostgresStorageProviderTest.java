@@ -136,6 +136,57 @@ class PostgresStorageProviderTest {
     }
 
     @Test
+    void rollsBackBootstrapWhenVectorValidationFails() throws SQLException {
+        PostgreSQLContainer<?> container = newPostgresContainer();
+        container.start();
+
+        PostgresStorageConfig config = new PostgresStorageConfig(
+            container.getJdbcUrl(),
+            container.getUsername(),
+            container.getPassword(),
+            "lightrag",
+            4,
+            "rag_"
+        );
+
+        try (container; HikariDataSource dataSource = newDataSource(config)) {
+            PostgresSchemaManager manager = new PostgresSchemaManager(
+                dataSource,
+                config,
+                List.of(
+                    "CREATE EXTENSION IF NOT EXISTS vector",
+                    "CREATE SCHEMA IF NOT EXISTS " + config.schemaName(),
+                    """
+                    CREATE TABLE IF NOT EXISTS %s (
+                        id TEXT PRIMARY KEY
+                    )
+                    """.formatted(config.qualifiedTableName("documents")),
+                    """
+                    CREATE TABLE IF NOT EXISTS %s (
+                        namespace TEXT NOT NULL,
+                        vector_id TEXT NOT NULL,
+                        embedding vector(3) NOT NULL,
+                        PRIMARY KEY (namespace, vector_id)
+                    )
+                    """.formatted(config.qualifiedTableName("vectors"))
+                )
+            );
+
+            assertThatThrownBy(manager::bootstrap)
+                .isInstanceOf(IllegalStateException.class)
+                .hasMessageContaining("vector dimensions");
+
+            try (var connection = DriverManager.getConnection(
+                config.jdbcUrl(),
+                config.username(),
+                config.password()
+            )) {
+                assertThat(existingTables(connection, config.schema())).isEmpty();
+            }
+        }
+    }
+
+    @Test
     void writeAtomicallyRemainsUnavailableUntilTransactionalStoresExist() {
         PostgreSQLContainer<?> container = newPostgresContainer();
         container.start();

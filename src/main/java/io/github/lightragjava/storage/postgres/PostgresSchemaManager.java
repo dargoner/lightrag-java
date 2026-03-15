@@ -32,6 +32,9 @@ public final class PostgresSchemaManager {
                 }
                 validateVectorDimensions(connection);
                 connection.commit();
+            } catch (RuntimeException exception) {
+                rollback(connection, exception);
+                throw exception;
             } catch (SQLException exception) {
                 rollback(connection, exception);
                 throw new IllegalStateException("Failed to bootstrap PostgreSQL schema", exception);
@@ -162,7 +165,7 @@ public final class PostgresSchemaManager {
         }
     }
 
-    private static void rollback(Connection connection, SQLException original) {
+    private static void rollback(Connection connection, Exception original) {
         try {
             connection.rollback();
         } catch (SQLException rollbackFailure) {
