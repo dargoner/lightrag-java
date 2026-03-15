@@ -71,6 +71,18 @@ class FixedWindowChunkerTest {
             .containsExactly("😀", "😀");
     }
 
+    @Test
+    void countsChunkTokensByUnicodeCodePoint() {
+        var chunker = new FixedWindowChunker(4, 1);
+        var document = new Document("doc-emoji-count", "Title", "ab😀cd😀ef", Map.of());
+
+        var chunks = chunker.chunk(document);
+
+        assertThat(chunks)
+            .extracting(Chunk::tokenCount)
+            .containsExactly(4, 4, 2);
+    }
+
     private static boolean hasIsolatedSurrogate(String text) {
         for (var index = 0; index < text.length(); index++) {
             var current = text.charAt(index);

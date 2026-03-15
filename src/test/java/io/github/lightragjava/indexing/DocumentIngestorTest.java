@@ -2,10 +2,8 @@ package io.github.lightragjava.indexing;
 
 import io.github.lightragjava.storage.ChunkStore;
 import io.github.lightragjava.storage.DocumentStore;
-import io.github.lightragjava.storage.IngestStorageProvider;
+import io.github.lightragjava.storage.AtomicStorageProvider;
 import io.github.lightragjava.storage.InMemoryStorageProvider;
-import io.github.lightragjava.storage.RollbackCapableChunkStore;
-import io.github.lightragjava.storage.RollbackCapableDocumentStore;
 import io.github.lightragjava.types.Chunk;
 import io.github.lightragjava.types.Document;
 import org.junit.jupiter.api.Test;
@@ -93,7 +91,7 @@ class DocumentIngestorTest {
 
     @Test
     void rollsBackDocumentAndChunkWritesWhenChunkStoreSaveFails() {
-        var storage = new RollbackAwareStorageProvider();
+        var storage = new AtomicFailureStorageProvider();
         var ingestor = new DocumentIngestor(storage, new FixedWindowChunker(4, 1));
         var document = new Document("doc-1", "Title", "abcdefghij", Map.of("source", "unit-test"));
 
@@ -105,17 +103,34 @@ class DocumentIngestorTest {
         assertThat(storage.chunkStore().list()).isEmpty();
     }
 
-    private static final class RollbackAwareStorageProvider implements IngestStorageProvider {
-        private final RollbackAwareDocumentStore documentStore = new RollbackAwareDocumentStore();
-        private final FailingRollbackAwareChunkStore chunkStore = new FailingRollbackAwareChunkStore();
+    @Test
+    void rejectsDocumentIdsThatAppearDuringAtomicWrite() {
+        var storage = new AtomicFailureStorageProvider();
+        storage.insertDocumentBeforeAtomicWrite(new DocumentStore.DocumentRecord("doc-1", "Existing", "seed", Map.of("seed", "true")));
+        var ingestor = new DocumentIngestor(storage, new FixedWindowChunker(4, 1));
+        var document = new Document("doc-1", "Incoming", "abcdefgh", Map.of());
+
+        assertThatThrownBy(() -> ingestor.ingest(List.of(document)))
+            .isInstanceOf(IllegalArgumentException.class)
+            .hasMessageContaining("doc-1");
+
+        assertThat(storage.documentStore().list())
+            .containsExactly(new DocumentStore.DocumentRecord("doc-1", "Existing", "seed", Map.of("seed", "true")));
+        assertThat(storage.chunkStore().list()).isEmpty();
+    }
+
+    private static final class AtomicFailureStorageProvider implements AtomicStorageProvider {
+        private final AtomicTestDocumentStore documentStore = new AtomicTestDocumentStore();
+        private final AtomicTestChunkStore chunkStore = new AtomicTestChunkStore();
+        private DocumentStore.DocumentRecord documentToInsertBeforeWrite;
 
         @Override
-        public RollbackCapableDocumentStore documentStore() {
+        public DocumentStore documentStore() {
             return documentStore;
         }
 
         @Override
-        public RollbackCapableChunkStore chunkStore() {
+        public ChunkStore chunkStore() {
             return chunkStore;
         }
 
@@ -133,9 +148,30 @@ class DocumentIngestorTest {
         public io.github.lightragjava.storage.SnapshotStore snapshotStore() {
             throw new UnsupportedOperationException("not used in test");
         }
+
+        @Override
+        public <T> T writeAtomically(AtomicOperation<T> operation) {
+            if (documentToInsertBeforeWrite != null) {
+                documentStore.save(documentToInsertBeforeWrite);
+                documentToInsertBeforeWrite = null;
+            }
+            var documentsBefore = documentStore.snapshot();
+            var chunksBefore = chunkStore.snapshot();
+            try {
+                return operation.execute(this);
+            } catch (RuntimeException failure) {
+                chunkStore.restore(chunksBefore);
+                documentStore.restore(documentsBefore);
+                throw failure;
+            }
+        }
+
+        void insertDocumentBeforeAtomicWrite(DocumentStore.DocumentRecord document) {
+            documentToInsertBeforeWrite = document;
+        }
     }
 
-    private static final class RollbackAwareDocumentStore implements RollbackCapableDocumentStore {
+    private static final class AtomicTestDocumentStore implements DocumentStore {
         private final Map<String, DocumentStore.DocumentRecord> documents = new LinkedHashMap<>();
 
         @Override
@@ -158,8 +194,11 @@ class DocumentIngestorTest {
             return documents.containsKey(documentId);
         }
 
-        @Override
-        public void restoreDocuments(List<DocumentStore.DocumentRecord> snapshot) {
+        List<DocumentStore.DocumentRecord> snapshot() {
+            return list();
+        }
+
+        void restore(List<DocumentStore.DocumentRecord> snapshot) {
             documents.clear();
             for (var document : snapshot) {
                 documents.put(document.id(), document);
@@ -167,7 +206,7 @@ class DocumentIngestorTest {
         }
     }
 
-    private static final class FailingRollbackAwareChunkStore implements RollbackCapableChunkStore {
+    private static final class AtomicTestChunkStore implements ChunkStore {
         private final Map<String, ChunkStore.ChunkRecord> chunks = new LinkedHashMap<>();
         private int saveAttempts;
 
@@ -197,8 +236,11 @@ class DocumentIngestorTest {
                 .toList();
         }
 
-        @Override
-        public void restoreChunks(List<ChunkStore.ChunkRecord> snapshot) {
+        List<ChunkStore.ChunkRecord> snapshot() {
+            return list();
+        }
+
+        void restore(List<ChunkStore.ChunkRecord> snapshot) {
             chunks.clear();
             for (var chunk : snapshot) {
                 chunks.put(chunk.id(), chunk);

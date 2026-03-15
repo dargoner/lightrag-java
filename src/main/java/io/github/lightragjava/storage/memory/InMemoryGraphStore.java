@@ -7,8 +7,6 @@ import java.util.Map;
 import java.util.Objects;
 import java.util.Optional;
 import java.util.Set;
-import java.util.concurrent.ConcurrentNavigableMap;
-import java.util.concurrent.ConcurrentSkipListMap;
 import java.util.HashMap;
 import java.util.TreeMap;
 import java.util.TreeSet;
@@ -16,21 +14,35 @@ import java.util.concurrent.locks.ReadWriteLock;
 import java.util.concurrent.locks.ReentrantReadWriteLock;
 
 public final class InMemoryGraphStore implements GraphStore {
-    private final ConcurrentNavigableMap<String, EntityRecord> entities = new ConcurrentSkipListMap<>();
+    private final Map<String, EntityRecord> entities = new TreeMap<>();
     private final Map<String, RelationRecord> relations = new TreeMap<>();
     private final Map<String, Set<String>> relationIdsByEntity = new HashMap<>();
-    private final ReadWriteLock relationLock = new ReentrantReadWriteLock();
+    private final ReadWriteLock lock;
+
+    public InMemoryGraphStore() {
+        this(new ReentrantReadWriteLock(true));
+    }
+
+    public InMemoryGraphStore(ReadWriteLock lock) {
+        this.lock = Objects.requireNonNull(lock, "lock");
+    }
 
     @Override
     public void saveEntity(EntityRecord entity) {
         var record = Objects.requireNonNull(entity, "entity");
-        entities.put(record.id(), record);
+        var writeLock = lock.writeLock();
+        writeLock.lock();
+        try {
+            entities.put(record.id(), record);
+        } finally {
+            writeLock.unlock();
+        }
     }
 
     @Override
     public void saveRelation(RelationRecord relation) {
         var record = Objects.requireNonNull(relation, "relation");
-        var writeLock = relationLock.writeLock();
+        var writeLock = lock.writeLock();
         writeLock.lock();
         try {
             var previous = relations.put(record.id(), record);
@@ -47,12 +59,18 @@ public final class InMemoryGraphStore implements GraphStore {
 
     @Override
     public Optional<EntityRecord> loadEntity(String entityId) {
-        return Optional.ofNullable(entities.get(Objects.requireNonNull(entityId, "entityId")));
+        var readLock = lock.readLock();
+        readLock.lock();
+        try {
+            return Optional.ofNullable(entities.get(Objects.requireNonNull(entityId, "entityId")));
+        } finally {
+            readLock.unlock();
+        }
     }
 
     @Override
     public Optional<RelationRecord> loadRelation(String relationId) {
-        var readLock = relationLock.readLock();
+        var readLock = lock.readLock();
         readLock.lock();
         try {
             return Optional.ofNullable(relations.get(Objects.requireNonNull(relationId, "relationId")));
@@ -63,12 +81,18 @@ public final class InMemoryGraphStore implements GraphStore {
 
     @Override
     public List<EntityRecord> allEntities() {
-        return List.copyOf(entities.values());
+        var readLock = lock.readLock();
+        readLock.lock();
+        try {
+            return List.copyOf(entities.values());
+        } finally {
+            readLock.unlock();
+        }
     }
 
     @Override
     public List<RelationRecord> allRelations() {
-        var readLock = relationLock.readLock();
+        var readLock = lock.readLock();
         readLock.lock();
         try {
             return List.copyOf(relations.values());
@@ -80,7 +104,7 @@ public final class InMemoryGraphStore implements GraphStore {
     @Override
     public List<RelationRecord> findRelations(String entityId) {
         var targetEntityId = Objects.requireNonNull(entityId, "entityId");
-        var readLock = relationLock.readLock();
+        var readLock = lock.readLock();
         readLock.lock();
         try {
             var relationIds = relationIdsByEntity.get(targetEntityId);
@@ -93,6 +117,35 @@ public final class InMemoryGraphStore implements GraphStore {
                 .toList();
         } finally {
             readLock.unlock();
+        }
+    }
+
+    public List<EntityRecord> snapshotEntities() {
+        return allEntities();
+    }
+
+    public List<RelationRecord> snapshotRelations() {
+        return allRelations();
+    }
+
+    public void restore(List<EntityRecord> entitySnapshot, List<RelationRecord> relationSnapshot) {
+        var writeLock = lock.writeLock();
+        writeLock.lock();
+        try {
+            entities.clear();
+            relations.clear();
+            relationIdsByEntity.clear();
+
+            for (var entity : Objects.requireNonNull(entitySnapshot, "entitySnapshot")) {
+                entities.put(entity.id(), entity);
+            }
+            for (var relation : Objects.requireNonNull(relationSnapshot, "relationSnapshot")) {
+                relations.put(relation.id(), relation);
+                addRelationEndpoint(relation.sourceEntityId(), relation.id());
+                addRelationEndpoint(relation.targetEntityId(), relation.id());
+            }
+        } finally {
+            writeLock.unlock();
         }
     }
 

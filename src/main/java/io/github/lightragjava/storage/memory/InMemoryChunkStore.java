@@ -1,54 +1,93 @@
 package io.github.lightragjava.storage.memory;
 
 import io.github.lightragjava.storage.ChunkStore;
-import io.github.lightragjava.storage.RollbackCapableChunkStore;
-
 import java.util.Comparator;
 import java.util.List;
-import java.util.Map;
 import java.util.Objects;
 import java.util.Optional;
 import java.util.concurrent.ConcurrentNavigableMap;
 import java.util.concurrent.ConcurrentSkipListMap;
+import java.util.concurrent.locks.ReadWriteLock;
+import java.util.concurrent.locks.ReentrantReadWriteLock;
 
-public final class InMemoryChunkStore implements RollbackCapableChunkStore {
+public final class InMemoryChunkStore implements ChunkStore {
     private static final Comparator<ChunkRecord> DOCUMENT_ORDER =
         Comparator.comparingInt(ChunkRecord::order).thenComparing(ChunkRecord::id);
 
     private final ConcurrentNavigableMap<String, ChunkRecord> chunks = new ConcurrentSkipListMap<>();
+    private final ReadWriteLock lock;
+
+    public InMemoryChunkStore() {
+        this(new ReentrantReadWriteLock(true));
+    }
+
+    public InMemoryChunkStore(ReadWriteLock lock) {
+        this.lock = Objects.requireNonNull(lock, "lock");
+    }
 
     @Override
     public void save(ChunkRecord chunk) {
         var record = Objects.requireNonNull(chunk, "chunk");
-        chunks.put(record.id(), record);
+        var writeLock = lock.writeLock();
+        writeLock.lock();
+        try {
+            chunks.put(record.id(), record);
+        } finally {
+            writeLock.unlock();
+        }
     }
 
     @Override
     public Optional<ChunkRecord> load(String chunkId) {
-        return Optional.ofNullable(chunks.get(Objects.requireNonNull(chunkId, "chunkId")));
+        var readLock = lock.readLock();
+        readLock.lock();
+        try {
+            return Optional.ofNullable(chunks.get(Objects.requireNonNull(chunkId, "chunkId")));
+        } finally {
+            readLock.unlock();
+        }
     }
 
     @Override
     public List<ChunkRecord> list() {
-        return List.copyOf(chunks.values());
+        var readLock = lock.readLock();
+        readLock.lock();
+        try {
+            return List.copyOf(chunks.values());
+        } finally {
+            readLock.unlock();
+        }
     }
 
     @Override
     public List<ChunkRecord> listByDocument(String documentId) {
         var targetDocumentId = Objects.requireNonNull(documentId, "documentId");
-        return chunks.values().stream()
-            .filter(chunk -> chunk.documentId().equals(targetDocumentId))
-            .sorted(DOCUMENT_ORDER)
-            .toList();
+        var readLock = lock.readLock();
+        readLock.lock();
+        try {
+            return chunks.values().stream()
+                .filter(chunk -> chunk.documentId().equals(targetDocumentId))
+                .sorted(DOCUMENT_ORDER)
+                .toList();
+        } finally {
+            readLock.unlock();
+        }
     }
 
-    @Override
-    public void restoreChunks(List<ChunkRecord> snapshot) {
-        var replacement = new ConcurrentSkipListMap<String, ChunkRecord>();
-        for (var record : Objects.requireNonNull(snapshot, "snapshot")) {
-            replacement.put(record.id(), record);
+    public List<ChunkRecord> snapshot() {
+        return list();
+    }
+
+    public void restore(List<ChunkRecord> snapshot) {
+        var writeLock = lock.writeLock();
+        writeLock.lock();
+        try {
+            chunks.clear();
+            for (var record : Objects.requireNonNull(snapshot, "snapshot")) {
+                chunks.put(record.id(), record);
+            }
+        } finally {
+            writeLock.unlock();
         }
-        chunks.clear();
-        chunks.putAll(Map.copyOf(replacement));
     }
 }

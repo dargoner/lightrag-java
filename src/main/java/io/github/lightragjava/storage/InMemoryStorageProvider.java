@@ -13,19 +13,23 @@ import java.util.NoSuchElementException;
 import java.util.Objects;
 import java.util.concurrent.ConcurrentNavigableMap;
 import java.util.concurrent.ConcurrentSkipListMap;
+import java.util.concurrent.locks.ReadWriteLock;
+import java.util.concurrent.locks.ReentrantReadWriteLock;
 
-public final class InMemoryStorageProvider implements IngestStorageProvider {
-    private final RollbackCapableDocumentStore documentStore;
-    private final RollbackCapableChunkStore chunkStore;
-    private final GraphStore graphStore;
-    private final VectorStore vectorStore;
+public final class InMemoryStorageProvider implements AtomicStorageProvider {
+    private final ReadWriteLock lock;
+    private final InMemoryDocumentStore documentStore;
+    private final InMemoryChunkStore chunkStore;
+    private final InMemoryGraphStore graphStore;
+    private final InMemoryVectorStore vectorStore;
     private final SnapshotStore snapshotStore;
 
     public InMemoryStorageProvider() {
-        this.documentStore = new InMemoryDocumentStore();
-        this.chunkStore = new InMemoryChunkStore();
-        this.graphStore = new InMemoryGraphStore();
-        this.vectorStore = new InMemoryVectorStore();
+        this.lock = new ReentrantReadWriteLock(true);
+        this.documentStore = new InMemoryDocumentStore(lock);
+        this.chunkStore = new InMemoryChunkStore(lock);
+        this.graphStore = new InMemoryGraphStore(lock);
+        this.vectorStore = new InMemoryVectorStore(lock);
         this.snapshotStore = new InMemorySnapshotStore();
     }
 
@@ -34,12 +38,12 @@ public final class InMemoryStorageProvider implements IngestStorageProvider {
     }
 
     @Override
-    public RollbackCapableDocumentStore documentStore() {
+    public DocumentStore documentStore() {
         return documentStore;
     }
 
     @Override
-    public RollbackCapableChunkStore chunkStore() {
+    public ChunkStore chunkStore() {
         return chunkStore;
     }
 
@@ -56,6 +60,75 @@ public final class InMemoryStorageProvider implements IngestStorageProvider {
     @Override
     public SnapshotStore snapshotStore() {
         return snapshotStore;
+    }
+
+    @Override
+    public <T> T writeAtomically(AtomicOperation<T> operation) {
+        var writeLock = lock.writeLock();
+        writeLock.lock();
+        var snapshot = snapshot();
+        try {
+            return Objects.requireNonNull(operation, "operation").execute(this);
+        } catch (RuntimeException failure) {
+            restore(snapshot, failure);
+            throw failure;
+        } finally {
+            writeLock.unlock();
+        }
+    }
+
+    private SnapshotStore.Snapshot snapshot() {
+        return new SnapshotStore.Snapshot(
+            documentStore.snapshot(),
+            chunkStore.snapshot(),
+            graphStore.snapshotEntities(),
+            graphStore.snapshotRelations(),
+            vectorStore.snapshot()
+        );
+    }
+
+    private void restore(SnapshotStore.Snapshot snapshot, RuntimeException failure) {
+        RuntimeException rollbackFailure = null;
+
+        try {
+            vectorStore.restore(snapshot.vectors());
+        } catch (RuntimeException exception) {
+            rollbackFailure = exception;
+        }
+
+        try {
+            graphStore.restore(snapshot.entities(), snapshot.relations());
+        } catch (RuntimeException exception) {
+            if (rollbackFailure == null) {
+                rollbackFailure = exception;
+            } else {
+                rollbackFailure.addSuppressed(exception);
+            }
+        }
+
+        try {
+            chunkStore.restore(snapshot.chunks());
+        } catch (RuntimeException exception) {
+            if (rollbackFailure == null) {
+                rollbackFailure = exception;
+            } else {
+                rollbackFailure.addSuppressed(exception);
+            }
+        }
+
+        try {
+            documentStore.restore(snapshot.documents());
+        } catch (RuntimeException exception) {
+            if (rollbackFailure == null) {
+                rollbackFailure = exception;
+            } else {
+                rollbackFailure.addSuppressed(exception);
+            }
+        }
+
+        if (rollbackFailure != null) {
+            failure.addSuppressed(rollbackFailure);
+        }
     }
 
     private static final class InMemorySnapshotStore implements SnapshotStore {

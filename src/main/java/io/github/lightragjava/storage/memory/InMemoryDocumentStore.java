@@ -1,46 +1,85 @@
 package io.github.lightragjava.storage.memory;
 
 import io.github.lightragjava.storage.DocumentStore;
-import io.github.lightragjava.storage.RollbackCapableDocumentStore;
-
 import java.util.List;
-import java.util.Map;
 import java.util.Objects;
 import java.util.Optional;
 import java.util.concurrent.ConcurrentNavigableMap;
 import java.util.concurrent.ConcurrentSkipListMap;
+import java.util.concurrent.locks.ReadWriteLock;
+import java.util.concurrent.locks.ReentrantReadWriteLock;
 
-public final class InMemoryDocumentStore implements RollbackCapableDocumentStore {
+public final class InMemoryDocumentStore implements DocumentStore {
     private final ConcurrentNavigableMap<String, DocumentRecord> documents = new ConcurrentSkipListMap<>();
+    private final ReadWriteLock lock;
+
+    public InMemoryDocumentStore() {
+        this(new ReentrantReadWriteLock(true));
+    }
+
+    public InMemoryDocumentStore(ReadWriteLock lock) {
+        this.lock = Objects.requireNonNull(lock, "lock");
+    }
 
     @Override
     public void save(DocumentRecord document) {
         var record = Objects.requireNonNull(document, "document");
-        documents.put(record.id(), record);
+        var writeLock = lock.writeLock();
+        writeLock.lock();
+        try {
+            documents.put(record.id(), record);
+        } finally {
+            writeLock.unlock();
+        }
     }
 
     @Override
     public Optional<DocumentRecord> load(String documentId) {
-        return Optional.ofNullable(documents.get(Objects.requireNonNull(documentId, "documentId")));
+        var readLock = lock.readLock();
+        readLock.lock();
+        try {
+            return Optional.ofNullable(documents.get(Objects.requireNonNull(documentId, "documentId")));
+        } finally {
+            readLock.unlock();
+        }
     }
 
     @Override
     public List<DocumentRecord> list() {
-        return List.copyOf(documents.values());
+        var readLock = lock.readLock();
+        readLock.lock();
+        try {
+            return List.copyOf(documents.values());
+        } finally {
+            readLock.unlock();
+        }
     }
 
     @Override
     public boolean contains(String documentId) {
-        return documents.containsKey(Objects.requireNonNull(documentId, "documentId"));
+        var readLock = lock.readLock();
+        readLock.lock();
+        try {
+            return documents.containsKey(Objects.requireNonNull(documentId, "documentId"));
+        } finally {
+            readLock.unlock();
+        }
     }
 
-    @Override
-    public void restoreDocuments(List<DocumentRecord> snapshot) {
-        var replacement = new ConcurrentSkipListMap<String, DocumentRecord>();
-        for (var record : Objects.requireNonNull(snapshot, "snapshot")) {
-            replacement.put(record.id(), record);
+    public List<DocumentRecord> snapshot() {
+        return list();
+    }
+
+    public void restore(List<DocumentRecord> snapshot) {
+        var writeLock = lock.writeLock();
+        writeLock.lock();
+        try {
+            documents.clear();
+            for (var record : Objects.requireNonNull(snapshot, "snapshot")) {
+                documents.put(record.id(), record);
+            }
+        } finally {
+            writeLock.unlock();
         }
-        documents.clear();
-        documents.putAll(Map.copyOf(replacement));
     }
 }
