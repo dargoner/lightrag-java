@@ -46,6 +46,7 @@ public final class PostgresSchemaManager {
                                 + latestSchemaVersion()
                         );
                     } else {
+                        replayAppliedMigrations(statement, currentVersion.get());
                         applyMissingMigrations(statement, currentVersion.get());
                     }
                     validateVectorDimensions(connection);
@@ -74,6 +75,17 @@ public final class PostgresSchemaManager {
                 statement.execute(sql);
             }
             storeSchemaVersion(statement.getConnection(), migration.version());
+        }
+    }
+
+    private void replayAppliedMigrations(Statement statement, int currentVersion) throws SQLException {
+        for (Migration migration : migrations()) {
+            if (migration.version() > currentVersion) {
+                continue;
+            }
+            for (String sql : migration.statements()) {
+                statement.execute(sql);
+            }
         }
     }
 

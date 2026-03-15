@@ -4,7 +4,7 @@
 
 **Goal:** Add transactional schema version tracking and SDK-managed migrations to the PostgreSQL provider while preserving current bootstrap behavior.
 
-**Architecture:** `PostgresSchemaManager` will own an ordered list of schema migrations and reconcile the configured schema to the latest supported version during provider startup. The first migration reuses the existing bootstrap SQL, while new metadata helpers upgrade legacy unversioned schemas in place and reject unsupported newer versions.
+**Architecture:** `PostgresSchemaManager` will own an ordered list of schema migrations and reconcile the configured schema to the latest supported version during provider startup. The first migration reuses the existing bootstrap SQL, while new metadata helpers upgrade legacy unversioned schemas in place, replay already-applied idempotent DDL for supported versioned schemas, and reject unsupported newer versions.
 
 **Tech Stack:** Java 17, JDBC, HikariCP, PostgreSQL, Testcontainers, JUnit 5, AssertJ
 
@@ -78,13 +78,14 @@ Update `bootstrap()` so it:
 
 - creates schema + metadata table
 - upgrades legacy unversioned schemas to `1` by replaying the `v1` migration
+- replays idempotent migrations for supported versioned schemas so missing tables are recreated
 - applies missing migrations on fresh databases
 - rejects stored versions greater than the supported version
 
 - [ ] **Step 4: Run targeted bootstrap tests**
 
 Run: `./gradlew test --tests io.github.lightragjava.storage.postgres.PostgresStorageProviderTest`
-Expected: PASS for migration metadata, legacy baseline, rollback, and vector drift coverage.
+Expected: PASS for migration metadata, legacy baseline, versioned-schema self-repair, rollback, and vector drift coverage.
 
 - [ ] **Step 5: Commit**
 

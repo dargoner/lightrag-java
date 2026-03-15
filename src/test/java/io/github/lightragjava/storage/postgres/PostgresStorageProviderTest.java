@@ -153,6 +153,50 @@ class PostgresStorageProviderTest {
         }
     }
 
+    @Test
+    void repairsVersionedSchemaByReplayingCurrentMigration() throws SQLException {
+        PostgreSQLContainer<?> container = newPostgresContainer();
+        container.start();
+
+        PostgresStorageConfig config = new PostgresStorageConfig(
+            container.getJdbcUrl(),
+            container.getUsername(),
+            container.getPassword(),
+            "lightrag",
+            3,
+            "rag_"
+        );
+
+        SnapshotStore snapshotStore = new InMemorySnapshotStore();
+
+        try (container) {
+            try (PostgresStorageProvider ignored = new PostgresStorageProvider(config, snapshotStore)) {
+                try (var connection = DriverManager.getConnection(
+                    config.jdbcUrl(),
+                    config.username(),
+                    config.password()
+                )) {
+                    connection.createStatement().execute("DROP TABLE " + config.qualifiedTableName("documents"));
+                    assertThat(existingTables(connection, config.schema())).doesNotContain("rag_documents");
+                    assertThat(schemaVersion(connection, config)).contains(1);
+                }
+            }
+
+            try (
+                PostgresStorageProvider ignored = new PostgresStorageProvider(config, snapshotStore);
+                var connection = DriverManager.getConnection(
+                    config.jdbcUrl(),
+                    config.username(),
+                    config.password()
+                )
+            ) {
+                assertThat(existingTables(connection, config.schema())).contains("rag_documents");
+                assertThat(schemaVersion(connection, config)).contains(1);
+            }
+        }
+    }
+
+    @Test
     void rejectsVectorDimensionDriftOnExistingSchema() {
         PostgreSQLContainer<?> container = newPostgresContainer();
         container.start();

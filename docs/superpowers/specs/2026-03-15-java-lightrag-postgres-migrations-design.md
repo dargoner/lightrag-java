@@ -107,9 +107,10 @@ On `bootstrap()`:
 4. read the stored schema version row
 5. if no version row exists, run migrations from `v1`
 6. if version row exists and is greater than the supported version, fail fast
-7. if version row exists and is less than the supported version, run each missing migration in order
-8. validate vector dimensions against the configured value
-9. commit
+7. if version row exists and is supported, replay the already-applied idempotent schema migrations for that version
+8. if version row exists and is less than the supported version, run each missing migration in order
+9. validate vector dimensions against the configured value
+10. commit
 
 All steps stay inside one transaction so version metadata and schema objects move together.
 
@@ -117,7 +118,9 @@ All steps stay inside one transaction so version metadata and schema objects mov
 
 An unversioned schema should be upgraded by replaying the idempotent `v1` migration statements and then recording version `1`.
 
-This preserves the existing bootstrap behavior for legacy deployments that have only part of the current table set, such as earlier layouts that predate graph or vector tables. Explicit structural validation remains limited to vector-dimension checks in this phase; broader table-shape drift detection is deferred.
+This preserves the existing bootstrap behavior for legacy deployments that have only part of the current table set, such as earlier layouts that predate graph or vector tables.
+
+The same replay model should also apply to already-versioned schemas on startup so that missing tables can still be recreated by the existing `CREATE TABLE IF NOT EXISTS` statements. Explicit structural validation remains limited to vector-dimension checks in this phase; broader table-shape drift detection is deferred.
 
 ### Failure Semantics
 
@@ -145,6 +148,7 @@ Recommended additions inside `PostgresSchemaManager`:
   - create the metadata table
   - read and write schema-version rows
   - apply migrations in order
+  - replay already-applied idempotent migrations for supported versioned schemas
   - record schema version after successful legacy upgrade
 
 The existing bootstrap SQL, including `CREATE EXTENSION IF NOT EXISTS vector`, should become the `v1` migration body instead of a special-case code path. If the database user cannot create the extension, bootstrap should fail with the underlying SQL error wrapped as a schema-bootstrap failure.
@@ -156,6 +160,7 @@ Required coverage:
 - fresh database creates application tables and schema-version metadata
 - existing unversioned schema is baselined to `v1`
 - existing partial legacy schemas are upgraded to `v1` and recorded
+- existing versioned schemas replay idempotent DDL so missing tables are recreated on startup
 - unsupported newer schema version fails fast
 - migration failure rolls back both schema objects and version metadata
 - existing vector-dimension drift detection still fails
