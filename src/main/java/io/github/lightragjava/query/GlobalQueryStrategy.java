@@ -34,7 +34,7 @@ public final class GlobalQueryStrategy implements QueryStrategy {
     @Override
     public QueryContext retrieve(QueryRequest request) {
         var query = Objects.requireNonNull(request, "request");
-        var queryVector = embeddingModel.embedAll(List.of(query.query())).getFirst();
+        var queryVector = embeddingModel.embedAll(List.of(query.query())).get(0);
         var relationScores = new LinkedHashMap<String, Double>();
         var entityScores = new LinkedHashMap<String, Double>();
         var chunkScores = new LinkedHashMap<String, Double>();

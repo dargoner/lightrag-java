@@ -110,7 +110,7 @@ public final class LocalQueryStrategy implements QueryStrategy {
     }
 
     private List<Double> embed(String query) {
-        return embeddingModel.embedAll(List.of(query)).getFirst();
+        return embeddingModel.embedAll(List.of(query)).get(0);
     }
 
     private static Entity toEntity(GraphStore.EntityRecord entity) {

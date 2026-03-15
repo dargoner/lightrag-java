@@ -36,7 +36,7 @@ public final class MixQueryStrategy implements QueryStrategy {
     @Override
     public QueryContext retrieve(QueryRequest request) {
         var hybrid = hybridStrategy.retrieve(request);
-        var queryVector = embeddingModel.embedAll(List.of(request.query())).getFirst();
+        var queryVector = embeddingModel.embedAll(List.of(request.query())).get(0);
         var mergedChunks = new LinkedHashMap<String, ScoredChunk>();
         for (var chunk : hybrid.matchedChunks()) {
             mergedChunks.put(chunk.chunkId(), chunk);
