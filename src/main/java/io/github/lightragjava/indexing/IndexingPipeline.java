@@ -45,31 +45,38 @@ public final class IndexingPipeline {
     }
 
     public void ingest(List<Document> documents) {
-        var chunks = documentIngestor.ingest(documents);
-        saveChunkVectors(chunks);
+        var prepared = documentIngestor.prepare(documents);
+        var chunks = prepared.chunks();
+        var chunkVectors = chunkVectors(chunks);
 
         var graph = graphAssembler.assemble(chunks.stream()
             .map(chunk -> new GraphAssembler.ChunkExtraction(chunk.id(), knowledgeExtractor.extract(chunk)))
             .toList());
+        var entityVectors = entityVectors(graph.entities());
+        var relationVectors = relationVectors(graph.relations());
 
         storageProvider.writeAtomically(storage -> {
+            saveDocumentsAndChunks(prepared, storage);
+            saveVectors(CHUNK_NAMESPACE, chunkVectors, storage.vectorStore());
             saveGraph(graph.entities(), graph.relations(), storage);
-            saveGraphVectors(graph.entities(), graph.relations(), storage.vectorStore());
+            saveVectors(ENTITY_NAMESPACE, entityVectors, storage.vectorStore());
+            saveVectors(RELATION_NAMESPACE, relationVectors, storage.vectorStore());
             return null;
         });
 
         persistSnapshotIfConfigured();
     }
 
-    private void saveChunkVectors(List<io.github.lightragjava.types.Chunk> chunks) {
-        if (chunks.isEmpty()) {
-            return;
+    private void saveDocumentsAndChunks(
+        DocumentIngestor.PreparedIngest prepared,
+        AtomicStorageProvider.AtomicStorageView storage
+    ) {
+        for (var documentRecord : prepared.documentRecords()) {
+            storage.documentStore().save(documentRecord);
         }
-        var embeddings = embeddingModel.embedAll(chunks.stream().map(io.github.lightragjava.types.Chunk::text).toList());
-        storageProvider.vectorStore().saveAll(
-            CHUNK_NAMESPACE,
-            toVectorRecords(chunks.stream().map(io.github.lightragjava.types.Chunk::id).toList(), embeddings)
-        );
+        for (var chunkRecord : prepared.chunkRecords()) {
+            storage.chunkStore().save(chunkRecord);
+        }
     }
 
     private void saveGraph(List<Entity> entities, List<Relation> relations, AtomicStorageProvider.AtomicStorageView storage) {
@@ -88,22 +95,11 @@ public final class IndexingPipeline {
         }
     }
 
-    private void saveGraphVectors(List<Entity> entities, List<Relation> relations, VectorStore vectorStore) {
-        if (!entities.isEmpty()) {
-            var entityEmbeddings = embeddingModel.embedAll(entities.stream().map(IndexingPipeline::entitySummary).toList());
-            vectorStore.saveAll(
-                ENTITY_NAMESPACE,
-                toVectorRecords(entities.stream().map(Entity::id).toList(), entityEmbeddings)
-            );
+    private void saveVectors(String namespace, List<VectorStore.VectorRecord> vectors, VectorStore vectorStore) {
+        if (vectors.isEmpty()) {
+            return;
         }
-
-        if (!relations.isEmpty()) {
-            var relationEmbeddings = embeddingModel.embedAll(relations.stream().map(IndexingPipeline::relationSummary).toList());
-            vectorStore.saveAll(
-                RELATION_NAMESPACE,
-                toVectorRecords(relations.stream().map(Relation::id).toList(), relationEmbeddings)
-            );
-        }
+        vectorStore.saveAll(namespace, vectors);
     }
 
     private void persistSnapshotIfConfigured() {
@@ -135,6 +131,30 @@ public final class IndexingPipeline {
         return java.util.stream.IntStream.range(0, ids.size())
             .mapToObj(index -> new VectorStore.VectorRecord(ids.get(index), embeddings.get(index)))
             .toList();
+    }
+
+    private List<VectorStore.VectorRecord> chunkVectors(List<io.github.lightragjava.types.Chunk> chunks) {
+        if (chunks.isEmpty()) {
+            return List.of();
+        }
+        var embeddings = embeddingModel.embedAll(chunks.stream().map(io.github.lightragjava.types.Chunk::text).toList());
+        return toVectorRecords(chunks.stream().map(io.github.lightragjava.types.Chunk::id).toList(), embeddings);
+    }
+
+    private List<VectorStore.VectorRecord> entityVectors(List<Entity> entities) {
+        if (entities.isEmpty()) {
+            return List.of();
+        }
+        var embeddings = embeddingModel.embedAll(entities.stream().map(IndexingPipeline::entitySummary).toList());
+        return toVectorRecords(entities.stream().map(Entity::id).toList(), embeddings);
+    }
+
+    private List<VectorStore.VectorRecord> relationVectors(List<Relation> relations) {
+        if (relations.isEmpty()) {
+            return List.of();
+        }
+        var embeddings = embeddingModel.embedAll(relations.stream().map(IndexingPipeline::relationSummary).toList());
+        return toVectorRecords(relations.stream().map(Relation::id).toList(), embeddings);
     }
 
     private static GraphStore.EntityRecord mergeEntity(GraphStore.EntityRecord existing, Entity incoming) {

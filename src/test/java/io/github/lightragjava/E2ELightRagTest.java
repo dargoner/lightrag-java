@@ -12,9 +12,13 @@ import io.github.lightragjava.storage.GraphStore;
 import io.github.lightragjava.storage.InMemoryStorageProvider;
 import io.github.lightragjava.storage.SnapshotStore;
 import io.github.lightragjava.storage.VectorStore;
+import io.github.lightragjava.storage.postgres.PostgresStorageConfig;
+import io.github.lightragjava.storage.postgres.PostgresStorageProvider;
 import io.github.lightragjava.types.Document;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
+import org.testcontainers.containers.PostgreSQLContainer;
+import org.testcontainers.utility.DockerImageName;
 
 import java.nio.file.Files;
 import java.nio.file.Path;
@@ -22,6 +26,7 @@ import java.util.List;
 import java.util.Map;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 class E2ELightRagTest {
     @Test
@@ -192,6 +197,163 @@ class E2ELightRagTest {
         assertThat(mix.contexts()).extracting(QueryResult.Context::sourceId).contains("doc-1:0");
     }
 
+    @Test
+    void postgresProviderSupportsIngestAndQueryModes() {
+        try (
+            var container = new PostgreSQLContainer<>(
+                DockerImageName.parse("pgvector/pgvector:pg16").asCompatibleSubstituteFor("postgres")
+            )
+        ) {
+            container.start();
+            var storage = new PostgresStorageProvider(
+                new PostgresStorageConfig(
+                    container.getJdbcUrl(),
+                    container.getUsername(),
+                    container.getPassword(),
+                    "lightrag",
+                    2,
+                    "rag_"
+                ),
+                new FileSnapshotStore()
+            );
+
+            try (storage) {
+                var rag = LightRag.builder()
+                    .chatModel(new FakeChatModel())
+                    .embeddingModel(new FakeEmbeddingModel())
+                    .storage(storage)
+                    .build();
+
+                rag.ingest(List.of(
+                    new Document("doc-1", "Title", "Alice works with Bob", Map.of()),
+                    new Document("doc-2", "Title", "Bob reports to Carol", Map.of())
+                ));
+
+                assertThat(storage.documentStore().load("doc-1")).isPresent();
+                assertThat(storage.chunkStore().listByDocument("doc-1")).isNotEmpty();
+                assertThat(storage.graphStore().allEntities()).isNotEmpty();
+                assertThat(storage.graphStore().allRelations()).isNotEmpty();
+                assertThat(storage.vectorStore().list("chunks")).isNotEmpty();
+
+                var local = rag.query(QueryRequest.builder()
+                    .query("Who works with Bob?")
+                    .mode(io.github.lightragjava.api.QueryMode.LOCAL)
+                    .build());
+                var global = rag.query(QueryRequest.builder()
+                    .query("Who reports to Carol?")
+                    .mode(io.github.lightragjava.api.QueryMode.GLOBAL)
+                    .build());
+                var hybrid = rag.query(QueryRequest.builder()
+                    .query("Who works with Bob?")
+                    .mode(io.github.lightragjava.api.QueryMode.HYBRID)
+                    .build());
+                var mix = rag.query(QueryRequest.builder()
+                    .query("Who works with Bob?")
+                    .mode(io.github.lightragjava.api.QueryMode.MIX)
+                    .build());
+
+                assertThat(local.contexts()).isNotEmpty();
+                assertThat(global.contexts()).isNotEmpty();
+                assertThat(hybrid.contexts()).isNotEmpty();
+                assertThat(mix.contexts()).isNotEmpty();
+            }
+        }
+    }
+
+    @Test
+    void postgresProviderRestoresFromSnapshotBeforeBuild() {
+        try (
+            var container = new PostgreSQLContainer<>(
+                DockerImageName.parse("pgvector/pgvector:pg16").asCompatibleSubstituteFor("postgres")
+            )
+        ) {
+            container.start();
+
+            var snapshotStore = new FileSnapshotStore();
+            var snapshotPath = tempDir.resolve("postgres-seed.snapshot.json");
+            snapshotStore.save(snapshotPath, new SnapshotStore.Snapshot(
+                List.of(new DocumentStore.DocumentRecord("doc-seed", "Seed", "Body", Map.of())),
+                List.of(new ChunkStore.ChunkRecord("doc-seed:0", "doc-seed", "Body", 4, 0, Map.of())),
+                List.of(new GraphStore.EntityRecord("entity:seed", "Seed", "person", "Seed entity", List.of(), List.of("doc-seed:0"))),
+                List.of(),
+                Map.of("chunks", List.of(new VectorStore.VectorRecord("doc-seed:0", List.of(1.0d, 0.0d))))
+            ));
+
+            var storage = new PostgresStorageProvider(
+                new PostgresStorageConfig(
+                    container.getJdbcUrl(),
+                    container.getUsername(),
+                    container.getPassword(),
+                    "lightrag",
+                    2,
+                    "rag_"
+                ),
+                snapshotStore
+            );
+
+            try (storage) {
+                var rag = LightRag.builder()
+                    .chatModel(new FakeChatModel())
+                    .embeddingModel(new FakeEmbeddingModel())
+                    .storage(storage)
+                    .loadFromSnapshot(snapshotPath)
+                    .build();
+
+                assertThat(rag).isNotNull();
+                assertThat(storage.documentStore().load("doc-seed")).isPresent();
+                assertThat(storage.chunkStore().load("doc-seed:0")).isPresent();
+                assertThat(storage.graphStore().loadEntity("entity:seed")).isPresent();
+                assertThat(storage.vectorStore().list("chunks"))
+                    .extracting(VectorStore.VectorRecord::id)
+                    .containsExactly("doc-seed:0");
+            }
+        }
+    }
+
+    @Test
+    void postgresIngestRollsBackWhenExtractionFailsAfterChunkPersistence() {
+        try (
+            var container = new PostgreSQLContainer<>(
+                DockerImageName.parse("pgvector/pgvector:pg16").asCompatibleSubstituteFor("postgres")
+            )
+        ) {
+            container.start();
+            var storage = new PostgresStorageProvider(
+                new PostgresStorageConfig(
+                    container.getJdbcUrl(),
+                    container.getUsername(),
+                    container.getPassword(),
+                    "lightrag",
+                    2,
+                    "rag_"
+                ),
+                new FileSnapshotStore()
+            );
+
+            try (storage) {
+                var rag = LightRag.builder()
+                    .chatModel(new FailingExtractionChatModel())
+                    .embeddingModel(new FakeEmbeddingModel())
+                    .storage(storage)
+                    .build();
+
+                assertThatThrownBy(() -> rag.ingest(List.of(
+                    new Document("doc-1", "Title", "Alice works with Bob", Map.of("source", "test"))
+                )))
+                    .isInstanceOf(IllegalStateException.class)
+                    .hasMessage("extract failed");
+
+                assertThat(storage.documentStore().list()).isEmpty();
+                assertThat(storage.chunkStore().list()).isEmpty();
+                assertThat(storage.graphStore().allEntities()).isEmpty();
+                assertThat(storage.graphStore().allRelations()).isEmpty();
+                assertThat(storage.vectorStore().list("chunks")).isEmpty();
+                assertThat(storage.vectorStore().list("entities")).isEmpty();
+                assertThat(storage.vectorStore().list("relations")).isEmpty();
+            }
+        }
+    }
+
     private static final class FakeChatModel implements ChatModel {
         private ChatRequest lastQueryRequest;
 
@@ -289,6 +451,16 @@ class E2ELightRagTest {
                 return List.of(0.6d, 0.4d);
             }
             return List.of(0.1d, 0.1d);
+        }
+    }
+
+    private static final class FailingExtractionChatModel implements ChatModel {
+        @Override
+        public String generate(ChatRequest request) {
+            if (request.userPrompt().contains("Question:")) {
+                return "unreachable";
+            }
+            throw new IllegalStateException("extract failed");
         }
     }
 }

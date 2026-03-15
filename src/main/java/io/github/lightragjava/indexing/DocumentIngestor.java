@@ -21,6 +21,16 @@ public final class DocumentIngestor {
     }
 
     public List<Chunk> ingest(List<Document> documents) {
+        var prepared = prepare(documents);
+        storageProvider.writeAtomically(storage -> {
+            validateIdsNotInStorage(prepared.documents(), storage.documentStore());
+            persist(prepared.documentRecords(), prepared.chunkRecords(), storage.documentStore(), storage.chunkStore());
+            return null;
+        });
+        return prepared.chunks();
+    }
+
+    PreparedIngest prepare(List<Document> documents) {
         var batch = List.copyOf(Objects.requireNonNull(documents, "documents"));
         validateUniqueBatchIds(batch);
         var documentRecords = new ArrayList<DocumentStore.DocumentRecord>(batch.size());
@@ -49,12 +59,12 @@ public final class DocumentIngestor {
             stagedChunks.addAll(chunks);
         }
 
-        storageProvider.writeAtomically(storage -> {
-            validateIdsNotInStorage(batch, storage.documentStore());
-            persist(documentRecords, chunkRecords, storage.documentStore(), storage.chunkStore());
-            return null;
-        });
-        return List.copyOf(stagedChunks);
+        return new PreparedIngest(
+            batch,
+            List.copyOf(documentRecords),
+            List.copyOf(chunkRecords),
+            List.copyOf(stagedChunks)
+        );
     }
 
     private void validateUniqueBatchIds(List<Document> documents) {
@@ -87,6 +97,14 @@ public final class DocumentIngestor {
         for (var chunkRecord : chunkRecords) {
             chunkStore.save(chunkRecord);
         }
+    }
+
+    record PreparedIngest(
+        List<Document> documents,
+        List<DocumentStore.DocumentRecord> documentRecords,
+        List<ChunkStore.ChunkRecord> chunkRecords,
+        List<Chunk> chunks
+    ) {
     }
 
 }
