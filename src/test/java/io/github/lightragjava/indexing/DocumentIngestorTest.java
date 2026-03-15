@@ -4,9 +4,13 @@ import io.github.lightragjava.storage.ChunkStore;
 import io.github.lightragjava.storage.DocumentStore;
 import io.github.lightragjava.storage.AtomicStorageProvider;
 import io.github.lightragjava.storage.InMemoryStorageProvider;
+import io.github.lightragjava.storage.postgres.PostgresStorageConfig;
+import io.github.lightragjava.storage.postgres.PostgresStorageProvider;
 import io.github.lightragjava.types.Chunk;
 import io.github.lightragjava.types.Document;
 import org.junit.jupiter.api.Test;
+import org.testcontainers.containers.PostgreSQLContainer;
+import org.testcontainers.utility.DockerImageName;
 
 import java.util.LinkedHashMap;
 import java.util.List;
@@ -117,6 +121,41 @@ class DocumentIngestorTest {
         assertThat(storage.documentStore().list())
             .containsExactly(new DocumentStore.DocumentRecord("doc-1", "Existing", "seed", Map.of("seed", "true")));
         assertThat(storage.chunkStore().list()).isEmpty();
+    }
+
+    @Test
+    void ingestsDocumentsIntoPostgresStorageProvider() {
+        var image = DockerImageName.parse("pgvector/pgvector:pg16").asCompatibleSubstituteFor("postgres");
+        try (var container = new PostgreSQLContainer<>(image)) {
+            container.start();
+
+            var storage = new PostgresStorageProvider(new PostgresStorageConfig(
+                container.getJdbcUrl(),
+                container.getUsername(),
+                container.getPassword(),
+                "lightrag",
+                3,
+                "rag_"
+            ), new PostgresSnapshotStore());
+            var ingestor = new DocumentIngestor(storage, new FixedWindowChunker(4, 1));
+            var document = new Document("doc-1", "Title", "abcdefghij", Map.of("source", "unit-test"));
+
+            try (storage) {
+                var chunks = ingestor.ingest(List.of(document));
+
+                assertThat(storage.documentStore().load("doc-1"))
+                    .contains(new DocumentStore.DocumentRecord("doc-1", "Title", "abcdefghij", Map.of("source", "unit-test")));
+                assertThat(storage.chunkStore().listByDocument("doc-1"))
+                    .containsExactly(
+                        new ChunkStore.ChunkRecord("doc-1:0", "doc-1", "abcd", 4, 0, Map.of("source", "unit-test")),
+                        new ChunkStore.ChunkRecord("doc-1:1", "doc-1", "defg", 4, 1, Map.of("source", "unit-test")),
+                        new ChunkStore.ChunkRecord("doc-1:2", "doc-1", "ghij", 4, 2, Map.of("source", "unit-test"))
+                    );
+                assertThat(chunks)
+                    .extracting(Chunk::id)
+                    .containsExactly("doc-1:0", "doc-1:1", "doc-1:2");
+            }
+        }
     }
 
     private static final class AtomicFailureStorageProvider implements AtomicStorageProvider {
@@ -271,6 +310,22 @@ class DocumentIngestorTest {
                 chunks.put(chunk.id(), chunk);
             }
             saveAttempts = 0;
+        }
+    }
+
+    private static final class PostgresSnapshotStore implements io.github.lightragjava.storage.SnapshotStore {
+        @Override
+        public void save(java.nio.file.Path path, Snapshot snapshot) {
+        }
+
+        @Override
+        public Snapshot load(java.nio.file.Path path) {
+            throw new UnsupportedOperationException("Not used in DocumentIngestor PostgreSQL test");
+        }
+
+        @Override
+        public List<java.nio.file.Path> list() {
+            return List.of();
         }
     }
 
