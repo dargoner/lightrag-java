@@ -167,6 +167,17 @@ class LightRagBuilderTest {
     }
 
     @Test
+    void queryModeExposesNaiveAndQueryRequestAcceptsIt() {
+        var request = QueryRequest.builder()
+            .query("Find the direct chunk")
+            .mode(QueryMode.NAIVE)
+            .build();
+
+        assertThat(QueryMode.valueOf("NAIVE")).isEqualTo(QueryMode.NAIVE);
+        assertThat(request.mode()).isEqualTo(QueryMode.NAIVE);
+    }
+
+    @Test
     void queryResultCopiesContexts() {
         var contexts = new ArrayList<QueryResult.Context>();
         contexts.add(new QueryResult.Context("chunk-1", "supporting context"));

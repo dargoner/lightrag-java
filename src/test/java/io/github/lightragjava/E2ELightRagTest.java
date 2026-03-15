@@ -1863,6 +1863,10 @@ class E2ELightRagTest {
             .query("Who works with Bob?")
             .mode(io.github.lightragjava.api.QueryMode.MIX)
             .build());
+        var naive = rag.query(QueryRequest.builder()
+            .query("Who works with Bob?")
+            .mode(io.github.lightragjava.api.QueryMode.NAIVE)
+            .build());
 
         assertThat(local.contexts()).isNotEmpty();
         assertThat(local.contexts()).extracting(QueryResult.Context::sourceId).contains("doc-1:0");
@@ -1875,6 +1879,9 @@ class E2ELightRagTest {
 
         assertThat(mix.contexts()).isNotEmpty();
         assertThat(mix.contexts()).extracting(QueryResult.Context::sourceId).contains("doc-1:0");
+
+        assertThat(naive.contexts()).isNotEmpty();
+        assertThat(naive.contexts()).extracting(QueryResult.Context::sourceId).contains("doc-1:0");
     }
 
     @Test
