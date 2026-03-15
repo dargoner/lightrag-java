@@ -21,6 +21,7 @@ public final class PostgresNeo4jStorageProvider implements AtomicStorageProvider
     private final ReentrantReadWriteLock lock = new ReentrantReadWriteLock(true);
     private final PostgresStorageProvider postgresProvider;
     private final Neo4jGraphStore neo4jGraphStore;
+    private final ProjectionApplier projectionApplier;
     private final GraphStore graphStore;
 
     public PostgresNeo4jStorageProvider(
@@ -33,13 +34,19 @@ public final class PostgresNeo4jStorageProvider implements AtomicStorageProvider
                 Objects.requireNonNull(postgresConfig, "postgresConfig"),
                 Objects.requireNonNull(snapshotStore, "snapshotStore")
             ),
-            new Neo4jGraphStore(Objects.requireNonNull(neo4jConfig, "neo4jConfig"))
+            new Neo4jGraphStore(Objects.requireNonNull(neo4jConfig, "neo4jConfig")),
+            null
         );
     }
 
-    PostgresNeo4jStorageProvider(PostgresStorageProvider postgresProvider, Neo4jGraphStore neo4jGraphStore) {
+    PostgresNeo4jStorageProvider(
+        PostgresStorageProvider postgresProvider,
+        Neo4jGraphStore neo4jGraphStore,
+        ProjectionApplier projectionApplier
+    ) {
         this.postgresProvider = Objects.requireNonNull(postgresProvider, "postgresProvider");
         this.neo4jGraphStore = Objects.requireNonNull(neo4jGraphStore, "neo4jGraphStore");
+        this.projectionApplier = projectionApplier == null ? this::applyProjection : projectionApplier;
         this.graphStore = new MirroringGraphStore();
     }
 
@@ -84,7 +91,7 @@ public final class PostgresNeo4jStorageProvider implements AtomicStorageProvider
                     new ProjectionStagingGraphStore(storage.graphStore(), stagedEntities, stagedRelations),
                     storage.vectorStore()
                 )));
-                applyProjection(stagedEntities.values(), stagedRelations.values());
+                projectionApplier.apply(stagedEntities.values(), stagedRelations.values());
                 return result;
             } catch (RuntimeException failure) {
                 restoreSnapshots(beforePostgres, beforeNeo4j, failure);
@@ -226,11 +233,11 @@ public final class PostgresNeo4jStorageProvider implements AtomicStorageProvider
                 try {
                     if (entity != null) {
                         postgresProvider.graphStore().saveEntity(entity);
-                        neo4jGraphStore.saveEntity(entity);
+                        projectionApplier.apply(List.of(entity), List.of());
                     }
                     if (relation != null) {
                         postgresProvider.graphStore().saveRelation(relation);
-                        neo4jGraphStore.saveRelation(relation);
+                        projectionApplier.apply(List.of(), List.of(relation));
                     }
                 } catch (RuntimeException failure) {
                     restoreSnapshots(beforePostgres, beforeNeo4j, failure);
@@ -301,5 +308,13 @@ public final class PostgresNeo4jStorageProvider implements AtomicStorageProvider
         public List<RelationRecord> findRelations(String entityId) {
             return postgresGraphStore.findRelations(entityId);
         }
+    }
+
+    @FunctionalInterface
+    interface ProjectionApplier {
+        void apply(
+            java.util.Collection<GraphStore.EntityRecord> entities,
+            java.util.Collection<GraphStore.RelationRecord> relations
+        );
     }
 }

@@ -7,6 +7,7 @@ import io.github.lightragjava.storage.GraphStore;
 import io.github.lightragjava.storage.SnapshotStore;
 import io.github.lightragjava.storage.VectorStore;
 import io.github.lightragjava.storage.postgres.PostgresStorageConfig;
+import io.github.lightragjava.storage.postgres.PostgresStorageProvider;
 import org.junit.jupiter.api.Test;
 import org.testcontainers.containers.Neo4jContainer;
 import org.testcontainers.containers.PostgreSQLContainer;
@@ -17,6 +18,7 @@ import java.util.Map;
 import java.util.concurrent.atomic.AtomicReference;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 class PostgresNeo4jStorageProviderTest {
     @Test
@@ -191,6 +193,80 @@ class PostgresNeo4jStorageProviderTest {
         }
     }
 
+    @Test
+    void rollsBackAllStoresWhenProjectionFailsAfterPostgresCommit() {
+        try (
+            var postgres = newPostgresContainer();
+            var neo4j = newNeo4jContainer()
+        ) {
+            postgres.start();
+            neo4j.start();
+
+            var originalDocument = new DocumentStore.DocumentRecord("doc-0", "Existing", "seed", Map.of("seed", "true"));
+            var originalChunk = new ChunkStore.ChunkRecord("doc-0:0", "doc-0", "seed", 4, 0, Map.of("seed", "true"));
+            var originalEntity = new GraphStore.EntityRecord(
+                "entity-0",
+                "Seed",
+                "seed",
+                "Seed entity",
+                List.of("S"),
+                List.of("doc-0:0")
+            );
+            var originalRelation = new GraphStore.RelationRecord(
+                "relation-0",
+                "entity-0",
+                "entity-0",
+                "self",
+                "Seed relation",
+                1.0d,
+                List.of("doc-0:0")
+            );
+            var originalVector = new VectorStore.VectorRecord("doc-0:0", List.of(1.0d, 0.0d, 0.0d));
+
+            try (var provider = newProvider(postgres, neo4j, new FileSnapshotStore())) {
+                provider.documentStore().save(originalDocument);
+                provider.chunkStore().save(originalChunk);
+                provider.graphStore().saveEntity(originalEntity);
+                provider.graphStore().saveRelation(originalRelation);
+                provider.vectorStore().saveAll("chunks", List.of(originalVector));
+            }
+
+            try (var provider = newFailingProvider(postgres, neo4j, new FileSnapshotStore())) {
+                assertThatThrownBy(() -> provider.writeAtomically(storage -> {
+                    storage.documentStore().save(new DocumentStore.DocumentRecord("doc-1", "Incoming", "body", Map.of()));
+                    storage.chunkStore().save(new ChunkStore.ChunkRecord("doc-1:0", "doc-1", "body", 4, 0, Map.of()));
+                    storage.graphStore().saveEntity(new GraphStore.EntityRecord(
+                        "entity-1",
+                        "Incoming",
+                        "seed",
+                        "Incoming entity",
+                        List.of(),
+                        List.of("doc-1:0")
+                    ));
+                    storage.graphStore().saveRelation(new GraphStore.RelationRecord(
+                        "relation-1",
+                        "entity-1",
+                        "entity-0",
+                        "links_to",
+                        "Incoming relation",
+                        0.5d,
+                        List.of("doc-1:0")
+                    ));
+                    storage.vectorStore().saveAll("chunks", List.of(new VectorStore.VectorRecord("doc-1:0", List.of(0.5d, 0.5d, 0.0d))));
+                    return null;
+                }))
+                    .isInstanceOf(IllegalStateException.class)
+                    .hasMessage("projection failed");
+
+                assertThat(provider.documentStore().list()).containsExactly(originalDocument);
+                assertThat(provider.chunkStore().list()).containsExactly(originalChunk);
+                assertThat(provider.graphStore().allEntities()).containsExactly(originalEntity);
+                assertThat(provider.graphStore().allRelations()).containsExactly(originalRelation);
+                assertThat(provider.vectorStore().list("chunks")).containsExactly(originalVector);
+            }
+        }
+    }
+
     private static PostgreSQLContainer<?> newPostgresContainer() {
         return new PostgreSQLContainer<>(
             DockerImageName.parse("pgvector/pgvector:pg16").asCompatibleSubstituteFor("postgres")
@@ -223,6 +299,37 @@ class PostgresNeo4jStorageProviderTest {
                 "neo4j"
             ),
             snapshotStore
+        );
+    }
+
+    private static PostgresNeo4jStorageProvider newFailingProvider(
+        PostgreSQLContainer<?> postgres,
+        Neo4jContainer<?> neo4j,
+        SnapshotStore snapshotStore
+    ) {
+        return new PostgresNeo4jStorageProvider(
+            new PostgresStorageProvider(
+                new PostgresStorageConfig(
+                    postgres.getJdbcUrl(),
+                    postgres.getUsername(),
+                    postgres.getPassword(),
+                    "lightrag",
+                    3,
+                    "rag_"
+                ),
+                snapshotStore
+            ),
+            new Neo4jGraphStore(
+                new Neo4jGraphConfig(
+                    neo4j.getBoltUrl(),
+                    "neo4j",
+                    neo4j.getAdminPassword(),
+                    "neo4j"
+                )
+            ),
+            (entities, relations) -> {
+                throw new IllegalStateException("projection failed");
+            }
         );
     }
 }
