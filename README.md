@@ -99,7 +99,7 @@ Notes:
 
 The Java SDK supports the upstream query-time prompt controls `userPrompt` and `conversationHistory`.
 
-It also supports manual graph-retrieval keyword overrides through `hlKeywords` and `llKeywords`.
+It supports graph-retrieval keywords through `hlKeywords` and `llKeywords`, with automatic extraction when both are omitted in graph-aware modes.
 
 It also supports upstream-style query token budgets through `maxEntityTokens`, `maxRelationTokens`, and `maxTotalTokens`.
 
@@ -155,6 +155,8 @@ var result = rag.query(QueryRequest.builder()
     .build());
 ```
 
+If both keyword lists are omitted, Java now performs an upstream-style keyword-extraction pass for `LOCAL`, `GLOBAL`, `HYBRID`, and `MIX` before retrieval. Manual keyword overrides always take precedence over automatic extraction.
+
 Use token budgets when you need deterministic caps on how much graph and chunk context is retained:
 
 ```java
@@ -201,7 +203,8 @@ Notes:
 - `conversationHistory` is passed separately to the chat adapter; Java does not flatten those messages into the current-turn prompt
 - `modelFunc(...)` overrides the builder-level `chatModel` for that query only
 - `modelFunc(...)` applies to both buffered and streaming generation, including `BYPASS`
-- `hlKeywords` and `llKeywords` are manual overrides only in this phase; Java does not yet implement upstream automatic keyword extraction
+- when both lists are empty in `LOCAL`, `GLOBAL`, `HYBRID`, and `MIX`, Java automatically extracts high-level and low-level keywords before retrieval
+- when either `hlKeywords` or `llKeywords` is provided, Java treats those lists as explicit overrides and skips automatic extraction
 - `includeReferences(true)` adds `QueryResult.references()` plus `referenceId` / `source` on each returned `QueryResult.Context`
 - `stream(true)` returns `QueryResult.streaming() == true`, leaves `QueryResult.answer()` empty, and exposes incremental model output through `QueryResult.answerStream()`
 - `modelFunc(...)` affects query-time generation only; indexing and extraction still use the builder-configured `chatModel`
@@ -212,8 +215,9 @@ Notes:
 - `maxTotalTokens` caps final chunk context after final merge/rerank ordering in `QueryEngine`
 - defaults are `maxEntityTokens=6000`, `maxRelationTokens=8000`, and `maxTotalTokens=30000`
 - chunk budgeting uses stored `Chunk.tokenCount()`, while prompt/query/entity/relation budgeting uses a shared lightweight text-token approximation in this phase
-- adding these three fields changes the public `QueryRequest` record shape; builder-based callers remain source-compatible, but canonical-constructor or record-pattern consumers need updates
+- recent query-request additions such as `stream` and `modelFunc` change the public `QueryRequest` record shape; builder-based callers remain source-compatible, but canonical-constructor or record-pattern consumers need updates
 - in `HYBRID` and `MIX`, when manual keyword overrides are provided, only the non-empty keyword side participates in graph retrieval; direct chunk retrieval in `MIX` still uses the raw query text
+- if automatic extraction returns no usable keywords, Java falls back to an upstream-like raw-query default by mode: `LOCAL`/`HYBRID`/`MIX` use low-level fallback, while `GLOBAL` uses high-level fallback
 - in standard retrieval modes, Java now follows the upstream-style boundary more closely: retrieval instructions, `responseType`, `userPrompt`, and assembled context are sent through `systemPrompt`, while the current-turn user message is the raw query text
 - standard retrieval modes now render richer upstream-style `---Role---`, `---Goal---`, `---Instructions---`, and `---Context---` sections instead of the earlier short custom template
 - graph-aware modes mention both knowledge graph data and document chunks, while `NAIVE` uses document-chunk-only wording
