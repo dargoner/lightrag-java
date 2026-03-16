@@ -2729,7 +2729,10 @@ class E2ELightRagTest {
     }
 
     private static boolean isRetrievalPrompt(ChatModel.ChatRequest request) {
-        return request.systemPrompt().contains("---Context---") || request.systemPrompt().contains("Context:");
+        return request.systemPrompt().contains("---Role---")
+            && request.systemPrompt().contains("---Instructions---")
+            && request.systemPrompt().contains("---Context---")
+            && request.systemPrompt().contains("The response should be presented in");
     }
 
     private static final class AtomicOnlyStorageProvider implements io.github.lightragjava.storage.AtomicStorageProvider {

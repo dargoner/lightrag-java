@@ -128,6 +128,7 @@ Notes:
 - in standard retrieval modes, Java now follows the upstream-style boundary more closely: retrieval instructions, `responseType`, `userPrompt`, and assembled context are sent through `systemPrompt`, while the current-turn user message is the raw query text
 - standard retrieval modes now render richer upstream-style `---Role---`, `---Goal---`, `---Instructions---`, and `---Context---` sections instead of the earlier short custom template
 - graph-aware modes mention both knowledge graph data and document chunks, while `NAIVE` uses document-chunk-only wording
+- those standard retrieval templates also inherit upstream-style Markdown and same-language guidance, so `userPrompt` should be treated as additive instructions inside that scaffold rather than a complete replacement for it
 - the default `responseType` is `Multiple Paragraphs`
 
 ## Query Shortcuts
