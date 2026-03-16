@@ -1,0 +1,6 @@
+ragas
+datasets
+langchain-openai
+httpx
+python-dotenv
+tqdm
