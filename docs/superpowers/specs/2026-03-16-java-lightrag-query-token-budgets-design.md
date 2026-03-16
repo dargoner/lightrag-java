@@ -10,7 +10,7 @@ This phase adds the three token budget knobs and applies them in the same broad 
 
 - entity context is capped independently
 - relation context is capped independently
-- final chunk context is capped against the remaining total budget after merge and rerank
+- final chunk context is capped against the remaining total budget after final merge and rerank
 
 ## Goals
 
@@ -97,8 +97,8 @@ Behavior:
 
 - `LOCAL` and `GLOBAL` cap their own entity/relation lists before building context
 - `HYBRID` and `MIX` re-apply entity/relation budgets after merging local/global results so composed modes do not effectively double-trim
-- final chunk budgeting is applied to the final chunk set after merge and rerank ordering are complete
-- `LOCAL`, `GLOBAL`, `HYBRID`, `MIX`, and `NAIVE` all respect `maxTotalTokens` on the final chunk set they expose
+- final chunk budgeting is applied in `QueryEngine` to the final chunk set after merge and rerank ordering are complete
+- `LOCAL`, `GLOBAL`, `HYBRID`, `MIX`, and `NAIVE` all respect `maxTotalTokens` through that final engine-stage chunk trim
 - `QueryEngine.expandChunkRequest(...)` preserves entity/relation budgets when rerank expands chunk retrieval breadth and intentionally relaxes the internal total chunk cap so final `maxTotalTokens` enforcement still happens after rerank
 
 ## Defaults And Compatibility

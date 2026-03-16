@@ -69,14 +69,14 @@ public final class GlobalQueryStrategy implements QueryStrategy {
             .filter(Objects::nonNull)
             .sorted(scoreOrder(ScoredEntity::score, ScoredEntity::entityId))
             .toList(), query.maxEntityTokens());
-        var matchedChunks = QueryBudgeting.limitChunks(chunkScores.entrySet().stream()
+        var matchedChunks = chunkScores.entrySet().stream()
             .map(entry -> storageProvider.chunkStore().load(entry.getKey())
                 .map(chunk -> new ScoredChunk(entry.getKey(), toChunk(chunk), entry.getValue()))
                 .orElse(null))
             .filter(Objects::nonNull)
             .sorted(scoreOrder(ScoredChunk::score, ScoredChunk::chunkId))
             .limit(query.chunkTopK())
-            .toList(), query.maxTotalTokens());
+            .toList();
 
         var context = new QueryContext(
             matchedEntities,

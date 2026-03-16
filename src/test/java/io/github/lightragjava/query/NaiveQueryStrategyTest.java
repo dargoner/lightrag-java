@@ -128,29 +128,6 @@ class NaiveQueryStrategyTest {
             .containsExactly("chunk-a", "chunk-b");
     }
 
-    @Test
-    void naiveTrimsChunksToMaxTotalTokens() {
-        var storage = InMemoryStorageProvider.create();
-        LocalQueryStrategyTest.seedGraph(storage);
-        LocalQueryStrategyTest.seedVectors(storage);
-        var strategy = new NaiveQueryStrategy(
-            new FakeEmbeddingModel(Map.of("naive question", List.of(1.0d, 0.0d))),
-            storage,
-            new ContextAssembler()
-        );
-
-        var context = strategy.retrieve(QueryRequest.builder()
-            .query("naive question")
-            .mode(QueryMode.NAIVE)
-            .chunkTopK(2)
-            .maxTotalTokens(4)
-            .build());
-
-        assertThat(context.matchedChunks())
-            .extracting(match -> match.chunkId())
-            .containsExactly("chunk-1");
-    }
-
     private record FakeEmbeddingModel(Map<String, List<Double>> vectorsByText) implements EmbeddingModel {
         @Override
         public List<List<Double>> embedAll(List<String> texts) {

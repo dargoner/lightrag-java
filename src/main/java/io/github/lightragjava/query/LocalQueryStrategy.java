@@ -72,10 +72,7 @@ public final class LocalQueryStrategy implements QueryStrategy {
             .toList();
         var limitedEntities = QueryBudgeting.limitEntities(matchedEntities, query.maxEntityTokens());
         var limitedRelations = QueryBudgeting.limitRelations(matchedRelations, query.maxRelationTokens());
-        var matchedChunks = QueryBudgeting.limitChunks(
-            collectChunks(limitedEntities, limitedRelations, query.chunkTopK()),
-            query.maxTotalTokens()
-        );
+        var matchedChunks = collectChunks(limitedEntities, limitedRelations, query.chunkTopK());
 
         var context = new QueryContext(
             limitedEntities,

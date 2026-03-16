@@ -408,6 +408,32 @@ class QueryEngineTest {
     }
 
     @Test
+    void rerankStillAppliesOriginalMaxTotalTokensAfterExpandedRetrieval() {
+        var strategy = new RecordingQueryStrategy(baseContext());
+        var engine = new QueryEngine(
+            new RecordingChatModel(),
+            new ContextAssembler(),
+            strategiesReturning(strategy),
+            new StubRerankModel(List.of(
+                new RerankModel.RerankResult("chunk-3", 0.99d),
+                new RerankModel.RerankResult("chunk-2", 0.88d),
+                new RerankModel.RerankResult("chunk-1", 0.77d)
+            ))
+        );
+
+        var result = engine.query(QueryRequest.builder()
+            .query("which chunk?")
+            .mode(QueryMode.LOCAL)
+            .chunkTopK(3)
+            .maxTotalTokens(1)
+            .build());
+
+        assertThat(strategy.lastRequest()).isNotNull();
+        assertThat(strategy.lastRequest().maxTotalTokens()).isEqualTo(Integer.MAX_VALUE);
+        assertThat(result.contexts()).isEmpty();
+    }
+
+    @Test
     void bypassesRerankWhenQueryRequestDisablesIt() {
         var strategy = new RecordingQueryStrategy(baseContext());
         var engine = new QueryEngine(

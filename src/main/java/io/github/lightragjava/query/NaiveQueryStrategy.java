@@ -40,9 +40,7 @@ public final class NaiveQueryStrategy implements QueryStrategy {
             .filter(Objects::nonNull)
             .sorted(scoreOrder())
             .toList();
-        var limitedChunks = QueryBudgeting.limitChunks(matchedChunks, query.maxTotalTokens());
-
-        var context = new QueryContext(List.of(), List.of(), limitedChunks, "");
+        var context = new QueryContext(List.of(), List.of(), matchedChunks, "");
         return new QueryContext(
             context.matchedEntities(),
             context.matchedRelations(),

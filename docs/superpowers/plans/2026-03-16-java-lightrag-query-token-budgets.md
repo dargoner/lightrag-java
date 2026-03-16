@@ -4,7 +4,7 @@
 
 **Goal:** Add upstream-aligned query token budget controls for entities, relations, and total chunk context.
 
-**Architecture:** Extend `QueryRequest` with three budget fields, add a shared query-budget utility for approximate token counting and ordered truncation, enforce entity/relation budgets at both leaf and post-merge graph retrieval points, then enforce final chunk budgets after merge/rerank ordering is finalized. Preserve rerank behavior by copying the new fields through internal request expansion.
+**Architecture:** Extend `QueryRequest` with three budget fields, add a shared query-budget utility for approximate token counting and ordered truncation, enforce entity/relation budgets at both leaf and post-merge graph retrieval points, then enforce final chunk budgets only in `QueryEngine` after merge/rerank ordering is finalized. Preserve rerank behavior by copying the new fields through internal request expansion.
 
 **Tech Stack:** Java 17, Gradle, JUnit 5, AssertJ
 
@@ -112,8 +112,8 @@ Requirements:
 - `LocalQueryStrategy` enforces entity and final chunk budgets
 - `GlobalQueryStrategy` enforces relation and final chunk budgets
 - `HybridQueryStrategy` re-applies entity/relation budgets after merging child results
-- `MixQueryStrategy` respects the same post-merge graph budgets and final chunk budgets after mixing direct chunk retrieval
-- `NaiveQueryStrategy` enforces final chunk budget
+- `MixQueryStrategy` respects the same post-merge graph budgets after mixing direct chunk retrieval
+- final chunk budgeting happens in `QueryEngine`, including `NAIVE`
 - score ordering remains unchanged before truncation
 
 - [ ] **Step 4: Preserve copied-request behavior in `QueryEngine`**

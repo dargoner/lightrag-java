@@ -57,10 +57,10 @@ public final class HybridQueryStrategy implements QueryStrategy {
             QueryBudgeting.limitRelations(mergedRelations.values().stream()
                 .sorted(scoreOrder(ScoredRelation::score, ScoredRelation::relationId))
                 .toList(), request.maxRelationTokens()),
-            QueryBudgeting.limitChunks(mergedChunks.values().stream()
+            mergedChunks.values().stream()
                 .sorted(scoreOrder(ScoredChunk::score, ScoredChunk::chunkId))
                 .limit(request.chunkTopK())
-                .toList(), request.maxTotalTokens()),
+                .toList(),
             ""
         );
         return new QueryContext(
