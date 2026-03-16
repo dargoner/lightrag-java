@@ -349,6 +349,8 @@ class QueryEngineTest {
             .chunkTopK(3)
             .responseType("Bullet Points")
             .userPrompt("Answer in one sentence.")
+            .hlKeywords(List.of("high level"))
+            .llKeywords(List.of("low level"))
             .conversationHistory(history)
             .build());
 
@@ -356,6 +358,8 @@ class QueryEngineTest {
         assertThat(strategy.lastRequest().chunkTopK()).isEqualTo(6);
         assertThat(strategy.lastRequest().responseType()).isEqualTo("Bullet Points");
         assertThat(strategy.lastRequest().userPrompt()).isEqualTo("Answer in one sentence.");
+        assertThat(strategy.lastRequest().hlKeywords()).containsExactly("high level");
+        assertThat(strategy.lastRequest().llKeywords()).containsExactly("low level");
         assertThat(strategy.lastRequest().conversationHistory()).containsExactlyElementsOf(history);
     }
 

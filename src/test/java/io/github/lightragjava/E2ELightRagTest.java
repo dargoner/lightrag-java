@@ -2002,6 +2002,40 @@ class E2ELightRagTest {
     }
 
     @Test
+    void querySupportsKeywordOverridesForGraphAwareModes() {
+        var storage = InMemoryStorageProvider.create();
+        var chatModel = new FakeChatModel();
+        var rag = LightRag.builder()
+            .chatModel(chatModel)
+            .embeddingModel(new FakeEmbeddingModel())
+            .storage(storage)
+            .build();
+
+        rag.ingest(List.of(
+            new Document("doc-1", "Title", "Alice works with Bob", Map.of()),
+            new Document("doc-2", "Title", "Bob reports to Carol", Map.of())
+        ));
+
+        var local = rag.query(QueryRequest.builder()
+            .query("Who reports to Carol?")
+            .mode(QueryMode.LOCAL)
+            .llKeywords(List.of("Alice"))
+            .build());
+        var global = rag.query(QueryRequest.builder()
+            .query("Who works with Bob?")
+            .mode(QueryMode.GLOBAL)
+            .hlKeywords(List.of("Carol"))
+            .build());
+
+        assertThat(local.contexts())
+            .extracting(QueryResult.Context::sourceId)
+            .contains("doc-1:0");
+        assertThat(global.contexts())
+            .extracting(QueryResult.Context::sourceId)
+            .contains("doc-2:0");
+    }
+
+    @Test
     void queryBypassesConfiguredRerankWhenDisabledPerRequest() {
         var storage = InMemoryStorageProvider.create();
         var rag = LightRag.builder()

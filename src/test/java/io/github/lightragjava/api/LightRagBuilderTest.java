@@ -167,6 +167,8 @@ class LightRagBuilderTest {
         assertThat(request.onlyNeedContext()).isFalse();
         assertThat(request.onlyNeedPrompt()).isFalse();
         assertThat(request.userPrompt()).isEmpty();
+        assertThat(request.hlKeywords()).isEmpty();
+        assertThat(request.llKeywords()).isEmpty();
         assertThat(request.conversationHistory()).isEmpty();
     }
 
@@ -190,6 +192,8 @@ class LightRagBuilderTest {
         assertThat(request.onlyNeedContext()).isFalse();
         assertThat(request.onlyNeedPrompt()).isFalse();
         assertThat(request.userPrompt()).isEmpty();
+        assertThat(request.hlKeywords()).isEmpty();
+        assertThat(request.llKeywords()).isEmpty();
         assertThat(request.conversationHistory()).isEmpty();
     }
 
@@ -209,6 +213,8 @@ class LightRagBuilderTest {
         assertThat(request.onlyNeedContext()).isFalse();
         assertThat(request.onlyNeedPrompt()).isFalse();
         assertThat(request.userPrompt()).isEqualTo("Answer in one sentence.");
+        assertThat(request.hlKeywords()).isEmpty();
+        assertThat(request.llKeywords()).isEmpty();
         assertThat(request.conversationHistory())
             .containsExactly(new ChatModel.ChatRequest.ConversationMessage("user", "Earlier question"));
     }
@@ -229,6 +235,22 @@ class LightRagBuilderTest {
         assertThatThrownBy(() -> request.conversationHistory().add(
             new ChatModel.ChatRequest.ConversationMessage("assistant", "Earlier answer")
         ))
+            .isInstanceOf(UnsupportedOperationException.class);
+    }
+
+    @Test
+    void queryRequestNormalizesKeywordOverrides() {
+        var request = QueryRequest.builder()
+            .query("Where is the evidence?")
+            .hlKeywords(List.of(" high ", "", "level "))
+            .llKeywords(List.of(" low ", " ", "detail"))
+            .build();
+
+        assertThat(request.hlKeywords()).containsExactly("high", "level");
+        assertThat(request.llKeywords()).containsExactly("low", "detail");
+        assertThatThrownBy(() -> request.hlKeywords().add("extra"))
+            .isInstanceOf(UnsupportedOperationException.class);
+        assertThatThrownBy(() -> request.llKeywords().add("extra"))
             .isInstanceOf(UnsupportedOperationException.class);
     }
 

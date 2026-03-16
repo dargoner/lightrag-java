@@ -35,7 +35,11 @@ public final class LocalQueryStrategy implements QueryStrategy {
     @Override
     public QueryContext retrieve(QueryRequest request) {
         var query = Objects.requireNonNull(request, "request");
-        var queryVector = embed(query.query());
+        var embeddingText = embeddingText(query);
+        if (embeddingText == null) {
+            return emptyContext();
+        }
+        var queryVector = embed(embeddingText);
         var entityScores = new LinkedHashMap<String, Double>();
         var relationScores = new LinkedHashMap<String, Double>();
 
@@ -111,6 +115,28 @@ public final class LocalQueryStrategy implements QueryStrategy {
 
     private List<Double> embed(String query) {
         return embeddingModel.embedAll(List.of(query)).get(0);
+    }
+
+    private QueryContext emptyContext() {
+        var context = new QueryContext(List.of(), List.of(), List.of(), "");
+        return new QueryContext(
+            context.matchedEntities(),
+            context.matchedRelations(),
+            context.matchedChunks(),
+            contextAssembler.assemble(context)
+        );
+    }
+
+    private static String embeddingText(QueryRequest request) {
+        if (!request.llKeywords().isEmpty()) {
+            return String.join(", ", request.llKeywords());
+        }
+        if ((request.mode() == io.github.lightragjava.api.QueryMode.HYBRID
+            || request.mode() == io.github.lightragjava.api.QueryMode.MIX)
+            && !request.hlKeywords().isEmpty()) {
+            return null;
+        }
+        return request.query();
     }
 
     private static Entity toEntity(GraphStore.EntityRecord entity) {

@@ -34,7 +34,11 @@ public final class GlobalQueryStrategy implements QueryStrategy {
     @Override
     public QueryContext retrieve(QueryRequest request) {
         var query = Objects.requireNonNull(request, "request");
-        var queryVector = embeddingModel.embedAll(List.of(query.query())).get(0);
+        var embeddingText = embeddingText(query);
+        if (embeddingText == null) {
+            return emptyContext();
+        }
+        var queryVector = embeddingModel.embedAll(List.of(embeddingText)).get(0);
         var relationScores = new LinkedHashMap<String, Double>();
         var entityScores = new LinkedHashMap<String, Double>();
         var chunkScores = new LinkedHashMap<String, Double>();
@@ -120,6 +124,28 @@ public final class GlobalQueryStrategy implements QueryStrategy {
             chunk.order(),
             chunk.metadata()
         );
+    }
+
+    private QueryContext emptyContext() {
+        var context = new QueryContext(List.of(), List.of(), List.of(), "");
+        return new QueryContext(
+            context.matchedEntities(),
+            context.matchedRelations(),
+            context.matchedChunks(),
+            contextAssembler.assemble(context)
+        );
+    }
+
+    private static String embeddingText(QueryRequest request) {
+        if (!request.hlKeywords().isEmpty()) {
+            return String.join(", ", request.hlKeywords());
+        }
+        if ((request.mode() == io.github.lightragjava.api.QueryMode.HYBRID
+            || request.mode() == io.github.lightragjava.api.QueryMode.MIX)
+            && !request.llKeywords().isEmpty()) {
+            return null;
+        }
+        return request.query();
     }
 
     private static <T> Comparator<T> scoreOrder(

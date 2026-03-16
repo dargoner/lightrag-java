@@ -66,6 +66,32 @@ class LocalQueryStrategyTest {
             .containsExactly("chunk-1");
     }
 
+    @Test
+    void localUsesLlKeywordsInsteadOfRawQueryWhenProvided() {
+        var storage = InMemoryStorageProvider.create();
+        seedGraph(storage);
+        seedVectors(storage);
+        var strategy = new LocalQueryStrategy(new FakeEmbeddingModel(Map.of(
+            "ambiguous question", List.of(0.0d, 1.0d),
+            "alice, focus", List.of(1.0d, 0.0d)
+        )), storage, new ContextAssembler());
+
+        var context = strategy.retrieve(QueryRequest.builder()
+            .query("ambiguous question")
+            .mode(QueryMode.LOCAL)
+            .topK(1)
+            .chunkTopK(2)
+            .llKeywords(List.of(" ", "alice", "focus", ""))
+            .build());
+
+        assertThat(context.matchedEntities())
+            .extracting(match -> match.entityId())
+            .containsExactly("entity:alice", "entity:bob");
+        assertThat(context.matchedRelations())
+            .extracting(match -> match.relationId())
+            .containsExactly("relation:entity:alice|works_with|entity:bob");
+    }
+
     static void seedGraph(InMemoryStorageProvider storage) {
         storage.chunkStore().save(new ChunkStore.ChunkRecord("chunk-1", "doc-1", "Alice works with Bob", 4, 0, Map.of()));
         storage.chunkStore().save(new ChunkStore.ChunkRecord("chunk-2", "doc-1", "Bob supports Alice", 4, 1, Map.of()));

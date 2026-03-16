@@ -15,6 +15,8 @@ public record QueryRequest(
     boolean onlyNeedContext,
     boolean onlyNeedPrompt,
     String userPrompt,
+    List<String> hlKeywords,
+    List<String> llKeywords,
     List<ChatModel.ChatRequest.ConversationMessage> conversationHistory
 ) {
     public static final QueryMode DEFAULT_MODE = QueryMode.MIX;
@@ -27,6 +29,8 @@ public record QueryRequest(
         mode = Objects.requireNonNull(mode, "mode");
         responseType = Objects.requireNonNull(responseType, "responseType");
         userPrompt = Objects.requireNonNull(userPrompt, "userPrompt");
+        hlKeywords = normalizeKeywords(hlKeywords, "hlKeywords");
+        llKeywords = normalizeKeywords(llKeywords, "llKeywords");
         conversationHistory = List.copyOf(Objects.requireNonNull(conversationHistory, "conversationHistory"));
         if (topK <= 0) {
             throw new IllegalArgumentException("topK must be positive");
@@ -44,7 +48,7 @@ public record QueryRequest(
         String responseType,
         boolean enableRerank
     ) {
-        this(query, mode, topK, chunkTopK, responseType, enableRerank, false, false, "", List.of());
+        this(query, mode, topK, chunkTopK, responseType, enableRerank, false, false, "", List.of(), List.of(), List.of());
     }
 
     public QueryRequest(
@@ -57,7 +61,7 @@ public record QueryRequest(
         String userPrompt,
         List<ChatModel.ChatRequest.ConversationMessage> conversationHistory
     ) {
-        this(query, mode, topK, chunkTopK, responseType, enableRerank, false, false, userPrompt, conversationHistory);
+        this(query, mode, topK, chunkTopK, responseType, enableRerank, false, false, userPrompt, List.of(), List.of(), conversationHistory);
     }
 
     public static Builder builder() {
@@ -74,6 +78,8 @@ public record QueryRequest(
         private boolean onlyNeedContext;
         private boolean onlyNeedPrompt;
         private String userPrompt = "";
+        private List<String> hlKeywords = List.of();
+        private List<String> llKeywords = List.of();
         private List<ChatModel.ChatRequest.ConversationMessage> conversationHistory = List.of();
 
         public Builder query(String query) {
@@ -121,6 +127,16 @@ public record QueryRequest(
             return this;
         }
 
+        public Builder hlKeywords(List<String> hlKeywords) {
+            this.hlKeywords = hlKeywords;
+            return this;
+        }
+
+        public Builder llKeywords(List<String> llKeywords) {
+            this.llKeywords = llKeywords;
+            return this;
+        }
+
         public Builder conversationHistory(List<ChatModel.ChatRequest.ConversationMessage> conversationHistory) {
             this.conversationHistory = conversationHistory;
             return this;
@@ -137,8 +153,18 @@ public record QueryRequest(
                 onlyNeedContext,
                 onlyNeedPrompt,
                 userPrompt,
+                hlKeywords,
+                llKeywords,
                 conversationHistory
             );
         }
+    }
+
+    private static List<String> normalizeKeywords(List<String> keywords, String fieldName) {
+        return List.copyOf(Objects.requireNonNull(keywords, fieldName).stream()
+            .map(keyword -> Objects.requireNonNull(keyword, fieldName + " entry"))
+            .map(String::trim)
+            .filter(keyword -> !keyword.isEmpty())
+            .toList());
     }
 }
