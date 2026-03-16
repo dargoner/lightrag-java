@@ -162,7 +162,7 @@ class LightRagBuilderTest {
         assertThat(request.mode()).isEqualTo(QueryMode.MIX);
         assertThat(request.topK()).isEqualTo(QueryRequest.DEFAULT_TOP_K);
         assertThat(request.chunkTopK()).isEqualTo(QueryRequest.DEFAULT_CHUNK_TOP_K);
-        assertThat(request.responseType()).isEqualTo(QueryRequest.DEFAULT_RESPONSE_TYPE);
+        assertThat(request.responseType()).isEqualTo("Multiple Paragraphs");
         assertThat(request.enableRerank()).isTrue();
         assertThat(request.onlyNeedContext()).isFalse();
         assertThat(request.onlyNeedPrompt()).isFalse();

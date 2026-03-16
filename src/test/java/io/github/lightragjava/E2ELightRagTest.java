@@ -1777,8 +1777,10 @@ class E2ELightRagTest {
             .extracting(QueryResult.Context::sourceId)
             .contains("doc-1:0");
         assertThat(chatModel.lastQueryRequest()).isNotNull();
-        assertThat(chatModel.lastQueryRequest().userPrompt()).contains("Who works with Bob?");
-        assertThat(chatModel.lastQueryRequest().userPrompt()).contains("Alice");
+        assertThat(chatModel.lastQueryRequest().systemPrompt())
+            .contains("The response should be presented in Multiple Paragraphs.")
+            .contains("Alice works with Bob");
+        assertThat(chatModel.lastQueryRequest().userPrompt()).isEqualTo("Who works with Bob?");
     }
 
     @Test
@@ -1795,6 +1797,7 @@ class E2ELightRagTest {
 
         var result = rag.query(QueryRequest.builder()
             .query("Who works with Bob?")
+            .responseType("Bullet Points")
             .userPrompt("Answer in bullet points.")
             .conversationHistory(List.of(
                 new ChatModel.ChatRequest.ConversationMessage("user", "Earlier question"),
@@ -1804,8 +1807,13 @@ class E2ELightRagTest {
 
         assertThat(result.answer()).isEqualTo("Alice works with Bob.");
         assertThat(chatModel.lastQueryRequest()).isNotNull();
-        assertThat(chatModel.lastQueryRequest().userPrompt()).contains("Additional Instructions:");
-        assertThat(chatModel.lastQueryRequest().userPrompt()).contains("Answer in bullet points.");
+        assertThat(chatModel.lastQueryRequest().systemPrompt())
+            .contains("The response should be presented in Bullet Points.")
+            .contains("Additional Instructions:")
+            .contains("Answer in bullet points.")
+            .doesNotContain("Earlier question")
+            .doesNotContain("Earlier answer");
+        assertThat(chatModel.lastQueryRequest().userPrompt()).isEqualTo("Who works with Bob?");
         assertThat(chatModel.lastQueryRequest().conversationHistory())
             .containsExactly(
                 new ChatModel.ChatRequest.ConversationMessage("user", "Earlier question"),
@@ -1860,16 +1868,16 @@ class E2ELightRagTest {
                 new ChatModel.ChatRequest.ConversationMessage("user", "Earlier question"),
                 new ChatModel.ChatRequest.ConversationMessage("assistant", "Earlier answer")
             ))
+            .responseType("")
             .onlyNeedPrompt(true)
             .build());
 
         assertThat(result.answer())
-            .contains("System Prompt:")
-            .contains("History:")
-            .contains("Earlier question")
-            .contains("Earlier answer")
-            .contains("User Prompt:")
-            .contains("Who works with Bob?");
+            .contains("The response should be presented in Multiple Paragraphs.")
+            .contains("---User Query---")
+            .contains("Who works with Bob?")
+            .doesNotContain("Earlier question")
+            .doesNotContain("Earlier answer");
         assertThat(result.contexts())
             .extracting(QueryResult.Context::sourceId)
             .contains("doc-1:0");
@@ -2510,7 +2518,7 @@ class E2ELightRagTest {
 
         @Override
         public String generate(ChatRequest request) {
-            if (request.userPrompt().contains("Question:")) {
+            if (request.systemPrompt().contains("Context:")) {
                 lastQueryRequest = request;
                 queryCallCount++;
                 return "Alice works with Bob.";
@@ -2624,7 +2632,7 @@ class E2ELightRagTest {
     private static final class FailingExtractionChatModel implements ChatModel {
         @Override
         public String generate(ChatRequest request) {
-            if (request.userPrompt().contains("Question:")) {
+            if (request.systemPrompt().contains("Context:")) {
                 return "unreachable";
             }
             throw new IllegalStateException("extract failed");
@@ -2651,7 +2659,7 @@ class E2ELightRagTest {
 
         @Override
         public String generate(ChatRequest request) {
-            if (request.userPrompt().contains("Question:")) {
+            if (request.systemPrompt().contains("Context:")) {
                 return "unreachable";
             }
             if (request.userPrompt().contains(failingDocumentId)) {
