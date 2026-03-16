@@ -219,6 +219,28 @@ class QueryEngineTest {
     }
 
     @Test
+    void streamingResultClosesUnderlyingAnswerStreamWhenClosed() throws Exception {
+        var chatModel = new RecordingChatModel().withStreamResponse("Alpha ", "answer");
+        var engine = new QueryEngine(
+            chatModel,
+            new ContextAssembler(),
+            strategiesReturning(baseContext()),
+            null
+        );
+
+        try (var result = engine.query(QueryRequest.builder()
+            .query("which chunk?")
+            .mode(QueryMode.LOCAL)
+            .chunkTopK(3)
+            .stream(true)
+            .build())) {
+            assertThat(result.streaming()).isTrue();
+        }
+
+        assertThat(chatModel.streamCloseCount()).isEqualTo(1);
+    }
+
+    @Test
     void returnsAssembledContextWithoutCallingChatModelWhenOnlyNeedContextIsEnabled() {
         var chatModel = new RecordingChatModel();
         var engine = new QueryEngine(
@@ -824,6 +846,7 @@ class QueryEngineTest {
 
         private int callCount;
         private int streamCallCount;
+        private int streamCloseCount;
 
         private RecordingChatModel() {
             this("answer");
@@ -863,7 +886,10 @@ class QueryEngineTest {
 
                 @Override
                 public void close() {
-                    closed = true;
+                    if (!closed) {
+                        closed = true;
+                        streamCloseCount++;
+                    }
                 }
             };
         }
@@ -887,6 +913,10 @@ class QueryEngineTest {
 
         int streamCallCount() {
             return streamCallCount;
+        }
+
+        int streamCloseCount() {
+            return streamCloseCount;
         }
     }
 
