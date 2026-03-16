@@ -84,6 +84,31 @@ class KnowledgeExtractorTest {
         );
     }
 
+    @Test
+    void acceptsJsonWrappedInMarkdownCodeFences() {
+        var extractor = new KnowledgeExtractor(new StubChatModel("""
+            ```json
+            {
+              "entities": [
+                {
+                  "name": "Alice",
+                  "type": "person",
+                  "description": "Researcher",
+                  "aliases": []
+                }
+              ],
+              "relations": []
+            }
+            ```
+            """));
+
+        var result = extractor.extract(chunk("Alice works with Bob"));
+
+        assertThat(result.entities()).containsExactly(
+            new ExtractedEntity("Alice", "person", "Researcher", List.of())
+        );
+    }
+
     private static Chunk chunk(String text) {
         return new Chunk("doc-1:0", "doc-1", text, text.length(), 0, Map.of());
     }

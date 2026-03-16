@@ -6,9 +6,9 @@ import io.github.lightragjava.model.openai.OpenAiCompatibleChatModel;
 import io.github.lightragjava.model.openai.OpenAiCompatibleEmbeddingModel;
 
 import java.nio.file.Path;
+import java.time.Duration;
 import java.util.HashMap;
 import java.util.Map;
-import java.util.Objects;
 
 public final class RagasEvaluationCli {
     private static final ObjectMapper OBJECT_MAPPER = new ObjectMapper();
@@ -27,7 +27,8 @@ public final class RagasEvaluationCli {
             new OpenAiCompatibleChatModel(
                 envOrDefault("LIGHTRAG_JAVA_EVAL_CHAT_BASE_URL", "https://api.openai.com/v1/"),
                 envOrDefault("LIGHTRAG_JAVA_EVAL_CHAT_MODEL", "gpt-4o-mini"),
-                requiredEnv("LIGHTRAG_JAVA_EVAL_CHAT_API_KEY", "OPENAI_API_KEY")
+                requiredEnv("LIGHTRAG_JAVA_EVAL_CHAT_API_KEY", "OPENAI_API_KEY"),
+                Duration.ofSeconds(Long.parseLong(envOrDefault("LIGHTRAG_JAVA_EVAL_CHAT_TIMEOUT_SECONDS", "120")))
             ),
             new OpenAiCompatibleEmbeddingModel(
                 envOrFallback("LIGHTRAG_JAVA_EVAL_EMBEDDING_BASE_URL", "LIGHTRAG_JAVA_EVAL_CHAT_BASE_URL", "https://api.openai.com/v1/"),

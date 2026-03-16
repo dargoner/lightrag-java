@@ -12,6 +12,7 @@ import csv
 import json
 import math
 import os
+import shlex
 import subprocess
 import sys
 from datetime import datetime
@@ -75,23 +76,21 @@ class JavaRagasEvaluator:
         )
 
     async def generate_rag_response(self, question: str) -> Dict[str, Any]:
-        command = [
-            "./gradlew",
-            "--quiet",
-            "runRagasQuery",
-            "--args",
-            (
-                f'--documents-dir "{self.documents_dir}" '
-                f'--question "{question}" '
-                f'--mode {os.getenv("LIGHTRAG_JAVA_EVAL_QUERY_MODE", "mix")} '
-                f'--top-k {os.getenv("EVAL_QUERY_TOP_K", "10")} '
-                f'--chunk-top-k {os.getenv("LIGHTRAG_JAVA_EVAL_CHUNK_TOP_K", "10")}'
-            ),
-        ]
+        app_args = " ".join(
+            [
+                f"--documents-dir {shlex.quote(str(self.documents_dir))}",
+                f"--question {shlex.quote(question)}",
+                f"--mode {shlex.quote(os.getenv('LIGHTRAG_JAVA_EVAL_QUERY_MODE', 'mix'))}",
+                f"--top-k {shlex.quote(os.getenv('EVAL_QUERY_TOP_K', '10'))}",
+                f"--chunk-top-k {shlex.quote(os.getenv('LIGHTRAG_JAVA_EVAL_CHUNK_TOP_K', '10'))}",
+            ]
+        )
+        command = f"./gradlew --no-daemon --quiet runRagasQuery --args={shlex.quote(app_args)}"
         completed = await asyncio.to_thread(
             subprocess.run,
-            command,
+            ["/bin/bash", "-lc", command],
             cwd=self.project_dir,
+            env=os.environ.copy(),
             capture_output=True,
             text=True,
             check=True,
