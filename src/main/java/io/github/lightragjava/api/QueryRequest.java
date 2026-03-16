@@ -19,6 +19,7 @@ public record QueryRequest(
     boolean onlyNeedPrompt,
     boolean includeReferences,
     boolean stream,
+    ChatModel modelFunc,
     String userPrompt,
     List<String> hlKeywords,
     List<String> llKeywords,
@@ -79,6 +80,7 @@ public record QueryRequest(
             false,
             false,
             false,
+            null,
             "",
             List.of(),
             List.of(),
@@ -110,6 +112,7 @@ public record QueryRequest(
             false,
             false,
             false,
+            null,
             userPrompt,
             List.of(),
             List.of(),
@@ -135,6 +138,7 @@ public record QueryRequest(
         private boolean onlyNeedPrompt;
         private boolean includeReferences;
         private boolean stream;
+        private ChatModel modelFunc;
         private String userPrompt = "";
         private List<String> hlKeywords = List.of();
         private List<String> llKeywords = List.of();
@@ -205,6 +209,11 @@ public record QueryRequest(
             return this;
         }
 
+        public Builder modelFunc(ChatModel modelFunc) {
+            this.modelFunc = modelFunc;
+            return this;
+        }
+
         public Builder userPrompt(String userPrompt) {
             this.userPrompt = userPrompt;
             return this;
@@ -240,6 +249,7 @@ public record QueryRequest(
                 onlyNeedPrompt,
                 includeReferences,
                 stream,
+                modelFunc,
                 userPrompt,
                 hlKeywords,
                 llKeywords,

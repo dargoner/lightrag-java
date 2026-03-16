@@ -171,6 +171,7 @@ class LightRagBuilderTest {
         assertThat(request.onlyNeedPrompt()).isFalse();
         assertThat(request.includeReferences()).isFalse();
         assertThat(request.stream()).isFalse();
+        assertThat(request.modelFunc()).isNull();
         assertThat(request.userPrompt()).isEmpty();
         assertThat(request.hlKeywords()).isEmpty();
         assertThat(request.llKeywords()).isEmpty();
@@ -201,6 +202,7 @@ class LightRagBuilderTest {
         assertThat(request.onlyNeedPrompt()).isFalse();
         assertThat(request.includeReferences()).isFalse();
         assertThat(request.stream()).isFalse();
+        assertThat(request.modelFunc()).isNull();
         assertThat(request.userPrompt()).isEmpty();
         assertThat(request.hlKeywords()).isEmpty();
         assertThat(request.llKeywords()).isEmpty();
@@ -224,6 +226,7 @@ class LightRagBuilderTest {
         assertThat(request.onlyNeedPrompt()).isFalse();
         assertThat(request.includeReferences()).isFalse();
         assertThat(request.stream()).isFalse();
+        assertThat(request.modelFunc()).isNull();
         assertThat(request.userPrompt()).isEqualTo("Answer in one sentence.");
         assertThat(request.maxEntityTokens()).isEqualTo(QueryRequest.DEFAULT_MAX_ENTITY_TOKENS);
         assertThat(request.maxRelationTokens()).isEqualTo(QueryRequest.DEFAULT_MAX_RELATION_TOKENS);
@@ -236,6 +239,7 @@ class LightRagBuilderTest {
 
     @Test
     void queryRequestAcceptsTokenBudgetOverrides() {
+        var overrideModel = new FakeChatModel();
         var request = QueryRequest.builder()
             .query("Where is the evidence?")
             .maxEntityTokens(111)
@@ -243,6 +247,7 @@ class LightRagBuilderTest {
             .maxTotalTokens(333)
             .includeReferences(true)
             .stream(true)
+            .modelFunc(overrideModel)
             .build();
 
         assertThat(request.maxEntityTokens()).isEqualTo(111);
@@ -250,6 +255,7 @@ class LightRagBuilderTest {
         assertThat(request.maxTotalTokens()).isEqualTo(333);
         assertThat(request.includeReferences()).isTrue();
         assertThat(request.stream()).isTrue();
+        assertThat(request.modelFunc()).isSameAs(overrideModel);
     }
 
     @Test

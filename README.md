@@ -107,6 +107,8 @@ It also supports upstream-style `includeReferences` for structured reference out
 
 It also supports upstream-style `stream` for incremental answer generation.
 
+It also supports upstream-style query-time `modelFunc` overrides.
+
 Use `userPrompt` when you want to add answer-formatting or style instructions without changing retrieval:
 
 ```java
@@ -125,6 +127,19 @@ var result = rag.query(QueryRequest.builder()
     .conversationHistory(List.of(
         new ChatModel.ChatRequest.ConversationMessage("user", "We are discussing team structure."),
         new ChatModel.ChatRequest.ConversationMessage("assistant", "Understood.")
+    ))
+    .build());
+```
+
+Use `modelFunc` when one specific query should use a different chat model than the `LightRagBuilder` default:
+
+```java
+var result = rag.query(QueryRequest.builder()
+    .query("Who works with Bob?")
+    .modelFunc(new OpenAiCompatibleChatModel(
+        "https://api.openai.com/v1/",
+        "gpt-4o",
+        System.getenv("OPENAI_API_KEY")
     ))
     .build());
 ```
@@ -184,9 +199,12 @@ Notes:
 
 - retrieval mode selection, graph expansion, and rerank behavior are unchanged by these fields
 - `conversationHistory` is passed separately to the chat adapter; Java does not flatten those messages into the current-turn prompt
+- `modelFunc(...)` overrides the builder-level `chatModel` for that query only
+- `modelFunc(...)` applies to both buffered and streaming generation, including `BYPASS`
 - `hlKeywords` and `llKeywords` are manual overrides only in this phase; Java does not yet implement upstream automatic keyword extraction
 - `includeReferences(true)` adds `QueryResult.references()` plus `referenceId` / `source` on each returned `QueryResult.Context`
 - `stream(true)` returns `QueryResult.streaming() == true`, leaves `QueryResult.answer()` empty, and exposes incremental model output through `QueryResult.answerStream()`
+- `modelFunc(...)` affects query-time generation only; indexing and extraction still use the builder-configured `chatModel`
 - streaming `QueryResult` implements `AutoCloseable`; close the result or its `answerStream()` when you stop reading early
 - structured references are derived from the final chunk list after merge, rerank, and final token-budget trimming
 - source resolution priority is `file_path`, then `source`, then `documentId`
@@ -248,6 +266,7 @@ Notes:
 - `onlyNeedContext` returns assembled context text in `QueryResult.answer`
 - `onlyNeedPrompt` returns an upstream-like prompt inspection payload: formatted system prompt plus a `---User Query---` section with the raw query text
 - `onlyNeedContext(true)` and `onlyNeedPrompt(true)` bypass streaming and return buffered `QueryResult.answer()` payloads even if `stream(true)` is also set
+- `onlyNeedContext(true)` and `onlyNeedPrompt(true)` also bypass `modelFunc(...)`; no chat model is invoked in those paths
 - prompt inspection does not inline `conversationHistory`; those turns still travel separately in the real chat-model request
 - plain `BYPASS` returns direct chat-model output in `QueryResult.answer` and an empty `contexts` list
 - `BYPASS + stream(true)` streams directly from the chat model through `QueryResult.answerStream()` and still returns empty retrieval metadata
