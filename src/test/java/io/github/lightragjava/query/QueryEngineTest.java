@@ -11,6 +11,7 @@ import org.junit.jupiter.api.Test;
 
 import java.util.EnumMap;
 import java.util.List;
+import java.util.Map;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
@@ -57,6 +58,37 @@ class QueryEngineTest {
             .contains("- chunk-2 | 0.800 | Beta chunk")
             .contains("- chunk-1 | 0.900 | Alpha chunk");
         assertThat(chatModel.lastRequest().userPrompt()).isEqualTo("which chunk?");
+        assertThat(result.references()).isEmpty();
+    }
+
+    @Test
+    void includeReferencesReturnsStructuredReferencesAndEnrichedContexts() {
+        var chatModel = new RecordingChatModel();
+        var engine = new QueryEngine(
+            chatModel,
+            new ContextAssembler(),
+            strategiesReturning(referenceContext()),
+            null
+        );
+
+        var result = engine.query(QueryRequest.builder()
+            .query("which chunk?")
+            .mode(QueryMode.LOCAL)
+            .chunkTopK(3)
+            .includeReferences(true)
+            .build());
+
+        assertThat(result.references())
+            .containsExactly(
+                new io.github.lightragjava.api.QueryResult.Reference("1", "alpha.txt"),
+                new io.github.lightragjava.api.QueryResult.Reference("2", "beta.txt")
+            );
+        assertThat(result.contexts())
+            .extracting(context -> context.referenceId())
+            .containsExactly("1", "1", "2");
+        assertThat(result.contexts())
+            .extracting(context -> context.source())
+            .containsExactly("alpha.txt", "alpha.txt", "beta.txt");
     }
 
     @Test
@@ -352,6 +384,7 @@ class QueryEngineTest {
             .maxEntityTokens(111)
             .maxRelationTokens(222)
             .maxTotalTokens(333)
+            .includeReferences(true)
             .hlKeywords(List.of("high level"))
             .llKeywords(List.of("low level"))
             .conversationHistory(history)
@@ -364,6 +397,7 @@ class QueryEngineTest {
         assertThat(strategy.lastRequest().maxEntityTokens()).isEqualTo(111);
         assertThat(strategy.lastRequest().maxRelationTokens()).isEqualTo(222);
         assertThat(strategy.lastRequest().maxTotalTokens()).isEqualTo(Integer.MAX_VALUE);
+        assertThat(strategy.lastRequest().includeReferences()).isTrue();
         assertThat(strategy.lastRequest().hlKeywords()).containsExactly("high level");
         assertThat(strategy.lastRequest().llKeywords()).containsExactly("low level");
         assertThat(strategy.lastRequest().conversationHistory()).containsExactlyElementsOf(history);
@@ -520,6 +554,7 @@ class QueryEngineTest {
 
         assertThat(result.answer()).isEqualTo("bypass answer");
         assertThat(result.contexts()).isEmpty();
+        assertThat(result.references()).isEmpty();
         assertThat(strategy.callCount()).isZero();
         assertThat(chatModel.callCount()).isEqualTo(1);
         assertThat(chatModel.lastRequest().systemPrompt()).isEmpty();
@@ -633,6 +668,15 @@ class QueryEngineTest {
         return new QueryContext(List.of(), List.of(), chunks, "stale assembled context");
     }
 
+    private static QueryContext referenceContext() {
+        var chunks = List.of(
+            scoredChunk("chunk-1", "Alpha chunk", 0.90d, "doc-a", Map.of("source", "alpha.txt")),
+            scoredChunk("chunk-2", "Beta chunk", 0.80d, "doc-b", Map.of("source", "alpha.txt")),
+            scoredChunk("chunk-3", "Gamma chunk", 0.70d, "doc-c", Map.of("file_path", "beta.txt"))
+        );
+        return new QueryContext(List.of(), List.of(), chunks, "stale assembled context");
+    }
+
     private static EnumMap<QueryMode, QueryStrategy> strategiesReturning(QueryStrategy strategy) {
         var strategies = new EnumMap<QueryMode, QueryStrategy>(QueryMode.class);
         strategies.put(QueryMode.LOCAL, strategy);
@@ -658,7 +702,17 @@ class QueryEngineTest {
     }
 
     private static ScoredChunk scoredChunk(String chunkId, String text, double score) {
-        return new ScoredChunk(chunkId, new Chunk(chunkId, "doc-1", text, 3, 0, java.util.Map.of()), score);
+        return scoredChunk(chunkId, text, score, "doc-1", Map.of());
+    }
+
+    private static ScoredChunk scoredChunk(
+        String chunkId,
+        String text,
+        double score,
+        String documentId,
+        Map<String, String> metadata
+    ) {
+        return new ScoredChunk(chunkId, new Chunk(chunkId, documentId, text, 3, 0, metadata), score);
     }
 
     private record StubRerankModel(List<RerankModel.RerankResult> results) implements RerankModel {

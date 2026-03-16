@@ -146,20 +146,20 @@ public final class QueryEngine {
             finalContext.matchedChunks(),
             assembledContext
         );
-        var contexts = contextAssembler.toContexts(assembledQueryContext);
+        var references = QueryReferences.fromChunks(assembledQueryContext.matchedChunks(), query.includeReferences());
         var chatRequest = new ChatModel.ChatRequest(
             buildSystemPrompt(query, assembledContext),
             query.query(),
             query.conversationHistory()
         );
         if (query.onlyNeedContext() && !query.onlyNeedPrompt()) {
-            return new QueryResult(assembledContext, contexts);
+            return new QueryResult(assembledContext, references.contexts(), references.references());
         }
         if (query.onlyNeedPrompt()) {
-            return new QueryResult(renderStandardPrompt(chatRequest), contexts);
+            return new QueryResult(renderStandardPrompt(chatRequest), references.contexts(), references.references());
         }
         var answer = chatModel.generate(chatRequest);
-        return new QueryResult(answer, contexts);
+        return new QueryResult(answer, references.contexts(), references.references());
     }
 
     private boolean rerankEnabled(QueryRequest request) {
@@ -180,6 +180,7 @@ public final class QueryEngine {
             request.enableRerank(),
             request.onlyNeedContext(),
             request.onlyNeedPrompt(),
+            request.includeReferences(),
             request.userPrompt(),
             request.hlKeywords(),
             request.llKeywords(),
@@ -194,12 +195,12 @@ public final class QueryEngine {
             query.conversationHistory()
         );
         if (query.onlyNeedContext()) {
-            return new QueryResult("", List.of());
+            return new QueryResult("", List.of(), List.of());
         }
         if (query.onlyNeedPrompt()) {
-            return new QueryResult(renderBypassPrompt(chatRequest), List.of());
+            return new QueryResult(renderBypassPrompt(chatRequest), List.of(), List.of());
         }
-        return new QueryResult(chatModel.generate(chatRequest), List.of());
+        return new QueryResult(chatModel.generate(chatRequest), List.of(), List.of());
     }
 
     private static String buildSystemPrompt(QueryRequest query, String assembledContext) {

@@ -17,6 +17,7 @@ public record QueryRequest(
     boolean enableRerank,
     boolean onlyNeedContext,
     boolean onlyNeedPrompt,
+    boolean includeReferences,
     String userPrompt,
     List<String> hlKeywords,
     List<String> llKeywords,
@@ -75,6 +76,7 @@ public record QueryRequest(
             enableRerank,
             false,
             false,
+            false,
             "",
             List.of(),
             List.of(),
@@ -104,6 +106,7 @@ public record QueryRequest(
             enableRerank,
             false,
             false,
+            false,
             userPrompt,
             List.of(),
             List.of(),
@@ -127,6 +130,7 @@ public record QueryRequest(
         private boolean enableRerank = true;
         private boolean onlyNeedContext;
         private boolean onlyNeedPrompt;
+        private boolean includeReferences;
         private String userPrompt = "";
         private List<String> hlKeywords = List.of();
         private List<String> llKeywords = List.of();
@@ -187,6 +191,11 @@ public record QueryRequest(
             return this;
         }
 
+        public Builder includeReferences(boolean includeReferences) {
+            this.includeReferences = includeReferences;
+            return this;
+        }
+
         public Builder userPrompt(String userPrompt) {
             this.userPrompt = userPrompt;
             return this;
@@ -220,6 +229,7 @@ public record QueryRequest(
                 enableRerank,
                 onlyNeedContext,
                 onlyNeedPrompt,
+                includeReferences,
                 userPrompt,
                 hlKeywords,
                 llKeywords,

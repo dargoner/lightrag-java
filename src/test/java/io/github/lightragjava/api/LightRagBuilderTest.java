@@ -169,6 +169,7 @@ class LightRagBuilderTest {
         assertThat(request.enableRerank()).isTrue();
         assertThat(request.onlyNeedContext()).isFalse();
         assertThat(request.onlyNeedPrompt()).isFalse();
+        assertThat(request.includeReferences()).isFalse();
         assertThat(request.userPrompt()).isEmpty();
         assertThat(request.hlKeywords()).isEmpty();
         assertThat(request.llKeywords()).isEmpty();
@@ -197,6 +198,7 @@ class LightRagBuilderTest {
         assertThat(request.enableRerank()).isFalse();
         assertThat(request.onlyNeedContext()).isFalse();
         assertThat(request.onlyNeedPrompt()).isFalse();
+        assertThat(request.includeReferences()).isFalse();
         assertThat(request.userPrompt()).isEmpty();
         assertThat(request.hlKeywords()).isEmpty();
         assertThat(request.llKeywords()).isEmpty();
@@ -218,6 +220,7 @@ class LightRagBuilderTest {
 
         assertThat(request.onlyNeedContext()).isFalse();
         assertThat(request.onlyNeedPrompt()).isFalse();
+        assertThat(request.includeReferences()).isFalse();
         assertThat(request.userPrompt()).isEqualTo("Answer in one sentence.");
         assertThat(request.maxEntityTokens()).isEqualTo(QueryRequest.DEFAULT_MAX_ENTITY_TOKENS);
         assertThat(request.maxRelationTokens()).isEqualTo(QueryRequest.DEFAULT_MAX_RELATION_TOKENS);
@@ -235,11 +238,13 @@ class LightRagBuilderTest {
             .maxEntityTokens(111)
             .maxRelationTokens(222)
             .maxTotalTokens(333)
+            .includeReferences(true)
             .build();
 
         assertThat(request.maxEntityTokens()).isEqualTo(111);
         assertThat(request.maxRelationTokens()).isEqualTo(222);
         assertThat(request.maxTotalTokens()).isEqualTo(333);
+        assertThat(request.includeReferences()).isTrue();
     }
 
     @Test
@@ -350,6 +355,23 @@ class LightRagBuilderTest {
         assertThat(result.answer()).isEqualTo("answer");
         assertThat(result.contexts()).containsExactly(new QueryResult.Context("chunk-1", "supporting context"));
         assertThatThrownBy(() -> result.contexts().add(new QueryResult.Context("chunk-2", "more context")))
+            .isInstanceOf(UnsupportedOperationException.class);
+    }
+
+    @Test
+    void queryResultSupportsStructuredReferencesWithLegacyConvenienceConstructors() {
+        var references = new ArrayList<QueryResult.Reference>();
+        references.add(new QueryResult.Reference("1", "demo-source"));
+        var contexts = List.of(new QueryResult.Context("chunk-1", "supporting context", "1", "demo-source"));
+
+        var result = new QueryResult("answer", contexts, references);
+        references.clear();
+
+        assertThat(result.references()).containsExactly(new QueryResult.Reference("1", "demo-source"));
+        assertThat(result.contexts()).containsExactly(new QueryResult.Context("chunk-1", "supporting context", "1", "demo-source"));
+        assertThat(new QueryResult.Context("chunk-2", "plain context").referenceId()).isEmpty();
+        assertThat(new QueryResult.Context("chunk-2", "plain context").source()).isEmpty();
+        assertThatThrownBy(() -> result.references().add(new QueryResult.Reference("2", "other-source")))
             .isInstanceOf(UnsupportedOperationException.class);
     }
 
