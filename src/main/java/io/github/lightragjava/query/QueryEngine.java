@@ -101,6 +101,7 @@ public final class QueryEngine {
     private final ContextAssembler contextAssembler;
     private final Map<QueryMode, QueryStrategy> strategies;
     private final RerankModel rerankModel;
+    private final QueryKeywordExtractor keywordExtractor;
 
     public QueryEngine(
         ChatModel chatModel,
@@ -112,6 +113,7 @@ public final class QueryEngine {
         this.contextAssembler = Objects.requireNonNull(contextAssembler, "contextAssembler");
         this.strategies = Map.copyOf(new EnumMap<>(Objects.requireNonNull(strategies, "strategies")));
         this.rerankModel = rerankModel;
+        this.keywordExtractor = new QueryKeywordExtractor();
     }
 
     public QueryResult query(QueryRequest request) {
@@ -119,19 +121,21 @@ public final class QueryEngine {
         if (query.mode() == QueryMode.BYPASS) {
             return bypassQuery(query);
         }
-        var strategy = strategies.get(query.mode());
+        var responseModel = selectChatModel(query);
+        var resolvedQuery = keywordExtractor.resolve(query, responseModel);
+        var strategy = strategies.get(resolvedQuery.mode());
         if (strategy == null) {
-            throw new IllegalStateException("No query strategy configured for mode: " + query.mode());
+            throw new IllegalStateException("No query strategy configured for mode: " + resolvedQuery.mode());
         }
 
-        var retrievalRequest = rerankEnabled(query) ? expandChunkRequest(query) : query;
+        var retrievalRequest = rerankEnabled(resolvedQuery) ? expandChunkRequest(resolvedQuery) : resolvedQuery;
         var retrievedContext = strategy.retrieve(retrievalRequest);
-        var rerankedChunks = rerankEnabled(query)
-            ? rerankChunks(query, retrievedContext.matchedChunks())
+        var rerankedChunks = rerankEnabled(resolvedQuery)
+            ? rerankChunks(resolvedQuery, retrievedContext.matchedChunks())
             : retrievedContext.matchedChunks();
         var finalChunks = QueryBudgeting.limitChunks(
             rerankedChunks,
-            remainingChunkBudget(query, retrievedContext)
+            remainingChunkBudget(resolvedQuery, retrievedContext)
         );
         var finalContext = new QueryContext(
             retrievedContext.matchedEntities(),
@@ -146,20 +150,19 @@ public final class QueryEngine {
             finalContext.matchedChunks(),
             assembledContext
         );
-        var references = QueryReferences.fromChunks(assembledQueryContext.matchedChunks(), query.includeReferences());
+        var references = QueryReferences.fromChunks(assembledQueryContext.matchedChunks(), resolvedQuery.includeReferences());
         var chatRequest = new ChatModel.ChatRequest(
-            buildSystemPrompt(query, assembledContext),
-            query.query(),
-            query.conversationHistory()
+            buildSystemPrompt(resolvedQuery, assembledContext),
+            resolvedQuery.query(),
+            resolvedQuery.conversationHistory()
         );
-        var responseModel = selectChatModel(query);
-        if (query.onlyNeedContext() && !query.onlyNeedPrompt()) {
+        if (resolvedQuery.onlyNeedContext() && !resolvedQuery.onlyNeedPrompt()) {
             return new QueryResult(assembledContext, references.contexts(), references.references());
         }
-        if (query.onlyNeedPrompt()) {
+        if (resolvedQuery.onlyNeedPrompt()) {
             return new QueryResult(renderStandardPrompt(chatRequest), references.contexts(), references.references());
         }
-        if (query.stream()) {
+        if (resolvedQuery.stream()) {
             return QueryResult.streaming(responseModel.stream(chatRequest), references.contexts(), references.references());
         }
         var answer = responseModel.generate(chatRequest);

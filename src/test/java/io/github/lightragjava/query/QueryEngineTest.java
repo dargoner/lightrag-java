@@ -242,6 +242,35 @@ class QueryEngineTest {
     }
 
     @Test
+    void usesQueryLevelModelOverrideForKeywordExtractionAndGeneration() {
+        var defaultModel = new RecordingChatModel("default answer");
+        var overrideModel = new RecordingChatModel("override answer")
+            .withKeywordExtractionResponse("""
+                {"high_level_keywords":["organization"],"low_level_keywords":["alice"]}
+                """);
+        var strategy = new RecordingQueryStrategy(baseContext());
+        var engine = new QueryEngine(
+            defaultModel,
+            new ContextAssembler(),
+            strategiesReturning(strategy),
+            null
+        );
+
+        var result = engine.query(QueryRequest.builder()
+            .query("which chunk?")
+            .mode(QueryMode.LOCAL)
+            .chunkTopK(3)
+            .modelFunc(overrideModel)
+            .build());
+
+        assertThat(result.answer()).isEqualTo("override answer");
+        assertThat(strategy.lastRequest().llKeywords()).containsExactly("alice");
+        assertThat(defaultModel.callCount()).isZero();
+        assertThat(overrideModel.keywordExtractionCallCount()).isEqualTo(1);
+        assertThat(overrideModel.callCount()).isEqualTo(1);
+    }
+
+    @Test
     void usesQueryLevelModelOverrideForStreamingGeneration() {
         var defaultModel = new RecordingChatModel().withStreamResponse("default");
         var overrideModel = new RecordingChatModel().withStreamResponse("override ", "stream");
@@ -789,6 +818,31 @@ class QueryEngineTest {
     }
 
     @Test
+    void bypassStreamingUsesQueryLevelModelOverride() {
+        var defaultModel = new RecordingChatModel().withStreamResponse("default");
+        var overrideModel = new RecordingChatModel().withStreamResponse("override ", "bypass");
+        var strategy = new FailingQueryStrategy();
+        var engine = new QueryEngine(
+            defaultModel,
+            new ContextAssembler(),
+            strategiesReturning(strategy),
+            null
+        );
+
+        var result = engine.query(QueryRequest.builder()
+            .query("talk directly to the model")
+            .mode(QueryMode.BYPASS)
+            .stream(true)
+            .modelFunc(overrideModel)
+            .build());
+
+        assertThat(readAll(result.answerStream())).containsExactly("override ", "bypass");
+        assertThat(defaultModel.streamCallCount()).isZero();
+        assertThat(overrideModel.streamCallCount()).isEqualTo(1);
+        assertThat(strategy.callCount()).isZero();
+    }
+
+    @Test
     void bypassModeReturnsPromptPayloadWithoutCallingChatModelWhenOnlyNeedPromptIsEnabled() {
         var chatModel = new RecordingChatModel();
         var strategy = new FailingQueryStrategy();
@@ -946,6 +1000,8 @@ class QueryEngineTest {
         private int callCount;
         private int streamCallCount;
         private int streamCloseCount;
+        private String keywordExtractionResponse;
+        private int keywordExtractionCallCount;
 
         private RecordingChatModel() {
             this("answer");
@@ -957,6 +1013,11 @@ class QueryEngineTest {
 
         @Override
         public String generate(ChatRequest request) {
+            if (request.userPrompt().contains("high_level_keywords")
+                && request.userPrompt().contains("low_level_keywords")) {
+                keywordExtractionCallCount++;
+                return keywordExtractionResponse == null ? "{\"high_level_keywords\":[],\"low_level_keywords\":[]}" : keywordExtractionResponse;
+            }
             callCount++;
             lastRequest = request;
             return response;
@@ -998,6 +1059,11 @@ class QueryEngineTest {
             return this;
         }
 
+        RecordingChatModel withKeywordExtractionResponse(String keywordExtractionResponse) {
+            this.keywordExtractionResponse = keywordExtractionResponse;
+            return this;
+        }
+
         ChatRequest lastRequest() {
             return lastRequest;
         }
@@ -1016,6 +1082,10 @@ class QueryEngineTest {
 
         int streamCloseCount() {
             return streamCloseCount;
+        }
+
+        int keywordExtractionCallCount() {
+            return keywordExtractionCallCount;
         }
     }
 

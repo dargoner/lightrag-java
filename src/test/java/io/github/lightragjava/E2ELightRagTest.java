@@ -1840,6 +1840,30 @@ class E2ELightRagTest {
     }
 
     @Test
+    void queryAutomaticallyExtractsKeywordsForGraphAwareModes() {
+        var storage = InMemoryStorageProvider.create();
+        var chatModel = new FakeChatModel();
+        var rag = LightRag.builder()
+            .chatModel(chatModel)
+            .embeddingModel(new FakeEmbeddingModel())
+            .storage(storage)
+            .build();
+
+        rag.ingest(List.of(
+            new Document("doc-1", "Title", "Alice works with Bob", Map.of()),
+            new Document("doc-2", "Title", "Bob reports to Carol", Map.of())
+        ));
+
+        var result = rag.query(QueryRequest.builder()
+            .query("Who works with Bob?")
+            .mode(QueryMode.LOCAL)
+            .build());
+
+        assertThat(result.answer()).isEqualTo("Alice works with Bob.");
+        assertThat(chatModel.keywordExtractionCallCount()).isEqualTo(1);
+    }
+
+    @Test
     void queryReturnsAssembledContextWhenOnlyNeedContextIsEnabled() {
         var storage = InMemoryStorageProvider.create();
         var chatModel = new FakeChatModel();
@@ -2742,9 +2766,14 @@ class E2ELightRagTest {
         private ChatRequest lastStreamQueryRequest;
         private ChatRequest lastStreamBypassRequest;
         private int queryCallCount;
+        private int keywordExtractionCallCount;
 
         @Override
         public String generate(ChatRequest request) {
+            if (isKeywordExtractionPrompt(request)) {
+                keywordExtractionCallCount++;
+                return keywordExtractionResponse(request.userPrompt());
+            }
             if (isRetrievalPrompt(request)) {
                 lastQueryRequest = request;
                 queryCallCount++;
@@ -2872,6 +2901,10 @@ class E2ELightRagTest {
 
         int queryCallCount() {
             return queryCallCount;
+        }
+
+        int keywordExtractionCallCount() {
+            return keywordExtractionCallCount;
         }
     }
 
@@ -3003,6 +3036,37 @@ class E2ELightRagTest {
             && request.systemPrompt().contains("---Instructions---")
             && request.systemPrompt().contains("---Context---")
             && request.systemPrompt().contains("The response should be presented in");
+    }
+
+    private static boolean isKeywordExtractionPrompt(ChatModel.ChatRequest request) {
+        return request.systemPrompt().isEmpty()
+            && request.userPrompt().contains("high_level_keywords")
+            && request.userPrompt().contains("low_level_keywords");
+    }
+
+    private static String keywordExtractionResponse(String prompt) {
+        if (prompt.contains("Who works with Bob?")) {
+            return """
+                {
+                  "high_level_keywords": ["collaboration"],
+                  "low_level_keywords": ["Alice", "Bob"]
+                }
+                """;
+        }
+        if (prompt.contains("Who reports to Carol?")) {
+            return """
+                {
+                  "high_level_keywords": ["reporting"],
+                  "low_level_keywords": ["Bob", "Carol"]
+                }
+                """;
+        }
+        return """
+            {
+              "high_level_keywords": [],
+              "low_level_keywords": []
+            }
+            """;
     }
 
     private static List<String> readAll(io.github.lightragjava.model.CloseableIterator<String> iterator) {
