@@ -1778,6 +1778,15 @@ class E2ELightRagTest {
             .contains("doc-1:0");
         assertThat(chatModel.lastQueryRequest()).isNotNull();
         assertThat(chatModel.lastQueryRequest().systemPrompt())
+            .contains("---Role---")
+            .contains("---Goal---")
+            .contains("---Instructions---")
+            .contains("---Context---")
+            .contains("Knowledge Graph Data")
+            .contains("Document Chunks")
+            .contains("DO NOT invent")
+            .contains("same language as the user query")
+            .contains("### References")
             .contains("The response should be presented in Multiple Paragraphs.")
             .contains("Alice works with Bob");
         assertThat(chatModel.lastQueryRequest().userPrompt()).isEqualTo("Who works with Bob?");
@@ -1808,6 +1817,15 @@ class E2ELightRagTest {
         assertThat(result.answer()).isEqualTo("Alice works with Bob.");
         assertThat(chatModel.lastQueryRequest()).isNotNull();
         assertThat(chatModel.lastQueryRequest().systemPrompt())
+            .contains("---Role---")
+            .contains("---Goal---")
+            .contains("---Instructions---")
+            .contains("---Context---")
+            .contains("Knowledge Graph Data")
+            .contains("Document Chunks")
+            .contains("DO NOT invent")
+            .contains("same language as the user query")
+            .contains("### References")
             .contains("The response should be presented in Bullet Points.")
             .contains("Additional Instructions:")
             .contains("Answer in bullet points.")
@@ -1873,6 +1891,15 @@ class E2ELightRagTest {
             .build());
 
         assertThat(result.answer())
+            .contains("---Role---")
+            .contains("---Goal---")
+            .contains("---Instructions---")
+            .contains("---Context---")
+            .contains("Knowledge Graph Data")
+            .contains("Document Chunks")
+            .contains("DO NOT invent")
+            .contains("same language as the user query")
+            .contains("### References")
             .contains("The response should be presented in Multiple Paragraphs.")
             .contains("---User Query---")
             .contains("Who works with Bob?")
@@ -1940,6 +1967,38 @@ class E2ELightRagTest {
         assertThat(result.contexts())
             .extracting(QueryResult.Context::sourceId)
             .containsExactly("doc-3:0", "doc-2:0", "doc-1:0");
+    }
+
+    @Test
+    void queryUsesNaiveSpecificPromptTemplate() {
+        var storage = InMemoryStorageProvider.create();
+        var chatModel = new FakeChatModel();
+        var rag = LightRag.builder()
+            .chatModel(chatModel)
+            .embeddingModel(new FakeEmbeddingModel())
+            .storage(storage)
+            .build();
+
+        rag.ingest(List.of(new Document("doc-1", "Title", "Alice works with Bob", Map.of())));
+
+        var result = rag.query(QueryRequest.builder()
+            .query("Who works with Bob?")
+            .mode(io.github.lightragjava.api.QueryMode.NAIVE)
+            .build());
+
+        assertThat(result.answer()).isEqualTo("Alice works with Bob.");
+        assertThat(chatModel.lastQueryRequest()).isNotNull();
+        assertThat(chatModel.lastQueryRequest().systemPrompt())
+            .contains("---Role---")
+            .contains("---Goal---")
+            .contains("---Instructions---")
+            .contains("---Context---")
+            .contains("Document Chunks")
+            .contains("DO NOT invent")
+            .contains("same language as the user query")
+            .contains("### References")
+            .doesNotContain("Knowledge Graph Data");
+        assertThat(chatModel.lastQueryRequest().userPrompt()).isEqualTo("Who works with Bob?");
     }
 
     @Test
@@ -2518,7 +2577,7 @@ class E2ELightRagTest {
 
         @Override
         public String generate(ChatRequest request) {
-            if (request.systemPrompt().contains("Context:")) {
+            if (isRetrievalPrompt(request)) {
                 lastQueryRequest = request;
                 queryCallCount++;
                 return "Alice works with Bob.";
@@ -2632,7 +2691,7 @@ class E2ELightRagTest {
     private static final class FailingExtractionChatModel implements ChatModel {
         @Override
         public String generate(ChatRequest request) {
-            if (request.systemPrompt().contains("Context:")) {
+            if (isRetrievalPrompt(request)) {
                 return "unreachable";
             }
             throw new IllegalStateException("extract failed");
@@ -2659,7 +2718,7 @@ class E2ELightRagTest {
 
         @Override
         public String generate(ChatRequest request) {
-            if (request.systemPrompt().contains("Context:")) {
+            if (isRetrievalPrompt(request)) {
                 return "unreachable";
             }
             if (request.userPrompt().contains(failingDocumentId)) {
@@ -2667,6 +2726,10 @@ class E2ELightRagTest {
             }
             return new FakeChatModel().generate(request);
         }
+    }
+
+    private static boolean isRetrievalPrompt(ChatModel.ChatRequest request) {
+        return request.systemPrompt().contains("---Context---") || request.systemPrompt().contains("Context:");
     }
 
     private static final class AtomicOnlyStorageProvider implements io.github.lightragjava.storage.AtomicStorageProvider {

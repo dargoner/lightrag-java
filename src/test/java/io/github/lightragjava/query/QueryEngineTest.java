@@ -42,6 +42,15 @@ class QueryEngineTest {
             .extracting(context -> context.sourceId())
             .containsExactly("chunk-3", "chunk-2", "chunk-1");
         assertThat(chatModel.lastRequest().systemPrompt())
+            .contains("---Role---")
+            .contains("---Goal---")
+            .contains("---Instructions---")
+            .contains("---Context---")
+            .contains("Knowledge Graph Data")
+            .contains("Document Chunks")
+            .contains("DO NOT invent")
+            .contains("same language as the user query")
+            .contains("### References")
             .contains("The response should be presented in Bullet Points.")
             .containsSubsequence("chunk-3", "chunk-2", "chunk-1")
             .contains("- chunk-3 | 0.700 | Gamma chunk")
@@ -69,11 +78,52 @@ class QueryEngineTest {
             .build());
 
         assertThat(chatModel.lastRequest().systemPrompt())
+            .contains("---Role---")
+            .contains("---Goal---")
+            .contains("---Instructions---")
+            .contains("---Context---")
+            .contains("Knowledge Graph Data")
+            .contains("Document Chunks")
+            .contains("DO NOT invent")
+            .contains("same language as the user query")
+            .contains("### References")
             .contains("The response should be presented in Bullet Points.")
-            .contains("Context:")
             .contains("Alpha chunk")
             .contains("Additional Instructions:")
             .contains("Answer in one sentence.");
+        assertThat(chatModel.lastRequest().userPrompt()).isEqualTo("which chunk?");
+    }
+
+    @Test
+    void usesNaiveSpecificUpstreamPromptTemplateForNaiveMode() {
+        var chatModel = new RecordingChatModel();
+        var strategies = new EnumMap<QueryMode, QueryStrategy>(QueryMode.class);
+        strategies.put(QueryMode.NAIVE, new RecordingQueryStrategy(baseContext()));
+        var engine = new QueryEngine(
+            chatModel,
+            new ContextAssembler(),
+            strategies,
+            null
+        );
+
+        engine.query(QueryRequest.builder()
+            .query("which chunk?")
+            .mode(QueryMode.NAIVE)
+            .chunkTopK(3)
+            .responseType("Single Paragraph")
+            .build());
+
+        assertThat(chatModel.lastRequest().systemPrompt())
+            .contains("---Role---")
+            .contains("---Goal---")
+            .contains("---Instructions---")
+            .contains("---Context---")
+            .contains("Document Chunks")
+            .contains("DO NOT invent")
+            .contains("same language as the user query")
+            .contains("### References")
+            .doesNotContain("Knowledge Graph Data")
+            .contains("The response should be presented in Single Paragraph.");
         assertThat(chatModel.lastRequest().userPrompt()).isEqualTo("which chunk?");
     }
 
@@ -167,6 +217,15 @@ class QueryEngineTest {
             .build());
 
         assertThat(result.answer())
+            .contains("---Role---")
+            .contains("---Goal---")
+            .contains("---Instructions---")
+            .contains("---Context---")
+            .contains("Knowledge Graph Data")
+            .contains("Document Chunks")
+            .contains("DO NOT invent")
+            .contains("same language as the user query")
+            .contains("### References")
             .contains("The response should be presented in Single Paragraph.")
             .contains("---User Query---")
             .contains("which chunk?")
@@ -227,6 +286,13 @@ class QueryEngineTest {
             .build());
 
         assertThat(chatModel.lastRequest().systemPrompt())
+            .contains("---Role---")
+            .contains("---Goal---")
+            .contains("---Instructions---")
+            .contains("---Context---")
+            .contains("DO NOT invent")
+            .contains("same language as the user query")
+            .contains("### References")
             .contains("The response should be presented in Single Paragraph.")
             .contains("Additional Instructions:")
             .contains("n/a")
