@@ -33,7 +33,9 @@ public final class OpenAiCompatibleChatModel implements ChatModel {
     public String generate(ChatRequest request) {
         Objects.requireNonNull(request, "request");
         var messages = new java.util.ArrayList<Map<String, String>>();
-        messages.add(Map.of("role", "system", "content", request.systemPrompt()));
+        if (!request.systemPrompt().isBlank()) {
+            messages.add(Map.of("role", "system", "content", request.systemPrompt()));
+        }
         for (var message : request.conversationHistory()) {
             messages.add(Map.of("role", message.role(), "content", message.content()));
         }

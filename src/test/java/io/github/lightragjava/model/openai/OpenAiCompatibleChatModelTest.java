@@ -88,6 +88,39 @@ class OpenAiCompatibleChatModelTest {
     }
 
     @Test
+    void chatAdapterOmitsBlankSystemMessage() throws Exception {
+        try (var server = new MockWebServer()) {
+            server.enqueue(new MockResponse().setBody("""
+                {
+                  "choices": [
+                    {
+                      "message": {
+                        "content": "Answer"
+                      }
+                    }
+                  ]
+                }
+                """));
+            server.start();
+            var model = new OpenAiCompatibleChatModel(server.url("/v1/").toString(), "gpt-test", "secret");
+
+            model.generate(new ChatModel.ChatRequest(
+                "",
+                "Current user prompt",
+                List.of(new ChatModel.ChatRequest.ConversationMessage("user", "Earlier question"))
+            ));
+
+            var request = server.takeRequest();
+            var payload = OBJECT_MAPPER.readTree(request.getBody().readUtf8());
+            assertThat(payload.path("messages")).hasSize(2);
+            assertThat(payload.path("messages").get(0).path("role").asText()).isEqualTo("user");
+            assertThat(payload.path("messages").get(0).path("content").asText()).isEqualTo("Earlier question");
+            assertThat(payload.path("messages").get(1).path("role").asText()).isEqualTo("user");
+            assertThat(payload.path("messages").get(1).path("content").asText()).isEqualTo("Current user prompt");
+        }
+    }
+
+    @Test
     void chatAdapterParsesResponseContent() throws Exception {
         try (var server = new MockWebServer()) {
             server.enqueue(new MockResponse().setBody("""

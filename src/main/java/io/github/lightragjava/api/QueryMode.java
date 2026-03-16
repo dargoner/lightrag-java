@@ -5,5 +5,6 @@ public enum QueryMode {
     LOCAL,
     GLOBAL,
     HYBRID,
-    MIX
+    MIX,
+    BYPASS
 }

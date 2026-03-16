@@ -92,6 +92,112 @@ class QueryEngineTest {
     }
 
     @Test
+    void returnsAssembledContextWithoutCallingChatModelWhenOnlyNeedContextIsEnabled() {
+        var chatModel = new RecordingChatModel();
+        var engine = new QueryEngine(
+            chatModel,
+            new ContextAssembler(),
+            strategiesReturning(baseContext()),
+            new StubRerankModel(List.of(
+                new RerankModel.RerankResult("chunk-3", 0.99d),
+                new RerankModel.RerankResult("chunk-2", 0.88d),
+                new RerankModel.RerankResult("chunk-1", 0.77d)
+            ))
+        );
+
+        var result = engine.query(QueryRequest.builder()
+            .query("which chunk?")
+            .mode(QueryMode.LOCAL)
+            .topK(3)
+            .chunkTopK(3)
+            .onlyNeedContext(true)
+            .build());
+
+        assertThat(result.answer())
+            .contains("Entities:")
+            .contains("Relations:")
+            .contains("Chunks:")
+            .contains("chunk-3")
+            .contains("chunk-2")
+            .contains("chunk-1");
+        assertThat(result.contexts())
+            .extracting(context -> context.sourceId())
+            .containsExactly("chunk-3", "chunk-2", "chunk-1");
+        assertThat(chatModel.callCount()).isZero();
+        assertThat(chatModel.lastRequest()).isNull();
+    }
+
+    @Test
+    void returnsCompletePromptPayloadWithoutCallingChatModelWhenOnlyNeedPromptIsEnabled() {
+        var chatModel = new RecordingChatModel();
+        var engine = new QueryEngine(
+            chatModel,
+            new ContextAssembler(),
+            strategiesReturning(baseContext()),
+            new StubRerankModel(List.of(
+                new RerankModel.RerankResult("chunk-3", 0.99d),
+                new RerankModel.RerankResult("chunk-2", 0.88d),
+                new RerankModel.RerankResult("chunk-1", 0.77d)
+            ))
+        );
+
+        var result = engine.query(QueryRequest.builder()
+            .query("which chunk?")
+            .mode(QueryMode.LOCAL)
+            .topK(3)
+            .chunkTopK(3)
+            .userPrompt("Answer in one sentence.")
+            .conversationHistory(List.of(
+                new ChatModel.ChatRequest.ConversationMessage("user", "Earlier question"),
+                new ChatModel.ChatRequest.ConversationMessage("assistant", "Earlier answer")
+            ))
+            .onlyNeedPrompt(true)
+            .build());
+
+        assertThat(result.answer())
+            .contains("System Prompt:")
+            .contains("Answer the user's question using the provided context.")
+            .contains("History:")
+            .contains("Earlier question")
+            .contains("Earlier answer")
+            .contains("User Prompt:")
+            .contains("Question:")
+            .contains("which chunk?")
+            .contains("Additional Instructions:")
+            .contains("Answer in one sentence.");
+        assertThat(result.contexts())
+            .extracting(context -> context.sourceId())
+            .containsExactly("chunk-3", "chunk-2", "chunk-1");
+        assertThat(chatModel.callCount()).isZero();
+        assertThat(chatModel.lastRequest()).isNull();
+    }
+
+    @Test
+    void onlyNeedContextTakesPrecedenceOverOnlyNeedPrompt() {
+        var chatModel = new RecordingChatModel();
+        var engine = new QueryEngine(
+            chatModel,
+            new ContextAssembler(),
+            strategiesReturning(baseContext()),
+            null
+        );
+
+        var result = engine.query(QueryRequest.builder()
+            .query("which chunk?")
+            .mode(QueryMode.LOCAL)
+            .chunkTopK(3)
+            .onlyNeedContext(true)
+            .onlyNeedPrompt(true)
+            .build());
+
+        assertThat(result.answer())
+            .contains("Entities:")
+            .contains("Chunks:")
+            .doesNotContain("System Prompt:");
+        assertThat(chatModel.callCount()).isZero();
+    }
+
+    @Test
     void doesNotAppendAdditionalInstructionsOrFlattenHistoryWhenUserPromptIsBlank() {
         var chatModel = new RecordingChatModel();
         var engine = new QueryEngine(
@@ -255,6 +361,124 @@ class QueryEngineTest {
             .hasMessage("rerank failure");
     }
 
+    @Test
+    void bypassModeSkipsRetrievalAndCallsChatModelDirectly() {
+        var chatModel = new RecordingChatModel("bypass answer");
+        var strategy = new FailingQueryStrategy();
+        var engine = new QueryEngine(
+            chatModel,
+            new ContextAssembler(),
+            strategiesReturning(strategy),
+            null
+        );
+
+        var result = engine.query(QueryRequest.builder()
+            .query("talk directly to the model")
+            .mode(QueryMode.BYPASS)
+            .userPrompt("Answer in one sentence.")
+            .conversationHistory(List.of(
+                new ChatModel.ChatRequest.ConversationMessage("user", "Earlier question"),
+                new ChatModel.ChatRequest.ConversationMessage("assistant", "Earlier answer")
+            ))
+            .build());
+
+        assertThat(result.answer()).isEqualTo("bypass answer");
+        assertThat(result.contexts()).isEmpty();
+        assertThat(strategy.callCount()).isZero();
+        assertThat(chatModel.callCount()).isEqualTo(1);
+        assertThat(chatModel.lastRequest().systemPrompt()).isEmpty();
+        assertThat(chatModel.lastRequest().userPrompt())
+            .contains("talk directly to the model")
+            .contains("Additional Instructions:")
+            .contains("Answer in one sentence.");
+        assertThat(chatModel.lastRequest().conversationHistory())
+            .containsExactly(
+                new ChatModel.ChatRequest.ConversationMessage("user", "Earlier question"),
+                new ChatModel.ChatRequest.ConversationMessage("assistant", "Earlier answer")
+            );
+    }
+
+    @Test
+    void bypassModeReturnsEmptyAnswerWithoutCallingChatModelWhenOnlyNeedContextIsEnabled() {
+        var chatModel = new RecordingChatModel();
+        var strategy = new FailingQueryStrategy();
+        var engine = new QueryEngine(
+            chatModel,
+            new ContextAssembler(),
+            strategiesReturning(strategy),
+            null
+        );
+
+        var result = engine.query(QueryRequest.builder()
+            .query("talk directly to the model")
+            .mode(QueryMode.BYPASS)
+            .onlyNeedContext(true)
+            .build());
+
+        assertThat(result.answer()).isEmpty();
+        assertThat(result.contexts()).isEmpty();
+        assertThat(strategy.callCount()).isZero();
+        assertThat(chatModel.callCount()).isZero();
+    }
+
+    @Test
+    void bypassModeReturnsPromptPayloadWithoutCallingChatModelWhenOnlyNeedPromptIsEnabled() {
+        var chatModel = new RecordingChatModel();
+        var strategy = new FailingQueryStrategy();
+        var engine = new QueryEngine(
+            chatModel,
+            new ContextAssembler(),
+            strategiesReturning(strategy),
+            null
+        );
+
+        var result = engine.query(QueryRequest.builder()
+            .query("talk directly to the model")
+            .mode(QueryMode.BYPASS)
+            .userPrompt("Answer in one sentence.")
+            .conversationHistory(List.of(
+                new ChatModel.ChatRequest.ConversationMessage("user", "Earlier question")
+            ))
+            .onlyNeedPrompt(true)
+            .build());
+
+        assertThat(result.answer())
+            .contains("System Prompt:")
+            .contains("History:")
+            .contains("Earlier question")
+            .contains("User Prompt:")
+            .contains("talk directly to the model")
+            .contains("Additional Instructions:")
+            .contains("Answer in one sentence.");
+        assertThat(result.contexts()).isEmpty();
+        assertThat(strategy.callCount()).isZero();
+        assertThat(chatModel.callCount()).isZero();
+    }
+
+    @Test
+    void bypassModeOnlyNeedContextStillWinsWhenBothShortcutFlagsAreEnabled() {
+        var chatModel = new RecordingChatModel();
+        var strategy = new FailingQueryStrategy();
+        var engine = new QueryEngine(
+            chatModel,
+            new ContextAssembler(),
+            strategiesReturning(strategy),
+            null
+        );
+
+        var result = engine.query(QueryRequest.builder()
+            .query("talk directly to the model")
+            .mode(QueryMode.BYPASS)
+            .onlyNeedContext(true)
+            .onlyNeedPrompt(true)
+            .build());
+
+        assertThat(result.answer()).isEmpty();
+        assertThat(result.contexts()).isEmpty();
+        assertThat(strategy.callCount()).isZero();
+        assertThat(chatModel.callCount()).isZero();
+    }
+
     private static QueryRequest baseRequest() {
         return QueryRequest.builder()
             .query("which chunk?")
@@ -281,6 +505,20 @@ class QueryEngineTest {
 
     private static EnumMap<QueryMode, QueryStrategy> strategiesReturning(QueryContext context) {
         return strategiesReturning(new RecordingQueryStrategy(context));
+    }
+
+    private static final class FailingQueryStrategy implements QueryStrategy {
+        private int callCount;
+
+        @Override
+        public QueryContext retrieve(QueryRequest request) {
+            callCount++;
+            throw new AssertionError("retrieve should not be called");
+        }
+
+        int callCount() {
+            return callCount;
+        }
     }
 
     private static ScoredChunk scoredChunk(String chunkId, String text, double score) {
@@ -314,16 +552,32 @@ class QueryEngineTest {
     }
 
     private static final class RecordingChatModel implements ChatModel {
+        private final String response;
         private ChatRequest lastRequest;
+
+        private int callCount;
+
+        private RecordingChatModel() {
+            this("answer");
+        }
+
+        private RecordingChatModel(String response) {
+            this.response = response;
+        }
 
         @Override
         public String generate(ChatRequest request) {
+            callCount++;
             lastRequest = request;
-            return "answer";
+            return response;
         }
 
         ChatRequest lastRequest() {
             return lastRequest;
+        }
+
+        int callCount() {
+            return callCount;
         }
     }
 }

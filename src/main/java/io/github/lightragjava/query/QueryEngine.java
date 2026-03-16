@@ -36,6 +36,9 @@ public final class QueryEngine {
 
     public QueryResult query(QueryRequest request) {
         var query = Objects.requireNonNull(request, "request");
+        if (query.mode() == QueryMode.BYPASS) {
+            return bypassQuery(query);
+        }
         var strategy = strategies.get(query.mode());
         if (strategy == null) {
             throw new IllegalStateException("No query strategy configured for mode: " + query.mode());
@@ -59,12 +62,20 @@ public final class QueryEngine {
             finalContext.matchedChunks(),
             assembledContext
         );
-        var answer = chatModel.generate(new ChatModel.ChatRequest(
+        var contexts = contextAssembler.toContexts(assembledQueryContext);
+        if (query.onlyNeedContext()) {
+            return new QueryResult(assembledContext, contexts);
+        }
+        var chatRequest = new ChatModel.ChatRequest(
             SYSTEM_PROMPT,
             buildUserPrompt(assembledContext, query),
             query.conversationHistory()
-        ));
-        return new QueryResult(answer, contextAssembler.toContexts(assembledQueryContext));
+        );
+        if (query.onlyNeedPrompt()) {
+            return new QueryResult(renderPrompt(chatRequest), contexts);
+        }
+        var answer = chatModel.generate(chatRequest);
+        return new QueryResult(answer, contexts);
     }
 
     private boolean rerankEnabled(QueryRequest request) {
@@ -80,9 +91,26 @@ public final class QueryEngine {
             (int) Math.min(Integer.MAX_VALUE, expandedChunkTopK),
             request.responseType(),
             request.enableRerank(),
+            request.onlyNeedContext(),
+            request.onlyNeedPrompt(),
             request.userPrompt(),
             request.conversationHistory()
         );
+    }
+
+    private QueryResult bypassQuery(QueryRequest query) {
+        if (query.onlyNeedContext()) {
+            return new QueryResult("", List.of());
+        }
+        var chatRequest = new ChatModel.ChatRequest(
+            "",
+            buildBypassUserPrompt(query),
+            query.conversationHistory()
+        );
+        if (query.onlyNeedPrompt()) {
+            return new QueryResult(renderPrompt(chatRequest), List.of());
+        }
+        return new QueryResult(chatModel.generate(chatRequest), List.of());
     }
 
     private static String buildUserPrompt(String assembledContext, QueryRequest query) {
@@ -102,6 +130,36 @@ public final class QueryEngine {
             Additional Instructions:
             %s
             """.formatted(basePrompt, query.userPrompt());
+    }
+
+    private static String buildBypassUserPrompt(QueryRequest query) {
+        if (query.userPrompt().isBlank()) {
+            return query.query();
+        }
+        return """
+            %s
+
+            Additional Instructions:
+            %s
+            """.formatted(query.query(), query.userPrompt());
+    }
+
+    private static String renderPrompt(ChatModel.ChatRequest request) {
+        var history = request.conversationHistory().isEmpty()
+            ? "(none)"
+            : request.conversationHistory().stream()
+                .map(message -> "- %s: %s".formatted(message.role(), message.content()))
+                .collect(java.util.stream.Collectors.joining("\n"));
+        return """
+            System Prompt:
+            %s
+
+            History:
+            %s
+
+            User Prompt:
+            %s
+            """.formatted(request.systemPrompt(), history, request.userPrompt());
     }
 
     private List<ScoredChunk> rerankChunks(QueryRequest request, List<ScoredChunk> matchedChunks) {

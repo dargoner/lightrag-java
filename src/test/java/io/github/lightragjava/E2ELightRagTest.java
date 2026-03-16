@@ -1,6 +1,7 @@
 package io.github.lightragjava;
 
 import io.github.lightragjava.api.LightRag;
+import io.github.lightragjava.api.QueryMode;
 import io.github.lightragjava.api.CreateEntityRequest;
 import io.github.lightragjava.api.CreateRelationRequest;
 import io.github.lightragjava.api.EditEntityRequest;
@@ -1813,6 +1814,101 @@ class E2ELightRagTest {
     }
 
     @Test
+    void queryReturnsAssembledContextWhenOnlyNeedContextIsEnabled() {
+        var storage = InMemoryStorageProvider.create();
+        var chatModel = new FakeChatModel();
+        var rag = LightRag.builder()
+            .chatModel(chatModel)
+            .embeddingModel(new FakeEmbeddingModel())
+            .storage(storage)
+            .build();
+
+        rag.ingest(List.of(new Document("doc-1", "Title", "Alice works with Bob", Map.of())));
+
+        var result = rag.query(QueryRequest.builder()
+            .query("Who works with Bob?")
+            .onlyNeedContext(true)
+            .build());
+
+        assertThat(result.answer())
+            .contains("Entities:")
+            .contains("Relations:")
+            .contains("Chunks:")
+            .contains("Alice works with Bob");
+        assertThat(result.contexts())
+            .extracting(QueryResult.Context::sourceId)
+            .contains("doc-1:0");
+        assertThat(chatModel.lastQueryRequest()).isNull();
+        assertThat(chatModel.queryCallCount()).isZero();
+    }
+
+    @Test
+    void queryReturnsCompletePromptWhenOnlyNeedPromptIsEnabled() {
+        var storage = InMemoryStorageProvider.create();
+        var chatModel = new FakeChatModel();
+        var rag = LightRag.builder()
+            .chatModel(chatModel)
+            .embeddingModel(new FakeEmbeddingModel())
+            .storage(storage)
+            .build();
+
+        rag.ingest(List.of(new Document("doc-1", "Title", "Alice works with Bob", Map.of())));
+
+        var result = rag.query(QueryRequest.builder()
+            .query("Who works with Bob?")
+            .conversationHistory(List.of(
+                new ChatModel.ChatRequest.ConversationMessage("user", "Earlier question"),
+                new ChatModel.ChatRequest.ConversationMessage("assistant", "Earlier answer")
+            ))
+            .onlyNeedPrompt(true)
+            .build());
+
+        assertThat(result.answer())
+            .contains("System Prompt:")
+            .contains("History:")
+            .contains("Earlier question")
+            .contains("Earlier answer")
+            .contains("User Prompt:")
+            .contains("Who works with Bob?");
+        assertThat(result.contexts())
+            .extracting(QueryResult.Context::sourceId)
+            .contains("doc-1:0");
+        assertThat(chatModel.lastQueryRequest()).isNull();
+        assertThat(chatModel.queryCallCount()).isZero();
+    }
+
+    @Test
+    void querySupportsBypassMode() {
+        var storage = InMemoryStorageProvider.create();
+        var chatModel = new FakeChatModel();
+        var rag = LightRag.builder()
+            .chatModel(chatModel)
+            .embeddingModel(new FakeEmbeddingModel())
+            .storage(storage)
+            .build();
+
+        var result = rag.query(QueryRequest.builder()
+            .query("Talk directly to the model")
+            .mode(QueryMode.BYPASS)
+            .conversationHistory(List.of(
+                new ChatModel.ChatRequest.ConversationMessage("user", "Earlier question")
+            ))
+            .userPrompt("Answer in one sentence.")
+            .build());
+
+        assertThat(result.answer()).isEqualTo("Bypass answer.");
+        assertThat(result.contexts()).isEmpty();
+        assertThat(chatModel.lastBypassRequest()).isNotNull();
+        assertThat(chatModel.lastBypassRequest().systemPrompt()).isEmpty();
+        assertThat(chatModel.lastBypassRequest().userPrompt())
+            .contains("Talk directly to the model")
+            .contains("Additional Instructions:")
+            .contains("Answer in one sentence.");
+        assertThat(chatModel.lastBypassRequest().conversationHistory())
+            .containsExactly(new ChatModel.ChatRequest.ConversationMessage("user", "Earlier question"));
+    }
+
+    @Test
     void queryReranksFinalContextsWhenConfigured() {
         var storage = InMemoryStorageProvider.create();
         var rag = LightRag.builder()
@@ -2409,12 +2505,19 @@ class E2ELightRagTest {
 
     private static final class FakeChatModel implements ChatModel {
         private ChatRequest lastQueryRequest;
+        private ChatRequest lastBypassRequest;
+        private int queryCallCount;
 
         @Override
         public String generate(ChatRequest request) {
             if (request.userPrompt().contains("Question:")) {
                 lastQueryRequest = request;
+                queryCallCount++;
                 return "Alice works with Bob.";
+            }
+            if (request.userPrompt().contains("Talk directly to the model")) {
+                lastBypassRequest = request;
+                return "Bypass answer.";
             }
             if (request.userPrompt().contains("Bob reports to Carol")) {
                 return """
@@ -2476,6 +2579,14 @@ class E2ELightRagTest {
 
         ChatRequest lastQueryRequest() {
             return lastQueryRequest;
+        }
+
+        ChatRequest lastBypassRequest() {
+            return lastBypassRequest;
+        }
+
+        int queryCallCount() {
+            return queryCallCount;
         }
     }
 
