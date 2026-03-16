@@ -1898,6 +1898,38 @@ class E2ELightRagTest {
     }
 
     @Test
+    void queryCanStreamRetrievedAnswersWhileKeepingMetadata() {
+        var storage = InMemoryStorageProvider.create();
+        var chatModel = new FakeChatModel();
+        var rag = LightRag.builder()
+            .chatModel(chatModel)
+            .embeddingModel(new FakeEmbeddingModel())
+            .storage(storage)
+            .build();
+
+        rag.ingest(List.of(
+            new Document("doc-1", "Title", "Alice works with Bob", Map.of("source", "team-notes.md"))
+        ));
+
+        var result = rag.query(QueryRequest.builder()
+            .query("Who works with Bob?")
+            .includeReferences(true)
+            .stream(true)
+            .build());
+
+        assertThat(result.streaming()).isTrue();
+        assertThat(result.answer()).isEmpty();
+        assertThat(readAll(result.answerStream())).containsExactly("Alice ", "works with Bob.");
+        assertThat(result.contexts())
+            .extracting(QueryResult.Context::sourceId)
+            .containsExactly("doc-1:0");
+        assertThat(result.references())
+            .containsExactly(new QueryResult.Reference("1", "team-notes.md"));
+        assertThat(chatModel.lastQueryRequest()).isNotNull();
+        assertThat(chatModel.lastStreamQueryRequest()).isNotNull();
+    }
+
+    @Test
     void queryReturnsCompletePromptWhenOnlyNeedPromptIsEnabled() {
         var storage = InMemoryStorageProvider.create();
         var chatModel = new FakeChatModel();
@@ -1970,6 +2002,30 @@ class E2ELightRagTest {
             .contains("Answer in one sentence.");
         assertThat(chatModel.lastBypassRequest().conversationHistory())
             .containsExactly(new ChatModel.ChatRequest.ConversationMessage("user", "Earlier question"));
+    }
+
+    @Test
+    void queryCanStreamBypassMode() {
+        var storage = InMemoryStorageProvider.create();
+        var chatModel = new FakeChatModel();
+        var rag = LightRag.builder()
+            .chatModel(chatModel)
+            .embeddingModel(new FakeEmbeddingModel())
+            .storage(storage)
+            .build();
+
+        var result = rag.query(QueryRequest.builder()
+            .query("Talk directly to the model")
+            .mode(QueryMode.BYPASS)
+            .stream(true)
+            .build());
+
+        assertThat(result.streaming()).isTrue();
+        assertThat(result.answer()).isEmpty();
+        assertThat(readAll(result.answerStream())).containsExactly("Bypass ", "answer.");
+        assertThat(result.contexts()).isEmpty();
+        assertThat(chatModel.lastStreamBypassRequest()).isNotNull();
+        assertThat(chatModel.lastStreamBypassRequest().userPrompt()).contains("Talk directly to the model");
     }
 
     @Test
@@ -2636,6 +2692,8 @@ class E2ELightRagTest {
     private static final class FakeChatModel implements ChatModel {
         private ChatRequest lastQueryRequest;
         private ChatRequest lastBypassRequest;
+        private ChatRequest lastStreamQueryRequest;
+        private ChatRequest lastStreamBypassRequest;
         private int queryCallCount;
 
         @Override
@@ -2707,12 +2765,62 @@ class E2ELightRagTest {
                 """;
         }
 
+        @Override
+        public io.github.lightragjava.model.CloseableIterator<String> stream(ChatRequest request) {
+            var fragments = isRetrievalPrompt(request)
+                ? recordQueryStream(request)
+                : recordBypassStream(request);
+            return new io.github.lightragjava.model.CloseableIterator<>() {
+                private int index;
+                private boolean closed;
+
+                @Override
+                public boolean hasNext() {
+                    return !closed && index < fragments.size();
+                }
+
+                @Override
+                public String next() {
+                    if (!hasNext()) {
+                        throw new java.util.NoSuchElementException();
+                    }
+                    return fragments.get(index++);
+                }
+
+                @Override
+                public void close() {
+                    closed = true;
+                }
+            };
+        }
+
+        private List<String> recordQueryStream(ChatRequest request) {
+            lastQueryRequest = request;
+            lastStreamQueryRequest = request;
+            queryCallCount++;
+            return List.of("Alice ", "works with Bob.");
+        }
+
+        private List<String> recordBypassStream(ChatRequest request) {
+            lastBypassRequest = request;
+            lastStreamBypassRequest = request;
+            return List.of("Bypass ", "answer.");
+        }
+
         ChatRequest lastQueryRequest() {
             return lastQueryRequest;
         }
 
         ChatRequest lastBypassRequest() {
             return lastBypassRequest;
+        }
+
+        ChatRequest lastStreamQueryRequest() {
+            return lastStreamQueryRequest;
+        }
+
+        ChatRequest lastStreamBypassRequest() {
+            return lastStreamBypassRequest;
         }
 
         int queryCallCount() {
@@ -2796,6 +2904,18 @@ class E2ELightRagTest {
             && request.systemPrompt().contains("---Instructions---")
             && request.systemPrompt().contains("---Context---")
             && request.systemPrompt().contains("The response should be presented in");
+    }
+
+    private static List<String> readAll(io.github.lightragjava.model.CloseableIterator<String> iterator) {
+        try (iterator) {
+            var values = new java.util.ArrayList<String>();
+            while (iterator.hasNext()) {
+                values.add(iterator.next());
+            }
+            return values;
+        } catch (Exception exception) {
+            throw new RuntimeException(exception);
+        }
     }
 
     private static final class AtomicOnlyStorageProvider implements io.github.lightragjava.storage.AtomicStorageProvider {

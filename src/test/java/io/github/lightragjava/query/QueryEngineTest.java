@@ -185,6 +185,40 @@ class QueryEngineTest {
     }
 
     @Test
+    void returnsStreamingAnswerAndRetrievalMetadataWhenStreamIsEnabled() {
+        var chatModel = new RecordingChatModel().withStreamResponse("Alpha ", "answer");
+        var engine = new QueryEngine(
+            chatModel,
+            new ContextAssembler(),
+            strategiesReturning(referenceContext()),
+            null
+        );
+
+        var result = engine.query(QueryRequest.builder()
+            .query("which chunk?")
+            .mode(QueryMode.LOCAL)
+            .chunkTopK(3)
+            .includeReferences(true)
+            .stream(true)
+            .build());
+
+        assertThat(result.streaming()).isTrue();
+        assertThat(result.answer()).isEmpty();
+        assertThat(readAll(result.answerStream())).containsExactly("Alpha ", "answer");
+        assertThat(result.contexts())
+            .extracting(context -> context.sourceId())
+            .containsExactly("chunk-1", "chunk-2", "chunk-3");
+        assertThat(result.references())
+            .containsExactly(
+                new io.github.lightragjava.api.QueryResult.Reference("1", "alpha.txt"),
+                new io.github.lightragjava.api.QueryResult.Reference("2", "beta.txt")
+            );
+        assertThat(chatModel.streamCallCount()).isEqualTo(1);
+        assertThat(chatModel.callCount()).isZero();
+        assertThat(chatModel.lastStreamRequest().userPrompt()).isEqualTo("which chunk?");
+    }
+
+    @Test
     void returnsAssembledContextWithoutCallingChatModelWhenOnlyNeedContextIsEnabled() {
         var chatModel = new RecordingChatModel();
         var engine = new QueryEngine(
@@ -203,6 +237,7 @@ class QueryEngineTest {
             .mode(QueryMode.LOCAL)
             .topK(3)
             .chunkTopK(3)
+            .stream(true)
             .onlyNeedContext(true)
             .build());
 
@@ -217,7 +252,9 @@ class QueryEngineTest {
             .extracting(context -> context.sourceId())
             .containsExactly("chunk-3", "chunk-2", "chunk-1");
         assertThat(chatModel.callCount()).isZero();
+        assertThat(chatModel.streamCallCount()).isZero();
         assertThat(chatModel.lastRequest()).isNull();
+        assertThat(chatModel.lastStreamRequest()).isNull();
     }
 
     @Test
@@ -245,6 +282,7 @@ class QueryEngineTest {
                 new ChatModel.ChatRequest.ConversationMessage("user", "Earlier question"),
                 new ChatModel.ChatRequest.ConversationMessage("assistant", "Earlier answer")
             ))
+            .stream(true)
             .onlyNeedPrompt(true)
             .build());
 
@@ -269,7 +307,9 @@ class QueryEngineTest {
             .extracting(context -> context.sourceId())
             .containsExactly("chunk-3", "chunk-2", "chunk-1");
         assertThat(chatModel.callCount()).isZero();
+        assertThat(chatModel.streamCallCount()).isZero();
         assertThat(chatModel.lastRequest()).isNull();
+        assertThat(chatModel.lastStreamRequest()).isNull();
     }
 
     @Test
@@ -385,6 +425,7 @@ class QueryEngineTest {
             .maxRelationTokens(222)
             .maxTotalTokens(333)
             .includeReferences(true)
+            .stream(true)
             .hlKeywords(List.of("high level"))
             .llKeywords(List.of("low level"))
             .conversationHistory(history)
@@ -398,6 +439,7 @@ class QueryEngineTest {
         assertThat(strategy.lastRequest().maxRelationTokens()).isEqualTo(222);
         assertThat(strategy.lastRequest().maxTotalTokens()).isEqualTo(Integer.MAX_VALUE);
         assertThat(strategy.lastRequest().includeReferences()).isTrue();
+        assertThat(strategy.lastRequest().stream()).isTrue();
         assertThat(strategy.lastRequest().hlKeywords()).containsExactly("high level");
         assertThat(strategy.lastRequest().llKeywords()).containsExactly("low level");
         assertThat(strategy.lastRequest().conversationHistory()).containsExactlyElementsOf(history);
@@ -593,6 +635,39 @@ class QueryEngineTest {
     }
 
     @Test
+    void bypassStreamsDirectlyFromChatModelWhenRequested() {
+        var chatModel = new RecordingChatModel().withStreamResponse("Bypass ", "answer");
+        var strategy = new FailingQueryStrategy();
+        var engine = new QueryEngine(
+            chatModel,
+            new ContextAssembler(),
+            strategiesReturning(strategy),
+            null
+        );
+
+        var result = engine.query(QueryRequest.builder()
+            .query("talk directly to the model")
+            .mode(QueryMode.BYPASS)
+            .userPrompt("Answer in one sentence.")
+            .stream(true)
+            .build());
+
+        assertThat(result.streaming()).isTrue();
+        assertThat(result.answer()).isEmpty();
+        assertThat(readAll(result.answerStream())).containsExactly("Bypass ", "answer");
+        assertThat(result.contexts()).isEmpty();
+        assertThat(result.references()).isEmpty();
+        assertThat(strategy.callCount()).isZero();
+        assertThat(chatModel.callCount()).isZero();
+        assertThat(chatModel.streamCallCount()).isEqualTo(1);
+        assertThat(chatModel.lastStreamRequest().systemPrompt()).isEmpty();
+        assertThat(chatModel.lastStreamRequest().userPrompt())
+            .contains("talk directly to the model")
+            .contains("Additional Instructions:")
+            .contains("Answer in one sentence.");
+    }
+
+    @Test
     void bypassModeReturnsPromptPayloadWithoutCallingChatModelWhenOnlyNeedPromptIsEnabled() {
         var chatModel = new RecordingChatModel();
         var strategy = new FailingQueryStrategy();
@@ -743,9 +818,12 @@ class QueryEngineTest {
 
     private static final class RecordingChatModel implements ChatModel {
         private final String response;
+        private List<String> streamResponse = List.of("answer");
         private ChatRequest lastRequest;
+        private ChatRequest lastStreamRequest;
 
         private int callCount;
+        private int streamCallCount;
 
         private RecordingChatModel() {
             this("answer");
@@ -762,12 +840,65 @@ class QueryEngineTest {
             return response;
         }
 
+        @Override
+        public io.github.lightragjava.model.CloseableIterator<String> stream(ChatRequest request) {
+            streamCallCount++;
+            lastStreamRequest = request;
+            return new io.github.lightragjava.model.CloseableIterator<>() {
+                private int index;
+                private boolean closed;
+
+                @Override
+                public boolean hasNext() {
+                    return !closed && index < streamResponse.size();
+                }
+
+                @Override
+                public String next() {
+                    if (!hasNext()) {
+                        throw new java.util.NoSuchElementException();
+                    }
+                    return streamResponse.get(index++);
+                }
+
+                @Override
+                public void close() {
+                    closed = true;
+                }
+            };
+        }
+
+        RecordingChatModel withStreamResponse(String... fragments) {
+            streamResponse = List.of(fragments);
+            return this;
+        }
+
         ChatRequest lastRequest() {
             return lastRequest;
         }
 
+        ChatRequest lastStreamRequest() {
+            return lastStreamRequest;
+        }
+
         int callCount() {
             return callCount;
+        }
+
+        int streamCallCount() {
+            return streamCallCount;
+        }
+    }
+
+    private static List<String> readAll(io.github.lightragjava.model.CloseableIterator<String> iterator) {
+        try (iterator) {
+            var values = new java.util.ArrayList<String>();
+            while (iterator.hasNext()) {
+                values.add(iterator.next());
+            }
+            return values;
+        } catch (Exception exception) {
+            throw new RuntimeException(exception);
         }
     }
 }

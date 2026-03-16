@@ -158,6 +158,9 @@ public final class QueryEngine {
         if (query.onlyNeedPrompt()) {
             return new QueryResult(renderStandardPrompt(chatRequest), references.contexts(), references.references());
         }
+        if (query.stream()) {
+            return QueryResult.streaming(chatModel.stream(chatRequest), references.contexts(), references.references());
+        }
         var answer = chatModel.generate(chatRequest);
         return new QueryResult(answer, references.contexts(), references.references());
     }
@@ -181,6 +184,7 @@ public final class QueryEngine {
             request.onlyNeedContext(),
             request.onlyNeedPrompt(),
             request.includeReferences(),
+            request.stream(),
             request.userPrompt(),
             request.hlKeywords(),
             request.llKeywords(),
@@ -199,6 +203,9 @@ public final class QueryEngine {
         }
         if (query.onlyNeedPrompt()) {
             return new QueryResult(renderBypassPrompt(chatRequest), List.of(), List.of());
+        }
+        if (query.stream()) {
+            return QueryResult.streaming(chatModel.stream(chatRequest), List.of(), List.of());
         }
         return new QueryResult(chatModel.generate(chatRequest), List.of(), List.of());
     }

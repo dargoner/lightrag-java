@@ -143,6 +143,57 @@ class OpenAiCompatibleChatModelTest {
     }
 
     @Test
+    void chatAdapterStreamsSseFragmentsAndSetsStreamFlag() throws Exception {
+        try (var server = new MockWebServer()) {
+            server.enqueue(new MockResponse()
+                .setHeader("Content-Type", "text/event-stream")
+                .setBody("""
+                    data: {"choices":[{"delta":{"content":"Hello "}}]}
+
+                    data: {"choices":[{"delta":{"content":"world"}}]}
+
+                    data: [DONE]
+
+                    """));
+            server.start();
+            var model = new OpenAiCompatibleChatModel(server.url("/v1/").toString(), "gpt-test", "secret");
+
+            try (var stream = model.stream(new ChatModel.ChatRequest("System prompt", "User prompt"))) {
+                assertThat(readAll(stream)).containsExactly("Hello ", "world");
+            }
+
+            var request = server.takeRequest();
+            var payload = OBJECT_MAPPER.readTree(request.getBody().readUtf8());
+            assertThat(payload.path("stream").asBoolean()).isTrue();
+        }
+    }
+
+    @Test
+    void chatAdapterAllowsEarlyCloseOfStreamingResponses() throws Exception {
+        try (var server = new MockWebServer()) {
+            server.enqueue(new MockResponse()
+                .setHeader("Content-Type", "text/event-stream")
+                .setBody("""
+                    data: {"choices":[{"delta":{"content":"Hello "}}]}
+
+                    data: {"choices":[{"delta":{"content":"world"}}]}
+
+                    data: [DONE]
+
+                    """));
+            server.start();
+            var model = new OpenAiCompatibleChatModel(server.url("/v1/").toString(), "gpt-test", "secret");
+
+            try (var stream = model.stream(new ChatModel.ChatRequest("System prompt", "User prompt"))) {
+                assertThat(stream.hasNext()).isTrue();
+                assertThat(stream.next()).isEqualTo("Hello ");
+                stream.close();
+                assertThat(stream.hasNext()).isFalse();
+            }
+        }
+    }
+
+    @Test
     void non2xxResponsesRaiseModelException() throws Exception {
         try (var server = new MockWebServer()) {
             server.enqueue(new MockResponse().setResponseCode(401).setBody("{\"error\":\"unauthorized\"}"));
@@ -176,5 +227,13 @@ class OpenAiCompatibleChatModelTest {
             assertThatThrownBy(() -> model.generate(new ChatModel.ChatRequest("System prompt", "User prompt")))
                 .isInstanceOf(ModelException.class);
         }
+    }
+
+    private static List<String> readAll(java.util.Iterator<String> iterator) {
+        var values = new java.util.ArrayList<String>();
+        while (iterator.hasNext()) {
+            values.add(iterator.next());
+        }
+        return values;
     }
 }
