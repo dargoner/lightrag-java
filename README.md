@@ -1,6 +1,34 @@
 # lightrag-java
 
+![Java 17](https://img.shields.io/badge/Java-17-437291)
+![Gradle 8](https://img.shields.io/badge/Gradle-8.14.3-02303A)
+![Spring Boot Starter](https://img.shields.io/badge/Spring_Boot-Starter-6DB33F)
+![RAGAS Eval](https://img.shields.io/badge/Evaluation-RAGAS-7B61FF)
+
 Standalone Java SDK for a LightRAG-style indexing and retrieval pipeline.
+
+## 中文速览
+
+`lightrag-java` 是一个面向 Java 17 的 LightRAG 风格 SDK，当前已经具备以下能力：
+
+- 文档 ingest、chunk、实体/关系抽取、图组装
+- 查询模式：`NAIVE`、`LOCAL`、`GLOBAL`、`HYBRID`、`MIX`、`BYPASS`
+- 查询增强：`userPrompt`、`conversationHistory`、`stream`、`includeReferences`、`modelFunc`
+- 自动关键词提取
+- 存储后端：
+  - `in-memory`
+  - `PostgresStorageProvider`
+  - `PostgresNeo4jStorageProvider`
+- Spring Boot Starter 与 Demo
+- upstream 风格 RAGAS 评测，以及 PG/Neo4j Testcontainers 同口径评测
+
+如果你是第一次接入，建议按这个顺序看：
+
+1. `Quick Start`
+2. `Spring Boot`
+3. `PostgreSQL Storage`
+4. `Postgres + Neo4j Storage`
+5. `evaluation/ragas/`
 
 ## Requirements
 
@@ -68,6 +96,120 @@ The demo's default config lives in:
 - `lightrag-spring-boot-demo/src/main/resources/application.yml`
 
 It defaults to `in-memory` storage and OpenAI-compatible model settings resolved from environment variables.
+
+### Spring Boot 中文说明
+
+当前仓库已经拆成多模块：
+
+- `lightrag-core`
+  - 核心 SDK
+- `lightrag-spring-boot-starter`
+  - Spring Boot 自动装配
+- `lightrag-spring-boot-demo`
+  - 最小可运行 REST 示例
+
+Starter 会自动装配这些核心 Bean：
+
+- `ChatModel`
+- `EmbeddingModel`
+- `StorageProvider`
+- `LightRag`
+
+你只需要在 `application.yml` 里提供：
+
+- chat 模型配置
+- embedding 模型配置
+- storage 类型与连接信息
+
+Starter 第一版支持的 storage 类型：
+
+- `in-memory`
+- `postgres`
+- `postgres-neo4j`
+
+最小内存版配置示例：
+
+```yaml
+lightrag:
+  chat:
+    base-url: http://localhost:11434/v1/
+    model: qwen2.5:7b
+    api-key: dummy
+  embedding:
+    base-url: http://localhost:11434/v1/
+    model: nomic-embed-text
+    api-key: dummy
+  storage:
+    type: in-memory
+```
+
+PostgreSQL 配置示例：
+
+```yaml
+lightrag:
+  chat:
+    base-url: https://api.openai.com/v1/
+    model: gpt-4o-mini
+    api-key: ${OPENAI_API_KEY}
+  embedding:
+    base-url: https://api.openai.com/v1/
+    model: text-embedding-3-small
+    api-key: ${OPENAI_API_KEY}
+  storage:
+    type: postgres
+    postgres:
+      jdbc-url: jdbc:postgresql://localhost:5432/lightrag
+      username: postgres
+      password: postgres
+      schema: lightrag
+      vector-dimensions: 1536
+      table-prefix: rag_
+```
+
+Postgres + Neo4j 配置示例：
+
+```yaml
+lightrag:
+  chat:
+    base-url: https://api.openai.com/v1/
+    model: gpt-4o-mini
+    api-key: ${OPENAI_API_KEY}
+  embedding:
+    base-url: https://api.openai.com/v1/
+    model: text-embedding-3-small
+    api-key: ${OPENAI_API_KEY}
+  storage:
+    type: postgres-neo4j
+    postgres:
+      jdbc-url: jdbc:postgresql://localhost:5432/lightrag
+      username: postgres
+      password: postgres
+      schema: lightrag
+      vector-dimensions: 1536
+      table-prefix: rag_
+    neo4j:
+      uri: bolt://localhost:7687
+      username: neo4j
+      password: password
+      database: neo4j
+```
+
+Demo 启动命令：
+
+```bash
+./gradlew :lightrag-spring-boot-demo:bootRun
+```
+
+Demo 当前只提供两个最小接口：
+
+- `POST /documents/ingest`
+- `POST /query`
+
+适合用来验证：
+
+- Starter 配置是否正确
+- 模型和存储是否可连通
+- 基础 ingest/query 链路是否正常
 
 ## Query Modes
 
