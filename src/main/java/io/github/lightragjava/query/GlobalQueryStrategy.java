@@ -40,43 +40,43 @@ public final class GlobalQueryStrategy implements QueryStrategy {
         }
         var queryVector = embeddingModel.embedAll(List.of(embeddingText)).get(0);
         var relationScores = new LinkedHashMap<String, Double>();
-        var entityScores = new LinkedHashMap<String, Double>();
-        var chunkScores = new LinkedHashMap<String, Double>();
-
         for (var match : storageProvider.vectorStore().search(RELATION_NAMESPACE, queryVector, query.topK())) {
             relationScores.merge(match.id(), match.score(), Math::max);
         }
 
-        var matchedRelations = relationScores.entrySet().stream()
+        var matchedRelations = QueryBudgeting.limitRelations(relationScores.entrySet().stream()
             .map(entry -> storageProvider.graphStore().loadRelation(entry.getKey())
-                .map(relation -> {
-                    entityScores.merge(relation.sourceEntityId(), entry.getValue(), Math::max);
-                    entityScores.merge(relation.targetEntityId(), entry.getValue(), Math::max);
-                    for (var chunkId : relation.sourceChunkIds()) {
-                        chunkScores.merge(chunkId, entry.getValue(), Math::max);
-                    }
-                    return new ScoredRelation(entry.getKey(), toRelation(relation), entry.getValue());
-                })
+                .map(relation -> new ScoredRelation(entry.getKey(), toRelation(relation), entry.getValue()))
                 .orElse(null))
             .filter(Objects::nonNull)
             .sorted(scoreOrder(ScoredRelation::score, ScoredRelation::relationId))
-            .toList();
+            .toList(), query.maxRelationTokens());
 
-        var matchedEntities = entityScores.entrySet().stream()
+        var entityScores = new LinkedHashMap<String, Double>();
+        var chunkScores = new LinkedHashMap<String, Double>();
+        for (var relation : matchedRelations) {
+            entityScores.merge(relation.relation().sourceEntityId(), relation.score(), Math::max);
+            entityScores.merge(relation.relation().targetEntityId(), relation.score(), Math::max);
+            for (var chunkId : relation.relation().sourceChunkIds()) {
+                chunkScores.merge(chunkId, relation.score(), Math::max);
+            }
+        }
+
+        var matchedEntities = QueryBudgeting.limitEntities(entityScores.entrySet().stream()
             .map(entry -> storageProvider.graphStore().loadEntity(entry.getKey())
                 .map(entity -> new ScoredEntity(entry.getKey(), toEntity(entity), entry.getValue()))
                 .orElse(null))
             .filter(Objects::nonNull)
             .sorted(scoreOrder(ScoredEntity::score, ScoredEntity::entityId))
-            .toList();
-        var matchedChunks = chunkScores.entrySet().stream()
+            .toList(), query.maxEntityTokens());
+        var matchedChunks = QueryBudgeting.limitChunks(chunkScores.entrySet().stream()
             .map(entry -> storageProvider.chunkStore().load(entry.getKey())
                 .map(chunk -> new ScoredChunk(entry.getKey(), toChunk(chunk), entry.getValue()))
                 .orElse(null))
             .filter(Objects::nonNull)
             .sorted(scoreOrder(ScoredChunk::score, ScoredChunk::chunkId))
             .limit(query.chunkTopK())
-            .toList();
+            .toList(), query.maxTotalTokens());
 
         var context = new QueryContext(
             matchedEntities,

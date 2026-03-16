@@ -101,6 +101,8 @@ The Java SDK supports the upstream query-time prompt controls `userPrompt` and `
 
 It also supports manual graph-retrieval keyword overrides through `hlKeywords` and `llKeywords`.
 
+It also supports upstream-style query token budgets through `maxEntityTokens`, `maxRelationTokens`, and `maxTotalTokens`.
+
 Use `userPrompt` when you want to add answer-formatting or style instructions without changing retrieval:
 
 ```java
@@ -134,11 +136,27 @@ var result = rag.query(QueryRequest.builder()
     .build());
 ```
 
+Use token budgets when you need deterministic caps on how much graph and chunk context is retained:
+
+```java
+var result = rag.query(QueryRequest.builder()
+    .query("Summarize the project status")
+    .mode(QueryMode.MIX)
+    .maxEntityTokens(6_000)
+    .maxRelationTokens(8_000)
+    .maxTotalTokens(30_000)
+    .build());
+```
+
 Notes:
 
 - retrieval mode selection, graph expansion, and rerank behavior are unchanged by these fields
 - `conversationHistory` is passed separately to the chat adapter; Java does not flatten those messages into the current-turn prompt
 - `hlKeywords` and `llKeywords` are manual overrides only in this phase; Java does not yet implement upstream automatic keyword extraction
+- `maxEntityTokens` and `maxRelationTokens` cap formatted graph context rows in score order
+- `maxTotalTokens` caps final chunk context; graph-aware queries apply a final remaining-budget trim after merge/rerank, while direct strategy retrieval also applies a coarse chunk-token cap
+- defaults are `maxEntityTokens=6000`, `maxRelationTokens=8000`, and `maxTotalTokens=30000`
+- chunk budgeting uses stored `Chunk.tokenCount()`, while prompt/query/entity/relation budgeting uses a shared lightweight text-token approximation in this phase
 - in `HYBRID` and `MIX`, when manual keyword overrides are provided, only the non-empty keyword side participates in graph retrieval; direct chunk retrieval in `MIX` still uses the raw query text
 - in standard retrieval modes, Java now follows the upstream-style boundary more closely: retrieval instructions, `responseType`, `userPrompt`, and assembled context are sent through `systemPrompt`, while the current-turn user message is the raw query text
 - standard retrieval modes now render richer upstream-style `---Role---`, `---Goal---`, `---Instructions---`, and `---Context---` sections instead of the earlier short custom template
