@@ -126,6 +126,8 @@ Notes:
 - retrieval mode selection, graph expansion, and rerank behavior are unchanged by these fields
 - `conversationHistory` is passed separately to the chat adapter; Java does not flatten those messages into the current-turn prompt
 - in standard retrieval modes, Java now follows the upstream-style boundary more closely: retrieval instructions, `responseType`, `userPrompt`, and assembled context are sent through `systemPrompt`, while the current-turn user message is the raw query text
+- standard retrieval modes now render richer upstream-style `---Role---`, `---Goal---`, `---Instructions---`, and `---Context---` sections instead of the earlier short custom template
+- graph-aware modes mention both knowledge graph data and document chunks, while `NAIVE` uses document-chunk-only wording
 - the default `responseType` is `Multiple Paragraphs`
 
 ## Query Shortcuts
@@ -152,7 +154,7 @@ var result = rag.query(QueryRequest.builder()
     .onlyNeedPrompt(true)
     .build());
 
-System.out.println(result.answer());   // system/history/user prompt dump
+System.out.println(result.answer());   // rendered system prompt plus raw user query
 ```
 
 Use `BYPASS` when you want a direct LLM call with optional chat history and prompt controls but no retrieval:
@@ -173,6 +175,7 @@ Notes:
 - in standard retrieval modes, `onlyNeedPrompt` takes precedence over `onlyNeedContext`
 - `onlyNeedContext` returns assembled context text in `QueryResult.answer`
 - `onlyNeedPrompt` returns an upstream-like prompt inspection payload: formatted system prompt plus a `---User Query---` section with the raw query text
+- prompt inspection does not inline `conversationHistory`; those turns still travel separately in the real chat-model request
 - plain `BYPASS` returns direct chat-model output in `QueryResult.answer` and an empty `contexts` list
 - `BYPASS + onlyNeedContext(true)` returns an empty `answer` and empty `contexts`
 - `BYPASS + onlyNeedPrompt(true)` returns the bypass prompt payload in `QueryResult.answer`
