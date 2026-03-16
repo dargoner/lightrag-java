@@ -38,6 +38,37 @@ System.out.println(result.answer());
 
 For tests, demos, and ephemeral runs, the in-memory provider is still the fastest option. For restart-safe ingestion and durable local state, use the PostgreSQL provider described below.
 
+## Spring Boot
+
+The repository now includes two Spring-focused modules:
+
+- `lightrag-core`: the framework-neutral SDK
+- `lightrag-spring-boot-starter`: Spring Boot auto-configuration for `LightRag`
+- `lightrag-spring-boot-demo`: a minimal REST demo application
+
+The starter auto-configures `LightRag` from `application.yml` when you provide:
+
+- chat model base URL, model name, and API key
+- embedding model base URL, model name, and API key
+- storage type: `in-memory`, `postgres`, or `postgres-neo4j`
+
+The demo application exposes:
+
+- `POST /documents/ingest`
+- `POST /query`
+
+Run the demo locally with:
+
+```bash
+./gradlew :lightrag-spring-boot-demo:bootRun
+```
+
+The demo's default config lives in:
+
+- `lightrag-spring-boot-demo/src/main/resources/application.yml`
+
+It defaults to `in-memory` storage and OpenAI-compatible model settings resolved from environment variables.
+
 ## Query Modes
 
 The Java SDK currently supports six query modes:
