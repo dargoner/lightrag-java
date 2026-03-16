@@ -51,16 +51,16 @@ public final class HybridQueryStrategy implements QueryStrategy {
         }
 
         var context = new QueryContext(
-            mergedEntities.values().stream()
+            QueryBudgeting.limitEntities(mergedEntities.values().stream()
                 .sorted(scoreOrder(ScoredEntity::score, ScoredEntity::entityId))
-                .toList(),
-            mergedRelations.values().stream()
+                .toList(), request.maxEntityTokens()),
+            QueryBudgeting.limitRelations(mergedRelations.values().stream()
                 .sorted(scoreOrder(ScoredRelation::score, ScoredRelation::relationId))
-                .toList(),
-            mergedChunks.values().stream()
+                .toList(), request.maxRelationTokens()),
+            QueryBudgeting.limitChunks(mergedChunks.values().stream()
                 .sorted(scoreOrder(ScoredChunk::score, ScoredChunk::chunkId))
                 .limit(request.chunkTopK())
-                .toList(),
+                .toList(), request.maxTotalTokens()),
             ""
         );
         return new QueryContext(

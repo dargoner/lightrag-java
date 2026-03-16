@@ -325,7 +325,7 @@ class QueryEngineTest {
     }
 
     @Test
-    void preservesPromptCustomizationWhenRerankExpandsChunkRequest() {
+    void preservesPromptCustomizationAndGraphBudgetsWhenRerankExpandsChunkRequest() {
         var history = List.of(
             new ChatModel.ChatRequest.ConversationMessage("user", "Earlier question"),
             new ChatModel.ChatRequest.ConversationMessage("assistant", "Earlier answer")
@@ -349,6 +349,9 @@ class QueryEngineTest {
             .chunkTopK(3)
             .responseType("Bullet Points")
             .userPrompt("Answer in one sentence.")
+            .maxEntityTokens(111)
+            .maxRelationTokens(222)
+            .maxTotalTokens(333)
             .hlKeywords(List.of("high level"))
             .llKeywords(List.of("low level"))
             .conversationHistory(history)
@@ -358,6 +361,9 @@ class QueryEngineTest {
         assertThat(strategy.lastRequest().chunkTopK()).isEqualTo(6);
         assertThat(strategy.lastRequest().responseType()).isEqualTo("Bullet Points");
         assertThat(strategy.lastRequest().userPrompt()).isEqualTo("Answer in one sentence.");
+        assertThat(strategy.lastRequest().maxEntityTokens()).isEqualTo(111);
+        assertThat(strategy.lastRequest().maxRelationTokens()).isEqualTo(222);
+        assertThat(strategy.lastRequest().maxTotalTokens()).isEqualTo(Integer.MAX_VALUE);
         assertThat(strategy.lastRequest().hlKeywords()).containsExactly("high level");
         assertThat(strategy.lastRequest().llKeywords()).containsExactly("low level");
         assertThat(strategy.lastRequest().conversationHistory()).containsExactlyElementsOf(history);
@@ -380,6 +386,25 @@ class QueryEngineTest {
             .containsExactly("chunk-1", "chunk-2", "chunk-3");
         assertThat(strategy.lastRequest()).isNotNull();
         assertThat(strategy.lastRequest().chunkTopK()).isEqualTo(3);
+    }
+
+    @Test
+    void trimsFinalChunksToRemainingMaxTotalTokensAfterRetrieval() {
+        var engine = new QueryEngine(
+            new RecordingChatModel(),
+            new ContextAssembler(),
+            strategiesReturning(baseContext()),
+            null
+        );
+
+        var result = engine.query(QueryRequest.builder()
+            .query("which chunk?")
+            .mode(QueryMode.LOCAL)
+            .chunkTopK(3)
+            .maxTotalTokens(1)
+            .build());
+
+        assertThat(result.contexts()).isEmpty();
     }
 
     @Test

@@ -92,6 +92,26 @@ class LocalQueryStrategyTest {
             .containsExactly("relation:entity:alice|works_with|entity:bob");
     }
 
+    @Test
+    void localTrimsEntitiesToMaxEntityTokens() {
+        var storage = InMemoryStorageProvider.create();
+        seedGraph(storage);
+        seedVectors(storage);
+        var strategy = new LocalQueryStrategy(new FakeEmbeddingModel(Map.of("alice question", List.of(1.0d, 0.0d))), storage, new ContextAssembler());
+
+        var context = strategy.retrieve(QueryRequest.builder()
+            .query("alice question")
+            .mode(QueryMode.LOCAL)
+            .topK(1)
+            .chunkTopK(2)
+            .maxEntityTokens(6)
+            .build());
+
+        assertThat(context.matchedEntities())
+            .extracting(match -> match.entityId())
+            .containsExactly("entity:alice");
+    }
+
     static void seedGraph(InMemoryStorageProvider storage) {
         storage.chunkStore().save(new ChunkStore.ChunkRecord("chunk-1", "doc-1", "Alice works with Bob", 4, 0, Map.of()));
         storage.chunkStore().save(new ChunkStore.ChunkRecord("chunk-2", "doc-1", "Bob supports Alice", 4, 1, Map.of()));

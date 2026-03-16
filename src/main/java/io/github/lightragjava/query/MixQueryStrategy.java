@@ -50,12 +50,12 @@ public final class MixQueryStrategy implements QueryStrategy {
         }
 
         var context = new QueryContext(
-            hybrid.matchedEntities(),
-            hybrid.matchedRelations(),
-            mergedChunks.values().stream()
+            QueryBudgeting.limitEntities(hybrid.matchedEntities(), request.maxEntityTokens()),
+            QueryBudgeting.limitRelations(hybrid.matchedRelations(), request.maxRelationTokens()),
+            QueryBudgeting.limitChunks(mergedChunks.values().stream()
                 .sorted(scoreOrder())
                 .limit(request.chunkTopK())
-                .toList(),
+                .toList(), request.maxTotalTokens()),
             ""
         );
         return new QueryContext(

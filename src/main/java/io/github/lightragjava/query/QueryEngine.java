@@ -15,6 +15,8 @@ import java.util.Map;
 import java.util.Objects;
 
 public final class QueryEngine {
+    private static final int CHUNK_BUDGET_BUFFER_TOKENS = 16;
+
     private static final String GRAPH_SYSTEM_PROMPT_TEMPLATE = """
         ---Role---
 
@@ -124,9 +126,13 @@ public final class QueryEngine {
 
         var retrievalRequest = rerankEnabled(query) ? expandChunkRequest(query) : query;
         var retrievedContext = strategy.retrieve(retrievalRequest);
-        var finalChunks = rerankEnabled(query)
+        var rerankedChunks = rerankEnabled(query)
             ? rerankChunks(query, retrievedContext.matchedChunks())
             : retrievedContext.matchedChunks();
+        var finalChunks = QueryBudgeting.limitChunks(
+            rerankedChunks,
+            remainingChunkBudget(query, retrievedContext)
+        );
         var finalContext = new QueryContext(
             retrievedContext.matchedEntities(),
             retrievedContext.matchedRelations(),
@@ -167,6 +173,9 @@ public final class QueryEngine {
             request.mode(),
             request.topK(),
             (int) Math.min(Integer.MAX_VALUE, expandedChunkTopK),
+            request.maxEntityTokens(),
+            request.maxRelationTokens(),
+            Integer.MAX_VALUE,
             request.responseType(),
             request.enableRerank(),
             request.onlyNeedContext(),
@@ -253,6 +262,20 @@ public final class QueryEngine {
 
     private static String effectiveUserPrompt(String userPrompt) {
         return userPrompt == null || userPrompt.isBlank() ? "n/a" : userPrompt;
+    }
+
+    private int remainingChunkBudget(QueryRequest request, QueryContext context) {
+        var nonChunkContext = new QueryContext(
+            context.matchedEntities(),
+            context.matchedRelations(),
+            List.of(),
+            ""
+        );
+        var assembledNonChunkContext = contextAssembler.assemble(nonChunkContext);
+        var systemPromptTokens = QueryBudgeting.approximateTokenCount(buildSystemPrompt(request, assembledNonChunkContext));
+        var queryTokens = QueryBudgeting.approximateTokenCount(request.query());
+        long remaining = (long) request.maxTotalTokens() - systemPromptTokens - queryTokens - CHUNK_BUDGET_BUFFER_TOKENS;
+        return (int) Math.max(0L, remaining);
     }
 
     private List<ScoredChunk> rerankChunks(QueryRequest request, List<ScoredChunk> matchedChunks) {

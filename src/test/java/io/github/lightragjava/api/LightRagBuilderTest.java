@@ -162,6 +162,9 @@ class LightRagBuilderTest {
         assertThat(request.mode()).isEqualTo(QueryMode.MIX);
         assertThat(request.topK()).isEqualTo(QueryRequest.DEFAULT_TOP_K);
         assertThat(request.chunkTopK()).isEqualTo(QueryRequest.DEFAULT_CHUNK_TOP_K);
+        assertThat(request.maxEntityTokens()).isEqualTo(QueryRequest.DEFAULT_MAX_ENTITY_TOKENS);
+        assertThat(request.maxRelationTokens()).isEqualTo(QueryRequest.DEFAULT_MAX_RELATION_TOKENS);
+        assertThat(request.maxTotalTokens()).isEqualTo(QueryRequest.DEFAULT_MAX_TOTAL_TOKENS);
         assertThat(request.responseType()).isEqualTo("Multiple Paragraphs");
         assertThat(request.enableRerank()).isTrue();
         assertThat(request.onlyNeedContext()).isFalse();
@@ -187,6 +190,9 @@ class LightRagBuilderTest {
         assertThat(request.mode()).isEqualTo(QueryMode.LOCAL);
         assertThat(request.topK()).isEqualTo(5);
         assertThat(request.chunkTopK()).isEqualTo(7);
+        assertThat(request.maxEntityTokens()).isEqualTo(QueryRequest.DEFAULT_MAX_ENTITY_TOKENS);
+        assertThat(request.maxRelationTokens()).isEqualTo(QueryRequest.DEFAULT_MAX_RELATION_TOKENS);
+        assertThat(request.maxTotalTokens()).isEqualTo(QueryRequest.DEFAULT_MAX_TOTAL_TOKENS);
         assertThat(request.responseType()).isEqualTo("text");
         assertThat(request.enableRerank()).isFalse();
         assertThat(request.onlyNeedContext()).isFalse();
@@ -213,10 +219,51 @@ class LightRagBuilderTest {
         assertThat(request.onlyNeedContext()).isFalse();
         assertThat(request.onlyNeedPrompt()).isFalse();
         assertThat(request.userPrompt()).isEqualTo("Answer in one sentence.");
+        assertThat(request.maxEntityTokens()).isEqualTo(QueryRequest.DEFAULT_MAX_ENTITY_TOKENS);
+        assertThat(request.maxRelationTokens()).isEqualTo(QueryRequest.DEFAULT_MAX_RELATION_TOKENS);
+        assertThat(request.maxTotalTokens()).isEqualTo(QueryRequest.DEFAULT_MAX_TOTAL_TOKENS);
         assertThat(request.hlKeywords()).isEmpty();
         assertThat(request.llKeywords()).isEmpty();
         assertThat(request.conversationHistory())
             .containsExactly(new ChatModel.ChatRequest.ConversationMessage("user", "Earlier question"));
+    }
+
+    @Test
+    void queryRequestAcceptsTokenBudgetOverrides() {
+        var request = QueryRequest.builder()
+            .query("Where is the evidence?")
+            .maxEntityTokens(111)
+            .maxRelationTokens(222)
+            .maxTotalTokens(333)
+            .build();
+
+        assertThat(request.maxEntityTokens()).isEqualTo(111);
+        assertThat(request.maxRelationTokens()).isEqualTo(222);
+        assertThat(request.maxTotalTokens()).isEqualTo(333);
+    }
+
+    @Test
+    void queryRequestRejectsNonPositiveTokenBudgets() {
+        assertThatThrownBy(() -> QueryRequest.builder()
+            .query("Where is the evidence?")
+            .maxEntityTokens(0)
+            .build())
+            .isInstanceOf(IllegalArgumentException.class)
+            .hasMessage("maxEntityTokens must be positive");
+
+        assertThatThrownBy(() -> QueryRequest.builder()
+            .query("Where is the evidence?")
+            .maxRelationTokens(-1)
+            .build())
+            .isInstanceOf(IllegalArgumentException.class)
+            .hasMessage("maxRelationTokens must be positive");
+
+        assertThatThrownBy(() -> QueryRequest.builder()
+            .query("Where is the evidence?")
+            .maxTotalTokens(0)
+            .build())
+            .isInstanceOf(IllegalArgumentException.class)
+            .hasMessage("maxTotalTokens must be positive");
     }
 
     @Test

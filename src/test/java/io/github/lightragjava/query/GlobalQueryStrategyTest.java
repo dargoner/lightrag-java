@@ -87,6 +87,28 @@ class GlobalQueryStrategyTest {
             .containsExactly("entity:bob", "entity:carol");
     }
 
+    @Test
+    void globalTrimsRelationsToMaxRelationTokens() {
+        var storage = InMemoryStorageProvider.create();
+        LocalQueryStrategyTest.seedGraph(storage);
+        LocalQueryStrategyTest.seedVectors(storage);
+        var strategy = new GlobalQueryStrategy(new FakeEmbeddingModel(Map.of(
+            "broad org question", List.of(0.8d, 0.6d)
+        )), storage, new ContextAssembler());
+
+        var context = strategy.retrieve(QueryRequest.builder()
+            .query("broad org question")
+            .mode(QueryMode.GLOBAL)
+            .topK(2)
+            .chunkTopK(2)
+            .maxRelationTokens(6)
+            .build());
+
+        assertThat(context.matchedRelations())
+            .extracting(match -> match.relationId())
+            .containsExactly("relation:entity:alice|works_with|entity:bob");
+    }
+
     private record FakeEmbeddingModel(Map<String, List<Double>> vectorsByText) implements EmbeddingModel {
         @Override
         public List<List<Double>> embedAll(List<String> texts) {

@@ -10,6 +10,9 @@ public record QueryRequest(
     QueryMode mode,
     int topK,
     int chunkTopK,
+    int maxEntityTokens,
+    int maxRelationTokens,
+    int maxTotalTokens,
     String responseType,
     boolean enableRerank,
     boolean onlyNeedContext,
@@ -22,6 +25,9 @@ public record QueryRequest(
     public static final QueryMode DEFAULT_MODE = QueryMode.MIX;
     public static final int DEFAULT_TOP_K = 10;
     public static final int DEFAULT_CHUNK_TOP_K = 10;
+    public static final int DEFAULT_MAX_ENTITY_TOKENS = 6_000;
+    public static final int DEFAULT_MAX_RELATION_TOKENS = 8_000;
+    public static final int DEFAULT_MAX_TOTAL_TOKENS = 30_000;
     public static final String DEFAULT_RESPONSE_TYPE = "Multiple Paragraphs";
 
     public QueryRequest {
@@ -38,6 +44,15 @@ public record QueryRequest(
         if (chunkTopK <= 0) {
             throw new IllegalArgumentException("chunkTopK must be positive");
         }
+        if (maxEntityTokens <= 0) {
+            throw new IllegalArgumentException("maxEntityTokens must be positive");
+        }
+        if (maxRelationTokens <= 0) {
+            throw new IllegalArgumentException("maxRelationTokens must be positive");
+        }
+        if (maxTotalTokens <= 0) {
+            throw new IllegalArgumentException("maxTotalTokens must be positive");
+        }
     }
 
     public QueryRequest(
@@ -48,7 +63,23 @@ public record QueryRequest(
         String responseType,
         boolean enableRerank
     ) {
-        this(query, mode, topK, chunkTopK, responseType, enableRerank, false, false, "", List.of(), List.of(), List.of());
+        this(
+            query,
+            mode,
+            topK,
+            chunkTopK,
+            DEFAULT_MAX_ENTITY_TOKENS,
+            DEFAULT_MAX_RELATION_TOKENS,
+            DEFAULT_MAX_TOTAL_TOKENS,
+            responseType,
+            enableRerank,
+            false,
+            false,
+            "",
+            List.of(),
+            List.of(),
+            List.of()
+        );
     }
 
     public QueryRequest(
@@ -61,7 +92,23 @@ public record QueryRequest(
         String userPrompt,
         List<ChatModel.ChatRequest.ConversationMessage> conversationHistory
     ) {
-        this(query, mode, topK, chunkTopK, responseType, enableRerank, false, false, userPrompt, List.of(), List.of(), conversationHistory);
+        this(
+            query,
+            mode,
+            topK,
+            chunkTopK,
+            DEFAULT_MAX_ENTITY_TOKENS,
+            DEFAULT_MAX_RELATION_TOKENS,
+            DEFAULT_MAX_TOTAL_TOKENS,
+            responseType,
+            enableRerank,
+            false,
+            false,
+            userPrompt,
+            List.of(),
+            List.of(),
+            conversationHistory
+        );
     }
 
     public static Builder builder() {
@@ -73,6 +120,9 @@ public record QueryRequest(
         private QueryMode mode = DEFAULT_MODE;
         private int topK = DEFAULT_TOP_K;
         private int chunkTopK = DEFAULT_CHUNK_TOP_K;
+        private int maxEntityTokens = DEFAULT_MAX_ENTITY_TOKENS;
+        private int maxRelationTokens = DEFAULT_MAX_RELATION_TOKENS;
+        private int maxTotalTokens = DEFAULT_MAX_TOTAL_TOKENS;
         private String responseType = DEFAULT_RESPONSE_TYPE;
         private boolean enableRerank = true;
         private boolean onlyNeedContext;
@@ -99,6 +149,21 @@ public record QueryRequest(
 
         public Builder chunkTopK(int chunkTopK) {
             this.chunkTopK = chunkTopK;
+            return this;
+        }
+
+        public Builder maxEntityTokens(int maxEntityTokens) {
+            this.maxEntityTokens = maxEntityTokens;
+            return this;
+        }
+
+        public Builder maxRelationTokens(int maxRelationTokens) {
+            this.maxRelationTokens = maxRelationTokens;
+            return this;
+        }
+
+        public Builder maxTotalTokens(int maxTotalTokens) {
+            this.maxTotalTokens = maxTotalTokens;
             return this;
         }
 
@@ -148,6 +213,9 @@ public record QueryRequest(
                 mode,
                 topK,
                 chunkTopK,
+                maxEntityTokens,
+                maxRelationTokens,
+                maxTotalTokens,
                 responseType,
                 enableRerank,
                 onlyNeedContext,

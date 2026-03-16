@@ -70,11 +70,16 @@ public final class LocalQueryStrategy implements QueryStrategy {
             .filter(Objects::nonNull)
             .sorted(scoreOrder(ScoredRelation::score, ScoredRelation::relationId))
             .toList();
-        var matchedChunks = collectChunks(matchedEntities, matchedRelations, query.chunkTopK());
+        var limitedEntities = QueryBudgeting.limitEntities(matchedEntities, query.maxEntityTokens());
+        var limitedRelations = QueryBudgeting.limitRelations(matchedRelations, query.maxRelationTokens());
+        var matchedChunks = QueryBudgeting.limitChunks(
+            collectChunks(limitedEntities, limitedRelations, query.chunkTopK()),
+            query.maxTotalTokens()
+        );
 
         var context = new QueryContext(
-            matchedEntities,
-            matchedRelations,
+            limitedEntities,
+            limitedRelations,
             matchedChunks,
             ""
         );

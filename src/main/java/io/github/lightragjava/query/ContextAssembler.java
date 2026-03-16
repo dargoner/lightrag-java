@@ -36,7 +36,7 @@ public final class ContextAssembler {
             return "(none)";
         }
         return context.matchedEntities().stream()
-            .map(entity -> "- %s | %s | %.3f".formatted(entity.entityId(), entity.entity().name(), entity.score()))
+            .map(QueryBudgeting::formatEntity)
             .collect(java.util.stream.Collectors.joining("\n"));
     }
 
@@ -45,11 +45,7 @@ public final class ContextAssembler {
             return "(none)";
         }
         return context.matchedRelations().stream()
-            .map(relation -> "- %s | %s | %.3f".formatted(
-                relation.relationId(),
-                relation.relation().type(),
-                relation.score()
-            ))
+            .map(QueryBudgeting::formatRelation)
             .collect(java.util.stream.Collectors.joining("\n"));
     }
 
@@ -58,7 +54,7 @@ public final class ContextAssembler {
             return "(none)";
         }
         return context.matchedChunks().stream()
-            .map(chunk -> "- %s | %.3f | %s".formatted(chunk.chunkId(), chunk.score(), chunk.chunk().text()))
+            .map(QueryBudgeting::formatChunk)
             .collect(java.util.stream.Collectors.joining("\n"));
     }
 }

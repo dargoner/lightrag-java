@@ -80,6 +80,33 @@ class MixQueryStrategyTest {
             .containsExactly("chunk-1", "chunk-2", "chunk-3");
     }
 
+    @Test
+    void mixTrimsFinalChunksToMaxTotalTokensAfterMerge() {
+        var storage = InMemoryStorageProvider.create();
+        LocalQueryStrategyTest.seedGraph(storage);
+        LocalQueryStrategyTest.seedVectors(storage);
+        var embeddings = new FakeEmbeddingModel(Map.of("mix question", List.of(1.0d, 0.0d)));
+        var contextAssembler = new ContextAssembler();
+        var hybrid = new HybridQueryStrategy(
+            new LocalQueryStrategy(embeddings, storage, contextAssembler),
+            new GlobalQueryStrategy(embeddings, storage, contextAssembler),
+            contextAssembler
+        );
+        var strategy = new MixQueryStrategy(embeddings, storage, hybrid, contextAssembler);
+
+        var context = strategy.retrieve(QueryRequest.builder()
+            .query("mix question")
+            .mode(QueryMode.MIX)
+            .topK(1)
+            .chunkTopK(3)
+            .maxTotalTokens(8)
+            .build());
+
+        assertThat(context.matchedChunks())
+            .extracting(match -> match.chunkId())
+            .containsExactly("chunk-1", "chunk-2");
+    }
+
     private record FakeEmbeddingModel(Map<String, List<Double>> vectorsByText) implements EmbeddingModel {
         @Override
         public List<List<Double>> embedAll(List<String> texts) {
