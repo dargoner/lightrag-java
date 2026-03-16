@@ -125,6 +125,8 @@ Notes:
 
 - retrieval mode selection, graph expansion, and rerank behavior are unchanged by these fields
 - `conversationHistory` is passed separately to the chat adapter; Java does not flatten those messages into the current-turn prompt
+- in standard retrieval modes, Java now follows the upstream-style boundary more closely: retrieval instructions, `responseType`, `userPrompt`, and assembled context are sent through `systemPrompt`, while the current-turn user message is the raw query text
+- the default `responseType` is `Multiple Paragraphs`
 
 ## Query Shortcuts
 
@@ -168,9 +170,9 @@ var result = rag.query(QueryRequest.builder()
 
 Notes:
 
-- in standard retrieval modes, `onlyNeedContext` takes precedence over `onlyNeedPrompt`
+- in standard retrieval modes, `onlyNeedPrompt` takes precedence over `onlyNeedContext`
 - `onlyNeedContext` returns assembled context text in `QueryResult.answer`
-- `onlyNeedPrompt` returns a stable text form of the final system/history/user prompt payload in `QueryResult.answer`
+- `onlyNeedPrompt` returns an upstream-like prompt inspection payload: formatted system prompt plus a `---User Query---` section with the raw query text
 - plain `BYPASS` returns direct chat-model output in `QueryResult.answer` and an empty `contexts` list
 - `BYPASS + onlyNeedContext(true)` returns an empty `answer` and empty `contexts`
 - `BYPASS + onlyNeedPrompt(true)` returns the bypass prompt payload in `QueryResult.answer`
