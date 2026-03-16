@@ -40,13 +40,14 @@ For tests, demos, and ephemeral runs, the in-memory provider is still the fastes
 
 ## Query Modes
 
-The Java SDK currently supports five query modes:
+The Java SDK currently supports six query modes:
 
 - `NAIVE`: direct chunk-vector retrieval only; ignores graph expansion and uses `chunkTopK` as the effective retrieval limit
 - `LOCAL`: entity-first graph expansion around locally similar entities
 - `GLOBAL`: relation-first graph expansion around globally similar relations
 - `HYBRID`: merged local + global graph retrieval
 - `MIX`: hybrid graph retrieval plus direct chunk-vector retrieval
+- `BYPASS`: skip retrieval and send the query directly to the configured chat model
 
 Use `NAIVE` when you want the simplest upstream-aligned chunk search path or when your data quality favors direct vector similarity over graph structure.
 
@@ -124,6 +125,55 @@ Notes:
 
 - retrieval mode selection, graph expansion, and rerank behavior are unchanged by these fields
 - `conversationHistory` is passed separately to the chat adapter; Java does not flatten those messages into the current-turn prompt
+
+## Query Shortcuts
+
+The Java SDK also supports upstream-style query shortcuts for inspecting or skipping generation.
+
+Use `onlyNeedContext` to return the assembled retrieval context without calling the chat model:
+
+```java
+var result = rag.query(QueryRequest.builder()
+    .query("Who works with Bob?")
+    .onlyNeedContext(true)
+    .build());
+
+System.out.println(result.answer());   // assembled context text
+System.out.println(result.contexts()); // resolved chunk contexts
+```
+
+Use `onlyNeedPrompt` to return the final prompt payload without calling the chat model:
+
+```java
+var result = rag.query(QueryRequest.builder()
+    .query("Who works with Bob?")
+    .onlyNeedPrompt(true)
+    .build());
+
+System.out.println(result.answer());   // system/history/user prompt dump
+```
+
+Use `BYPASS` when you want a direct LLM call with optional chat history and prompt controls but no retrieval:
+
+```java
+var result = rag.query(QueryRequest.builder()
+    .query("Talk directly to the model")
+    .mode(QueryMode.BYPASS)
+    .conversationHistory(List.of(
+        new ChatModel.ChatRequest.ConversationMessage("user", "We are drafting a reply.")
+    ))
+    .userPrompt("Answer in one sentence.")
+    .build());
+```
+
+Notes:
+
+- in standard retrieval modes, `onlyNeedContext` takes precedence over `onlyNeedPrompt`
+- `onlyNeedContext` returns assembled context text in `QueryResult.answer`
+- `onlyNeedPrompt` returns a stable text form of the final system/history/user prompt payload in `QueryResult.answer`
+- plain `BYPASS` returns direct chat-model output in `QueryResult.answer` and an empty `contexts` list
+- `BYPASS + onlyNeedContext(true)` returns an empty `answer` and empty `contexts`
+- `BYPASS + onlyNeedPrompt(true)` returns the bypass prompt payload in `QueryResult.answer`
 
 ## Document Status
 
