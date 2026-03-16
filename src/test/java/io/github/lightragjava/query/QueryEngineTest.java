@@ -219,6 +219,53 @@ class QueryEngineTest {
     }
 
     @Test
+    void usesQueryLevelModelOverrideForStandardGeneration() {
+        var defaultModel = new RecordingChatModel("default answer");
+        var overrideModel = new RecordingChatModel("override answer");
+        var engine = new QueryEngine(
+            defaultModel,
+            new ContextAssembler(),
+            strategiesReturning(baseContext()),
+            null
+        );
+
+        var result = engine.query(QueryRequest.builder()
+            .query("which chunk?")
+            .mode(QueryMode.LOCAL)
+            .chunkTopK(3)
+            .modelFunc(overrideModel)
+            .build());
+
+        assertThat(result.answer()).isEqualTo("override answer");
+        assertThat(defaultModel.callCount()).isZero();
+        assertThat(overrideModel.callCount()).isEqualTo(1);
+    }
+
+    @Test
+    void usesQueryLevelModelOverrideForStreamingGeneration() {
+        var defaultModel = new RecordingChatModel().withStreamResponse("default");
+        var overrideModel = new RecordingChatModel().withStreamResponse("override ", "stream");
+        var engine = new QueryEngine(
+            defaultModel,
+            new ContextAssembler(),
+            strategiesReturning(baseContext()),
+            null
+        );
+
+        var result = engine.query(QueryRequest.builder()
+            .query("which chunk?")
+            .mode(QueryMode.LOCAL)
+            .chunkTopK(3)
+            .stream(true)
+            .modelFunc(overrideModel)
+            .build());
+
+        assertThat(readAll(result.answerStream())).containsExactly("override ", "stream");
+        assertThat(defaultModel.streamCallCount()).isZero();
+        assertThat(overrideModel.streamCallCount()).isEqualTo(1);
+    }
+
+    @Test
     void streamingResultClosesUnderlyingAnswerStreamWhenClosed() throws Exception {
         var chatModel = new RecordingChatModel().withStreamResponse("Alpha ", "answer");
         var engine = new QueryEngine(
@@ -238,6 +285,31 @@ class QueryEngineTest {
         }
 
         assertThat(chatModel.streamCloseCount()).isEqualTo(1);
+    }
+
+    @Test
+    void shortcutsDoNotInvokeQueryLevelModelOverride() {
+        var defaultModel = new RecordingChatModel("default answer");
+        var overrideModel = new RecordingChatModel("override answer");
+        var engine = new QueryEngine(
+            defaultModel,
+            new ContextAssembler(),
+            strategiesReturning(baseContext()),
+            null
+        );
+
+        engine.query(QueryRequest.builder()
+            .query("which chunk?")
+            .mode(QueryMode.LOCAL)
+            .chunkTopK(3)
+            .onlyNeedPrompt(true)
+            .modelFunc(overrideModel)
+            .build());
+
+        assertThat(defaultModel.callCount()).isZero();
+        assertThat(defaultModel.streamCallCount()).isZero();
+        assertThat(overrideModel.callCount()).isZero();
+        assertThat(overrideModel.streamCallCount()).isZero();
     }
 
     @Test
@@ -424,6 +496,7 @@ class QueryEngineTest {
             new ChatModel.ChatRequest.ConversationMessage("user", "Earlier question"),
             new ChatModel.ChatRequest.ConversationMessage("assistant", "Earlier answer")
         );
+        var overrideModel = new RecordingChatModel("override answer");
         var strategy = new RecordingQueryStrategy(baseContext());
         var engine = new QueryEngine(
             new RecordingChatModel(),
@@ -448,6 +521,7 @@ class QueryEngineTest {
             .maxTotalTokens(333)
             .includeReferences(true)
             .stream(true)
+            .modelFunc(overrideModel)
             .hlKeywords(List.of("high level"))
             .llKeywords(List.of("low level"))
             .conversationHistory(history)
@@ -462,6 +536,7 @@ class QueryEngineTest {
         assertThat(strategy.lastRequest().maxTotalTokens()).isEqualTo(Integer.MAX_VALUE);
         assertThat(strategy.lastRequest().includeReferences()).isTrue();
         assertThat(strategy.lastRequest().stream()).isTrue();
+        assertThat(strategy.lastRequest().modelFunc()).isSameAs(overrideModel);
         assertThat(strategy.lastRequest().hlKeywords()).containsExactly("high level");
         assertThat(strategy.lastRequest().llKeywords()).containsExactly("low level");
         assertThat(strategy.lastRequest().conversationHistory()).containsExactlyElementsOf(history);
@@ -687,6 +762,30 @@ class QueryEngineTest {
             .contains("talk directly to the model")
             .contains("Additional Instructions:")
             .contains("Answer in one sentence.");
+    }
+
+    @Test
+    void bypassUsesQueryLevelModelOverride() {
+        var defaultModel = new RecordingChatModel("default answer");
+        var overrideModel = new RecordingChatModel("override bypass");
+        var strategy = new FailingQueryStrategy();
+        var engine = new QueryEngine(
+            defaultModel,
+            new ContextAssembler(),
+            strategiesReturning(strategy),
+            null
+        );
+
+        var result = engine.query(QueryRequest.builder()
+            .query("talk directly to the model")
+            .mode(QueryMode.BYPASS)
+            .modelFunc(overrideModel)
+            .build());
+
+        assertThat(result.answer()).isEqualTo("override bypass");
+        assertThat(defaultModel.callCount()).isZero();
+        assertThat(overrideModel.callCount()).isEqualTo(1);
+        assertThat(strategy.callCount()).isZero();
     }
 
     @Test

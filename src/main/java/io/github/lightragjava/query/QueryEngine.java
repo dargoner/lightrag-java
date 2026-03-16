@@ -152,6 +152,7 @@ public final class QueryEngine {
             query.query(),
             query.conversationHistory()
         );
+        var responseModel = selectChatModel(query);
         if (query.onlyNeedContext() && !query.onlyNeedPrompt()) {
             return new QueryResult(assembledContext, references.contexts(), references.references());
         }
@@ -159,9 +160,9 @@ public final class QueryEngine {
             return new QueryResult(renderStandardPrompt(chatRequest), references.contexts(), references.references());
         }
         if (query.stream()) {
-            return QueryResult.streaming(chatModel.stream(chatRequest), references.contexts(), references.references());
+            return QueryResult.streaming(responseModel.stream(chatRequest), references.contexts(), references.references());
         }
-        var answer = chatModel.generate(chatRequest);
+        var answer = responseModel.generate(chatRequest);
         return new QueryResult(answer, references.contexts(), references.references());
     }
 
@@ -185,6 +186,7 @@ public final class QueryEngine {
             request.onlyNeedPrompt(),
             request.includeReferences(),
             request.stream(),
+            request.modelFunc(),
             request.userPrompt(),
             request.hlKeywords(),
             request.llKeywords(),
@@ -198,6 +200,7 @@ public final class QueryEngine {
             buildBypassUserPrompt(query),
             query.conversationHistory()
         );
+        var responseModel = selectChatModel(query);
         if (query.onlyNeedContext()) {
             return new QueryResult("", List.of(), List.of());
         }
@@ -205,9 +208,13 @@ public final class QueryEngine {
             return new QueryResult(renderBypassPrompt(chatRequest), List.of(), List.of());
         }
         if (query.stream()) {
-            return QueryResult.streaming(chatModel.stream(chatRequest), List.of(), List.of());
+            return QueryResult.streaming(responseModel.stream(chatRequest), List.of(), List.of());
         }
-        return new QueryResult(chatModel.generate(chatRequest), List.of(), List.of());
+        return new QueryResult(responseModel.generate(chatRequest), List.of(), List.of());
+    }
+
+    private ChatModel selectChatModel(QueryRequest request) {
+        return request.modelFunc() != null ? request.modelFunc() : chatModel;
     }
 
     private static String buildSystemPrompt(QueryRequest query, String assembledContext) {

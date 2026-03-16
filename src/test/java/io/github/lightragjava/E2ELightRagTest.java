@@ -1930,6 +1930,53 @@ class E2ELightRagTest {
     }
 
     @Test
+    void queryCanOverrideDefaultModelForOneRequest() {
+        var storage = InMemoryStorageProvider.create();
+        var chatModel = new FakeChatModel();
+        var overrideModel = new OverrideChatModel("Override answer.", "Override bypass.", List.of("Override ", "answer."));
+        var rag = LightRag.builder()
+            .chatModel(chatModel)
+            .embeddingModel(new FakeEmbeddingModel())
+            .storage(storage)
+            .build();
+
+        rag.ingest(List.of(new Document("doc-1", "Title", "Alice works with Bob", Map.of())));
+
+        var result = rag.query(QueryRequest.builder()
+            .query("Who works with Bob?")
+            .modelFunc(overrideModel)
+            .build());
+
+        assertThat(result.answer()).isEqualTo("Override answer.");
+        assertThat(chatModel.lastQueryRequest()).isNull();
+        assertThat(overrideModel.lastQueryRequest()).isNotNull();
+    }
+
+    @Test
+    void queryCanStreamThroughQueryLevelModelOverride() {
+        var storage = InMemoryStorageProvider.create();
+        var chatModel = new FakeChatModel();
+        var overrideModel = new OverrideChatModel("Override answer.", "Override bypass.", List.of("Override ", "answer."));
+        var rag = LightRag.builder()
+            .chatModel(chatModel)
+            .embeddingModel(new FakeEmbeddingModel())
+            .storage(storage)
+            .build();
+
+        rag.ingest(List.of(new Document("doc-1", "Title", "Alice works with Bob", Map.of())));
+
+        var result = rag.query(QueryRequest.builder()
+            .query("Who works with Bob?")
+            .stream(true)
+            .modelFunc(overrideModel)
+            .build());
+
+        assertThat(readAll(result.answerStream())).containsExactly("Override ", "answer.");
+        assertThat(chatModel.lastStreamQueryRequest()).isNull();
+        assertThat(overrideModel.lastStreamQueryRequest()).isNotNull();
+    }
+
+    @Test
     void queryReturnsCompletePromptWhenOnlyNeedPromptIsEnabled() {
         var storage = InMemoryStorageProvider.create();
         var chatModel = new FakeChatModel();
@@ -2825,6 +2872,58 @@ class E2ELightRagTest {
 
         int queryCallCount() {
             return queryCallCount;
+        }
+    }
+
+    private static final class OverrideChatModel implements ChatModel {
+        private final String queryAnswer;
+        private final String bypassAnswer;
+        private final List<String> streamAnswer;
+        private ChatRequest lastQueryRequest;
+        private ChatRequest lastBypassRequest;
+        private ChatRequest lastStreamQueryRequest;
+        private ChatRequest lastStreamBypassRequest;
+
+        private OverrideChatModel(String queryAnswer, String bypassAnswer, List<String> streamAnswer) {
+            this.queryAnswer = queryAnswer;
+            this.bypassAnswer = bypassAnswer;
+            this.streamAnswer = streamAnswer;
+        }
+
+        @Override
+        public String generate(ChatRequest request) {
+            if (isRetrievalPrompt(request)) {
+                lastQueryRequest = request;
+                return queryAnswer;
+            }
+            lastBypassRequest = request;
+            return bypassAnswer;
+        }
+
+        @Override
+        public io.github.lightragjava.model.CloseableIterator<String> stream(ChatRequest request) {
+            if (isRetrievalPrompt(request)) {
+                lastStreamQueryRequest = request;
+            } else {
+                lastStreamBypassRequest = request;
+            }
+            return io.github.lightragjava.model.CloseableIterator.of(streamAnswer);
+        }
+
+        ChatRequest lastQueryRequest() {
+            return lastQueryRequest;
+        }
+
+        ChatRequest lastBypassRequest() {
+            return lastBypassRequest;
+        }
+
+        ChatRequest lastStreamQueryRequest() {
+            return lastStreamQueryRequest;
+        }
+
+        ChatRequest lastStreamBypassRequest() {
+            return lastStreamBypassRequest;
         }
     }
 
