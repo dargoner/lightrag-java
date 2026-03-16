@@ -7,6 +7,7 @@ import okhttp3.mockwebserver.MockResponse;
 import okhttp3.mockwebserver.MockWebServer;
 import org.junit.jupiter.api.Test;
 
+import java.time.Duration;
 import java.util.List;
 
 import static org.assertj.core.api.Assertions.assertThat;
@@ -248,6 +249,35 @@ class OpenAiCompatibleChatModelTest {
                 .isInstanceOf(ModelException.class);
             assertThatThrownBy(() -> model.generate(new ChatModel.ChatRequest("System prompt", "User prompt")))
                 .isInstanceOf(ModelException.class);
+        }
+    }
+
+    @Test
+    void chatAdapterSupportsCustomRequestTimeout() throws Exception {
+        try (var server = new MockWebServer()) {
+            server.enqueue(new MockResponse()
+                .setBody("""
+                    {
+                      "choices": [
+                        {
+                          "message": {
+                            "content": "Delayed answer"
+                          }
+                        }
+                      ]
+                    }
+                    """)
+                .setBodyDelay(1500, java.util.concurrent.TimeUnit.MILLISECONDS));
+            server.start();
+            var model = new OpenAiCompatibleChatModel(
+                server.url("/v1/").toString(),
+                "gpt-test",
+                "secret",
+                Duration.ofSeconds(5)
+            );
+
+            assertThat(model.generate(new ChatModel.ChatRequest("System prompt", "User prompt")))
+                .isEqualTo("Delayed answer");
         }
     }
 

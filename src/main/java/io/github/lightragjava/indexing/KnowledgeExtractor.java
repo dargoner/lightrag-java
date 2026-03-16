@@ -66,7 +66,7 @@ public final class KnowledgeExtractor {
 
     private static JsonNode parseResponse(String response) {
         try {
-            var root = OBJECT_MAPPER.readTree(response);
+            var root = OBJECT_MAPPER.readTree(normalizeResponse(response));
             if (root == null || !root.isObject()) {
                 throw new ExtractionException("Knowledge extraction response must be a JSON object");
             }
@@ -74,6 +74,20 @@ public final class KnowledgeExtractor {
         } catch (JsonProcessingException | IllegalArgumentException exception) {
             throw new ExtractionException("Knowledge extraction response is not valid JSON", exception);
         }
+    }
+
+    private static String normalizeResponse(String response) {
+        var normalized = Objects.requireNonNull(response, "response").strip();
+        if (normalized.startsWith("```")) {
+            var firstNewline = normalized.indexOf('\n');
+            if (firstNewline >= 0) {
+                normalized = normalized.substring(firstNewline + 1);
+            }
+            if (normalized.endsWith("```")) {
+                normalized = normalized.substring(0, normalized.length() - 3);
+            }
+        }
+        return normalized.strip();
     }
 
     private static JsonNode topLevelArray(JsonNode root, String fieldName) {

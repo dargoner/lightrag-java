@@ -31,3 +31,10 @@ dependencies {
 tasks.test {
     useJUnitPlatform()
 }
+
+tasks.register<JavaExec>("runRagasQuery") {
+    group = "evaluation"
+    description = "Runs a single LightRAG query for RAGAS evaluation."
+    classpath = sourceSets.main.get().runtimeClasspath
+    mainClass.set("io.github.lightragjava.evaluation.RagasEvaluationCli")
+}
