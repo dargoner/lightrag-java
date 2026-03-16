@@ -172,6 +172,8 @@ public final class QueryEngine {
             request.onlyNeedContext(),
             request.onlyNeedPrompt(),
             request.userPrompt(),
+            request.hlKeywords(),
+            request.llKeywords(),
             request.conversationHistory()
         );
     }

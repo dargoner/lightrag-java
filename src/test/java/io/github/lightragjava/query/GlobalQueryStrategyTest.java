@@ -61,6 +61,32 @@ class GlobalQueryStrategyTest {
             .containsExactly("chunk-1");
     }
 
+    @Test
+    void globalUsesHlKeywordsInsteadOfRawQueryWhenProvided() {
+        var storage = InMemoryStorageProvider.create();
+        LocalQueryStrategyTest.seedGraph(storage);
+        LocalQueryStrategyTest.seedVectors(storage);
+        var strategy = new GlobalQueryStrategy(new FakeEmbeddingModel(Map.of(
+            "ambiguous question", List.of(1.0d, 0.0d),
+            "org, focus", List.of(0.0d, 1.0d)
+        )), storage, new ContextAssembler());
+
+        var context = strategy.retrieve(QueryRequest.builder()
+            .query("ambiguous question")
+            .mode(QueryMode.GLOBAL)
+            .topK(1)
+            .chunkTopK(2)
+            .hlKeywords(List.of("org", "focus"))
+            .build());
+
+        assertThat(context.matchedRelations())
+            .extracting(match -> match.relationId())
+            .containsExactly("relation:entity:bob|reports_to|entity:carol");
+        assertThat(context.matchedEntities())
+            .extracting(match -> match.entityId())
+            .containsExactly("entity:bob", "entity:carol");
+    }
+
     private record FakeEmbeddingModel(Map<String, List<Double>> vectorsByText) implements EmbeddingModel {
         @Override
         public List<List<Double>> embedAll(List<String> texts) {

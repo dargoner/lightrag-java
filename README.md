@@ -99,6 +99,8 @@ Notes:
 
 The Java SDK supports the upstream query-time prompt controls `userPrompt` and `conversationHistory`.
 
+It also supports manual graph-retrieval keyword overrides through `hlKeywords` and `llKeywords`.
+
 Use `userPrompt` when you want to add answer-formatting or style instructions without changing retrieval:
 
 ```java
@@ -121,10 +123,23 @@ var result = rag.query(QueryRequest.builder()
     .build());
 ```
 
+Use `llKeywords` to steer entity-oriented retrieval in `LOCAL`, `HYBRID`, and `MIX`, and `hlKeywords` to steer relation-oriented retrieval in `GLOBAL`, `HYBRID`, and `MIX`:
+
+```java
+var result = rag.query(QueryRequest.builder()
+    .query("Who works with Bob?")
+    .mode(QueryMode.HYBRID)
+    .llKeywords(List.of("Alice", "collaboration"))
+    .hlKeywords(List.of("organization", "reporting"))
+    .build());
+```
+
 Notes:
 
 - retrieval mode selection, graph expansion, and rerank behavior are unchanged by these fields
 - `conversationHistory` is passed separately to the chat adapter; Java does not flatten those messages into the current-turn prompt
+- `hlKeywords` and `llKeywords` are manual overrides only in this phase; Java does not yet implement upstream automatic keyword extraction
+- in `HYBRID` and `MIX`, when manual keyword overrides are provided, only the non-empty keyword side participates in graph retrieval; direct chunk retrieval in `MIX` still uses the raw query text
 - in standard retrieval modes, Java now follows the upstream-style boundary more closely: retrieval instructions, `responseType`, `userPrompt`, and assembled context are sent through `systemPrompt`, while the current-turn user message is the raw query text
 - standard retrieval modes now render richer upstream-style `---Role---`, `---Goal---`, `---Instructions---`, and `---Context---` sections instead of the earlier short custom template
 - graph-aware modes mention both knowledge graph data and document chunks, while `NAIVE` uses document-chunk-only wording
