@@ -75,17 +75,18 @@ class JavaRagasEvaluator:
             ),
         )
 
-    async def generate_rag_response(self, question: str) -> Dict[str, Any]:
+    async def generate_rag_responses(self) -> List[Dict[str, Any]]:
         app_args = " ".join(
             [
                 f"--documents-dir {shlex.quote(str(self.documents_dir))}",
-                f"--question {shlex.quote(question)}",
+                f"--dataset {shlex.quote(str(self.dataset_path))}",
+                f"--storage-profile {shlex.quote(os.getenv('LIGHTRAG_JAVA_EVAL_STORAGE_PROFILE', 'in-memory'))}",
                 f"--mode {shlex.quote(os.getenv('LIGHTRAG_JAVA_EVAL_QUERY_MODE', 'mix'))}",
                 f"--top-k {shlex.quote(os.getenv('EVAL_QUERY_TOP_K', '10'))}",
                 f"--chunk-top-k {shlex.quote(os.getenv('LIGHTRAG_JAVA_EVAL_CHUNK_TOP_K', '10'))}",
             ]
         )
-        command = f"./gradlew --no-daemon --quiet runRagasQuery --args={shlex.quote(app_args)}"
+        command = f"./gradlew --no-daemon --quiet runRagasBatchEval --args={shlex.quote(app_args)}"
         completed = await asyncio.to_thread(
             subprocess.run,
             ["/bin/bash", "-lc", command],
@@ -97,10 +98,9 @@ class JavaRagasEvaluator:
         )
         return json.loads(completed.stdout.strip())
 
-    async def evaluate_single_case(self, idx: int, test_case: Dict[str, str]) -> Dict[str, Any]:
+    async def evaluate_single_case(self, idx: int, test_case: Dict[str, str], rag_response: Dict[str, Any]) -> Dict[str, Any]:
         question = test_case["question"]
         ground_truth = test_case["ground_truth"]
-        rag_response = await self.generate_rag_response(question)
         dataset = Dataset.from_dict(
             {
                 "question": [question],
@@ -132,9 +132,14 @@ class JavaRagasEvaluator:
         }
 
     async def run(self):
+        rag_responses = await self.generate_rag_responses()
+        if len(rag_responses) != len(self.test_cases):
+            raise SystemExit(
+                f"Java batch runner returned {len(rag_responses)} results for {len(self.test_cases)} test cases"
+            )
         results = []
-        for index, test_case in enumerate(self.test_cases, start=1):
-            results.append(await self.evaluate_single_case(index, test_case))
+        for index, (test_case, rag_response) in enumerate(zip(self.test_cases, rag_responses, strict=True), start=1):
+            results.append(await self.evaluate_single_case(index, test_case, rag_response))
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
         json_path = self.results_dir / f"results_{timestamp}.json"
         csv_path = self.results_dir / f"results_{timestamp}.csv"

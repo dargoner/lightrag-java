@@ -22,10 +22,10 @@ dependencies {
     implementation("com.zaxxer:HikariCP:7.0.2")
     implementation("com.pgvector:pgvector:0.1.6")
     implementation("org.neo4j.driver:neo4j-java-driver:5.28.5")
+    implementation("org.testcontainers:postgresql:1.21.4")
+    implementation("org.testcontainers:neo4j:1.21.4")
     testImplementation("com.squareup.okhttp3:mockwebserver:4.12.0")
     testImplementation("org.testcontainers:junit-jupiter:1.21.4")
-    testImplementation("org.testcontainers:postgresql:1.21.4")
-    testImplementation("org.testcontainers:neo4j:1.21.4")
 }
 
 tasks.test {
@@ -37,4 +37,11 @@ tasks.register<JavaExec>("runRagasQuery") {
     description = "Runs a single LightRAG query for RAGAS evaluation."
     classpath = sourceSets.main.get().runtimeClasspath
     mainClass.set("io.github.lightragjava.evaluation.RagasEvaluationCli")
+}
+
+tasks.register<JavaExec>("runRagasBatchEval") {
+    group = "evaluation"
+    description = "Runs the full LightRAG evaluation dataset and returns answers plus contexts."
+    classpath = sourceSets.main.get().runtimeClasspath
+    mainClass.set("io.github.lightragjava.evaluation.RagasBatchEvaluationCli")
 }

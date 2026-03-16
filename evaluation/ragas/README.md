@@ -23,6 +23,13 @@ Simplest setup:
 - set only `OPENAI_API_KEY`
 - keep the defaults from `.env.example`
 
+Storage profile:
+
+- `LIGHTRAG_JAVA_EVAL_STORAGE_PROFILE=in-memory`
+- `LIGHTRAG_JAVA_EVAL_STORAGE_PROFILE=postgres-neo4j-testcontainers`
+
+For the Testcontainers profile, Docker must be available locally.
+
 Optional custom OpenAI-compatible endpoints:
 
 - `LIGHTRAG_JAVA_EVAL_CHAT_BASE_URL`
