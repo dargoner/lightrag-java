@@ -168,13 +168,12 @@ var firstContextSource = result.contexts().get(0).source();
 Use `stream` when you want to consume generated text incrementally while keeping retrieval metadata:
 
 ```java
-var result = rag.query(QueryRequest.builder()
-    .query("Who works with Bob?")
-    .includeReferences(true)
-    .stream(true)
-    .build());
-
-try (var chunks = result.answerStream()) {
+try (var result = rag.query(QueryRequest.builder()
+        .query("Who works with Bob?")
+        .includeReferences(true)
+        .stream(true)
+        .build());
+     var chunks = result.answerStream()) {
     while (chunks.hasNext()) {
         System.out.print(chunks.next());
     }
@@ -188,6 +187,7 @@ Notes:
 - `hlKeywords` and `llKeywords` are manual overrides only in this phase; Java does not yet implement upstream automatic keyword extraction
 - `includeReferences(true)` adds `QueryResult.references()` plus `referenceId` / `source` on each returned `QueryResult.Context`
 - `stream(true)` returns `QueryResult.streaming() == true`, leaves `QueryResult.answer()` empty, and exposes incremental model output through `QueryResult.answerStream()`
+- streaming `QueryResult` implements `AutoCloseable`; close the result or its `answerStream()` when you stop reading early
 - structured references are derived from the final chunk list after merge, rerank, and final token-budget trimming
 - source resolution priority is `file_path`, then `source`, then `documentId`
 - `maxEntityTokens` and `maxRelationTokens` cap formatted graph context rows in score order

@@ -6,22 +6,25 @@ import java.util.NoSuchElementException;
 import java.util.Objects;
 
 public interface CloseableIterator<T> extends Iterator<T>, AutoCloseable {
+    CloseableIterator<?> EMPTY = new CloseableIterator<>() {
+        @Override
+        public boolean hasNext() {
+            return false;
+        }
+
+        @Override
+        public Object next() {
+            throw new NoSuchElementException();
+        }
+    };
+
     @Override
     default void close() {
     }
 
+    @SuppressWarnings("unchecked")
     static <T> CloseableIterator<T> empty() {
-        return new CloseableIterator<>() {
-            @Override
-            public boolean hasNext() {
-                return false;
-            }
-
-            @Override
-            public T next() {
-                throw new NoSuchElementException();
-            }
-        };
+        return (CloseableIterator<T>) EMPTY;
     }
 
     static <T> CloseableIterator<T> of(List<T> values) {

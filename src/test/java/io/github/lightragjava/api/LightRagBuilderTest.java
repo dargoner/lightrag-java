@@ -393,6 +393,18 @@ class LightRagBuilderTest {
     }
 
     @Test
+    void queryResultLegacyConstructorsPreserveValueEquality() {
+        var contexts = List.of(new QueryResult.Context("chunk-1", "supporting context"));
+        var references = List.of(new QueryResult.Reference("1", "demo-source"));
+
+        var left = new QueryResult("answer", contexts, references);
+        var right = new QueryResult("answer", contexts, references);
+
+        assertThat(left).isEqualTo(right);
+        assertThat(left.hashCode()).isEqualTo(right.hashCode());
+    }
+
+    @Test
     void documentRequiresNonBlankId() {
         assertThatThrownBy(() -> new Document(" ", "Title", "Body", Map.of()))
             .isInstanceOf(IllegalArgumentException.class);

@@ -194,6 +194,28 @@ class OpenAiCompatibleChatModelTest {
     }
 
     @Test
+    void chatAdapterSupportsMultilineSseDataEvents() throws Exception {
+        try (var server = new MockWebServer()) {
+            server.enqueue(new MockResponse()
+                .setHeader("Content-Type", "text/event-stream")
+                .setBody("""
+                    data: {"choices":[{"delta":{
+                    data: "content":"Hello from multiline"
+                    data: }}]}
+
+                    data: [DONE]
+
+                    """));
+            server.start();
+            var model = new OpenAiCompatibleChatModel(server.url("/v1/").toString(), "gpt-test", "secret");
+
+            try (var stream = model.stream(new ChatModel.ChatRequest("System prompt", "User prompt"))) {
+                assertThat(readAll(stream)).containsExactly("Hello from multiline");
+            }
+        }
+    }
+
+    @Test
     void non2xxResponsesRaiseModelException() throws Exception {
         try (var server = new MockWebServer()) {
             server.enqueue(new MockResponse().setResponseCode(401).setBody("{\"error\":\"unauthorized\"}"));

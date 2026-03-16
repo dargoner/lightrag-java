@@ -170,15 +170,11 @@ public final class OpenAiCompatibleChatModel implements ChatModel {
         private void loadNext() {
             try {
                 while (!closed && !completed) {
-                    var line = source.readUtf8Line();
-                    if (line == null) {
+                    var data = readNextEventData();
+                    if (data == null) {
                         close();
                         return;
                     }
-                    if (line.isBlank() || !line.startsWith("data:")) {
-                        continue;
-                    }
-                    var data = line.substring("data:".length()).trim();
                     if (data.equals("[DONE]")) {
                         close();
                         return;
@@ -193,6 +189,32 @@ public final class OpenAiCompatibleChatModel implements ChatModel {
                 close();
                 throw new ModelException("Chat completion stream failed", exception);
             }
+        }
+
+        private String readNextEventData() throws IOException {
+            StringBuilder data = null;
+            while (!closed && !completed) {
+                var line = source.readUtf8Line();
+                if (line == null) {
+                    return data == null ? null : data.toString();
+                }
+                if (line.isBlank()) {
+                    if (data != null) {
+                        return data.toString();
+                    }
+                    continue;
+                }
+                if (!line.startsWith("data:")) {
+                    continue;
+                }
+                if (data == null) {
+                    data = new StringBuilder();
+                } else {
+                    data.append('\n');
+                }
+                data.append(line.substring("data:".length()).stripLeading());
+            }
+            return data == null ? null : data.toString();
         }
 
         private static String extractDeltaContent(JsonNode root) {
