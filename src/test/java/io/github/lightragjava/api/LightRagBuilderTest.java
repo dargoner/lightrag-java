@@ -170,6 +170,7 @@ class LightRagBuilderTest {
         assertThat(request.onlyNeedContext()).isFalse();
         assertThat(request.onlyNeedPrompt()).isFalse();
         assertThat(request.includeReferences()).isFalse();
+        assertThat(request.stream()).isFalse();
         assertThat(request.userPrompt()).isEmpty();
         assertThat(request.hlKeywords()).isEmpty();
         assertThat(request.llKeywords()).isEmpty();
@@ -199,6 +200,7 @@ class LightRagBuilderTest {
         assertThat(request.onlyNeedContext()).isFalse();
         assertThat(request.onlyNeedPrompt()).isFalse();
         assertThat(request.includeReferences()).isFalse();
+        assertThat(request.stream()).isFalse();
         assertThat(request.userPrompt()).isEmpty();
         assertThat(request.hlKeywords()).isEmpty();
         assertThat(request.llKeywords()).isEmpty();
@@ -221,6 +223,7 @@ class LightRagBuilderTest {
         assertThat(request.onlyNeedContext()).isFalse();
         assertThat(request.onlyNeedPrompt()).isFalse();
         assertThat(request.includeReferences()).isFalse();
+        assertThat(request.stream()).isFalse();
         assertThat(request.userPrompt()).isEqualTo("Answer in one sentence.");
         assertThat(request.maxEntityTokens()).isEqualTo(QueryRequest.DEFAULT_MAX_ENTITY_TOKENS);
         assertThat(request.maxRelationTokens()).isEqualTo(QueryRequest.DEFAULT_MAX_RELATION_TOKENS);
@@ -239,12 +242,14 @@ class LightRagBuilderTest {
             .maxRelationTokens(222)
             .maxTotalTokens(333)
             .includeReferences(true)
+            .stream(true)
             .build();
 
         assertThat(request.maxEntityTokens()).isEqualTo(111);
         assertThat(request.maxRelationTokens()).isEqualTo(222);
         assertThat(request.maxTotalTokens()).isEqualTo(333);
         assertThat(request.includeReferences()).isTrue();
+        assertThat(request.stream()).isTrue();
     }
 
     @Test
@@ -354,6 +359,12 @@ class LightRagBuilderTest {
 
         assertThat(result.answer()).isEqualTo("answer");
         assertThat(result.contexts()).containsExactly(new QueryResult.Context("chunk-1", "supporting context"));
+        assertThat(result.streaming()).isFalse();
+        try (var stream = result.answerStream()) {
+            assertThat(stream.hasNext()).isFalse();
+        } catch (Exception exception) {
+            throw new RuntimeException(exception);
+        }
         assertThatThrownBy(() -> result.contexts().add(new QueryResult.Context("chunk-2", "more context")))
             .isInstanceOf(UnsupportedOperationException.class);
     }
@@ -369,6 +380,12 @@ class LightRagBuilderTest {
 
         assertThat(result.references()).containsExactly(new QueryResult.Reference("1", "demo-source"));
         assertThat(result.contexts()).containsExactly(new QueryResult.Context("chunk-1", "supporting context", "1", "demo-source"));
+        assertThat(result.streaming()).isFalse();
+        try (var stream = result.answerStream()) {
+            assertThat(stream.hasNext()).isFalse();
+        } catch (Exception exception) {
+            throw new RuntimeException(exception);
+        }
         assertThat(new QueryResult.Context("chunk-2", "plain context").referenceId()).isEmpty();
         assertThat(new QueryResult.Context("chunk-2", "plain context").source()).isEmpty();
         assertThatThrownBy(() -> result.references().add(new QueryResult.Reference("2", "other-source")))

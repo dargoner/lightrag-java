@@ -105,6 +105,8 @@ It also supports upstream-style query token budgets through `maxEntityTokens`, `
 
 It also supports upstream-style `includeReferences` for structured reference output.
 
+It also supports upstream-style `stream` for incremental answer generation.
+
 Use `userPrompt` when you want to add answer-formatting or style instructions without changing retrieval:
 
 ```java
@@ -163,12 +165,29 @@ var firstContextReferenceId = result.contexts().get(0).referenceId();
 var firstContextSource = result.contexts().get(0).source();
 ```
 
+Use `stream` when you want to consume generated text incrementally while keeping retrieval metadata:
+
+```java
+var result = rag.query(QueryRequest.builder()
+    .query("Who works with Bob?")
+    .includeReferences(true)
+    .stream(true)
+    .build());
+
+try (var chunks = result.answerStream()) {
+    while (chunks.hasNext()) {
+        System.out.print(chunks.next());
+    }
+}
+```
+
 Notes:
 
 - retrieval mode selection, graph expansion, and rerank behavior are unchanged by these fields
 - `conversationHistory` is passed separately to the chat adapter; Java does not flatten those messages into the current-turn prompt
 - `hlKeywords` and `llKeywords` are manual overrides only in this phase; Java does not yet implement upstream automatic keyword extraction
 - `includeReferences(true)` adds `QueryResult.references()` plus `referenceId` / `source` on each returned `QueryResult.Context`
+- `stream(true)` returns `QueryResult.streaming() == true`, leaves `QueryResult.answer()` empty, and exposes incremental model output through `QueryResult.answerStream()`
 - structured references are derived from the final chunk list after merge, rerank, and final token-budget trimming
 - source resolution priority is `file_path`, then `source`, then `documentId`
 - `maxEntityTokens` and `maxRelationTokens` cap formatted graph context rows in score order
@@ -228,8 +247,10 @@ Notes:
 - in standard retrieval modes, `onlyNeedPrompt` takes precedence over `onlyNeedContext`
 - `onlyNeedContext` returns assembled context text in `QueryResult.answer`
 - `onlyNeedPrompt` returns an upstream-like prompt inspection payload: formatted system prompt plus a `---User Query---` section with the raw query text
+- `onlyNeedContext(true)` and `onlyNeedPrompt(true)` bypass streaming and return buffered `QueryResult.answer()` payloads even if `stream(true)` is also set
 - prompt inspection does not inline `conversationHistory`; those turns still travel separately in the real chat-model request
 - plain `BYPASS` returns direct chat-model output in `QueryResult.answer` and an empty `contexts` list
+- `BYPASS + stream(true)` streams directly from the chat model through `QueryResult.answerStream()` and still returns empty retrieval metadata
 - `BYPASS + onlyNeedContext(true)` returns an empty `answer` and empty `contexts`
 - `BYPASS + onlyNeedPrompt(true)` returns the bypass prompt payload in `QueryResult.answer`
 

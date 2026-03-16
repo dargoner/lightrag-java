@@ -18,6 +18,7 @@ public record QueryRequest(
     boolean onlyNeedContext,
     boolean onlyNeedPrompt,
     boolean includeReferences,
+    boolean stream,
     String userPrompt,
     List<String> hlKeywords,
     List<String> llKeywords,
@@ -77,6 +78,7 @@ public record QueryRequest(
             false,
             false,
             false,
+            false,
             "",
             List.of(),
             List.of(),
@@ -107,6 +109,7 @@ public record QueryRequest(
             false,
             false,
             false,
+            false,
             userPrompt,
             List.of(),
             List.of(),
@@ -131,6 +134,7 @@ public record QueryRequest(
         private boolean onlyNeedContext;
         private boolean onlyNeedPrompt;
         private boolean includeReferences;
+        private boolean stream;
         private String userPrompt = "";
         private List<String> hlKeywords = List.of();
         private List<String> llKeywords = List.of();
@@ -196,6 +200,11 @@ public record QueryRequest(
             return this;
         }
 
+        public Builder stream(boolean stream) {
+            this.stream = stream;
+            return this;
+        }
+
         public Builder userPrompt(String userPrompt) {
             this.userPrompt = userPrompt;
             return this;
@@ -230,6 +239,7 @@ public record QueryRequest(
                 onlyNeedContext,
                 onlyNeedPrompt,
                 includeReferences,
+                stream,
                 userPrompt,
                 hlKeywords,
                 llKeywords,

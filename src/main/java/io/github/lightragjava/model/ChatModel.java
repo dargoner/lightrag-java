@@ -6,6 +6,14 @@ import java.util.Objects;
 public interface ChatModel {
     String generate(ChatRequest request);
 
+    default CloseableIterator<String> stream(ChatRequest request) {
+        var response = generate(request);
+        if (response.isEmpty()) {
+            return CloseableIterator.empty();
+        }
+        return CloseableIterator.of(List.of(response));
+    }
+
     record ChatRequest(
         String systemPrompt,
         String userPrompt,
