@@ -164,6 +164,8 @@ class LightRagBuilderTest {
         assertThat(request.chunkTopK()).isEqualTo(QueryRequest.DEFAULT_CHUNK_TOP_K);
         assertThat(request.responseType()).isEqualTo(QueryRequest.DEFAULT_RESPONSE_TYPE);
         assertThat(request.enableRerank()).isTrue();
+        assertThat(request.onlyNeedContext()).isFalse();
+        assertThat(request.onlyNeedPrompt()).isFalse();
         assertThat(request.userPrompt()).isEmpty();
         assertThat(request.conversationHistory()).isEmpty();
     }
@@ -185,8 +187,30 @@ class LightRagBuilderTest {
         assertThat(request.chunkTopK()).isEqualTo(7);
         assertThat(request.responseType()).isEqualTo("text");
         assertThat(request.enableRerank()).isFalse();
+        assertThat(request.onlyNeedContext()).isFalse();
+        assertThat(request.onlyNeedPrompt()).isFalse();
         assertThat(request.userPrompt()).isEmpty();
         assertThat(request.conversationHistory()).isEmpty();
+    }
+
+    @Test
+    void queryRequestPromptControlConstructorDefaultsShortcutFlags() {
+        var request = new QueryRequest(
+            "Where is the evidence?",
+            QueryMode.LOCAL,
+            5,
+            7,
+            "text",
+            false,
+            "Answer in one sentence.",
+            List.of(new ChatModel.ChatRequest.ConversationMessage("user", "Earlier question"))
+        );
+
+        assertThat(request.onlyNeedContext()).isFalse();
+        assertThat(request.onlyNeedPrompt()).isFalse();
+        assertThat(request.userPrompt()).isEqualTo("Answer in one sentence.");
+        assertThat(request.conversationHistory())
+            .containsExactly(new ChatModel.ChatRequest.ConversationMessage("user", "Earlier question"));
     }
 
     @Test
@@ -233,6 +257,17 @@ class LightRagBuilderTest {
 
         assertThat(QueryMode.valueOf("NAIVE")).isEqualTo(QueryMode.NAIVE);
         assertThat(request.mode()).isEqualTo(QueryMode.NAIVE);
+    }
+
+    @Test
+    void queryModeExposesBypassAndQueryRequestAcceptsIt() {
+        var request = QueryRequest.builder()
+            .query("Talk directly to the model")
+            .mode(QueryMode.BYPASS)
+            .build();
+
+        assertThat(QueryMode.valueOf("BYPASS")).isEqualTo(QueryMode.BYPASS);
+        assertThat(request.mode()).isEqualTo(QueryMode.BYPASS);
     }
 
     @Test

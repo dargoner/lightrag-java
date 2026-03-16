@@ -12,6 +12,8 @@ public record QueryRequest(
     int chunkTopK,
     String responseType,
     boolean enableRerank,
+    boolean onlyNeedContext,
+    boolean onlyNeedPrompt,
     String userPrompt,
     List<ChatModel.ChatRequest.ConversationMessage> conversationHistory
 ) {
@@ -42,7 +44,20 @@ public record QueryRequest(
         String responseType,
         boolean enableRerank
     ) {
-        this(query, mode, topK, chunkTopK, responseType, enableRerank, "", List.of());
+        this(query, mode, topK, chunkTopK, responseType, enableRerank, false, false, "", List.of());
+    }
+
+    public QueryRequest(
+        String query,
+        QueryMode mode,
+        int topK,
+        int chunkTopK,
+        String responseType,
+        boolean enableRerank,
+        String userPrompt,
+        List<ChatModel.ChatRequest.ConversationMessage> conversationHistory
+    ) {
+        this(query, mode, topK, chunkTopK, responseType, enableRerank, false, false, userPrompt, conversationHistory);
     }
 
     public static Builder builder() {
@@ -56,6 +71,8 @@ public record QueryRequest(
         private int chunkTopK = DEFAULT_CHUNK_TOP_K;
         private String responseType = DEFAULT_RESPONSE_TYPE;
         private boolean enableRerank = true;
+        private boolean onlyNeedContext;
+        private boolean onlyNeedPrompt;
         private String userPrompt = "";
         private List<ChatModel.ChatRequest.ConversationMessage> conversationHistory = List.of();
 
@@ -89,6 +106,16 @@ public record QueryRequest(
             return this;
         }
 
+        public Builder onlyNeedContext(boolean onlyNeedContext) {
+            this.onlyNeedContext = onlyNeedContext;
+            return this;
+        }
+
+        public Builder onlyNeedPrompt(boolean onlyNeedPrompt) {
+            this.onlyNeedPrompt = onlyNeedPrompt;
+            return this;
+        }
+
         public Builder userPrompt(String userPrompt) {
             this.userPrompt = userPrompt;
             return this;
@@ -100,7 +127,18 @@ public record QueryRequest(
         }
 
         public QueryRequest build() {
-            return new QueryRequest(query, mode, topK, chunkTopK, responseType, enableRerank, userPrompt, conversationHistory);
+            return new QueryRequest(
+                query,
+                mode,
+                topK,
+                chunkTopK,
+                responseType,
+                enableRerank,
+                onlyNeedContext,
+                onlyNeedPrompt,
+                userPrompt,
+                conversationHistory
+            );
         }
     }
 }
