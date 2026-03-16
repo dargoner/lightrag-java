@@ -103,6 +103,8 @@ It also supports manual graph-retrieval keyword overrides through `hlKeywords` a
 
 It also supports upstream-style query token budgets through `maxEntityTokens`, `maxRelationTokens`, and `maxTotalTokens`.
 
+It also supports upstream-style `includeReferences` for structured reference output.
+
 Use `userPrompt` when you want to add answer-formatting or style instructions without changing retrieval:
 
 ```java
@@ -148,11 +150,27 @@ var result = rag.query(QueryRequest.builder()
     .build());
 ```
 
+Use `includeReferences` when you want structured references in `QueryResult` in addition to the generated answer:
+
+```java
+var result = rag.query(QueryRequest.builder()
+    .query("Who works with Bob?")
+    .includeReferences(true)
+    .build());
+
+var references = result.references();
+var firstContextReferenceId = result.contexts().get(0).referenceId();
+var firstContextSource = result.contexts().get(0).source();
+```
+
 Notes:
 
 - retrieval mode selection, graph expansion, and rerank behavior are unchanged by these fields
 - `conversationHistory` is passed separately to the chat adapter; Java does not flatten those messages into the current-turn prompt
 - `hlKeywords` and `llKeywords` are manual overrides only in this phase; Java does not yet implement upstream automatic keyword extraction
+- `includeReferences(true)` adds `QueryResult.references()` plus `referenceId` / `source` on each returned `QueryResult.Context`
+- structured references are derived from the final chunk list after merge, rerank, and final token-budget trimming
+- source resolution priority is `file_path`, then `source`, then `documentId`
 - `maxEntityTokens` and `maxRelationTokens` cap formatted graph context rows in score order
 - `maxTotalTokens` caps final chunk context after final merge/rerank ordering in `QueryEngine`
 - defaults are `maxEntityTokens=6000`, `maxRelationTokens=8000`, and `maxTotalTokens=30000`

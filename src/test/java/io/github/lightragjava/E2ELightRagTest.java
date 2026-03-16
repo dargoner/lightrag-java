@@ -1869,6 +1869,35 @@ class E2ELightRagTest {
     }
 
     @Test
+    void queryCanReturnStructuredReferencesFromDocumentSourceMetadata() {
+        var storage = InMemoryStorageProvider.create();
+        var chatModel = new FakeChatModel();
+        var rag = LightRag.builder()
+            .chatModel(chatModel)
+            .embeddingModel(new FakeEmbeddingModel())
+            .storage(storage)
+            .build();
+
+        rag.ingest(List.of(
+            new Document("doc-1", "Title", "Alice works with Bob", Map.of("source", "team-notes.md"))
+        ));
+
+        var result = rag.query(QueryRequest.builder()
+            .query("Who works with Bob?")
+            .includeReferences(true)
+            .build());
+
+        assertThat(result.references())
+            .containsExactly(new QueryResult.Reference("1", "team-notes.md"));
+        assertThat(result.contexts())
+            .extracting(QueryResult.Context::referenceId)
+            .containsExactly("1");
+        assertThat(result.contexts())
+            .extracting(QueryResult.Context::source)
+            .containsExactly("team-notes.md");
+    }
+
+    @Test
     void queryReturnsCompletePromptWhenOnlyNeedPromptIsEnabled() {
         var storage = InMemoryStorageProvider.create();
         var chatModel = new FakeChatModel();
