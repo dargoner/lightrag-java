@@ -38,7 +38,7 @@ public final class RagasEvaluationService {
         );
     }
 
-    private static List<Document> loadDocuments(Path documentsDir) throws IOException {
+    static List<Document> loadDocuments(Path documentsDir) throws IOException {
         try (var paths = Files.list(Objects.requireNonNull(documentsDir, "documentsDir"))) {
             return paths
                 .filter(Files::isRegularFile)
@@ -49,7 +49,7 @@ public final class RagasEvaluationService {
         }
     }
 
-    private static Document toDocument(Path path) {
+    static Document toDocument(Path path) {
         try {
             var content = Files.readString(path);
             var fileName = path.getFileName().toString();
@@ -65,7 +65,7 @@ public final class RagasEvaluationService {
         }
     }
 
-    private static String extractTitle(String content, String fileName) {
+    static String extractTitle(String content, String fileName) {
         return content.lines()
             .map(String::trim)
             .filter(line -> line.startsWith("# "))
@@ -75,7 +75,7 @@ public final class RagasEvaluationService {
             .orElse(fileName);
     }
 
-    private static String documentId(String fileName) {
+    static String documentId(String fileName) {
         var baseName = fileName.replaceFirst("\\.md$", "");
         return baseName.toLowerCase(Locale.ROOT).replaceAll("[^a-z0-9]+", "-").replaceAll("(^-|-$)", "");
     }
