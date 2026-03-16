@@ -30,20 +30,28 @@ class QueryEngineTest {
             ))
         );
 
-        var result = engine.query(baseRequest());
+        var result = engine.query(QueryRequest.builder()
+            .query("which chunk?")
+            .mode(QueryMode.LOCAL)
+            .topK(3)
+            .chunkTopK(3)
+            .responseType("Bullet Points")
+            .build());
 
         assertThat(result.contexts())
             .extracting(context -> context.sourceId())
             .containsExactly("chunk-3", "chunk-2", "chunk-1");
-        assertThat(chatModel.lastRequest().userPrompt())
+        assertThat(chatModel.lastRequest().systemPrompt())
+            .contains("The response should be presented in Bullet Points.")
             .containsSubsequence("chunk-3", "chunk-2", "chunk-1")
             .contains("- chunk-3 | 0.700 | Gamma chunk")
             .contains("- chunk-2 | 0.800 | Beta chunk")
             .contains("- chunk-1 | 0.900 | Alpha chunk");
+        assertThat(chatModel.lastRequest().userPrompt()).isEqualTo("which chunk?");
     }
 
     @Test
-    void appendsUserPromptToFinalCurrentTurnPrompt() {
+    void movesAdditionalInstructionsIntoSystemPromptAndKeepsRawQueryAsUserPrompt() {
         var chatModel = new RecordingChatModel();
         var engine = new QueryEngine(
             chatModel,
@@ -56,14 +64,17 @@ class QueryEngineTest {
             .query("which chunk?")
             .mode(QueryMode.LOCAL)
             .chunkTopK(3)
+            .responseType("Bullet Points")
             .userPrompt("Answer in one sentence.")
             .build());
 
-        assertThat(chatModel.lastRequest().userPrompt())
-            .contains("Question:")
-            .contains("which chunk?")
+        assertThat(chatModel.lastRequest().systemPrompt())
+            .contains("The response should be presented in Bullet Points.")
+            .contains("Context:")
+            .contains("Alpha chunk")
             .contains("Additional Instructions:")
             .contains("Answer in one sentence.");
+        assertThat(chatModel.lastRequest().userPrompt()).isEqualTo("which chunk?");
     }
 
     @Test
@@ -146,6 +157,7 @@ class QueryEngineTest {
             .mode(QueryMode.LOCAL)
             .topK(3)
             .chunkTopK(3)
+            .responseType("Single Paragraph")
             .userPrompt("Answer in one sentence.")
             .conversationHistory(List.of(
                 new ChatModel.ChatRequest.ConversationMessage("user", "Earlier question"),
@@ -155,16 +167,13 @@ class QueryEngineTest {
             .build());
 
         assertThat(result.answer())
-            .contains("System Prompt:")
-            .contains("Answer the user's question using the provided context.")
-            .contains("History:")
-            .contains("Earlier question")
-            .contains("Earlier answer")
-            .contains("User Prompt:")
-            .contains("Question:")
+            .contains("The response should be presented in Single Paragraph.")
+            .contains("---User Query---")
             .contains("which chunk?")
             .contains("Additional Instructions:")
-            .contains("Answer in one sentence.");
+            .contains("Answer in one sentence.")
+            .doesNotContain("Earlier question")
+            .doesNotContain("Earlier answer");
         assertThat(result.contexts())
             .extracting(context -> context.sourceId())
             .containsExactly("chunk-3", "chunk-2", "chunk-1");
@@ -173,7 +182,7 @@ class QueryEngineTest {
     }
 
     @Test
-    void onlyNeedContextTakesPrecedenceOverOnlyNeedPrompt() {
+    void onlyNeedPromptTakesPrecedenceOverOnlyNeedContext() {
         var chatModel = new RecordingChatModel();
         var engine = new QueryEngine(
             chatModel,
@@ -191,14 +200,13 @@ class QueryEngineTest {
             .build());
 
         assertThat(result.answer())
-            .contains("Entities:")
-            .contains("Chunks:")
-            .doesNotContain("System Prompt:");
+            .contains("---User Query---")
+            .contains("which chunk?");
         assertThat(chatModel.callCount()).isZero();
     }
 
     @Test
-    void doesNotAppendAdditionalInstructionsOrFlattenHistoryWhenUserPromptIsBlank() {
+    void keepsHistorySeparateAndUsesNaForBlankUserPrompt() {
         var chatModel = new RecordingChatModel();
         var engine = new QueryEngine(
             chatModel,
@@ -211,16 +219,21 @@ class QueryEngineTest {
             .query("which chunk?")
             .mode(QueryMode.LOCAL)
             .chunkTopK(3)
+            .responseType("Single Paragraph")
             .conversationHistory(List.of(
                 new ChatModel.ChatRequest.ConversationMessage("user", "Earlier question"),
                 new ChatModel.ChatRequest.ConversationMessage("assistant", "Earlier answer")
             ))
             .build());
 
+        assertThat(chatModel.lastRequest().systemPrompt())
+            .contains("The response should be presented in Single Paragraph.")
+            .contains("Additional Instructions:")
+            .contains("n/a")
+            .doesNotContain("Earlier question")
+            .doesNotContain("Earlier answer");
         assertThat(chatModel.lastRequest().userPrompt())
-            .contains("Question:")
-            .contains("which chunk?")
-            .doesNotContain("Additional Instructions:")
+            .isEqualTo("which chunk?")
             .doesNotContain("Earlier question")
             .doesNotContain("Earlier answer");
     }
@@ -268,12 +281,14 @@ class QueryEngineTest {
             .mode(QueryMode.LOCAL)
             .topK(3)
             .chunkTopK(3)
+            .responseType("Bullet Points")
             .userPrompt("Answer in one sentence.")
             .conversationHistory(history)
             .build());
 
         assertThat(strategy.lastRequest()).isNotNull();
         assertThat(strategy.lastRequest().chunkTopK()).isEqualTo(6);
+        assertThat(strategy.lastRequest().responseType()).isEqualTo("Bullet Points");
         assertThat(strategy.lastRequest().userPrompt()).isEqualTo("Answer in one sentence.");
         assertThat(strategy.lastRequest().conversationHistory()).containsExactlyElementsOf(history);
     }

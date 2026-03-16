@@ -15,7 +15,16 @@ import java.util.Map;
 import java.util.Objects;
 
 public final class QueryEngine {
-    private static final String SYSTEM_PROMPT = "Answer the user's question using the provided context.";
+    private static final String SYSTEM_PROMPT_TEMPLATE = """
+        Answer the user's question using only the provided context.
+
+        The response should be presented in %s.
+
+        Additional Instructions: %s
+
+        Context:
+        %s
+        """;
 
     private final ChatModel chatModel;
     private final ContextAssembler contextAssembler;
@@ -63,16 +72,16 @@ public final class QueryEngine {
             assembledContext
         );
         var contexts = contextAssembler.toContexts(assembledQueryContext);
-        if (query.onlyNeedContext()) {
-            return new QueryResult(assembledContext, contexts);
-        }
         var chatRequest = new ChatModel.ChatRequest(
-            SYSTEM_PROMPT,
-            buildUserPrompt(assembledContext, query),
+            buildSystemPrompt(assembledContext, query),
+            query.query(),
             query.conversationHistory()
         );
+        if (query.onlyNeedContext() && !query.onlyNeedPrompt()) {
+            return new QueryResult(assembledContext, contexts);
+        }
         if (query.onlyNeedPrompt()) {
-            return new QueryResult(renderPrompt(chatRequest), contexts);
+            return new QueryResult(renderStandardPrompt(chatRequest), contexts);
         }
         var answer = chatModel.generate(chatRequest);
         return new QueryResult(answer, contexts);
@@ -99,37 +108,26 @@ public final class QueryEngine {
     }
 
     private QueryResult bypassQuery(QueryRequest query) {
-        if (query.onlyNeedContext()) {
-            return new QueryResult("", List.of());
-        }
         var chatRequest = new ChatModel.ChatRequest(
             "",
             buildBypassUserPrompt(query),
             query.conversationHistory()
         );
+        if (query.onlyNeedContext()) {
+            return new QueryResult("", List.of());
+        }
         if (query.onlyNeedPrompt()) {
-            return new QueryResult(renderPrompt(chatRequest), List.of());
+            return new QueryResult(renderBypassPrompt(chatRequest), List.of());
         }
         return new QueryResult(chatModel.generate(chatRequest), List.of());
     }
 
-    private static String buildUserPrompt(String assembledContext, QueryRequest query) {
-        var basePrompt = """
-            Context:
-            %s
-
-            Question:
-            %s
-            """.formatted(assembledContext, query.query());
-        if (query.userPrompt().isBlank()) {
-            return basePrompt;
-        }
-        return """
-            %s
-
-            Additional Instructions:
-            %s
-            """.formatted(basePrompt, query.userPrompt());
+    private static String buildSystemPrompt(String assembledContext, QueryRequest query) {
+        return SYSTEM_PROMPT_TEMPLATE.formatted(
+            effectiveResponseType(query.responseType()),
+            effectiveUserPrompt(query.userPrompt()),
+            assembledContext
+        );
     }
 
     private static String buildBypassUserPrompt(QueryRequest query) {
@@ -144,7 +142,16 @@ public final class QueryEngine {
             """.formatted(query.query(), query.userPrompt());
     }
 
-    private static String renderPrompt(ChatModel.ChatRequest request) {
+    private static String renderStandardPrompt(ChatModel.ChatRequest request) {
+        return """
+            %s
+
+            ---User Query---
+            %s
+            """.formatted(request.systemPrompt(), request.userPrompt());
+    }
+
+    private static String renderBypassPrompt(ChatModel.ChatRequest request) {
         var history = request.conversationHistory().isEmpty()
             ? "(none)"
             : request.conversationHistory().stream()
@@ -160,6 +167,14 @@ public final class QueryEngine {
             User Prompt:
             %s
             """.formatted(request.systemPrompt(), history, request.userPrompt());
+    }
+
+    private static String effectiveResponseType(String responseType) {
+        return responseType == null || responseType.isBlank() ? QueryRequest.DEFAULT_RESPONSE_TYPE : responseType;
+    }
+
+    private static String effectiveUserPrompt(String userPrompt) {
+        return userPrompt == null || userPrompt.isBlank() ? "n/a" : userPrompt;
     }
 
     private List<ScoredChunk> rerankChunks(QueryRequest request, List<ScoredChunk> matchedChunks) {

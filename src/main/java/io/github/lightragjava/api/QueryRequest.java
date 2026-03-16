@@ -20,7 +20,7 @@ public record QueryRequest(
     public static final QueryMode DEFAULT_MODE = QueryMode.MIX;
     public static final int DEFAULT_TOP_K = 10;
     public static final int DEFAULT_CHUNK_TOP_K = 10;
-    public static final String DEFAULT_RESPONSE_TYPE = "text";
+    public static final String DEFAULT_RESPONSE_TYPE = "Multiple Paragraphs";
 
     public QueryRequest {
         query = Objects.requireNonNull(query, "query");
