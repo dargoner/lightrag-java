@@ -1,0 +1,11 @@
+lightrag:
+  chat:
+    base-url: ${LIGHTRAG_CHAT_BASE_URL:http://localhost:11434/v1/}
+    model: ${LIGHTRAG_CHAT_MODEL:qwen2.5:7b}
+    api-key: ${LIGHTRAG_CHAT_API_KEY:dummy}
+  embedding:
+    base-url: ${LIGHTRAG_EMBEDDING_BASE_URL:http://localhost:11434/v1/}
+    model: ${LIGHTRAG_EMBEDDING_MODEL:nomic-embed-text}
+    api-key: ${LIGHTRAG_EMBEDDING_API_KEY:dummy}
+  storage:
+    type: ${LIGHTRAG_STORAGE_TYPE:in-memory}

@@ -86,7 +86,7 @@ class JavaRagasEvaluator:
                 f"--chunk-top-k {shlex.quote(os.getenv('LIGHTRAG_JAVA_EVAL_CHUNK_TOP_K', '10'))}",
             ]
         )
-        command = f"./gradlew --no-daemon --quiet runRagasBatchEval --args={shlex.quote(app_args)}"
+        command = f"./gradlew --no-daemon --quiet :lightrag-core:runRagasBatchEval --args={shlex.quote(app_args)}"
         completed = await asyncio.to_thread(
             subprocess.run,
             ["/bin/bash", "-lc", command],
