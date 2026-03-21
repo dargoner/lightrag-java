@@ -74,6 +74,8 @@ The demo application exposes:
 - `POST /graph/relations`
 - `PUT /graph/relations`
 - `DELETE /graph/relations?sourceEntityName=...&targetEntityName=...`
+- `GET /actuator/health`
+- `GET /actuator/info`
 
 Run the demo locally with:
 
@@ -115,6 +117,11 @@ lightrag:
 ```
 
 If the application provides its own `Chunker` bean, the starter backs off and uses that bean instead.
+
+For lightweight operations visibility, the demo also exposes:
+
+- `/actuator/health`: application health plus a `lightrag` component with storage type and async ingest flags
+- `/actuator/info`: static runtime info such as storage type, async ingest setting, and default query mode
 
 The demo `/query` endpoint accepts the core query controls used most often in service mode, including:
 
