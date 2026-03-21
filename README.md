@@ -63,6 +63,7 @@ The demo application exposes:
 
 - `POST /documents/ingest`: submit an ingest job and receive a `jobId`
 - `POST /documents/upload`: upload one or more text files and receive a `jobId` plus generated `documentIds`
+- `GET /documents/jobs?page=0&size=20`: list recent ingest jobs with pagination
 - `GET /documents/jobs/{jobId}`: poll async ingest state
 - `GET /documents/status`
 - `GET /documents/status/{documentId}`
@@ -154,6 +155,12 @@ curl -X POST http://127.0.0.1:8080/documents/upload \
 ```
 
 The response returns a `jobId` and `documentIds`. Use those IDs with `/documents/status/{documentId}` or `DELETE /documents/{documentId}` after the ingest job completes.
+
+The job endpoints expose lightweight observability fields for demo troubleshooting:
+
+- `documentCount`: number of submitted documents in the job
+- `createdAt`, `startedAt`, `finishedAt`: basic ingest timeline
+- `errorMessage`: populated when the job reaches `FAILED`
 
 The demo `/query` endpoint accepts the core query controls used most often in service mode, including:
 

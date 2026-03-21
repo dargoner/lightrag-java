@@ -231,6 +231,11 @@ lightrag:
 当前 demo 提供这些最小接口：
 
 - `POST /documents/ingest`
+- `GET /documents/jobs?page=0&size=20`
+- `GET /documents/jobs/{jobId}`
+- `GET /documents/status`
+- `GET /documents/status/{documentId}`
+- `DELETE /documents/{documentId}`
 - `POST /query`
 - `GET /actuator/health`
 - `GET /actuator/info`
@@ -246,6 +251,12 @@ lightrag:
 
 - `/actuator/health`：返回应用整体健康状态，以及 `lightrag` 组件的 storage type / async ingest 配置
 - `/actuator/info`：返回 storage type、async ingest 开关、默认 query mode
+
+其中 job 查询接口额外暴露了最小可观测字段：
+
+- `documentCount`
+- `createdAt` / `startedAt` / `finishedAt`
+- `errorMessage`
 
 Demo 默认配置文件：
 
