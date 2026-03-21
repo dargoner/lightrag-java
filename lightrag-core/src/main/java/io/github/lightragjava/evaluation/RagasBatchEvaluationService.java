@@ -52,7 +52,8 @@ public final class RagasBatchEvaluationService {
                     testCase.groundTruth(),
                     testCase.metadata(),
                     queryResult.answer(),
-                    queryResult.contexts()
+                    queryResult.contexts(),
+                    queryResult.references()
                 ));
             }
             return List.copyOf(results);
@@ -175,7 +176,8 @@ public final class RagasBatchEvaluationService {
         String groundTruth,
         Map<String, Object> caseMetadata,
         String answer,
-        List<QueryResult.Context> contexts
+        List<QueryResult.Context> contexts,
+        List<QueryResult.Reference> references
     ) {
         public Result {
             question = Objects.requireNonNull(question, "question");
@@ -183,6 +185,7 @@ public final class RagasBatchEvaluationService {
             caseMetadata = Map.copyOf(Objects.requireNonNull(caseMetadata, "caseMetadata"));
             answer = Objects.requireNonNull(answer, "answer");
             contexts = List.copyOf(Objects.requireNonNull(contexts, "contexts"));
+            references = List.copyOf(Objects.requireNonNull(references, "references"));
         }
     }
 

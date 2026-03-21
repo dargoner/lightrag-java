@@ -630,14 +630,32 @@ Batch evaluation:
   --mode MIX \
   --top-k 10 \
   --chunk-top-k 10 \
+  --storage-profile in-memory \
+  --run-label baseline"
+```
+
+For a fixed local baseline, the batch CLI now defaults to the bundled sample corpus and sample dataset:
+
+```bash
+./gradlew :lightrag-core:runRagasBatchEval --args="--run-label baseline"
+```
+
+You can compare a candidate configuration by re-running the same dataset with a different label and retrieval knobs:
+
+```bash
+./gradlew :lightrag-core:runRagasBatchEval --args="\
+  --run-label candidate-rerank-4 \
+  --top-k 10 \
+  --chunk-top-k 20 \
+  --mode MIX \
   --storage-profile in-memory"
 ```
 
 Batch output now includes:
 
-- `request`: run-level parameters such as `mode`, `topK`, `chunkTopK`, and `storageProfile`
+- `request`: run-level parameters such as `mode`, `topK`, `chunkTopK`, `storageProfile`, and `runLabel`
 - `summary.totalCases`: quick run-size check
-- `results[*]`: `caseIndex`, `question`, `groundTruth`, `caseMetadata`, `answer`, and structured `contexts`
+- `results[*]`: `caseIndex`, `question`, `groundTruth`, `caseMetadata`, `answer`, structured `contexts`, and structured `references`
 
 Compatibility note:
 
