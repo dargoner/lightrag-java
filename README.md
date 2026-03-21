@@ -62,6 +62,7 @@ The starter auto-configures `LightRag` from `application.yml` when you provide:
 The demo application exposes:
 
 - `POST /documents/ingest`: submit an ingest job and receive a `jobId`
+- `POST /documents/upload`: upload one or more text files and receive a `jobId` plus generated `documentIds`
 - `GET /documents/jobs/{jobId}`: poll async ingest state
 - `GET /documents/status`
 - `GET /documents/status/{documentId}`
@@ -122,6 +123,37 @@ For lightweight operations visibility, the demo also exposes:
 
 - `/actuator/health`: application health plus a `lightrag` component with storage type and async ingest flags
 - `/actuator/info`: static runtime info such as storage type, async ingest setting, and default query mode
+
+Use `POST /documents/ingest` when you already have structured `Document` JSON payloads. Use `POST /documents/upload` when you want the demo to read text files for you and create `Document` objects automatically.
+
+The upload endpoint accepts `multipart/form-data` with one or more `files` parts and an optional `async=true|false` query parameter. Supported file types are:
+
+- `.txt`
+- `.md`
+- `.markdown`
+
+Current demo limits:
+
+- maximum `20` files per request
+- maximum `1 MiB` per file
+- maximum `4 MiB` total request payload across all files
+- file content must decode as valid UTF-8
+
+Each uploaded file becomes a `Document` with:
+
+- a generated URL-safe `documentId`
+- `title` set to the basename of the uploaded file
+- metadata including `source=upload`, `filename`, and `contentType`
+
+Example:
+
+```bash
+curl -X POST http://127.0.0.1:8080/documents/upload \
+  -F 'files=@notes.md;type=text/markdown' \
+  -F 'files=@facts.txt;type=text/plain'
+```
+
+The response returns a `jobId` and `documentIds`. Use those IDs with `/documents/status/{documentId}` or `DELETE /documents/{documentId}` after the ingest job completes.
 
 The demo `/query` endpoint accepts the core query controls used most often in service mode, including:
 
