@@ -20,6 +20,7 @@ import java.util.List;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
@@ -29,7 +30,7 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
 @WebMvcTest(UploadController.class)
-@Import({UploadControllerTest.TestConfig.class, ApiExceptionHandler.class})
+@Import({UploadControllerTest.TestConfig.class, ApiExceptionHandler.class, WorkspaceResolver.class})
 @SuppressWarnings("unchecked")
 class UploadControllerTest {
     @Autowired
@@ -53,7 +54,7 @@ class UploadControllerTest {
 
     @Test
     void uploadsSingleFileAndUsesConfiguredAsyncDefault() throws Exception {
-        when(ingestJobService.submit(any(), eq(true))).thenReturn("job-1");
+        when(ingestJobService.submit(eq("alpha"), any(), eq(true))).thenReturn("job-1");
 
         var mvcResult = mockMvc.perform(multipart("/documents/upload")
                 .file(new MockMultipartFile(
@@ -61,14 +62,15 @@ class UploadControllerTest {
                     "nested/path/Alice Notes.txt",
                     MediaType.TEXT_PLAIN_VALUE,
                     "Alice works with Bob".getBytes(StandardCharsets.UTF_8)
-                )))
+                ))
+                .header("X-Workspace-Id", "alpha"))
             .andExpect(status().isAccepted())
             .andExpect(jsonPath("$.jobId").value("job-1"))
             .andExpect(jsonPath("$.documentIds[0]").isNotEmpty())
             .andReturn();
 
         var documentsCaptor = ArgumentCaptor.forClass(List.class);
-        verify(ingestJobService).submit(documentsCaptor.capture(), eq(true));
+        verify(ingestJobService).submit(eq("alpha"), documentsCaptor.capture(), eq(true));
 
         @SuppressWarnings("unchecked")
         var documents = (List<Document>) documentsCaptor.getValue();
@@ -85,7 +87,7 @@ class UploadControllerTest {
 
     @Test
     void uploadsMultipleFilesAndAllowsAsyncOverride() throws Exception {
-        when(ingestJobService.submit(any(), eq(false))).thenReturn("job-2");
+        when(ingestJobService.submit(eq("default"), any(), eq(false))).thenReturn("job-2");
 
         mockMvc.perform(multipart("/documents/upload")
                 .file(new MockMultipartFile(
@@ -107,7 +109,7 @@ class UploadControllerTest {
             .andExpect(jsonPath("$.documentIds[1]").isNotEmpty());
 
         var documentsCaptor = ArgumentCaptor.forClass(List.class);
-        verify(ingestJobService).submit(documentsCaptor.capture(), eq(false));
+        verify(ingestJobService).submit(eq("default"), documentsCaptor.capture(), eq(false));
 
         @SuppressWarnings("unchecked")
         var documents = (List<Document>) documentsCaptor.getValue();
@@ -129,7 +131,7 @@ class UploadControllerTest {
             .andExpect(status().isBadRequest())
             .andExpect(jsonPath("$.message").value("file content must not be blank: blank.txt"));
 
-        verify(ingestJobService, never()).submit(any(), any(Boolean.class));
+        verify(ingestJobService, never()).submit(anyString(), any(), any(Boolean.class));
     }
 
     @Test
@@ -144,7 +146,7 @@ class UploadControllerTest {
             .andExpect(status().isBadRequest())
             .andExpect(jsonPath("$.message").value("unsupported file type: paper.pdf"));
 
-        verify(ingestJobService, never()).submit(any(), any(Boolean.class));
+        verify(ingestJobService, never()).submit(anyString(), any(), any(Boolean.class));
     }
 
     @Test
@@ -152,7 +154,7 @@ class UploadControllerTest {
         mockMvc.perform(multipart("/documents/upload"))
             .andExpect(status().isBadRequest());
 
-        verify(ingestJobService, never()).submit(any(), any(Boolean.class));
+        verify(ingestJobService, never()).submit(anyString(), any(), any(Boolean.class));
     }
 
     @Test
@@ -167,7 +169,7 @@ class UploadControllerTest {
             .andExpect(status().isBadRequest())
             .andExpect(jsonPath("$.message").value("file name must not be blank"));
 
-        verify(ingestJobService, never()).submit(any(), any(Boolean.class));
+        verify(ingestJobService, never()).submit(anyString(), any(), any(Boolean.class));
     }
 
     @Test
@@ -182,7 +184,7 @@ class UploadControllerTest {
             .andExpect(status().isBadRequest())
             .andExpect(jsonPath("$.message").value("file too large: large.txt"));
 
-        verify(ingestJobService, never()).submit(any(), any(Boolean.class));
+        verify(ingestJobService, never()).submit(anyString(), any(), any(Boolean.class));
     }
 
     @Test
@@ -197,7 +199,7 @@ class UploadControllerTest {
             .andExpect(status().isBadRequest())
             .andExpect(jsonPath("$.message").value("file content must be valid UTF-8: broken.txt"));
 
-        verify(ingestJobService, never()).submit(any(), any(Boolean.class));
+        verify(ingestJobService, never()).submit(anyString(), any(), any(Boolean.class));
     }
 
     @Test
@@ -216,7 +218,7 @@ class UploadControllerTest {
             .andExpect(status().isBadRequest())
             .andExpect(jsonPath("$.message").value("too many files in a single upload"));
 
-        verify(ingestJobService, never()).submit(any(), any(Boolean.class));
+        verify(ingestJobService, never()).submit(anyString(), any(), any(Boolean.class));
     }
 
     @Test
@@ -237,7 +239,7 @@ class UploadControllerTest {
             .andExpect(status().isBadRequest())
             .andExpect(jsonPath("$.message").value("total upload too large"));
 
-        verify(ingestJobService, never()).submit(any(), any(Boolean.class));
+        verify(ingestJobService, never()).submit(anyString(), any(), any(Boolean.class));
     }
 
     @Test
@@ -258,6 +260,6 @@ class UploadControllerTest {
             .andExpect(status().isBadRequest())
             .andExpect(jsonPath("$.message").value(org.hamcrest.Matchers.startsWith("duplicate uploaded document id: alice-")));
 
-        verify(ingestJobService, never()).submit(any(), any(Boolean.class));
+        verify(ingestJobService, never()).submit(anyString(), any(), any(Boolean.class));
     }
 }

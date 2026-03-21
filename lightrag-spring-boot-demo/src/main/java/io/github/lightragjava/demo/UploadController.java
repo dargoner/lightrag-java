@@ -1,6 +1,7 @@
 package io.github.lightragjava.demo;
 
 import io.github.lightragjava.spring.boot.LightRagProperties;
+import jakarta.servlet.http.HttpServletRequest;
 import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.PostMapping;
@@ -16,26 +17,31 @@ import java.util.Objects;
 class UploadController {
     private final IngestJobService ingestJobService;
     private final UploadedDocumentMapper uploadedDocumentMapper;
+    private final WorkspaceResolver workspaceResolver;
     private final LightRagProperties properties;
 
     UploadController(
         IngestJobService ingestJobService,
         UploadedDocumentMapper uploadedDocumentMapper,
+        WorkspaceResolver workspaceResolver,
         LightRagProperties properties
     ) {
         this.ingestJobService = ingestJobService;
         this.uploadedDocumentMapper = uploadedDocumentMapper;
+        this.workspaceResolver = workspaceResolver;
         this.properties = properties;
     }
 
     @PostMapping(path = "/documents/upload", consumes = MediaType.MULTIPART_FORM_DATA_VALUE)
     ResponseEntity<UploadJobResponse> upload(
         @RequestPart("files") List<MultipartFile> files,
-        @RequestParam(name = "async", required = false) Boolean async
+        @RequestParam(name = "async", required = false) Boolean async,
+        HttpServletRequest request
     ) {
         var documents = uploadedDocumentMapper.toDocuments(files);
         var runAsync = async == null ? properties.getDemo().isAsyncIngestEnabled() : async;
-        var jobId = ingestJobService.submit(documents, runAsync);
+        var workspaceId = workspaceResolver.resolve(request);
+        var jobId = ingestJobService.submit(workspaceId, documents, runAsync);
         return ResponseEntity.accepted().body(new UploadJobResponse(
             jobId,
             documents.stream().map(document -> document.id()).toList()

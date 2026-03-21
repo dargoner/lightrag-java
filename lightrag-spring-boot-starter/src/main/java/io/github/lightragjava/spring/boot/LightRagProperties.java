@@ -11,6 +11,7 @@ public class LightRagProperties {
     private final IndexingProperties indexing = new IndexingProperties();
     private final QueryProperties query = new QueryProperties();
     private final DemoProperties demo = new DemoProperties();
+    private final WorkspaceProperties workspace = new WorkspaceProperties();
     private String snapshotPath;
 
     public ModelProperties getChat() {
@@ -35,6 +36,10 @@ public class LightRagProperties {
 
     public DemoProperties getDemo() {
         return demo;
+    }
+
+    public WorkspaceProperties getWorkspace() {
+        return workspace;
     }
 
     public String getSnapshotPath() {
@@ -174,6 +179,36 @@ public class LightRagProperties {
 
         public void setAsyncIngestEnabled(boolean asyncIngestEnabled) {
             this.asyncIngestEnabled = asyncIngestEnabled;
+        }
+    }
+
+    public static class WorkspaceProperties {
+        private String headerName = "X-Workspace-Id";
+        private String defaultId = "default";
+        private int maxActiveWorkspaces = 32;
+
+        public String getHeaderName() {
+            return headerName;
+        }
+
+        public void setHeaderName(String headerName) {
+            this.headerName = headerName;
+        }
+
+        public String getDefaultId() {
+            return defaultId;
+        }
+
+        public void setDefaultId(String defaultId) {
+            this.defaultId = defaultId;
+        }
+
+        public int getMaxActiveWorkspaces() {
+            return maxActiveWorkspaces;
+        }
+
+        public void setMaxActiveWorkspaces(int maxActiveWorkspaces) {
+            this.maxActiveWorkspaces = maxActiveWorkspaces;
         }
     }
 

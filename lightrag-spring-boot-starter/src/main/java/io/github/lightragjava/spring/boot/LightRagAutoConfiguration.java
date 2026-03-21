@@ -23,8 +23,6 @@ import org.springframework.boot.autoconfigure.condition.ConditionalOnMissingBean
 import org.springframework.boot.context.properties.EnableConfigurationProperties;
 import org.springframework.context.annotation.Bean;
 
-import java.nio.file.Path;
-
 @AutoConfiguration
 @ConditionalOnClass(LightRag.class)
 @EnableConfigurationProperties(LightRagProperties.class)
@@ -80,27 +78,30 @@ public class LightRagAutoConfiguration {
 
     @Bean
     @ConditionalOnMissingBean
-    LightRag lightRag(
+    WorkspaceLightRagFactory workspaceLightRagFactory(
         ChatModel chatModel,
         EmbeddingModel embeddingModel,
-        StorageProvider storageProvider,
-        Chunker chunker,
+        ObjectProvider<StorageProvider> storageProvider,
+        ObjectProvider<Chunker> chunker,
         ObjectProvider<RerankModel> rerankModel,
+        SnapshotStore snapshotStore,
         LightRagProperties properties
     ) {
-        var builder = LightRag.builder()
-            .chatModel(chatModel)
-            .embeddingModel(embeddingModel)
-            .storage(storageProvider)
-            .chunker(chunker);
-        var rerank = rerankModel.getIfAvailable();
-        if (rerank != null) {
-            builder.rerankModel(rerank);
-        }
-        if (properties.getSnapshotPath() != null && !properties.getSnapshotPath().isBlank()) {
-            builder.loadFromSnapshot(Path.of(properties.getSnapshotPath()));
-        }
-        return builder.build();
+        return new WorkspaceLightRagFactory(
+            chatModel,
+            embeddingModel,
+            storageProvider,
+            chunker,
+            rerankModel,
+            snapshotStore,
+            properties
+        );
+    }
+
+    @Bean
+    @ConditionalOnMissingBean
+    LightRag lightRag(WorkspaceLightRagFactory workspaceLightRagFactory, LightRagProperties properties) {
+        return workspaceLightRagFactory.get(properties.getWorkspace().getDefaultId());
     }
 
     private static PostgresStorageConfig postgresConfig(LightRagProperties properties) {

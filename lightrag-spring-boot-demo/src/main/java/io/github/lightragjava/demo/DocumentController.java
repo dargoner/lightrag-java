@@ -2,6 +2,7 @@ package io.github.lightragjava.demo;
 
 import io.github.lightragjava.types.Document;
 import io.github.lightragjava.spring.boot.LightRagProperties;
+import jakarta.servlet.http.HttpServletRequest;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestBody;
@@ -14,15 +15,17 @@ import java.util.Objects;
 @RestController
 class DocumentController {
     private final IngestJobService ingestJobService;
+    private final WorkspaceResolver workspaceResolver;
     private final LightRagProperties properties;
 
-    DocumentController(IngestJobService ingestJobService, LightRagProperties properties) {
+    DocumentController(IngestJobService ingestJobService, WorkspaceResolver workspaceResolver, LightRagProperties properties) {
         this.ingestJobService = ingestJobService;
+        this.workspaceResolver = workspaceResolver;
         this.properties = properties;
     }
 
     @PostMapping("/documents/ingest")
-    ResponseEntity<IngestJobResponse> ingest(@RequestBody IngestRequest request) {
+    ResponseEntity<IngestJobResponse> ingest(@RequestBody IngestRequest request, HttpServletRequest servletRequest) {
         if (request == null || request.documents() == null || request.documents().isEmpty()) {
             throw new IllegalArgumentException("documents must not be empty");
         }
@@ -34,7 +37,8 @@ class DocumentController {
                 payload.metadata() == null ? Map.of() : payload.metadata()
             ))
             .toList();
-        var jobId = ingestJobService.submit(documents, properties.getDemo().isAsyncIngestEnabled());
+        var workspaceId = workspaceResolver.resolve(servletRequest);
+        var jobId = ingestJobService.submit(workspaceId, documents, properties.getDemo().isAsyncIngestEnabled());
         return ResponseEntity.accepted().body(new IngestJobResponse(jobId));
     }
 

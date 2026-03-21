@@ -80,6 +80,8 @@ The demo application exposes:
 - `GET /actuator/health`
 - `GET /actuator/info`
 
+All demo endpoints resolve a workspace before touching storage. By default the demo reads `X-Workspace-Id`; when the header is omitted it falls back to the configured default workspace.
+
 Run the demo locally with:
 
 ```bash
@@ -147,10 +149,18 @@ Each uploaded file becomes a `Document` with:
 - `title` set to the basename of the uploaded file
 - metadata including `source=upload`, `filename`, and `contentType`
 
-Example:
+Workspace routing is configured through the starter properties:
+
+- `lightrag.workspace.header-name`: request header used by the demo, default `X-Workspace-Id`
+- `lightrag.workspace.default-id`: fallback workspace when the header is missing, default `default`
+- `lightrag.workspace.max-active-workspaces`: upper bound for cached workspace instances, default `32`
+- `lightrag.workspace.max-active-workspaces`: upper bound for cached workspace instances, default `32`
+
+Upload example:
 
 ```bash
 curl -X POST http://127.0.0.1:8080/documents/upload \
+  -H 'X-Workspace-Id: team-a' \
   -F 'files=@notes.md;type=text/markdown' \
   -F 'files=@facts.txt;type=text/plain'
 ```
@@ -162,6 +172,31 @@ The job endpoints expose lightweight observability fields for demo troubleshooti
 - `documentCount`: number of submitted documents in the job
 - `createdAt`, `startedAt`, `finishedAt`: basic ingest timeline
 - `errorMessage`: populated when the job reaches `FAILED`
+
+Workspace-scoped structured ingest example:
+
+```bash
+curl -X POST http://127.0.0.1:8080/documents/ingest \
+  -H 'Content-Type: application/json' \
+  -H 'X-Workspace-Id: team-a' \
+  -d '{
+    "documents": [
+      {
+        "id": "doc-1",
+        "title": "Title",
+        "content": "Alice works with Bob"
+      }
+    ]
+  }'
+```
+
+Workspace isolation support in this phase:
+
+- `in-memory`: each workspace gets an isolated in-process `LightRag` instance
+- `postgres`: each workspace gets an isolated table prefix and snapshot path
+- `postgres-neo4j`: current behavior is preserved for the default workspace only; non-default workspaces are not supported yet
+- custom `StorageProvider` beans remain default-workspace only unless you provide your own workspace-aware routing layer
+
 The demo `/query` and `/query/stream` endpoints accept the core query controls used most often in service mode, including:
 
 - `mode`, `topK`, `chunkTopK`

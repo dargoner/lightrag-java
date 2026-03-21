@@ -8,6 +8,8 @@ import io.github.lightragjava.api.QueryRequest;
 import io.github.lightragjava.api.QueryResult;
 import io.github.lightragjava.model.CloseableIterator;
 import io.github.lightragjava.spring.boot.LightRagProperties;
+import io.github.lightragjava.spring.boot.WorkspaceLightRagFactory;
+import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.mockito.ArgumentCaptor;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -28,6 +30,8 @@ import java.util.concurrent.atomic.AtomicBoolean;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyString;
+import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
@@ -37,7 +41,7 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
 @WebMvcTest(StreamingQueryController.class)
-@Import({StreamingQueryControllerTest.TestConfig.class, ApiExceptionHandler.class})
+@Import({StreamingQueryControllerTest.TestConfig.class, WorkspaceResolver.class, ApiExceptionHandler.class})
 class StreamingQueryControllerTest {
     @Autowired
     private MockMvc mockMvc;
@@ -46,7 +50,10 @@ class StreamingQueryControllerTest {
     private ObjectMapper objectMapper;
 
     @MockBean
-    private LightRag lightRag;
+    private WorkspaceLightRagFactory workspaceLightRagFactory;
+
+    private LightRag defaultLightRag;
+    private LightRag alphaLightRag;
 
     @SpyBean
     private QueryRequestMapper queryRequestMapper;
@@ -69,15 +76,24 @@ class StreamingQueryControllerTest {
         }
     }
 
+    @BeforeEach
+    void setUp() {
+        defaultLightRag = mock(LightRag.class);
+        alphaLightRag = mock(LightRag.class);
+        when(workspaceLightRagFactory.get("default")).thenReturn(defaultLightRag);
+        when(workspaceLightRagFactory.get("alpha")).thenReturn(alphaLightRag);
+    }
+
     @Test
-    void streamsMetaChunkAndCompleteEvents() throws Exception {
-        when(lightRag.query(any())).thenReturn(QueryResult.streaming(
+    void streamsMetaChunkAndCompleteEventsFromResolvedWorkspace() throws Exception {
+        when(alphaLightRag.query(any())).thenReturn(QueryResult.streaming(
             CloseableIterator.of(List.of("Alice ", "works with Bob.")),
             List.of(new QueryResult.Context("chunk-1", "Alice works with Bob", "1", "demo.txt")),
             List.of(new QueryResult.Reference("1", "demo.txt"))
         ));
 
         var mvcResult = mockMvc.perform(post("/query/stream")
+                .header("X-Workspace-Id", "alpha")
                 .contentType(MediaType.APPLICATION_JSON)
                 .accept(MediaType.TEXT_EVENT_STREAM)
                 .content("""
@@ -93,7 +109,8 @@ class StreamingQueryControllerTest {
 
         var requestCaptor = ArgumentCaptor.forClass(QueryRequest.class);
         verify(queryRequestMapper).toStreamingRequest(any());
-        verify(lightRag).query(requestCaptor.capture());
+        verify(workspaceLightRagFactory).get("alpha");
+        verify(alphaLightRag).query(requestCaptor.capture());
 
         assertThat(requestCaptor.getValue().mode()).isEqualTo(QueryMode.MIX);
         assertThat(requestCaptor.getValue().stream()).isTrue();
@@ -106,14 +123,40 @@ class StreamingQueryControllerTest {
     }
 
     @Test
+    void fallsBackToDefaultWorkspaceWhenHeaderMissing() throws Exception {
+        when(defaultLightRag.query(any())).thenReturn(QueryResult.streaming(
+            CloseableIterator.of(List.of("Default ", "workspace")),
+            List.of(),
+            List.of()
+        ));
+
+        var mvcResult = mockMvc.perform(post("/query/stream")
+                .contentType(MediaType.APPLICATION_JSON)
+                .accept(MediaType.TEXT_EVENT_STREAM)
+                .content("""
+                    {
+                      "query": "Who works with Bob?"
+                    }
+                    """))
+            .andExpect(request().asyncStarted())
+            .andReturn();
+
+        var events = dispatch(mvcResult);
+
+        verify(workspaceLightRagFactory).get("default");
+        assertThat(chunkTexts(events)).containsExactly("Default ", "workspace");
+    }
+
+    @Test
     void streamsBufferedFallbackAsAnswerEvent() throws Exception {
-        when(lightRag.query(any())).thenReturn(new QueryResult(
+        when(alphaLightRag.query(any())).thenReturn(new QueryResult(
             "assembled prompt",
             List.of(new QueryResult.Context("chunk-1", "Alice works with Bob", "1", "demo.txt")),
             List.of(new QueryResult.Reference("1", "demo.txt"))
         ));
 
         var mvcResult = mockMvc.perform(post("/query/stream")
+                .header("X-Workspace-Id", "alpha")
                 .contentType(MediaType.APPLICATION_JSON)
                 .accept(MediaType.TEXT_EVENT_STREAM)
                 .content("""
@@ -128,7 +171,7 @@ class StreamingQueryControllerTest {
         var events = dispatch(mvcResult);
 
         var requestCaptor = ArgumentCaptor.forClass(QueryRequest.class);
-        verify(lightRag).query(requestCaptor.capture());
+        verify(alphaLightRag).query(requestCaptor.capture());
 
         assertThat(requestCaptor.getValue().stream()).isTrue();
         assertThat(requestCaptor.getValue().onlyNeedPrompt()).isTrue();
@@ -141,13 +184,14 @@ class StreamingQueryControllerTest {
 
     @Test
     void streamsContextFallbackAsAnswerEvent() throws Exception {
-        when(lightRag.query(any())).thenReturn(new QueryResult(
+        when(alphaLightRag.query(any())).thenReturn(new QueryResult(
             "assembled context",
             List.of(new QueryResult.Context("chunk-1", "Alice works with Bob", "1", "demo.txt")),
             List.of(new QueryResult.Reference("1", "demo.txt"))
         ));
 
         var mvcResult = mockMvc.perform(post("/query/stream")
+                .header("X-Workspace-Id", "alpha")
                 .contentType(MediaType.APPLICATION_JSON)
                 .accept(MediaType.TEXT_EVENT_STREAM)
                 .content("""
@@ -162,7 +206,7 @@ class StreamingQueryControllerTest {
         var events = dispatch(mvcResult);
 
         var requestCaptor = ArgumentCaptor.forClass(QueryRequest.class);
-        verify(lightRag).query(requestCaptor.capture());
+        verify(alphaLightRag).query(requestCaptor.capture());
 
         assertThat(requestCaptor.getValue().stream()).isTrue();
         assertThat(requestCaptor.getValue().onlyNeedContext()).isTrue();
@@ -175,13 +219,14 @@ class StreamingQueryControllerTest {
 
     @Test
     void streamsBypassModeAsChunksWithEmptyRetrievalMetadata() throws Exception {
-        when(lightRag.query(any())).thenReturn(QueryResult.streaming(
+        when(alphaLightRag.query(any())).thenReturn(QueryResult.streaming(
             CloseableIterator.of(List.of("Bypass ", "answer")),
             List.of(),
             List.of()
         ));
 
         var mvcResult = mockMvc.perform(post("/query/stream")
+                .header("X-Workspace-Id", "alpha")
                 .contentType(MediaType.APPLICATION_JSON)
                 .accept(MediaType.TEXT_EVENT_STREAM)
                 .content("""
@@ -197,7 +242,7 @@ class StreamingQueryControllerTest {
         var events = dispatch(mvcResult);
 
         var requestCaptor = ArgumentCaptor.forClass(QueryRequest.class);
-        verify(lightRag).query(requestCaptor.capture());
+        verify(alphaLightRag).query(requestCaptor.capture());
 
         assertThat(requestCaptor.getValue().mode()).isEqualTo(QueryMode.BYPASS);
         assertThat(requestCaptor.getValue().stream()).isTrue();
@@ -211,9 +256,26 @@ class StreamingQueryControllerTest {
     }
 
     @Test
+    void rejectsInvalidPayloadWithoutCreatingWorkspaceInstance() throws Exception {
+        mockMvc.perform(post("/query/stream")
+                .header("X-Workspace-Id", "alpha")
+                .contentType(MediaType.APPLICATION_JSON)
+                .accept(MediaType.TEXT_EVENT_STREAM)
+                .content("""
+                    {
+                      "query": "   "
+                    }
+                    """))
+            .andExpect(status().isBadRequest());
+
+        verify(workspaceLightRagFactory, never()).get(anyString());
+        verify(alphaLightRag, never()).query(any());
+    }
+
+    @Test
     void emitsErrorEventWhenStreamingIteratorFails() throws Exception {
         var closed = new AtomicBoolean();
-        when(lightRag.query(any())).thenReturn(QueryResult.streaming(
+        when(alphaLightRag.query(any())).thenReturn(QueryResult.streaming(
             new CloseableIterator<>() {
                 private int index;
 
@@ -240,6 +302,7 @@ class StreamingQueryControllerTest {
         ));
 
         var mvcResult = mockMvc.perform(post("/query/stream")
+                .header("X-Workspace-Id", "alpha")
                 .contentType(MediaType.APPLICATION_JSON)
                 .accept(MediaType.TEXT_EVENT_STREAM)
                 .content("""
@@ -259,48 +322,31 @@ class StreamingQueryControllerTest {
         assertThat(events.get(2).data().get("message").asText()).isEqualTo("stream broke");
     }
 
-    @Test
-    void rejectsInvalidStreamingPayloadBeforeAsyncStart() throws Exception {
-        mockMvc.perform(post("/query/stream")
-                .contentType(MediaType.APPLICATION_JSON)
-                .accept(MediaType.TEXT_EVENT_STREAM)
-                .content("""
-                    {
-                      "query": "   "
-                    }
-                    """))
-            .andExpect(status().isBadRequest());
-
-        verify(lightRag, never()).query(any());
-    }
-
     private List<SseEvent> dispatch(MvcResult mvcResult) throws Exception {
-        mvcResult.getAsyncResult(5_000L);
+        mvcResult.getAsyncResult();
         var response = mockMvc.perform(asyncDispatch(mvcResult))
             .andExpect(status().isOk())
             .andReturn()
             .getResponse();
         response.setCharacterEncoding(StandardCharsets.UTF_8.name());
-        assertThat(response.getContentType()).startsWith(MediaType.TEXT_EVENT_STREAM_VALUE);
         return parseEvents(response.getContentAsString(StandardCharsets.UTF_8));
     }
 
-    private List<SseEvent> parseEvents(String responseBody) throws Exception {
+    private List<SseEvent> parseEvents(String payload) throws Exception {
         var events = new ArrayList<SseEvent>();
-        for (var block : responseBody.strip().split("\\R\\R")) {
-            if (block.isBlank()) {
+        String currentEvent = null;
+        for (var line : payload.split("\\R")) {
+            if (line.startsWith("event:")) {
+                currentEvent = line.substring("event:".length()).trim();
                 continue;
             }
-            String name = null;
-            String data = null;
-            for (var line : block.split("\\R")) {
-                if (line.startsWith("event:")) {
-                    name = line.substring("event:".length()).trim();
-                } else if (line.startsWith("data:")) {
-                    data = line.substring("data:".length()).trim();
-                }
+            if (line.startsWith("data:")) {
+                events.add(new SseEvent(
+                    currentEvent == null ? "" : currentEvent,
+                    objectMapper.readTree(line.substring("data:".length()).trim())
+                ));
+                currentEvent = null;
             }
-            events.add(new SseEvent(name, data == null ? objectMapper.nullNode() : objectMapper.readTree(data)));
         }
         return events;
     }

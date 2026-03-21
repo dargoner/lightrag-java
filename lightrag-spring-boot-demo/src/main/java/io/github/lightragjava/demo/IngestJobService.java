@@ -1,12 +1,13 @@
 package io.github.lightragjava.demo;
 
-import io.github.lightragjava.api.LightRag;
+import io.github.lightragjava.spring.boot.WorkspaceLightRagFactory;
 import io.github.lightragjava.types.Document;
 import jakarta.annotation.PreDestroy;
 import org.springframework.stereotype.Service;
 
 import java.time.Instant;
 import java.util.List;
+import java.util.Objects;
 import java.util.Optional;
 import java.util.UUID;
 import java.util.concurrent.ConcurrentHashMap;
@@ -19,13 +20,13 @@ import java.util.concurrent.atomic.AtomicReference;
 
 @Service
 class IngestJobService {
-    private final LightRag lightRag;
+    private final WorkspaceLightRagFactory workspaceLightRagFactory;
     private final ExecutorService executor;
     private final ConcurrentMap<String, JobState> jobs = new ConcurrentHashMap<>();
     private final AtomicLong sequence = new AtomicLong();
 
-    IngestJobService(LightRag lightRag) {
-        this.lightRag = lightRag;
+    IngestJobService(WorkspaceLightRagFactory workspaceLightRagFactory) {
+        this.workspaceLightRagFactory = workspaceLightRagFactory;
         this.executor = Executors.newSingleThreadExecutor(new ThreadFactory() {
             @Override
             public Thread newThread(Runnable runnable) {
@@ -36,13 +37,15 @@ class IngestJobService {
         });
     }
 
-    String submit(List<Document> documents) {
-        return submit(documents, true);
-    }
-
-    String submit(List<Document> documents, boolean async) {
+    String submit(String workspaceId, List<Document> documents, boolean async) {
         var jobId = UUID.randomUUID().toString();
-        var jobState = new JobState(jobId, documents.size(), sequence.incrementAndGet(), Instant.now());
+        var jobState = new JobState(
+            jobId,
+            requireNonBlank(workspaceId, "workspaceId"),
+            documents.size(),
+            sequence.incrementAndGet(),
+            Instant.now()
+        );
         jobs.put(jobId, jobState);
         if (async) {
             executor.submit(() -> runJob(jobState, documents));
@@ -52,19 +55,24 @@ class IngestJobService {
         return jobId;
     }
 
-    Optional<JobSnapshot> getJob(String jobId) {
-        return Optional.ofNullable(jobs.get(jobId)).map(JobState::toSnapshot);
+    Optional<JobSnapshot> getJob(String workspaceId, String jobId) {
+        var targetWorkspaceId = requireNonBlank(workspaceId, "workspaceId");
+        return Optional.ofNullable(jobs.get(jobId))
+            .filter(jobState -> jobState.workspaceId().equals(targetWorkspaceId))
+            .map(JobState::toSnapshot);
     }
 
-    JobPage listJobs(int page, int size) {
+    JobPage listJobs(String workspaceId, int page, int size) {
         if (page < 0) {
             throw new IllegalArgumentException("page must be greater than or equal to 0");
         }
         if (size <= 0) {
             throw new IllegalArgumentException("size must be positive");
         }
+        var targetWorkspaceId = requireNonBlank(workspaceId, "workspaceId");
 
         var snapshots = jobs.values().stream()
+            .filter(jobState -> jobState.workspaceId().equals(targetWorkspaceId))
             .sorted((left, right) -> Long.compare(right.sequence(), left.sequence()))
             .map(JobState::toSnapshot)
             .toList();
@@ -81,7 +89,7 @@ class IngestJobService {
     private void runJob(JobState jobState, List<Document> documents) {
         jobState.markStarted();
         try {
-            lightRag.ingest(documents);
+            workspaceLightRagFactory.get(jobState.workspaceId()).ingest(documents);
             jobState.markFinished(IngestJobStatus.SUCCEEDED);
         } catch (Throwable throwable) {
             jobState.markFailed(throwable.getMessage());
@@ -111,6 +119,7 @@ class IngestJobService {
 
     private static final class JobState {
         private final String jobId;
+        private final String workspaceId;
         private final int documentCount;
         private final long sequence;
         private final Instant createdAt;
@@ -119,8 +128,9 @@ class IngestJobService {
         private final AtomicReference<Instant> finishedAt = new AtomicReference<>();
         private final AtomicReference<String> errorMessage = new AtomicReference<>();
 
-        JobState(String jobId, int documentCount, long sequence, Instant createdAt) {
+        JobState(String jobId, String workspaceId, int documentCount, long sequence, Instant createdAt) {
             this.jobId = jobId;
+            this.workspaceId = workspaceId;
             this.documentCount = documentCount;
             this.sequence = sequence;
             this.createdAt = createdAt;
@@ -157,5 +167,17 @@ class IngestJobService {
                 errorMessage.get()
             );
         }
+
+        String workspaceId() {
+            return workspaceId;
+        }
+    }
+
+    private static String requireNonBlank(String value, String fieldName) {
+        var normalized = Objects.requireNonNull(value, fieldName).strip();
+        if (normalized.isEmpty()) {
+            throw new IllegalArgumentException(fieldName + " must not be blank");
+        }
+        return normalized;
     }
 }

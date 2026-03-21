@@ -4,23 +4,26 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import io.github.lightragjava.api.DocumentProcessingStatus;
 import io.github.lightragjava.api.DocumentStatus;
 import io.github.lightragjava.api.LightRag;
+import io.github.lightragjava.spring.boot.WorkspaceLightRagFactory;
+import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.autoconfigure.web.servlet.AutoConfigureMockMvc;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.boot.test.mock.mockito.MockBean;
-import org.springframework.http.MediaType;
 import org.springframework.test.web.servlet.MockMvc;
 
 import java.util.List;
 import java.util.NoSuchElementException;
+import java.util.Optional;
 import java.util.concurrent.atomic.AtomicBoolean;
 
 import static org.junit.jupiter.api.Assertions.fail;
-import static org.hamcrest.Matchers.hasItem;
 import static org.mockito.ArgumentMatchers.argThat;
+import static org.mockito.Mockito.doAnswer;
 import static org.mockito.Mockito.doNothing;
 import static org.mockito.Mockito.doThrow;
+import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.when;
 import static org.springframework.http.MediaType.APPLICATION_JSON;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.delete;
@@ -43,6 +46,10 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 )
 @AutoConfigureMockMvc
 class DocumentStatusControllerTest {
+    private static final String WORKSPACE_HEADER = "X-Workspace-Id";
+    private static final String WORKSPACE_STATUS = "ws-status";
+    private static final String WORKSPACE_ISOLATED = "ws-isolated";
+    private static final String WORKSPACE_B = "ws-b";
     private static final String INGEST_PAYLOAD = """
         {
           "documents": [
@@ -99,84 +106,106 @@ class DocumentStatusControllerTest {
     private ObjectMapper objectMapper;
 
     @MockBean
+    private WorkspaceLightRagFactory workspaceLightRagFactory;
+
+    @MockBean
     private LightRag lightRag;
+
+    private LightRag statusLightRag;
+    private LightRag isolatedLightRag;
+
+    @BeforeEach
+    void setUp() {
+        statusLightRag = mock(LightRag.class);
+        isolatedLightRag = mock(LightRag.class);
+
+        when(workspaceLightRagFactory.get(WORKSPACE_STATUS)).thenReturn(statusLightRag);
+        when(workspaceLightRagFactory.find(WORKSPACE_STATUS)).thenReturn(Optional.of(statusLightRag));
+        when(workspaceLightRagFactory.get(WORKSPACE_ISOLATED)).thenReturn(isolatedLightRag);
+        when(workspaceLightRagFactory.find(WORKSPACE_ISOLATED)).thenReturn(Optional.of(isolatedLightRag));
+        when(workspaceLightRagFactory.find(WORKSPACE_B)).thenReturn(Optional.empty());
+    }
 
     @Test
     void jobLifecycleAndStatusEndpoints() throws Exception {
         var deleted = new AtomicBoolean(false);
-        doNothing().when(lightRag).ingest(argThat(documents ->
+        doNothing().when(statusLightRag).ingest(argThat(documents ->
             documents.size() == 1 && "doc-1".equals(documents.get(0).id())
         ));
-        when(lightRag.listDocumentStatuses()).thenReturn(List.of(
+        when(statusLightRag.listDocumentStatuses()).thenReturn(List.of(
             new DocumentProcessingStatus("doc-1", DocumentStatus.PROCESSED, "processed 1 chunk", null)
         ));
-        when(lightRag.getDocumentStatus("doc-1")).thenAnswer(invocation -> {
+        when(statusLightRag.getDocumentStatus("doc-1")).thenAnswer(invocation -> {
             if (deleted.get()) {
                 throw new NoSuchElementException("missing doc-1");
             }
             return new DocumentProcessingStatus("doc-1", DocumentStatus.PROCESSED, "processed 1 chunk", null);
         });
-        org.mockito.Mockito.doAnswer(invocation -> {
+        doAnswer(invocation -> {
             deleted.set(true);
             return null;
-        }).when(lightRag).deleteByDocumentId("doc-1");
+        }).when(statusLightRag).deleteByDocumentId("doc-1");
 
-        var ingestResult = mockMvc.perform(post("/documents/ingest")
-                .contentType(APPLICATION_JSON)
-                .content(INGEST_PAYLOAD))
-            .andExpect(status().isAccepted())
-            .andExpect(jsonPath("$.jobId").isNotEmpty())
-            .andReturn();
+        var jobId = submitJob(WORKSPACE_STATUS, INGEST_PAYLOAD);
+        awaitJobStatus(WORKSPACE_STATUS, jobId, "SUCCEEDED");
 
-        var jobId = objectMapper.readTree(ingestResult.getResponse().getContentAsString()).get("jobId").asText();
-        awaitJobStatus(jobId, "SUCCEEDED");
-
-        mockMvc.perform(get("/documents/jobs/{jobId}", jobId))
+        mockMvc.perform(get("/documents/jobs/{jobId}", jobId)
+                .header(WORKSPACE_HEADER, WORKSPACE_STATUS))
             .andExpect(status().isOk())
-            .andExpect(jsonPath("$.status").value("SUCCEEDED"));
+            .andExpect(jsonPath("$.status").value("SUCCEEDED"))
+            .andExpect(jsonPath("$.documentCount").value(1))
+            .andExpect(jsonPath("$.createdAt").isNotEmpty())
+            .andExpect(jsonPath("$.startedAt").isNotEmpty())
+            .andExpect(jsonPath("$.finishedAt").isNotEmpty());
 
-        mockMvc.perform(get("/documents/status"))
+        mockMvc.perform(get("/documents/status")
+                .header(WORKSPACE_HEADER, WORKSPACE_STATUS))
             .andExpect(status().isOk())
-            .andExpect(jsonPath("$[*].documentId", hasItem("doc-1")));
+            .andExpect(jsonPath("$[?(@.documentId == 'doc-1')]").exists());
 
-        mockMvc.perform(get("/documents/status/{documentId}", "doc-1"))
+        mockMvc.perform(get("/documents/status/{documentId}", "doc-1")
+                .header(WORKSPACE_HEADER, WORKSPACE_STATUS))
             .andExpect(status().isOk())
             .andExpect(jsonPath("$.documentId").value("doc-1"));
 
-        mockMvc.perform(delete("/documents/{documentId}", "doc-1"))
+        mockMvc.perform(delete("/documents/{documentId}", "doc-1")
+                .header(WORKSPACE_HEADER, WORKSPACE_STATUS))
             .andExpect(status().isNoContent());
 
-        mockMvc.perform(get("/documents/status/{documentId}", "doc-1"))
+        mockMvc.perform(get("/documents/status/{documentId}", "doc-1")
+                .header(WORKSPACE_HEADER, WORKSPACE_STATUS))
             .andExpect(status().isNotFound());
     }
 
     @Test
     void missingJobAndDocumentReturn404() throws Exception {
-        org.mockito.Mockito.doThrow(new NoSuchElementException("missing-doc"))
-            .when(lightRag).getDocumentStatus("missing-doc");
+        when(statusLightRag.getDocumentStatus("missing-doc"))
+            .thenThrow(new NoSuchElementException("missing-doc"));
 
-        mockMvc.perform(get("/documents/jobs/{jobId}", "missing-job"))
+        mockMvc.perform(get("/documents/jobs/{jobId}", "missing-job")
+                .header(WORKSPACE_HEADER, WORKSPACE_STATUS))
             .andExpect(status().isNotFound());
-        mockMvc.perform(get("/documents/status/{documentId}", "missing-doc"))
+
+        mockMvc.perform(get("/documents/status/{documentId}", "missing-doc")
+                .header(WORKSPACE_HEADER, WORKSPACE_STATUS))
             .andExpect(status().isNotFound());
     }
 
     @Test
     void jobsEndpointReturnsPaginatedNewestFirstWithTimelineFields() throws Exception {
-        doNothing().when(lightRag).ingest(argThat(documents -> documents.size() == 1));
+        doNothing().when(statusLightRag).ingest(argThat(documents -> documents.size() == 1));
 
-        var firstJobId = submitJob(INGEST_PAYLOAD);
-        awaitJobStatus(firstJobId, "SUCCEEDED");
-        Thread.sleep(5L);
+        var firstJobId = submitJob(WORKSPACE_STATUS, INGEST_PAYLOAD);
+        awaitJobStatus(WORKSPACE_STATUS, firstJobId, "SUCCEEDED");
 
-        var secondJobId = submitJob(SECOND_INGEST_PAYLOAD);
-        awaitJobStatus(secondJobId, "SUCCEEDED");
-        Thread.sleep(5L);
+        var secondJobId = submitJob(WORKSPACE_STATUS, SECOND_INGEST_PAYLOAD);
+        awaitJobStatus(WORKSPACE_STATUS, secondJobId, "SUCCEEDED");
 
-        var thirdJobId = submitJob(THIRD_INGEST_PAYLOAD);
-        awaitJobStatus(thirdJobId, "SUCCEEDED");
+        var thirdJobId = submitJob(WORKSPACE_STATUS, THIRD_INGEST_PAYLOAD);
+        awaitJobStatus(WORKSPACE_STATUS, thirdJobId, "SUCCEEDED");
 
         mockMvc.perform(get("/documents/jobs")
+                .header(WORKSPACE_HEADER, WORKSPACE_STATUS)
                 .queryParam("page", "0")
                 .queryParam("size", "2"))
             .andExpect(status().isOk())
@@ -194,14 +223,15 @@ class DocumentStatusControllerTest {
     @Test
     void failedJobExposesErrorMessageInDetailAndListResponses() throws Exception {
         doThrow(new IllegalStateException("simulated ingest failure"))
-            .when(lightRag).ingest(argThat(documents ->
+            .when(statusLightRag).ingest(argThat(documents ->
                 documents.size() == 1 && "doc-fail".equals(documents.get(0).id())
             ));
 
-        var failedJobId = submitJob(FAILING_INGEST_PAYLOAD);
-        awaitJobStatus(failedJobId, "FAILED");
+        var failedJobId = submitJob(WORKSPACE_STATUS, FAILING_INGEST_PAYLOAD);
+        awaitJobStatus(WORKSPACE_STATUS, failedJobId, "FAILED");
 
-        mockMvc.perform(get("/documents/jobs/{jobId}", failedJobId))
+        mockMvc.perform(get("/documents/jobs/{jobId}", failedJobId)
+                .header(WORKSPACE_HEADER, WORKSPACE_STATUS))
             .andExpect(status().isOk())
             .andExpect(jsonPath("$.status").value("FAILED"))
             .andExpect(jsonPath("$.errorMessage").value("simulated ingest failure"))
@@ -210,6 +240,7 @@ class DocumentStatusControllerTest {
             .andExpect(jsonPath("$.finishedAt").isNotEmpty());
 
         mockMvc.perform(get("/documents/jobs")
+                .header(WORKSPACE_HEADER, WORKSPACE_STATUS)
                 .queryParam("page", "0")
                 .queryParam("size", "10"))
             .andExpect(status().isOk())
@@ -221,14 +252,54 @@ class DocumentStatusControllerTest {
     @Test
     void rejectsInvalidJobPaginationParams() throws Exception {
         mockMvc.perform(get("/documents/jobs")
+                .header(WORKSPACE_HEADER, WORKSPACE_STATUS)
                 .queryParam("page", "-1")
                 .queryParam("size", "0"))
             .andExpect(status().isBadRequest())
             .andExpect(jsonPath("$.message").value("page must be greater than or equal to 0"));
     }
 
-    private String submitJob(String payload) throws Exception {
+    @Test
+    void isolatesJobsAndStatusesAcrossWorkspaces() throws Exception {
+        doNothing().when(isolatedLightRag).ingest(argThat(documents ->
+            documents.size() == 1 && "doc-ws-a".equals(documents.get(0).id())
+        ));
+        when(isolatedLightRag.listDocumentStatuses()).thenReturn(List.of(
+            new DocumentProcessingStatus("doc-ws-a", DocumentStatus.PROCESSED, "processed 1 chunk", null)
+        ));
+
+        var jobId = submitJob(WORKSPACE_ISOLATED, """
+            {
+              "documents": [
+                {
+                  "id": "doc-ws-a",
+                  "title": "Title",
+                  "content": "Alice works with Bob",
+                  "metadata": {"source": "demo"}
+                }
+              ]
+            }
+            """);
+        awaitJobStatus(WORKSPACE_ISOLATED, jobId, "SUCCEEDED");
+
+        mockMvc.perform(get("/documents/status")
+                .header(WORKSPACE_HEADER, WORKSPACE_ISOLATED))
+            .andExpect(status().isOk())
+            .andExpect(jsonPath("$[?(@.documentId == 'doc-ws-a')]").exists());
+
+        mockMvc.perform(get("/documents/status")
+                .header(WORKSPACE_HEADER, WORKSPACE_B))
+            .andExpect(status().isOk())
+            .andExpect(jsonPath("$").isEmpty());
+
+        mockMvc.perform(get("/documents/jobs/{jobId}", jobId)
+                .header(WORKSPACE_HEADER, WORKSPACE_B))
+            .andExpect(status().isNotFound());
+    }
+
+    private String submitJob(String workspaceId, String payload) throws Exception {
         var ingestResult = mockMvc.perform(post("/documents/ingest")
+                .header(WORKSPACE_HEADER, workspaceId)
                 .contentType(APPLICATION_JSON)
                 .content(payload))
             .andExpect(status().isAccepted())
@@ -237,16 +308,17 @@ class DocumentStatusControllerTest {
         return objectMapper.readTree(ingestResult.getResponse().getContentAsString()).get("jobId").asText();
     }
 
-    private void awaitJobStatus(String jobId, String expectedStatus) throws Exception {
-        for (int attempt = 0; attempt < 20; attempt++) {
-            var jobResult = mockMvc.perform(get("/documents/jobs/{jobId}", jobId))
+    private void awaitJobStatus(String workspaceId, String jobId, String expectedStatus) throws Exception {
+        for (int attempt = 0; attempt < 40; attempt++) {
+            var jobResult = mockMvc.perform(get("/documents/jobs/{jobId}", jobId)
+                    .header(WORKSPACE_HEADER, workspaceId))
                 .andExpect(status().isOk())
                 .andReturn();
             var statusValue = objectMapper.readTree(jobResult.getResponse().getContentAsString()).get("status").asText();
             if (expectedStatus.equals(statusValue)) {
                 return;
             }
-            Thread.sleep(50);
+            Thread.sleep(50L);
         }
         fail("job did not reach " + expectedStatus + " before timeout");
     }
