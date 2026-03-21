@@ -1,6 +1,8 @@
 package io.github.lightragjava.spring.boot;
 
 import io.github.lightragjava.api.LightRag;
+import io.github.lightragjava.indexing.Chunker;
+import io.github.lightragjava.indexing.FixedWindowChunker;
 import io.github.lightragjava.model.ChatModel;
 import io.github.lightragjava.model.EmbeddingModel;
 import io.github.lightragjava.model.RerankModel;
@@ -56,6 +58,13 @@ public class LightRagAutoConfiguration {
     }
 
     @Bean
+    @ConditionalOnMissingBean
+    Chunker chunker(LightRagProperties properties) {
+        var chunking = properties.getIndexing().getChunking();
+        return new FixedWindowChunker(chunking.getWindowSize(), chunking.getOverlap());
+    }
+
+    @Bean
     @ConditionalOnMissingBean(StorageProvider.class)
     StorageProvider storageProvider(LightRagProperties properties, SnapshotStore snapshotStore) {
         return switch (properties.getStorage().getType()) {
@@ -75,13 +84,15 @@ public class LightRagAutoConfiguration {
         ChatModel chatModel,
         EmbeddingModel embeddingModel,
         StorageProvider storageProvider,
+        Chunker chunker,
         ObjectProvider<RerankModel> rerankModel,
         LightRagProperties properties
     ) {
         var builder = LightRag.builder()
             .chatModel(chatModel)
             .embeddingModel(embeddingModel)
-            .storage(storageProvider);
+            .storage(storageProvider)
+            .chunker(chunker);
         var rerank = rerankModel.getIfAvailable();
         if (rerank != null) {
             builder.rerankModel(rerank);

@@ -57,6 +57,7 @@ The starter auto-configures `LightRag` from `application.yml` when you provide:
 - chat model base URL, model name, and API key
 - embedding model base URL, model name, and API key
 - storage type: `in-memory`, `postgres`, or `postgres-neo4j`
+- fixed-window chunking defaults such as `window-size` and `overlap`
 - demo defaults for query mode, top-k, response type, and async ingest behavior
 
 The demo application exposes:
@@ -86,6 +87,35 @@ The demo's default config lives in:
 - `lightrag-spring-boot-demo/src/main/resources/application.yml`
 
 It defaults to `in-memory` storage, OpenAI-compatible model settings resolved from environment variables, buffered `/query` responses, and async ingest enabled.
+
+## Chunking
+
+The SDK can now override the ingest-time `Chunker` instead of always using the built-in fixed-window split.
+
+Use a custom chunker from the builder when you need application-specific chunk boundaries:
+
+```java
+var rag = LightRag.builder()
+    .chatModel(chatModel)
+    .embeddingModel(embeddingModel)
+    .storage(storage)
+    .chunker(document -> List.of(
+        new Chunk(document.id() + ":0", document.id(), document.content(), document.content().length(), 0, document.metadata())
+    ))
+    .build();
+```
+
+With Spring Boot Starter, fixed-window chunking can be configured in `application.yml`:
+
+```yaml
+lightrag:
+  indexing:
+    chunking:
+      window-size: 1200
+      overlap: 150
+```
+
+If the application provides its own `Chunker` bean, the starter backs off and uses that bean instead.
 
 The demo `/query` endpoint accepts the core query controls used most often in service mode, including:
 

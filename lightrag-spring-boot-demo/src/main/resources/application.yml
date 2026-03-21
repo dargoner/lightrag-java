@@ -7,6 +7,10 @@ lightrag:
     base-url: ${LIGHTRAG_EMBEDDING_BASE_URL:http://localhost:11434/v1/}
     model: ${LIGHTRAG_EMBEDDING_MODEL:nomic-embed-text}
     api-key: ${LIGHTRAG_EMBEDDING_API_KEY:dummy}
+  indexing:
+    chunking:
+      window-size: ${LIGHTRAG_INDEXING_CHUNKING_WINDOW_SIZE:1000}
+      overlap: ${LIGHTRAG_INDEXING_CHUNKING_OVERLAP:100}
   query:
     default-mode: ${LIGHTRAG_QUERY_DEFAULT_MODE:MIX}
     default-top-k: ${LIGHTRAG_QUERY_DEFAULT_TOP_K:10}

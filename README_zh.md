@@ -112,6 +112,7 @@ System.out.println(result.answer());
 
 - `ChatModel`
 - `EmbeddingModel`
+- `Chunker`
 - `StorageProvider`
 - `LightRag`
 
@@ -135,7 +136,28 @@ lightrag:
     api-key: dummy
   storage:
     type: in-memory
+  indexing:
+    chunking:
+      window-size: 1000
+      overlap: 100
 ```
+
+### 自定义分块
+
+Java SDK 现在支持在 builder 上覆盖 ingest 阶段的 `Chunker`，不再只能使用内置的 `FixedWindowChunker(1000, 100)`。
+
+```java
+var rag = LightRag.builder()
+    .chatModel(chatModel)
+    .embeddingModel(embeddingModel)
+    .storage(storage)
+    .chunker(document -> List.of(
+        new Chunk(document.id() + ":0", document.id(), document.content(), document.content().length(), 0, document.metadata())
+    ))
+    .build();
+```
+
+如果使用 Spring Boot Starter，也可以直接在 `application.yml` 里调整固定窗口分块参数；如果应用自己声明了 `Chunker` Bean，starter 会自动让位。
 
 ### PostgreSQL 配置示例
 

@@ -30,7 +30,8 @@ public final class LightRag {
             config.chatModel(),
             config.embeddingModel(),
             config.storageProvider(),
-            config.snapshotPath()
+            config.snapshotPath(),
+            config.chunker()
         );
         this.deletionPipeline = new DeletionPipeline(
             config.storageProvider(),

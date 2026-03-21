@@ -33,12 +33,16 @@ public final class IndexingPipeline {
         ChatModel chatModel,
         EmbeddingModel embeddingModel,
         AtomicStorageProvider storageProvider,
-        Path snapshotPath
+        Path snapshotPath,
+        Chunker chunker
     ) {
         this.storageProvider = Objects.requireNonNull(storageProvider, "storageProvider");
         this.embeddingModel = Objects.requireNonNull(embeddingModel, "embeddingModel");
         this.snapshotPath = snapshotPath;
-        this.documentIngestor = new DocumentIngestor(storageProvider, new FixedWindowChunker(DEFAULT_CHUNK_WINDOW, DEFAULT_CHUNK_OVERLAP));
+        this.documentIngestor = new DocumentIngestor(
+            storageProvider,
+            chunker == null ? new FixedWindowChunker(DEFAULT_CHUNK_WINDOW, DEFAULT_CHUNK_OVERLAP) : chunker
+        );
         this.knowledgeExtractor = new KnowledgeExtractor(Objects.requireNonNull(chatModel, "chatModel"));
         this.graphAssembler = new GraphAssembler();
     }
