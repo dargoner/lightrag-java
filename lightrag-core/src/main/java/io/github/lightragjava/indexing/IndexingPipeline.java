@@ -19,15 +19,21 @@ import java.util.Map;
 import java.util.Objects;
 
 public final class IndexingPipeline {
-    private static final int DEFAULT_CHUNK_WINDOW = 1_000;
-    private static final int DEFAULT_CHUNK_OVERLAP = 100;
-
     private final AtomicStorageProvider storageProvider;
     private final DocumentIngestor documentIngestor;
     private final KnowledgeExtractor knowledgeExtractor;
     private final GraphAssembler graphAssembler;
     private final EmbeddingModel embeddingModel;
     private final Path snapshotPath;
+
+    public IndexingPipeline(
+        ChatModel chatModel,
+        EmbeddingModel embeddingModel,
+        AtomicStorageProvider storageProvider,
+        Path snapshotPath
+    ) {
+        this(chatModel, embeddingModel, storageProvider, snapshotPath, null);
+    }
 
     public IndexingPipeline(
         ChatModel chatModel,
@@ -41,7 +47,7 @@ public final class IndexingPipeline {
         this.snapshotPath = snapshotPath;
         this.documentIngestor = new DocumentIngestor(
             storageProvider,
-            chunker == null ? new FixedWindowChunker(DEFAULT_CHUNK_WINDOW, DEFAULT_CHUNK_OVERLAP) : chunker
+            chunker == null ? new FixedWindowChunker(FixedWindowChunker.DEFAULT_WINDOW_SIZE, FixedWindowChunker.DEFAULT_OVERLAP) : chunker
         );
         this.knowledgeExtractor = new KnowledgeExtractor(Objects.requireNonNull(chatModel, "chatModel"));
         this.graphAssembler = new GraphAssembler();

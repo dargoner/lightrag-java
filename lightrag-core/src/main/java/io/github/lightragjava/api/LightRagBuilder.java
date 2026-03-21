@@ -87,9 +87,8 @@ public final class LightRagBuilder {
             atomicStorageProvider,
             storageProvider.documentStatusStore(),
             snapshotPath,
-            rerankModel,
-            chunker
-        ));
+            rerankModel
+        ), chunker);
     }
 
     private static <T> T requireStore(String componentName, T store, Class<T> storeType) {

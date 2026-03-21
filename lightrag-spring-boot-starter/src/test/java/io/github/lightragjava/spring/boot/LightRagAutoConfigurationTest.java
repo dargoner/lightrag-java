@@ -93,23 +93,42 @@ class LightRagAutoConfigurationTest {
 
     @Test
     void autoConfiguresFixedWindowChunkerFromProperties() {
-        contextRunner.run(context -> {
+        contextRunner
+            .withUserConfiguration(TestModelConfiguration.class)
+            .run(context -> {
             var chunker = context.getBean(Chunker.class);
+            var lightRag = context.getBean(LightRag.class);
+            var storageProvider = context.getBean(StorageProvider.class);
 
             assertThat(chunker).isInstanceOf(FixedWindowChunker.class);
             assertThat(chunker.chunk(new Document("doc-1", "Title", "abcdefghi", Map.of())))
                 .extracting(Chunk::text)
                 .containsExactly("abcd", "defg", "ghi");
-        });
+
+            lightRag.ingest(List.of(new Document("doc-1", "Title", "abcdefghi", Map.of())));
+
+            assertThat(storageProvider.chunkStore().listByDocument("doc-1"))
+                .extracting(record -> record.text())
+                .containsExactly("abcd", "defg", "ghi");
+            });
     }
 
     @Test
     void backsOffWhenApplicationProvidesCustomChunker() {
         contextRunner
-            .withUserConfiguration(CustomChunkerConfiguration.class)
+            .withUserConfiguration(TestModelConfiguration.class, CustomChunkerConfiguration.class)
             .run(context -> {
+                var lightRag = context.getBean(LightRag.class);
+                var storageProvider = context.getBean(StorageProvider.class);
+
                 assertThat(context.getBean(Chunker.class)).isInstanceOf(StaticChunker.class);
                 assertThat(context.getBean(Chunker.class)).isNotInstanceOf(FixedWindowChunker.class);
+
+                lightRag.ingest(List.of(new Document("doc-1", "Title", "ignored", Map.of("source", "custom"))));
+
+                assertThat(storageProvider.chunkStore().listByDocument("doc-1"))
+                    .extracting(record -> record.id(), record -> record.text())
+                    .containsExactly(org.assertj.core.groups.Tuple.tuple("doc-1:custom", "custom"));
             });
     }
 
@@ -141,6 +160,21 @@ class LightRagAutoConfigurationTest {
         @Bean
         Chunker customChunker() {
             return new StaticChunker();
+        }
+    }
+
+    @Configuration(proxyBeanMethods = false)
+    static class TestModelConfiguration {
+        @Bean
+        ChatModel chatModel() {
+            return request -> "{\"entities\":[],\"relations\":[]}";
+        }
+
+        @Bean
+        EmbeddingModel embeddingModel() {
+            return texts -> texts.stream()
+                .map(text -> List.of((double) text.length()))
+                .toList();
         }
     }
 

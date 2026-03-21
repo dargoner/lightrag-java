@@ -1,5 +1,6 @@
 package io.github.lightragjava.spring.boot;
 
+import io.github.lightragjava.indexing.FixedWindowChunker;
 import org.springframework.boot.context.properties.ConfigurationProperties;
 
 @ConfigurationProperties(prefix = "lightrag")
@@ -144,8 +145,8 @@ public class LightRagProperties {
     }
 
     public static class ChunkingProperties {
-        private int windowSize = 1_000;
-        private int overlap = 100;
+        private int windowSize = FixedWindowChunker.DEFAULT_WINDOW_SIZE;
+        private int overlap = FixedWindowChunker.DEFAULT_OVERLAP;
 
         public int getWindowSize() {
             return windowSize;

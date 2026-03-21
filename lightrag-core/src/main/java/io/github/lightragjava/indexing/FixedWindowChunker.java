@@ -8,6 +8,9 @@ import java.util.List;
 import java.util.Objects;
 
 public final class FixedWindowChunker implements Chunker {
+    public static final int DEFAULT_WINDOW_SIZE = 1_000;
+    public static final int DEFAULT_OVERLAP = 100;
+
     private final int windowSize;
     private final int overlap;
 

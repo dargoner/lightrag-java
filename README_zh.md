@@ -136,10 +136,6 @@ lightrag:
     api-key: dummy
   storage:
     type: in-memory
-  indexing:
-    chunking:
-      window-size: 1000
-      overlap: 100
 ```
 
 ### 自定义分块
@@ -158,6 +154,16 @@ var rag = LightRag.builder()
 ```
 
 如果使用 Spring Boot Starter，也可以直接在 `application.yml` 里调整固定窗口分块参数；如果应用自己声明了 `Chunker` Bean，starter 会自动让位。
+
+```yaml
+lightrag:
+  indexing:
+    chunking:
+      window-size: 1200
+      overlap: 150
+```
+
+如果不配置这两个字段，starter 默认仍然使用 `window-size=1000`、`overlap=100`。
 
 ### PostgreSQL 配置示例
 

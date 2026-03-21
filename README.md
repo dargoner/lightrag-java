@@ -57,7 +57,6 @@ The starter auto-configures `LightRag` from `application.yml` when you provide:
 - chat model base URL, model name, and API key
 - embedding model base URL, model name, and API key
 - storage type: `in-memory`, `postgres`, or `postgres-neo4j`
-- fixed-window chunking defaults such as `window-size` and `overlap`
 - demo defaults for query mode, top-k, response type, and async ingest behavior
 
 The demo application exposes:
@@ -105,7 +104,7 @@ var rag = LightRag.builder()
     .build();
 ```
 
-With Spring Boot Starter, fixed-window chunking can be configured in `application.yml`:
+With Spring Boot Starter, fixed-window chunking can be configured optionally in `application.yml`. If omitted, it still defaults to `window-size=1000` and `overlap=100`:
 
 ```yaml
 lightrag:

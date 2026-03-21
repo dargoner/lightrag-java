@@ -46,6 +46,7 @@ public final class DocumentIngestor {
             ));
 
             var chunks = chunker.chunk(document);
+            validateChunkContract(document, chunks);
             for (var chunk : chunks) {
                 chunkRecords.add(new ChunkStore.ChunkRecord(
                     chunk.id(),
@@ -81,6 +82,22 @@ public final class DocumentIngestor {
         for (var document : documents) {
             if (documentStore.contains(document.id())) {
                 throw new IllegalArgumentException("Document id already exists in storage: " + document.id());
+            }
+        }
+    }
+
+    private void validateChunkContract(Document document, List<Chunk> chunks) {
+        var seenChunkIds = new HashSet<String>();
+        for (int index = 0; index < chunks.size(); index++) {
+            var chunk = Objects.requireNonNull(chunks.get(index), "chunk");
+            if (!chunk.documentId().equals(document.id())) {
+                throw new IllegalArgumentException("chunk documentId must match source document id: " + document.id());
+            }
+            if (!seenChunkIds.add(chunk.id())) {
+                throw new IllegalArgumentException("chunk id must be unique within document: " + chunk.id());
+            }
+            if (chunk.order() != index) {
+                throw new IllegalArgumentException("chunk order must be contiguous and start at 0");
             }
         }
     }

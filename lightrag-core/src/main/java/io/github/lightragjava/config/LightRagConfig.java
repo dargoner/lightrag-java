@@ -1,6 +1,5 @@
 package io.github.lightragjava.config;
 
-import io.github.lightragjava.indexing.Chunker;
 import io.github.lightragjava.model.ChatModel;
 import io.github.lightragjava.model.EmbeddingModel;
 import io.github.lightragjava.model.RerankModel;
@@ -16,8 +15,7 @@ public record LightRagConfig(
     AtomicStorageProvider storageProvider,
     DocumentStatusStore documentStatusStore,
     Path snapshotPath,
-    RerankModel rerankModel,
-    Chunker chunker
+    RerankModel rerankModel
 ) {
     public LightRagConfig {
         chatModel = Objects.requireNonNull(chatModel, "chatModel");

@@ -1,6 +1,7 @@
 package io.github.lightragjava.api;
 
 import io.github.lightragjava.config.LightRagConfig;
+import io.github.lightragjava.indexing.Chunker;
 import io.github.lightragjava.indexing.DeletionPipeline;
 import io.github.lightragjava.indexing.GraphManagementPipeline;
 import io.github.lightragjava.indexing.IndexingPipeline;
@@ -25,13 +26,17 @@ public final class LightRag {
     private final QueryEngine queryEngine;
 
     LightRag(LightRagConfig config) {
+        this(config, null);
+    }
+
+    LightRag(LightRagConfig config, Chunker chunker) {
         this.config = config;
         this.indexingPipeline = new IndexingPipeline(
             config.chatModel(),
             config.embeddingModel(),
             config.storageProvider(),
             config.snapshotPath(),
-            config.chunker()
+            chunker
         );
         this.deletionPipeline = new DeletionPipeline(
             config.storageProvider(),
