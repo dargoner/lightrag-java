@@ -12,17 +12,13 @@ import java.util.Map;
 
 public final class RagasBatchEvaluationCli {
     private static final ObjectMapper OBJECT_MAPPER = new ObjectMapper();
+    private static final String DEFAULT_DOCUMENTS_DIR = "evaluation/ragas/sample_documents";
+    private static final String DEFAULT_DATASET_PATH = "evaluation/ragas/sample_dataset.json";
+    private static final String DEFAULT_RUN_LABEL = "baseline";
 
     public static void main(String[] args) throws Exception {
-        var arguments = parseArgs(args);
-        var batchRequest = new RagasBatchEvaluationService.BatchRequest(
-            Path.of(requireArg(arguments, "--documents-dir")),
-            Path.of(requireArg(arguments, "--dataset")),
-            QueryMode.valueOf(arguments.getOrDefault("--mode", QueryMode.MIX.name()).toUpperCase(java.util.Locale.ROOT)),
-            Integer.parseInt(arguments.getOrDefault("--top-k", "10")),
-            Integer.parseInt(arguments.getOrDefault("--chunk-top-k", "10")),
-            RagasStorageProfile.fromValue(arguments.getOrDefault("--storage-profile", "in-memory"))
-        );
+        var config = buildConfig(parseArgs(args));
+        var batchRequest = config.batchRequest();
         var service = new RagasBatchEvaluationService();
         var results = service.evaluateBatch(
             batchRequest,
@@ -45,11 +41,29 @@ public final class RagasBatchEvaluationCli {
                 batchRequest.mode(),
                 batchRequest.topK(),
                 batchRequest.chunkTopK(),
-                batchRequest.storageProfile()
+                batchRequest.storageProfile(),
+                config.runLabel()
             ),
             new Summary(results.size()),
             results
         )));
+    }
+
+    static BatchCliConfig buildConfig(Map<String, String> arguments) {
+        return new BatchCliConfig(
+            new RagasBatchEvaluationService.BatchRequest(
+                Path.of(arguments.getOrDefault("--documents-dir", DEFAULT_DOCUMENTS_DIR)),
+                Path.of(arguments.getOrDefault("--dataset", DEFAULT_DATASET_PATH)),
+                QueryMode.valueOf(arguments.getOrDefault("--mode", QueryMode.MIX.name()).toUpperCase(java.util.Locale.ROOT)),
+                Integer.parseInt(arguments.getOrDefault("--top-k", "10")),
+                Integer.parseInt(arguments.getOrDefault("--chunk-top-k", "10")),
+                RagasStorageProfile.fromValue(arguments.getOrDefault("--storage-profile", "in-memory"))
+            ),
+            arguments.getOrDefault("--run-label", DEFAULT_RUN_LABEL)
+        );
+    }
+
+    record BatchCliConfig(RagasBatchEvaluationService.BatchRequest batchRequest, String runLabel) {
     }
 
     record OutputEnvelope(RequestMetadata request, Summary summary, java.util.List<RagasBatchEvaluationService.Result> results) {
@@ -61,7 +75,8 @@ public final class RagasBatchEvaluationCli {
         QueryMode mode,
         int topK,
         int chunkTopK,
-        RagasStorageProfile storageProfile
+        RagasStorageProfile storageProfile,
+        String runLabel
     ) {
     }
 
