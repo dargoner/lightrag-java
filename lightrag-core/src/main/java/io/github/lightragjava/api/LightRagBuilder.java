@@ -1,6 +1,7 @@
 package io.github.lightragjava.api;
 
 import io.github.lightragjava.config.LightRagConfig;
+import io.github.lightragjava.indexing.Chunker;
 import io.github.lightragjava.model.ChatModel;
 import io.github.lightragjava.model.EmbeddingModel;
 import io.github.lightragjava.model.RerankModel;
@@ -23,6 +24,7 @@ public final class LightRagBuilder {
     private StorageProvider storageProvider;
     private Path snapshotPath;
     private RerankModel rerankModel;
+    private Chunker chunker;
 
     public LightRagBuilder chatModel(ChatModel chatModel) {
         this.chatModel = Objects.requireNonNull(chatModel, "chatModel");
@@ -45,6 +47,11 @@ public final class LightRagBuilder {
      */
     public LightRagBuilder rerankModel(RerankModel rerankModel) {
         this.rerankModel = Objects.requireNonNull(rerankModel, "rerankModel");
+        return this;
+    }
+
+    public LightRagBuilder chunker(Chunker chunker) {
+        this.chunker = Objects.requireNonNull(chunker, "chunker");
         return this;
     }
 
@@ -81,7 +88,7 @@ public final class LightRagBuilder {
             storageProvider.documentStatusStore(),
             snapshotPath,
             rerankModel
-        ));
+        ), chunker);
     }
 
     private static <T> T requireStore(String componentName, T store, Class<T> storeType) {

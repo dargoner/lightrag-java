@@ -87,6 +87,35 @@ The demo's default config lives in:
 
 It defaults to `in-memory` storage, OpenAI-compatible model settings resolved from environment variables, buffered `/query` responses, and async ingest enabled.
 
+## Chunking
+
+The SDK can now override the ingest-time `Chunker` instead of always using the built-in fixed-window split.
+
+Use a custom chunker from the builder when you need application-specific chunk boundaries:
+
+```java
+var rag = LightRag.builder()
+    .chatModel(chatModel)
+    .embeddingModel(embeddingModel)
+    .storage(storage)
+    .chunker(document -> List.of(
+        new Chunk(document.id() + ":0", document.id(), document.content(), document.content().length(), 0, document.metadata())
+    ))
+    .build();
+```
+
+With Spring Boot Starter, fixed-window chunking can be configured optionally in `application.yml`. If omitted, it still defaults to `window-size=1000` and `overlap=100`:
+
+```yaml
+lightrag:
+  indexing:
+    chunking:
+      window-size: 1200
+      overlap: 150
+```
+
+If the application provides its own `Chunker` bean, the starter backs off and uses that bean instead.
+
 The demo `/query` endpoint accepts the core query controls used most often in service mode, including:
 
 - `mode`, `topK`, `chunkTopK`

@@ -1,5 +1,6 @@
 package io.github.lightragjava.spring.boot;
 
+import io.github.lightragjava.indexing.FixedWindowChunker;
 import org.springframework.boot.context.properties.ConfigurationProperties;
 
 @ConfigurationProperties(prefix = "lightrag")
@@ -7,6 +8,7 @@ public class LightRagProperties {
     private final ModelProperties chat = new ModelProperties();
     private final ModelProperties embedding = new ModelProperties();
     private final StorageProperties storage = new StorageProperties();
+    private final IndexingProperties indexing = new IndexingProperties();
     private final QueryProperties query = new QueryProperties();
     private final DemoProperties demo = new DemoProperties();
     private String snapshotPath;
@@ -21,6 +23,10 @@ public class LightRagProperties {
 
     public StorageProperties getStorage() {
         return storage;
+    }
+
+    public IndexingProperties getIndexing() {
+        return indexing;
     }
 
     public QueryProperties getQuery() {
@@ -127,6 +133,35 @@ public class LightRagProperties {
 
         public void setDefaultResponseType(String defaultResponseType) {
             this.defaultResponseType = defaultResponseType;
+        }
+    }
+
+    public static class IndexingProperties {
+        private final ChunkingProperties chunking = new ChunkingProperties();
+
+        public ChunkingProperties getChunking() {
+            return chunking;
+        }
+    }
+
+    public static class ChunkingProperties {
+        private int windowSize = FixedWindowChunker.DEFAULT_WINDOW_SIZE;
+        private int overlap = FixedWindowChunker.DEFAULT_OVERLAP;
+
+        public int getWindowSize() {
+            return windowSize;
+        }
+
+        public void setWindowSize(int windowSize) {
+            this.windowSize = windowSize;
+        }
+
+        public int getOverlap() {
+            return overlap;
+        }
+
+        public void setOverlap(int overlap) {
+            this.overlap = overlap;
         }
     }
 

@@ -96,6 +96,55 @@ class DocumentIngestorTest {
     }
 
     @Test
+    void rejectsChunkerOutputWhenChunkDocumentIdDoesNotMatchSourceDocument() {
+        var storage = InMemoryStorageProvider.create();
+        var ingestor = new DocumentIngestor(storage, document -> List.of(
+            new Chunk("doc-1:0", "other-doc", "abcd", 4, 0, document.metadata())
+        ));
+        var document = new Document("doc-1", "Title", "abcdefgh", Map.of("source", "unit-test"));
+
+        assertThatThrownBy(() -> ingestor.ingest(List.of(document)))
+            .isInstanceOf(IllegalArgumentException.class)
+            .hasMessageContaining("chunk documentId must match source document id");
+
+        assertThat(storage.documentStore().list()).isEmpty();
+        assertThat(storage.chunkStore().list()).isEmpty();
+    }
+
+    @Test
+    void rejectsChunkerOutputWhenChunkIdsAreDuplicated() {
+        var storage = InMemoryStorageProvider.create();
+        var ingestor = new DocumentIngestor(storage, document -> List.of(
+            new Chunk("doc-1:0", document.id(), "abcd", 4, 0, document.metadata()),
+            new Chunk("doc-1:0", document.id(), "defg", 4, 1, document.metadata())
+        ));
+        var document = new Document("doc-1", "Title", "abcdefgh", Map.of("source", "unit-test"));
+
+        assertThatThrownBy(() -> ingestor.ingest(List.of(document)))
+            .isInstanceOf(IllegalArgumentException.class)
+            .hasMessageContaining("chunk id must be unique");
+
+        assertThat(storage.documentStore().list()).isEmpty();
+        assertThat(storage.chunkStore().list()).isEmpty();
+    }
+
+    @Test
+    void rejectsChunkerOutputWhenChunkOrderIsNotContiguous() {
+        var storage = InMemoryStorageProvider.create();
+        var ingestor = new DocumentIngestor(storage, document -> List.of(
+            new Chunk("doc-1:0", document.id(), "abcd", 4, 1, document.metadata())
+        ));
+        var document = new Document("doc-1", "Title", "abcdefgh", Map.of("source", "unit-test"));
+
+        assertThatThrownBy(() -> ingestor.ingest(List.of(document)))
+            .isInstanceOf(IllegalArgumentException.class)
+            .hasMessageContaining("chunk order must be contiguous");
+
+        assertThat(storage.documentStore().list()).isEmpty();
+        assertThat(storage.chunkStore().list()).isEmpty();
+    }
+
+    @Test
     void rollsBackDocumentAndChunkWritesWhenChunkStoreSaveFails() {
         var storage = new AtomicFailureStorageProvider();
         var ingestor = new DocumentIngestor(storage, new FixedWindowChunker(4, 1));

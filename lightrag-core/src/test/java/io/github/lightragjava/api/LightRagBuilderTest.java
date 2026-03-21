@@ -1,6 +1,7 @@
 package io.github.lightragjava.api;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
+import io.github.lightragjava.indexing.Chunker;
 import io.github.lightragjava.model.ChatModel;
 import io.github.lightragjava.model.EmbeddingModel;
 import io.github.lightragjava.model.RerankModel;
@@ -9,6 +10,7 @@ import io.github.lightragjava.storage.ChunkStore;
 import io.github.lightragjava.storage.DocumentStore;
 import io.github.lightragjava.storage.DocumentStatusStore;
 import io.github.lightragjava.storage.GraphStore;
+import io.github.lightragjava.storage.InMemoryStorageProvider;
 import io.github.lightragjava.storage.SnapshotStore;
 import io.github.lightragjava.storage.StorageProvider;
 import io.github.lightragjava.storage.VectorStore;
@@ -76,6 +78,31 @@ class LightRagBuilderTest {
     }
 
     @Test
+    void buildsWithCustomChunker() {
+        var storageProvider = new InMemoryStorageProvider();
+        var customChunker = new StaticChunker(List.of(
+            new io.github.lightragjava.types.Chunk("doc-1:custom-0", "doc-1", "Alpha", 5, 0, Map.of("source", "custom")),
+            new io.github.lightragjava.types.Chunk("doc-1:custom-1", "doc-1", "Beta", 4, 1, Map.of("source", "custom"))
+        ));
+
+        var rag = LightRag.builder()
+            .chatModel(new ExtractingChatModel())
+            .embeddingModel(new FakeEmbeddingModel())
+            .storage(storageProvider)
+            .chunker(customChunker)
+            .build();
+
+        rag.ingest(List.of(new Document("doc-1", "Title", "Ignored by custom chunker", Map.of("source", "doc"))));
+
+        assertThat(storageProvider.chunkStore().listByDocument("doc-1"))
+            .extracting(ChunkStore.ChunkRecord::id, ChunkStore.ChunkRecord::text, ChunkStore.ChunkRecord::order)
+            .containsExactly(
+                org.assertj.core.groups.Tuple.tuple("doc-1:custom-0", "Alpha", 0),
+                org.assertj.core.groups.Tuple.tuple("doc-1:custom-1", "Beta", 1)
+            );
+    }
+
+    @Test
     void rejectsMissingChatModel() {
         assertThatThrownBy(() -> LightRag.builder()
             .embeddingModel(new FakeEmbeddingModel())
@@ -130,6 +157,13 @@ class LightRagBuilderTest {
         assertThatThrownBy(() -> LightRag.builder().loadFromSnapshot(null))
             .isInstanceOf(NullPointerException.class)
             .hasMessage("path");
+    }
+
+    @Test
+    void rejectsNullChunker() {
+        assertThatThrownBy(() -> LightRag.builder().chunker(null))
+            .isInstanceOf(NullPointerException.class)
+            .hasMessage("chunker");
     }
 
     @Test
@@ -458,6 +492,13 @@ class LightRagBuilderTest {
         }
     }
 
+    private static final class ExtractingChatModel implements ChatModel {
+        @Override
+        public String generate(ChatRequest request) {
+            return "{\"entities\":[],\"relations\":[]}";
+        }
+    }
+
     private static final class FakeEmbeddingModel implements EmbeddingModel {
         @Override
         public List<List<Double>> embedAll(List<String> texts) {
@@ -473,6 +514,13 @@ class LightRagBuilderTest {
             return request.candidates().stream()
                 .map(candidate -> new RerankResult(candidate.id(), 1.0d))
                 .toList();
+        }
+    }
+
+    private record StaticChunker(List<io.github.lightragjava.types.Chunk> chunks) implements Chunker {
+        @Override
+        public List<io.github.lightragjava.types.Chunk> chunk(Document document) {
+            return chunks;
         }
     }
 
