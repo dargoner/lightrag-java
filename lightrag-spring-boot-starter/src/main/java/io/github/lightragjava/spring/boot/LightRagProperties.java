@@ -150,6 +150,7 @@ public class LightRagProperties {
     public static class WorkspaceProperties {
         private String headerName = "X-Workspace-Id";
         private String defaultId = "default";
+        private int maxActiveWorkspaces = 32;
 
         public String getHeaderName() {
             return headerName;
@@ -165,6 +166,14 @@ public class LightRagProperties {
 
         public void setDefaultId(String defaultId) {
             this.defaultId = defaultId;
+        }
+
+        public int getMaxActiveWorkspaces() {
+            return maxActiveWorkspaces;
+        }
+
+        public void setMaxActiveWorkspaces(int maxActiveWorkspaces) {
+            this.maxActiveWorkspaces = maxActiveWorkspaces;
         }
     }
 

@@ -16,6 +16,7 @@ import org.springframework.beans.factory.ObjectProvider;
 import java.nio.file.Path;
 import java.util.Locale;
 import java.util.Objects;
+import java.util.Optional;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ConcurrentMap;
 
@@ -48,7 +49,26 @@ public class WorkspaceLightRagFactory {
 
     public LightRag get(String workspaceId) {
         var normalizedWorkspaceId = normalizeWorkspaceId(workspaceId);
-        return cache.computeIfAbsent(normalizedWorkspaceId, this::create);
+        var cached = cache.get(normalizedWorkspaceId);
+        if (cached != null) {
+            return cached;
+        }
+        synchronized (cache) {
+            cached = cache.get(normalizedWorkspaceId);
+            if (cached != null) {
+                return cached;
+            }
+            if (cache.size() >= maxActiveWorkspaces()) {
+                throw new IllegalStateException("workspace cache limit exceeded");
+            }
+            var created = create(normalizedWorkspaceId);
+            cache.put(normalizedWorkspaceId, created);
+            return created;
+        }
+    }
+
+    public Optional<LightRag> find(String workspaceId) {
+        return Optional.ofNullable(cache.get(normalizeWorkspaceId(workspaceId)));
     }
 
     private LightRag create(String workspaceId) {
@@ -67,11 +87,12 @@ public class WorkspaceLightRagFactory {
     }
 
     private StorageProvider createStorageProvider(String workspaceId) {
-        if (isDefaultWorkspace(workspaceId)) {
-            var existingStorageProvider = storageProvider.getIfAvailable();
-            if (existingStorageProvider != null) {
-                return existingStorageProvider;
-            }
+        var existingStorageProvider = storageProvider.getIfAvailable();
+        if (isDefaultWorkspace(workspaceId) && existingStorageProvider != null) {
+            return existingStorageProvider;
+        }
+        if (!isDefaultWorkspace(workspaceId) && isCustomStorageProvider(existingStorageProvider)) {
+            throw new IllegalStateException("non-default workspaces require starter-managed storage providers");
         }
         return switch (properties.getStorage().getType()) {
             case IN_MEMORY -> InMemoryStorageProvider.create(snapshotStore);
@@ -151,6 +172,23 @@ public class WorkspaceLightRagFactory {
             throw new IllegalStateException("lightrag.workspace.default-id must not be blank");
         }
         return candidate.strip();
+    }
+
+    private int maxActiveWorkspaces() {
+        var value = properties.getWorkspace().getMaxActiveWorkspaces();
+        if (value <= 0) {
+            throw new IllegalStateException("lightrag.workspace.max-active-workspaces must be positive");
+        }
+        return value;
+    }
+
+    private static boolean isCustomStorageProvider(StorageProvider storageProvider) {
+        if (storageProvider == null) {
+            return false;
+        }
+        return !(storageProvider instanceof InMemoryStorageProvider)
+            && !(storageProvider instanceof PostgresStorageProvider)
+            && !(storageProvider instanceof PostgresNeo4jStorageProvider);
     }
 
     private static String slug(String workspaceId) {

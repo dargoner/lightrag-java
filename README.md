@@ -93,6 +93,7 @@ Workspace routing is configured through the starter properties:
 
 - `lightrag.workspace.header-name`: request header used by the demo, default `X-Workspace-Id`
 - `lightrag.workspace.default-id`: fallback workspace when the header is missing, default `default`
+- `lightrag.workspace.max-active-workspaces`: upper bound for cached workspace instances, default `32`
 
 Example:
 
@@ -116,6 +117,7 @@ Workspace isolation support in this phase:
 - `in-memory`: each workspace gets an isolated in-process `LightRag` instance
 - `postgres`: each workspace gets an isolated table prefix and snapshot path
 - `postgres-neo4j`: current behavior is preserved for the default workspace only; non-default workspaces are not supported yet
+- custom `StorageProvider` beans remain default-workspace only unless you provide your own workspace-aware routing layer
 
 The demo `/query` endpoint accepts the core query controls used most often in service mode, including:
 

@@ -5,9 +5,13 @@ import jakarta.servlet.http.HttpServletRequest;
 import org.springframework.stereotype.Component;
 
 import java.util.Objects;
+import java.util.regex.Pattern;
 
 @Component
 class WorkspaceResolver {
+    private static final int MAX_WORKSPACE_ID_LENGTH = 64;
+    private static final Pattern WORKSPACE_ID_PATTERN = Pattern.compile("[A-Za-z0-9][A-Za-z0-9_-]*");
+
     private final LightRagProperties properties;
 
     WorkspaceResolver(LightRagProperties properties) {
@@ -27,6 +31,10 @@ class WorkspaceResolver {
         if (workspaceId == null || workspaceId.isBlank()) {
             throw new IllegalStateException("lightrag.workspace.default-id must not be blank");
         }
-        return workspaceId.strip();
+        var normalized = workspaceId.strip();
+        if (normalized.length() > MAX_WORKSPACE_ID_LENGTH || !WORKSPACE_ID_PATTERN.matcher(normalized).matches()) {
+            throw new IllegalArgumentException("workspaceId must match [A-Za-z0-9][A-Za-z0-9_-]* and be at most 64 characters");
+        }
+        return normalized;
     }
 }
