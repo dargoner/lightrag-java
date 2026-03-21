@@ -39,7 +39,10 @@ class RagasEvaluationServiceTest {
 
         assertThat(result.answer()).isEqualTo("Alice works with Bob.");
         assertThat(result.contexts()).hasSize(1);
-        assertThat(result.contexts().get(0)).contains("Alice works with Bob");
+        assertThat(result.contexts().get(0).sourceId()).isNotBlank();
+        assertThat(result.contexts().get(0).text()).contains("Alice works with Bob");
+        assertThat(result.contexts().get(0).referenceId()).isEmpty();
+        assertThat(result.contexts().get(0).source()).isEmpty();
     }
 
     private static final class FakeChatModel implements ChatModel {

@@ -30,7 +30,8 @@ public final class LightRag {
             config.chatModel(),
             config.embeddingModel(),
             config.storageProvider(),
-            config.snapshotPath()
+            config.snapshotPath(),
+            config.chunker()
         );
         this.deletionPipeline = new DeletionPipeline(
             config.storageProvider(),
@@ -54,7 +55,14 @@ public final class LightRag {
         strategies.put(QueryMode.GLOBAL, global);
         strategies.put(QueryMode.HYBRID, hybrid);
         strategies.put(QueryMode.MIX, mix);
-        this.queryEngine = new QueryEngine(config.chatModel(), contextAssembler, strategies, config.rerankModel());
+        this.queryEngine = new QueryEngine(
+            config.chatModel(),
+            contextAssembler,
+            strategies,
+            config.rerankModel(),
+            config.automaticQueryKeywordExtraction(),
+            config.rerankCandidateMultiplier()
+        );
     }
 
     public static LightRagBuilder builder() {

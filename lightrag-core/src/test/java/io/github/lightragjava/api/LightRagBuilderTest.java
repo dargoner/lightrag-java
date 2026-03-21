@@ -4,6 +4,7 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import io.github.lightragjava.model.ChatModel;
 import io.github.lightragjava.model.EmbeddingModel;
 import io.github.lightragjava.model.RerankModel;
+import io.github.lightragjava.indexing.Chunker;
 import io.github.lightragjava.storage.AtomicStorageProvider;
 import io.github.lightragjava.storage.ChunkStore;
 import io.github.lightragjava.storage.DocumentStore;
@@ -13,6 +14,7 @@ import io.github.lightragjava.storage.SnapshotStore;
 import io.github.lightragjava.storage.StorageProvider;
 import io.github.lightragjava.storage.VectorStore;
 import io.github.lightragjava.storage.memory.InMemoryDocumentStatusStore;
+import io.github.lightragjava.types.Chunk;
 import io.github.lightragjava.types.Document;
 import io.github.lightragjava.types.ExtractedRelation;
 import org.junit.jupiter.api.Test;
@@ -76,6 +78,44 @@ class LightRagBuilderTest {
     }
 
     @Test
+    void buildsWithCustomRetrievalQualityOptions() {
+        Chunker chunker = document -> List.of();
+
+        var rag = LightRag.builder()
+            .chatModel(new FakeChatModel())
+            .embeddingModel(new FakeEmbeddingModel())
+            .storage(new FakeStorageProvider())
+            .chunker(chunker)
+            .automaticQueryKeywordExtraction(false)
+            .rerankCandidateMultiplier(4)
+            .build();
+
+        assertThat(rag.config().chunker()).isSameAs(chunker);
+        assertThat(rag.config().automaticQueryKeywordExtraction()).isFalse();
+        assertThat(rag.config().rerankCandidateMultiplier()).isEqualTo(4);
+    }
+
+    @Test
+    void usesConfiguredChunkerDuringIngest() {
+        var storageProvider = new FakeStorageProvider();
+        var rag = LightRag.builder()
+            .chatModel(new IngestionChatModel())
+            .embeddingModel(new FakeEmbeddingModel())
+            .storage(storageProvider)
+            .chunker(document -> List.of(
+                new Chunk(document.id() + ":custom-1", document.id(), "alpha", 1, 0, Map.of()),
+                new Chunk(document.id() + ":custom-2", document.id(), "beta", 1, 1, Map.of())
+            ))
+            .build();
+
+        rag.ingest(List.of(new Document("doc-1", "Title", "ignored source text", Map.of())));
+
+        assertThat(storageProvider.chunkStore().listByDocument("doc-1"))
+            .extracting(ChunkStore.ChunkRecord::id)
+            .containsExactly("doc-1:custom-1", "doc-1:custom-2");
+    }
+
+    @Test
     void rejectsMissingChatModel() {
         assertThatThrownBy(() -> LightRag.builder()
             .embeddingModel(new FakeEmbeddingModel())
@@ -130,6 +170,20 @@ class LightRagBuilderTest {
         assertThatThrownBy(() -> LightRag.builder().loadFromSnapshot(null))
             .isInstanceOf(NullPointerException.class)
             .hasMessage("path");
+    }
+
+    @Test
+    void rejectsNullChunker() {
+        assertThatThrownBy(() -> LightRag.builder().chunker(null))
+            .isInstanceOf(NullPointerException.class)
+            .hasMessage("chunker");
+    }
+
+    @Test
+    void rejectsNonPositiveRerankCandidateMultiplier() {
+        assertThatThrownBy(() -> LightRag.builder().rerankCandidateMultiplier(0))
+            .isInstanceOf(IllegalArgumentException.class)
+            .hasMessage("rerankCandidateMultiplier must be positive");
     }
 
     @Test
@@ -458,6 +512,18 @@ class LightRagBuilderTest {
         }
     }
 
+    private static final class IngestionChatModel implements ChatModel {
+        @Override
+        public String generate(ChatRequest request) {
+            return """
+                {
+                  "entities": [],
+                  "relations": []
+                }
+                """;
+        }
+    }
+
     private static final class FakeEmbeddingModel implements EmbeddingModel {
         @Override
         public List<List<Double>> embedAll(List<String> texts) {
@@ -591,44 +657,52 @@ class LightRagBuilderTest {
     }
 
     private static final class FakeDocumentStore implements DocumentStore {
+        private final java.util.LinkedHashMap<String, DocumentRecord> documents = new java.util.LinkedHashMap<>();
+
         @Override
         public void save(DocumentRecord document) {
+            documents.put(document.id(), document);
         }
 
         @Override
         public Optional<DocumentRecord> load(String documentId) {
-            return Optional.empty();
+            return Optional.ofNullable(documents.get(documentId));
         }
 
         @Override
         public List<DocumentRecord> list() {
-            return List.of();
+            return List.copyOf(documents.values());
         }
 
         @Override
         public boolean contains(String documentId) {
-            return false;
+            return documents.containsKey(documentId);
         }
     }
 
     private static final class FakeChunkStore implements ChunkStore {
+        private final java.util.LinkedHashMap<String, ChunkRecord> chunks = new java.util.LinkedHashMap<>();
+
         @Override
         public void save(ChunkRecord chunk) {
+            chunks.put(chunk.id(), chunk);
         }
 
         @Override
         public Optional<ChunkRecord> load(String chunkId) {
-            return Optional.empty();
+            return Optional.ofNullable(chunks.get(chunkId));
         }
 
         @Override
         public List<ChunkRecord> list() {
-            return List.of();
+            return List.copyOf(chunks.values());
         }
 
         @Override
         public List<ChunkRecord> listByDocument(String documentId) {
-            return List.of();
+            return chunks.values().stream()
+                .filter(chunk -> chunk.documentId().equals(documentId))
+                .toList();
         }
     }
 

@@ -70,6 +70,23 @@ class QueryKeywordExtractorTest {
     }
 
     @Test
+    void returnsOriginalRequestWhenAutomaticKeywordExtractionIsDisabled() {
+        var model = new CountingKeywordChatModel("""
+            {"high_level_keywords":["organization"],"low_level_keywords":["alice","bob"]}
+            """);
+        var extractor = new QueryKeywordExtractor(false);
+        var request = QueryRequest.builder()
+            .query("Who works with Bob?")
+            .mode(QueryMode.HYBRID)
+            .build();
+
+        var resolved = extractor.resolve(request, model);
+
+        assertThat(resolved).isEqualTo(request);
+        assertThat(model.keywordExtractionCallCount()).isZero();
+    }
+
+    @Test
     void fallsBackByModeWhenExtractionReturnsNoKeywords() {
         var extractor = new QueryKeywordExtractor();
 

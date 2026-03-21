@@ -102,6 +102,7 @@ public final class QueryEngine {
     private final Map<QueryMode, QueryStrategy> strategies;
     private final RerankModel rerankModel;
     private final QueryKeywordExtractor keywordExtractor;
+    private final int rerankCandidateMultiplier;
 
     public QueryEngine(
         ChatModel chatModel,
@@ -109,11 +110,26 @@ public final class QueryEngine {
         Map<QueryMode, QueryStrategy> strategies,
         RerankModel rerankModel
     ) {
+        this(chatModel, contextAssembler, strategies, rerankModel, true, 2);
+    }
+
+    public QueryEngine(
+        ChatModel chatModel,
+        ContextAssembler contextAssembler,
+        Map<QueryMode, QueryStrategy> strategies,
+        RerankModel rerankModel,
+        boolean automaticKeywordExtractionEnabled,
+        int rerankCandidateMultiplier
+    ) {
         this.chatModel = Objects.requireNonNull(chatModel, "chatModel");
         this.contextAssembler = Objects.requireNonNull(contextAssembler, "contextAssembler");
         this.strategies = Map.copyOf(new EnumMap<>(Objects.requireNonNull(strategies, "strategies")));
         this.rerankModel = rerankModel;
-        this.keywordExtractor = new QueryKeywordExtractor();
+        if (rerankCandidateMultiplier <= 0) {
+            throw new IllegalArgumentException("rerankCandidateMultiplier must be positive");
+        }
+        this.keywordExtractor = new QueryKeywordExtractor(automaticKeywordExtractionEnabled);
+        this.rerankCandidateMultiplier = rerankCandidateMultiplier;
     }
 
     public QueryResult query(QueryRequest request) {
@@ -128,7 +144,7 @@ public final class QueryEngine {
             throw new IllegalStateException("No query strategy configured for mode: " + resolvedQuery.mode());
         }
 
-        var retrievalRequest = rerankEnabled(resolvedQuery) ? expandChunkRequest(resolvedQuery) : resolvedQuery;
+        var retrievalRequest = rerankEnabled(resolvedQuery) ? expandChunkRequest(resolvedQuery, rerankCandidateMultiplier) : resolvedQuery;
         var retrievedContext = strategy.retrieve(retrievalRequest);
         var rerankedChunks = rerankEnabled(resolvedQuery)
             ? rerankChunks(resolvedQuery, retrievedContext.matchedChunks())
@@ -173,8 +189,8 @@ public final class QueryEngine {
         return request.enableRerank() && rerankModel != null;
     }
 
-    private static QueryRequest expandChunkRequest(QueryRequest request) {
-        long expandedChunkTopK = Math.max((long) request.chunkTopK() * 2L, request.chunkTopK());
+    private static QueryRequest expandChunkRequest(QueryRequest request, int rerankCandidateMultiplier) {
+        long expandedChunkTopK = Math.max((long) request.chunkTopK() * rerankCandidateMultiplier, request.chunkTopK());
         return new QueryRequest(
             request.query(),
             request.mode(),

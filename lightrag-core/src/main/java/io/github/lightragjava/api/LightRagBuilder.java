@@ -1,6 +1,8 @@
 package io.github.lightragjava.api;
 
 import io.github.lightragjava.config.LightRagConfig;
+import io.github.lightragjava.indexing.Chunker;
+import io.github.lightragjava.indexing.FixedWindowChunker;
 import io.github.lightragjava.model.ChatModel;
 import io.github.lightragjava.model.EmbeddingModel;
 import io.github.lightragjava.model.RerankModel;
@@ -18,11 +20,17 @@ import java.util.NoSuchElementException;
 import java.util.Objects;
 
 public final class LightRagBuilder {
+    private static final int DEFAULT_CHUNK_WINDOW = 1_000;
+    private static final int DEFAULT_CHUNK_OVERLAP = 100;
+
     private ChatModel chatModel;
     private EmbeddingModel embeddingModel;
     private StorageProvider storageProvider;
     private Path snapshotPath;
     private RerankModel rerankModel;
+    private Chunker chunker = new FixedWindowChunker(DEFAULT_CHUNK_WINDOW, DEFAULT_CHUNK_OVERLAP);
+    private boolean automaticQueryKeywordExtraction = true;
+    private int rerankCandidateMultiplier = 2;
 
     public LightRagBuilder chatModel(ChatModel chatModel) {
         this.chatModel = Objects.requireNonNull(chatModel, "chatModel");
@@ -45,6 +53,24 @@ public final class LightRagBuilder {
      */
     public LightRagBuilder rerankModel(RerankModel rerankModel) {
         this.rerankModel = Objects.requireNonNull(rerankModel, "rerankModel");
+        return this;
+    }
+
+    public LightRagBuilder chunker(Chunker chunker) {
+        this.chunker = Objects.requireNonNull(chunker, "chunker");
+        return this;
+    }
+
+    public LightRagBuilder automaticQueryKeywordExtraction(boolean automaticQueryKeywordExtraction) {
+        this.automaticQueryKeywordExtraction = automaticQueryKeywordExtraction;
+        return this;
+    }
+
+    public LightRagBuilder rerankCandidateMultiplier(int rerankCandidateMultiplier) {
+        if (rerankCandidateMultiplier <= 0) {
+            throw new IllegalArgumentException("rerankCandidateMultiplier must be positive");
+        }
+        this.rerankCandidateMultiplier = rerankCandidateMultiplier;
         return this;
     }
 
@@ -80,7 +106,10 @@ public final class LightRagBuilder {
             atomicStorageProvider,
             storageProvider.documentStatusStore(),
             snapshotPath,
-            rerankModel
+            rerankModel,
+            chunker,
+            automaticQueryKeywordExtraction,
+            rerankCandidateMultiplier
         ));
     }
 

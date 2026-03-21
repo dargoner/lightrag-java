@@ -542,6 +542,102 @@ rag.ingest(documents);
 
 With the PostgreSQL and PostgreSQL+Neo4j backends, snapshots remain delegated to the configured `SnapshotStore`. PostgreSQL is the primary durable store for online data and document statuses, while snapshot files are still used only when you explicitly load or autosave snapshots through the existing API.
 
+## Retrieval Quality Controls
+
+The builder now exposes a small set of retrieval-quality controls without changing the public query request contract:
+
+```java
+var rag = LightRag.builder()
+    .chatModel(chatModel)
+    .embeddingModel(embeddingModel)
+    .storage(storage)
+    .chunker(new FixedWindowChunker(600, 80))
+    .automaticQueryKeywordExtraction(false)
+    .rerankCandidateMultiplier(4)
+    .build();
+```
+
+- `chunker(...)`: replaces the default fixed-window chunker used during ingest
+- `automaticQueryKeywordExtraction(...)`: turns graph-mode keyword extraction on or off
+- `rerankCandidateMultiplier(...)`: controls how far `QueryEngine` expands `chunkTopK` before reranking
+
+Defaults in this phase:
+
+- chunker: `FixedWindowChunker(1000, 100)`
+- automatic keyword extraction: `true`
+- rerank candidate multiplier: `2`
+
+These controls change indexing or retrieval internals only. They do not alter the `QueryRequest` surface or default query semantics unless you opt in through the builder.
+
+Compatibility note:
+
+- the canonical `LightRagConfig(...)` constructor now includes `chunker`, `automaticQueryKeywordExtraction`, and `rerankCandidateMultiplier`
+- external integrations should prefer `LightRag.builder()` unless they intentionally construct `LightRagConfig` directly
+
+## Evaluation CLI
+
+The evaluation tasks now emit structured JSON envelopes so different runs can be compared more reliably.
+
+Single-query evaluation:
+
+```bash
+./gradlew :lightrag-core:runRagasQuery --args="\
+  --documents-dir /tmp/docs \
+  --question 'Who works with Bob?' \
+  --mode NAIVE \
+  --top-k 5 \
+  --chunk-top-k 7"
+```
+
+Output shape:
+
+```json
+{
+  "request": {
+    "documentsDir": "/tmp/docs",
+    "question": "Who works with Bob?",
+    "mode": "NAIVE",
+    "topK": 5,
+    "chunkTopK": 7
+  },
+  "result": {
+    "answer": "Alice works with Bob.",
+    "contexts": [
+      {
+        "sourceId": "chunk-1",
+        "referenceId": "",
+        "source": "",
+        "text": "Alice works with Bob"
+      }
+    ]
+  }
+}
+```
+
+Batch evaluation:
+
+```bash
+./gradlew :lightrag-core:runRagasBatchEval --args="\
+  --documents-dir /tmp/docs \
+  --dataset /tmp/dataset.json \
+  --mode MIX \
+  --top-k 10 \
+  --chunk-top-k 10 \
+  --storage-profile in-memory"
+```
+
+Batch output now includes:
+
+- `request`: run-level parameters such as `mode`, `topK`, `chunkTopK`, and `storageProfile`
+- `summary.totalCases`: quick run-size check
+- `results[*]`: `caseIndex`, `question`, `groundTruth`, `caseMetadata`, `answer`, and structured `contexts`
+
+Compatibility note:
+
+- `RagasEvaluationService.EvaluationResult` and `RagasBatchEvaluationService.Result` now expose structured `QueryResult.Context` entries instead of plain strings
+- if your integration previously consumed `List<String>` contexts, read `context.text()` from each returned context object
+- `evaluation/ragas/eval_rag_quality_java.py` remains compatible with both the legacy list payload and the new batch envelope
+
 ## Current v1 Scope
 
 - Bundled storage providers: in-memory, PostgreSQL, and PostgreSQL+Neo4j.
