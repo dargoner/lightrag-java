@@ -62,6 +62,7 @@ The starter auto-configures `LightRag` from `application.yml` when you provide:
 The demo application exposes:
 
 - `POST /documents/ingest`: submit an ingest job and receive a `jobId`
+- `GET /documents/jobs?page=0&size=20`: list recent ingest jobs with pagination
 - `GET /documents/jobs/{jobId}`: poll async ingest state
 - `GET /documents/status`
 - `GET /documents/status/{documentId}`
@@ -86,6 +87,12 @@ The demo's default config lives in:
 - `lightrag-spring-boot-demo/src/main/resources/application.yml`
 
 It defaults to `in-memory` storage, OpenAI-compatible model settings resolved from environment variables, buffered `/query` responses, and async ingest enabled.
+
+The job endpoints expose lightweight observability fields for demo troubleshooting:
+
+- `documentCount`: number of submitted documents in the job
+- `createdAt`, `startedAt`, `finishedAt`: basic ingest timeline
+- `errorMessage`: populated when the job reaches `FAILED`
 
 The demo `/query` endpoint accepts the core query controls used most often in service mode, including:
 
