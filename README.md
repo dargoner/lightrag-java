@@ -74,6 +74,8 @@ The demo application exposes:
 - `POST /graph/relations`
 - `PUT /graph/relations`
 - `DELETE /graph/relations?sourceEntityName=...&targetEntityName=...`
+- `GET /actuator/health`
+- `GET /actuator/info`
 
 Run the demo locally with:
 
@@ -86,6 +88,11 @@ The demo's default config lives in:
 - `lightrag-spring-boot-demo/src/main/resources/application.yml`
 
 It defaults to `in-memory` storage, OpenAI-compatible model settings resolved from environment variables, buffered `/query` responses, and async ingest enabled.
+
+For lightweight operations visibility, the demo also exposes:
+
+- `/actuator/health`: application health plus a `lightrag` component with storage type and async ingest flags
+- `/actuator/info`: static runtime info such as storage type, async ingest setting, and default query mode
 
 The demo `/query` endpoint accepts the core query controls used most often in service mode, including:
 

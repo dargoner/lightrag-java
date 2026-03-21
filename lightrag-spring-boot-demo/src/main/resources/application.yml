@@ -16,3 +16,16 @@ lightrag:
     async-ingest-enabled: ${LIGHTRAG_DEMO_ASYNC_INGEST_ENABLED:true}
   storage:
     type: ${LIGHTRAG_STORAGE_TYPE:in-memory}
+
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,info
+  endpoint:
+    health:
+      show-details: always
+      show-components: always
+  health:
+    neo4j:
+      enabled: false

@@ -200,16 +200,24 @@ lightrag:
 ./gradlew :lightrag-spring-boot-demo:bootRun
 ```
 
-当前提供两个最小接口：
+当前 demo 提供这些最小接口：
 
 - `POST /documents/ingest`
 - `POST /query`
+- `GET /actuator/health`
+- `GET /actuator/info`
 
 适合用来验证：
 
 - starter 自动装配是否生效
 - 模型服务是否联通
 - 基础 ingest / query 链路是否正常
+- 服务基础探活和运行配置是否正常暴露
+
+其中 actuator 端点提供最小运维信息：
+
+- `/actuator/health`：返回应用整体健康状态，以及 `lightrag` 组件的 storage type / async ingest 配置
+- `/actuator/info`：返回 storage type、async ingest 开关、默认 query mode
 
 Demo 默认配置文件：
 
