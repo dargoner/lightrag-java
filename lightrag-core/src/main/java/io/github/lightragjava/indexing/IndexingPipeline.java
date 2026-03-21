@@ -30,15 +30,6 @@ public final class IndexingPipeline {
         ChatModel chatModel,
         EmbeddingModel embeddingModel,
         AtomicStorageProvider storageProvider,
-        Path snapshotPath
-    ) {
-        this(chatModel, embeddingModel, storageProvider, snapshotPath, null);
-    }
-
-    public IndexingPipeline(
-        ChatModel chatModel,
-        EmbeddingModel embeddingModel,
-        AtomicStorageProvider storageProvider,
         Path snapshotPath,
         Chunker chunker
     ) {
@@ -51,6 +42,15 @@ public final class IndexingPipeline {
         );
         this.knowledgeExtractor = new KnowledgeExtractor(Objects.requireNonNull(chatModel, "chatModel"));
         this.graphAssembler = new GraphAssembler();
+    }
+
+    public IndexingPipeline(
+        ChatModel chatModel,
+        EmbeddingModel embeddingModel,
+        AtomicStorageProvider storageProvider,
+        Path snapshotPath
+    ) {
+        this(chatModel, embeddingModel, storageProvider, snapshotPath, null);
     }
 
     public void ingest(List<Document> documents) {

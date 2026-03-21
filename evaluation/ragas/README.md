@@ -65,4 +65,9 @@ python3 evaluation/ragas/eval_rag_quality_java.py \
   --documents-dir evaluation/ragas/sample_documents
 ```
 
+Compatibility notes:
+
+- the Python wrapper accepts both the legacy batch `list` payload and the new Java CLI envelope `{request, summary, results}`
+- when the Java CLI returns structured context objects, the wrapper automatically converts them to the plain context strings expected by RAGAS
+
 Results are written to `evaluation/ragas/results/`.

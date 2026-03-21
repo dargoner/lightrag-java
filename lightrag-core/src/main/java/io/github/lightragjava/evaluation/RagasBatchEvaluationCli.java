@@ -12,19 +12,16 @@ import java.util.Map;
 
 public final class RagasBatchEvaluationCli {
     private static final ObjectMapper OBJECT_MAPPER = new ObjectMapper();
+    private static final String DEFAULT_DOCUMENTS_DIR = "evaluation/ragas/sample_documents";
+    private static final String DEFAULT_DATASET_PATH = "evaluation/ragas/sample_dataset.json";
+    private static final String DEFAULT_RUN_LABEL = "baseline";
 
     public static void main(String[] args) throws Exception {
-        var arguments = parseArgs(args);
+        var config = buildConfig(parseArgs(args));
+        var batchRequest = config.batchRequest();
         var service = new RagasBatchEvaluationService();
         var results = service.evaluateBatch(
-            new RagasBatchEvaluationService.BatchRequest(
-                Path.of(requireArg(arguments, "--documents-dir")),
-                Path.of(requireArg(arguments, "--dataset")),
-                QueryMode.valueOf(arguments.getOrDefault("--mode", QueryMode.MIX.name()).toUpperCase(java.util.Locale.ROOT)),
-                Integer.parseInt(arguments.getOrDefault("--top-k", "10")),
-                Integer.parseInt(arguments.getOrDefault("--chunk-top-k", "10")),
-                RagasStorageProfile.fromValue(arguments.getOrDefault("--storage-profile", "in-memory"))
-            ),
+            batchRequest,
             new OpenAiCompatibleChatModel(
                 envOrDefault("LIGHTRAG_JAVA_EVAL_CHAT_BASE_URL", "https://api.openai.com/v1/"),
                 envOrDefault("LIGHTRAG_JAVA_EVAL_CHAT_MODEL", "gpt-4o-mini"),
@@ -37,7 +34,53 @@ public final class RagasBatchEvaluationCli {
                 requiredEnv("LIGHTRAG_JAVA_EVAL_EMBEDDING_API_KEY", "LIGHTRAG_JAVA_EVAL_CHAT_API_KEY", "OPENAI_API_KEY")
             )
         );
-        System.out.println(OBJECT_MAPPER.writeValueAsString(results));
+        System.out.println(OBJECT_MAPPER.writeValueAsString(new OutputEnvelope(
+            new RequestMetadata(
+                batchRequest.documentsDir(),
+                batchRequest.datasetPath(),
+                batchRequest.mode(),
+                batchRequest.topK(),
+                batchRequest.chunkTopK(),
+                batchRequest.storageProfile(),
+                config.runLabel()
+            ),
+            new Summary(results.size()),
+            results
+        )));
+    }
+
+    static BatchCliConfig buildConfig(Map<String, String> arguments) {
+        return new BatchCliConfig(
+            new RagasBatchEvaluationService.BatchRequest(
+                Path.of(arguments.getOrDefault("--documents-dir", DEFAULT_DOCUMENTS_DIR)),
+                Path.of(arguments.getOrDefault("--dataset", DEFAULT_DATASET_PATH)),
+                QueryMode.valueOf(arguments.getOrDefault("--mode", QueryMode.MIX.name()).toUpperCase(java.util.Locale.ROOT)),
+                Integer.parseInt(arguments.getOrDefault("--top-k", "10")),
+                Integer.parseInt(arguments.getOrDefault("--chunk-top-k", "10")),
+                RagasStorageProfile.fromValue(arguments.getOrDefault("--storage-profile", "in-memory"))
+            ),
+            arguments.getOrDefault("--run-label", DEFAULT_RUN_LABEL)
+        );
+    }
+
+    record BatchCliConfig(RagasBatchEvaluationService.BatchRequest batchRequest, String runLabel) {
+    }
+
+    record OutputEnvelope(RequestMetadata request, Summary summary, java.util.List<RagasBatchEvaluationService.Result> results) {
+    }
+
+    record RequestMetadata(
+        Path documentsDir,
+        Path datasetPath,
+        QueryMode mode,
+        int topK,
+        int chunkTopK,
+        RagasStorageProfile storageProfile,
+        String runLabel
+    ) {
+    }
+
+    record Summary(int totalCases) {
     }
 
     private static Map<String, String> parseArgs(String[] args) {

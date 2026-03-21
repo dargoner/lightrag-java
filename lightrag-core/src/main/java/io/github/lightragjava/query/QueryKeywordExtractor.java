@@ -47,9 +47,22 @@ final class QueryKeywordExtractor {
         Output: {"high_level_keywords":["Education","Poverty reduction"],"low_level_keywords":["School access","Literacy rates","Job training"]}
         """;
 
+    private final boolean automaticKeywordExtractionEnabled;
+
+    QueryKeywordExtractor() {
+        this(true);
+    }
+
+    QueryKeywordExtractor(boolean automaticKeywordExtractionEnabled) {
+        this.automaticKeywordExtractionEnabled = automaticKeywordExtractionEnabled;
+    }
+
     QueryRequest resolve(QueryRequest request, ChatModel chatModel) {
         Objects.requireNonNull(request, "request");
         Objects.requireNonNull(chatModel, "chatModel");
+        if (!automaticKeywordExtractionEnabled) {
+            return request;
+        }
         if (!supportsAutomaticKeywords(request.mode())) {
             return request;
         }

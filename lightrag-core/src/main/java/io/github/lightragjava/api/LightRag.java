@@ -26,10 +26,19 @@ public final class LightRag {
     private final QueryEngine queryEngine;
 
     LightRag(LightRagConfig config) {
-        this(config, null);
+        this(config, null, true, 2);
     }
 
     LightRag(LightRagConfig config, Chunker chunker) {
+        this(config, chunker, true, 2);
+    }
+
+    LightRag(
+        LightRagConfig config,
+        Chunker chunker,
+        boolean automaticQueryKeywordExtraction,
+        int rerankCandidateMultiplier
+    ) {
         this.config = config;
         this.indexingPipeline = new IndexingPipeline(
             config.chatModel(),
@@ -60,7 +69,14 @@ public final class LightRag {
         strategies.put(QueryMode.GLOBAL, global);
         strategies.put(QueryMode.HYBRID, hybrid);
         strategies.put(QueryMode.MIX, mix);
-        this.queryEngine = new QueryEngine(config.chatModel(), contextAssembler, strategies, config.rerankModel());
+        this.queryEngine = new QueryEngine(
+            config.chatModel(),
+            contextAssembler,
+            strategies,
+            config.rerankModel(),
+            automaticQueryKeywordExtraction,
+            rerankCandidateMultiplier
+        );
     }
 
     public static LightRagBuilder builder() {

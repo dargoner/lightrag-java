@@ -25,6 +25,8 @@ public final class LightRagBuilder {
     private Path snapshotPath;
     private RerankModel rerankModel;
     private Chunker chunker;
+    private boolean automaticQueryKeywordExtraction = true;
+    private int rerankCandidateMultiplier = 2;
 
     public LightRagBuilder chatModel(ChatModel chatModel) {
         this.chatModel = Objects.requireNonNull(chatModel, "chatModel");
@@ -55,6 +57,18 @@ public final class LightRagBuilder {
         return this;
     }
 
+    public LightRagBuilder automaticQueryKeywordExtraction(boolean automaticQueryKeywordExtraction) {
+        this.automaticQueryKeywordExtraction = automaticQueryKeywordExtraction;
+        return this;
+    }
+
+    public LightRagBuilder rerankCandidateMultiplier(int rerankCandidateMultiplier) {
+        if (rerankCandidateMultiplier <= 0) {
+            throw new IllegalArgumentException("rerankCandidateMultiplier must be positive");
+        }
+        this.rerankCandidateMultiplier = rerankCandidateMultiplier;
+        return this;
+    }
     public LightRagBuilder loadFromSnapshot(Path path) {
         this.snapshotPath = Objects.requireNonNull(path, "path");
         return this;
@@ -88,7 +102,7 @@ public final class LightRagBuilder {
             storageProvider.documentStatusStore(),
             snapshotPath,
             rerankModel
-        ), chunker);
+        ), chunker, automaticQueryKeywordExtraction, rerankCandidateMultiplier);
     }
 
     private static <T> T requireStore(String componentName, T store, Class<T> storeType) {

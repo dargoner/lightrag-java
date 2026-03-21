@@ -39,6 +39,37 @@ def _is_nan(value: Any) -> bool:
     return isinstance(value, float) and math.isnan(value)
 
 
+def _normalize_contexts(raw_contexts: Any) -> List[str]:
+    if not isinstance(raw_contexts, list):
+        return []
+    normalized = []
+    for context in raw_contexts:
+        if isinstance(context, str):
+            text = context.strip()
+        elif isinstance(context, dict):
+            text = str(context.get("text", "")).strip()
+        else:
+            text = ""
+        if text:
+            normalized.append(text)
+    return normalized
+
+
+def _normalize_batch_results(payload: Any) -> List[Dict[str, Any]]:
+    raw_results = payload if isinstance(payload, list) else payload.get("results") if isinstance(payload, dict) else None
+    if not isinstance(raw_results, list):
+        raise SystemExit("Java batch runner returned an unexpected JSON shape")
+
+    normalized_results = []
+    for item in raw_results:
+        if not isinstance(item, dict):
+            raise SystemExit("Java batch runner returned a non-object result entry")
+        normalized_item = dict(item)
+        normalized_item["contexts"] = _normalize_contexts(item.get("contexts", []))
+        normalized_results.append(normalized_item)
+    return normalized_results
+
+
 class JavaRagasEvaluator:
     def __init__(self, dataset_path: Path, documents_dir: Path, project_dir: Path):
         load_dotenv(dotenv_path=project_dir / "evaluation" / "ragas" / ".env", override=False)
@@ -96,7 +127,7 @@ class JavaRagasEvaluator:
             text=True,
             check=True,
         )
-        return json.loads(completed.stdout.strip())
+        return _normalize_batch_results(json.loads(completed.stdout.strip()))
 
     async def evaluate_single_case(self, idx: int, test_case: Dict[str, str], rag_response: Dict[str, Any]) -> Dict[str, Any]:
         question = test_case["question"]
