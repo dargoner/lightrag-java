@@ -12,7 +12,9 @@ import org.springframework.test.web.servlet.MockMvc;
 import java.util.List;
 import java.util.Map;
 
+import static org.junit.jupiter.api.Assertions.fail;
 import static org.springframework.http.MediaType.APPLICATION_JSON;
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
@@ -34,9 +36,12 @@ class DemoApplicationTest {
     @org.springframework.beans.factory.annotation.Autowired
     private MockMvc mockMvc;
 
+    @org.springframework.beans.factory.annotation.Autowired
+    private com.fasterxml.jackson.databind.ObjectMapper objectMapper;
+
     @Test
     void ingestsDocumentsAndAnswersQuery() throws Exception {
-        mockMvc.perform(post("/documents/ingest")
+        var ingestResult = mockMvc.perform(post("/documents/ingest")
                 .contentType(APPLICATION_JSON)
                 .content("""
                     {
@@ -50,7 +55,12 @@ class DemoApplicationTest {
                       ]
                     }
                     """))
-            .andExpect(status().isOk());
+            .andExpect(status().isAccepted())
+            .andExpect(jsonPath("$.jobId").isNotEmpty())
+            .andReturn();
+
+        var jobId = objectMapper.readTree(ingestResult.getResponse().getContentAsString()).get("jobId").asText();
+        awaitJobSuccess(jobId);
 
         mockMvc.perform(post("/query")
                 .contentType(APPLICATION_JSON)
@@ -62,6 +72,20 @@ class DemoApplicationTest {
                     """))
             .andExpect(status().isOk())
             .andExpect(jsonPath("$.answer").value("Alice works with Bob."));
+    }
+
+    private void awaitJobSuccess(String jobId) throws Exception {
+        for (int attempt = 0; attempt < 20; attempt++) {
+            var jobResult = mockMvc.perform(get("/documents/jobs/{jobId}", jobId))
+                .andExpect(status().isOk())
+                .andReturn();
+            var statusValue = objectMapper.readTree(jobResult.getResponse().getContentAsString()).get("status").asText();
+            if ("SUCCEEDED".equals(statusValue)) {
+                return;
+            }
+            Thread.sleep(50L);
+        }
+        fail("job did not reach SUCCEEDED before timeout");
     }
 
     @TestConfiguration

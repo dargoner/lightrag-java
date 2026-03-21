@@ -7,6 +7,8 @@ public class LightRagProperties {
     private final ModelProperties chat = new ModelProperties();
     private final ModelProperties embedding = new ModelProperties();
     private final StorageProperties storage = new StorageProperties();
+    private final QueryProperties query = new QueryProperties();
+    private final DemoProperties demo = new DemoProperties();
     private String snapshotPath;
 
     public ModelProperties getChat() {
@@ -19,6 +21,14 @@ public class LightRagProperties {
 
     public StorageProperties getStorage() {
         return storage;
+    }
+
+    public QueryProperties getQuery() {
+        return query;
+    }
+
+    public DemoProperties getDemo() {
+        return demo;
     }
 
     public String getSnapshotPath() {
@@ -78,6 +88,57 @@ public class LightRagProperties {
 
         public Neo4jProperties getNeo4j() {
             return neo4j;
+        }
+    }
+
+    public static class QueryProperties {
+        private String defaultMode = "MIX";
+        private int defaultTopK = 10;
+        private int defaultChunkTopK = 10;
+        private String defaultResponseType = "Multiple Paragraphs";
+
+        public String getDefaultMode() {
+            return defaultMode;
+        }
+
+        public void setDefaultMode(String defaultMode) {
+            this.defaultMode = defaultMode;
+        }
+
+        public int getDefaultTopK() {
+            return defaultTopK;
+        }
+
+        public void setDefaultTopK(int defaultTopK) {
+            this.defaultTopK = defaultTopK;
+        }
+
+        public int getDefaultChunkTopK() {
+            return defaultChunkTopK;
+        }
+
+        public void setDefaultChunkTopK(int defaultChunkTopK) {
+            this.defaultChunkTopK = defaultChunkTopK;
+        }
+
+        public String getDefaultResponseType() {
+            return defaultResponseType;
+        }
+
+        public void setDefaultResponseType(String defaultResponseType) {
+            this.defaultResponseType = defaultResponseType;
+        }
+    }
+
+    public static class DemoProperties {
+        private boolean asyncIngestEnabled = true;
+
+        public boolean isAsyncIngestEnabled() {
+            return asyncIngestEnabled;
+        }
+
+        public void setAsyncIngestEnabled(boolean asyncIngestEnabled) {
+            this.asyncIngestEnabled = asyncIngestEnabled;
         }
     }
 

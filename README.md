@@ -57,11 +57,23 @@ The starter auto-configures `LightRag` from `application.yml` when you provide:
 - chat model base URL, model name, and API key
 - embedding model base URL, model name, and API key
 - storage type: `in-memory`, `postgres`, or `postgres-neo4j`
+- demo defaults for query mode, top-k, response type, and async ingest behavior
 
 The demo application exposes:
 
-- `POST /documents/ingest`
+- `POST /documents/ingest`: submit an ingest job and receive a `jobId`
+- `GET /documents/jobs/{jobId}`: poll async ingest state
+- `GET /documents/status`
+- `GET /documents/status/{documentId}`
+- `DELETE /documents/{documentId}`
 - `POST /query`
+- `POST /graph/entities`
+- `PUT /graph/entities`
+- `POST /graph/entities/merge`
+- `DELETE /graph/entities/{entityName}`
+- `POST /graph/relations`
+- `PUT /graph/relations`
+- `DELETE /graph/relations?sourceEntityName=...&targetEntityName=...`
 
 Run the demo locally with:
 
@@ -73,7 +85,17 @@ The demo's default config lives in:
 
 - `lightrag-spring-boot-demo/src/main/resources/application.yml`
 
-It defaults to `in-memory` storage and OpenAI-compatible model settings resolved from environment variables.
+It defaults to `in-memory` storage, OpenAI-compatible model settings resolved from environment variables, buffered `/query` responses, and async ingest enabled.
+
+The demo `/query` endpoint accepts the core query controls used most often in service mode, including:
+
+- `mode`, `topK`, `chunkTopK`
+- `maxEntityTokens`, `maxRelationTokens`, `maxTotalTokens`
+- `responseType`, `enableRerank`
+- `includeReferences`, `onlyNeedContext`, `onlyNeedPrompt`
+- `userPrompt`, `hlKeywords`, `llKeywords`, `conversationHistory`
+
+`stream=true` is intentionally rejected on `/query`; the demo currently exposes buffered HTTP responses only.
 
 ## Query Modes
 

@@ -7,5 +7,12 @@ lightrag:
     base-url: ${LIGHTRAG_EMBEDDING_BASE_URL:http://localhost:11434/v1/}
     model: ${LIGHTRAG_EMBEDDING_MODEL:nomic-embed-text}
     api-key: ${LIGHTRAG_EMBEDDING_API_KEY:dummy}
+  query:
+    default-mode: ${LIGHTRAG_QUERY_DEFAULT_MODE:MIX}
+    default-top-k: ${LIGHTRAG_QUERY_DEFAULT_TOP_K:10}
+    default-chunk-top-k: ${LIGHTRAG_QUERY_DEFAULT_CHUNK_TOP_K:10}
+    default-response-type: ${LIGHTRAG_QUERY_DEFAULT_RESPONSE_TYPE:Multiple Paragraphs}
+  demo:
+    async-ingest-enabled: ${LIGHTRAG_DEMO_ASYNC_INGEST_ENABLED:true}
   storage:
     type: ${LIGHTRAG_STORAGE_TYPE:in-memory}

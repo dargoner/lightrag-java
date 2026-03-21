@@ -20,7 +20,12 @@ class LightRagAutoConfigurationTest {
             "lightrag.embedding.base-url=http://localhost:11434/v1/",
             "lightrag.embedding.model=nomic-embed-text",
             "lightrag.embedding.api-key=dummy",
-            "lightrag.storage.type=in-memory"
+            "lightrag.storage.type=in-memory",
+            "lightrag.query.default-mode=GLOBAL",
+            "lightrag.query.default-top-k=12",
+            "lightrag.query.default-chunk-top-k=18",
+            "lightrag.query.default-response-type=Bullet Points",
+            "lightrag.demo.async-ingest-enabled=false"
         );
 
     @Test
@@ -31,5 +36,42 @@ class LightRagAutoConfigurationTest {
             assertThat(context).hasSingleBean(EmbeddingModel.class);
             assertThat(context).hasSingleBean(StorageProvider.class);
         });
+    }
+
+    @Test
+    void bindsQueryAndDemoDefaults() {
+        contextRunner.run(context -> {
+            var properties = context.getBean(LightRagProperties.class);
+
+            assertThat(properties.getQuery().getDefaultMode()).isEqualTo("GLOBAL");
+            assertThat(properties.getQuery().getDefaultTopK()).isEqualTo(12);
+            assertThat(properties.getQuery().getDefaultChunkTopK()).isEqualTo(18);
+            assertThat(properties.getQuery().getDefaultResponseType()).isEqualTo("Bullet Points");
+            assertThat(properties.getDemo().isAsyncIngestEnabled()).isFalse();
+        });
+    }
+
+    @Test
+    void providesP0DefaultsWhenNotConfigured() {
+        new ApplicationContextRunner()
+            .withConfiguration(AutoConfigurations.of(LightRagAutoConfiguration.class))
+            .withPropertyValues(
+                "lightrag.chat.base-url=http://localhost:11434/v1/",
+                "lightrag.chat.model=qwen2.5:7b",
+                "lightrag.chat.api-key=dummy",
+                "lightrag.embedding.base-url=http://localhost:11434/v1/",
+                "lightrag.embedding.model=nomic-embed-text",
+                "lightrag.embedding.api-key=dummy",
+                "lightrag.storage.type=in-memory"
+            )
+            .run(context -> {
+                var properties = context.getBean(LightRagProperties.class);
+
+                assertThat(properties.getQuery().getDefaultMode()).isEqualTo("MIX");
+                assertThat(properties.getQuery().getDefaultTopK()).isEqualTo(10);
+                assertThat(properties.getQuery().getDefaultChunkTopK()).isEqualTo(10);
+                assertThat(properties.getQuery().getDefaultResponseType()).isEqualTo("Multiple Paragraphs");
+                assertThat(properties.getDemo().isAsyncIngestEnabled()).isTrue();
+            });
     }
 }
