@@ -33,6 +33,10 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 )
 @AutoConfigureMockMvc
 class DemoApplicationTest {
+    private static final String WORKSPACE_HEADER = "X-Workspace-Id";
+    private static final String WORKSPACE_A = "ws-demo-a";
+    private static final String WORKSPACE_B = "ws-demo-b";
+
     @org.springframework.beans.factory.annotation.Autowired
     private MockMvc mockMvc;
 
@@ -42,6 +46,7 @@ class DemoApplicationTest {
     @Test
     void ingestsDocumentsAndAnswersQuery() throws Exception {
         var ingestResult = mockMvc.perform(post("/documents/ingest")
+                .header(WORKSPACE_HEADER, WORKSPACE_A)
                 .contentType(APPLICATION_JSON)
                 .content("""
                     {
@@ -60,9 +65,10 @@ class DemoApplicationTest {
             .andReturn();
 
         var jobId = objectMapper.readTree(ingestResult.getResponse().getContentAsString()).get("jobId").asText();
-        awaitJobSuccess(jobId);
+        awaitJobSuccess(WORKSPACE_A, jobId);
 
         mockMvc.perform(post("/query")
+                .header(WORKSPACE_HEADER, WORKSPACE_A)
                 .contentType(APPLICATION_JSON)
                 .content("""
                     {
@@ -72,11 +78,25 @@ class DemoApplicationTest {
                     """))
             .andExpect(status().isOk())
             .andExpect(jsonPath("$.answer").value("Alice works with Bob."));
+
+        mockMvc.perform(post("/query")
+                .header(WORKSPACE_HEADER, WORKSPACE_B)
+                .contentType(APPLICATION_JSON)
+                .content("""
+                    {
+                      "query": "Who works with Bob?",
+                      "mode": "MIX"
+                    }
+                    """))
+            .andExpect(status().isOk())
+            .andExpect(jsonPath("$.contexts").isEmpty())
+            .andExpect(jsonPath("$.references").isEmpty());
     }
 
-    private void awaitJobSuccess(String jobId) throws Exception {
+    private void awaitJobSuccess(String workspaceId, String jobId) throws Exception {
         for (int attempt = 0; attempt < 20; attempt++) {
-            var jobResult = mockMvc.perform(get("/documents/jobs/{jobId}", jobId))
+            var jobResult = mockMvc.perform(get("/documents/jobs/{jobId}", jobId)
+                    .header(WORKSPACE_HEADER, workspaceId))
                 .andExpect(status().isOk())
                 .andReturn();
             var statusValue = objectMapper.readTree(jobResult.getResponse().getContentAsString()).get("status").asText();

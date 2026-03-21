@@ -6,6 +6,8 @@ import io.github.lightragjava.api.QueryRequest;
 import io.github.lightragjava.api.QueryResult;
 import io.github.lightragjava.model.ChatModel;
 import io.github.lightragjava.spring.boot.LightRagProperties;
+import io.github.lightragjava.spring.boot.WorkspaceLightRagFactory;
+import jakarta.servlet.http.HttpServletRequest;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RestController;
@@ -14,18 +16,24 @@ import java.util.List;
 
 @RestController
 class QueryController {
-    private final LightRag lightRag;
+    private final WorkspaceLightRagFactory workspaceLightRagFactory;
+    private final WorkspaceResolver workspaceResolver;
     private final LightRagProperties properties;
 
-    QueryController(LightRag lightRag, LightRagProperties properties) {
-        this.lightRag = lightRag;
+    QueryController(
+        WorkspaceLightRagFactory workspaceLightRagFactory,
+        WorkspaceResolver workspaceResolver,
+        LightRagProperties properties
+    ) {
+        this.workspaceLightRagFactory = workspaceLightRagFactory;
+        this.workspaceResolver = workspaceResolver;
         this.properties = properties;
     }
 
     @PostMapping("/query")
-    QueryResponse query(@RequestBody QueryPayload payload) {
+    QueryResponse query(@RequestBody QueryPayload payload, HttpServletRequest request) {
         validate(payload);
-        var result = lightRag.query(QueryRequest.builder()
+        var result = lightRag(request).query(QueryRequest.builder()
             .query(payload.query().strip())
             .mode(payload.mode() == null ? defaultMode() : payload.mode())
             .topK(payload.topK() == null ? properties.getQuery().getDefaultTopK() : payload.topK())
@@ -45,6 +53,10 @@ class QueryController {
             .conversationHistory(toConversationHistory(payload.conversationHistory()))
             .build());
         return new QueryResponse(result.answer(), result.contexts(), result.references());
+    }
+
+    private LightRag lightRag(HttpServletRequest request) {
+        return workspaceLightRagFactory.get(workspaceResolver.resolve(request));
     }
 
     private void validate(QueryPayload payload) {

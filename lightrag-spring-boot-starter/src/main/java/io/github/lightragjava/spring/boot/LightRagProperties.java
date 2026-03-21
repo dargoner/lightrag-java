@@ -9,6 +9,7 @@ public class LightRagProperties {
     private final StorageProperties storage = new StorageProperties();
     private final QueryProperties query = new QueryProperties();
     private final DemoProperties demo = new DemoProperties();
+    private final WorkspaceProperties workspace = new WorkspaceProperties();
     private String snapshotPath;
 
     public ModelProperties getChat() {
@@ -29,6 +30,10 @@ public class LightRagProperties {
 
     public DemoProperties getDemo() {
         return demo;
+    }
+
+    public WorkspaceProperties getWorkspace() {
+        return workspace;
     }
 
     public String getSnapshotPath() {
@@ -139,6 +144,27 @@ public class LightRagProperties {
 
         public void setAsyncIngestEnabled(boolean asyncIngestEnabled) {
             this.asyncIngestEnabled = asyncIngestEnabled;
+        }
+    }
+
+    public static class WorkspaceProperties {
+        private String headerName = "X-Workspace-Id";
+        private String defaultId = "default";
+
+        public String getHeaderName() {
+            return headerName;
+        }
+
+        public void setHeaderName(String headerName) {
+            this.headerName = headerName;
+        }
+
+        public String getDefaultId() {
+            return defaultId;
+        }
+
+        public void setDefaultId(String defaultId) {
+            this.defaultId = defaultId;
         }
     }
 

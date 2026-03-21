@@ -35,6 +35,7 @@ class LightRagAutoConfigurationTest {
             assertThat(context).hasSingleBean(ChatModel.class);
             assertThat(context).hasSingleBean(EmbeddingModel.class);
             assertThat(context).hasSingleBean(StorageProvider.class);
+            assertThat(context).hasSingleBean(WorkspaceLightRagFactory.class);
         });
     }
 
@@ -48,6 +49,8 @@ class LightRagAutoConfigurationTest {
             assertThat(properties.getQuery().getDefaultChunkTopK()).isEqualTo(18);
             assertThat(properties.getQuery().getDefaultResponseType()).isEqualTo("Bullet Points");
             assertThat(properties.getDemo().isAsyncIngestEnabled()).isFalse();
+            assertThat(properties.getWorkspace().getHeaderName()).isEqualTo("X-Workspace-Id");
+            assertThat(properties.getWorkspace().getDefaultId()).isEqualTo("default");
         });
     }
 
@@ -72,6 +75,27 @@ class LightRagAutoConfigurationTest {
                 assertThat(properties.getQuery().getDefaultChunkTopK()).isEqualTo(10);
                 assertThat(properties.getQuery().getDefaultResponseType()).isEqualTo("Multiple Paragraphs");
                 assertThat(properties.getDemo().isAsyncIngestEnabled()).isTrue();
+                assertThat(properties.getWorkspace().getHeaderName()).isEqualTo("X-Workspace-Id");
+                assertThat(properties.getWorkspace().getDefaultId()).isEqualTo("default");
+            });
+    }
+
+    @Test
+    void bindsWorkspaceOverridesAndCachesWorkspaceInstances() {
+        contextRunner
+            .withPropertyValues(
+                "lightrag.workspace.header-name=X-Tenant-Id",
+                "lightrag.workspace.default-id=main"
+            )
+            .run(context -> {
+                var properties = context.getBean(LightRagProperties.class);
+                var factory = context.getBean(WorkspaceLightRagFactory.class);
+
+                assertThat(properties.getWorkspace().getHeaderName()).isEqualTo("X-Tenant-Id");
+                assertThat(properties.getWorkspace().getDefaultId()).isEqualTo("main");
+                assertThat(factory.get("alpha")).isSameAs(factory.get("alpha"));
+                assertThat(factory.get("alpha")).isNotSameAs(factory.get("beta"));
+                assertThat(context.getBean(LightRag.class)).isSameAs(factory.get("main"));
             });
     }
 }

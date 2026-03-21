@@ -75,6 +75,8 @@ The demo application exposes:
 - `PUT /graph/relations`
 - `DELETE /graph/relations?sourceEntityName=...&targetEntityName=...`
 
+All demo endpoints resolve a workspace before touching storage. By default the demo reads `X-Workspace-Id`; when the header is omitted it falls back to the configured default workspace.
+
 Run the demo locally with:
 
 ```bash
@@ -86,6 +88,34 @@ The demo's default config lives in:
 - `lightrag-spring-boot-demo/src/main/resources/application.yml`
 
 It defaults to `in-memory` storage, OpenAI-compatible model settings resolved from environment variables, buffered `/query` responses, and async ingest enabled.
+
+Workspace routing is configured through the starter properties:
+
+- `lightrag.workspace.header-name`: request header used by the demo, default `X-Workspace-Id`
+- `lightrag.workspace.default-id`: fallback workspace when the header is missing, default `default`
+
+Example:
+
+```bash
+curl -X POST http://localhost:8080/documents/ingest \
+  -H 'Content-Type: application/json' \
+  -H 'X-Workspace-Id: team-a' \
+  -d '{
+    "documents": [
+      {
+        "id": "doc-1",
+        "title": "Title",
+        "content": "Alice works with Bob"
+      }
+    ]
+  }'
+```
+
+Workspace isolation support in this phase:
+
+- `in-memory`: each workspace gets an isolated in-process `LightRag` instance
+- `postgres`: each workspace gets an isolated table prefix and snapshot path
+- `postgres-neo4j`: current behavior is preserved for the default workspace only; non-default workspaces are not supported yet
 
 The demo `/query` endpoint accepts the core query controls used most often in service mode, including:
 

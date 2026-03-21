@@ -1,11 +1,12 @@
 package io.github.lightragjava.demo;
 
-import io.github.lightragjava.api.LightRag;
+import io.github.lightragjava.spring.boot.WorkspaceLightRagFactory;
 import io.github.lightragjava.types.Document;
 import jakarta.annotation.PreDestroy;
 import org.springframework.stereotype.Service;
 
 import java.util.List;
+import java.util.Objects;
 import java.util.Optional;
 import java.util.UUID;
 import java.util.concurrent.ConcurrentHashMap;
@@ -17,12 +18,12 @@ import java.util.concurrent.atomic.AtomicReference;
 
 @Service
 class IngestJobService {
-    private final LightRag lightRag;
+    private final WorkspaceLightRagFactory workspaceLightRagFactory;
     private final ExecutorService executor;
     private final ConcurrentMap<String, JobState> jobs = new ConcurrentHashMap<>();
 
-    IngestJobService(LightRag lightRag) {
-        this.lightRag = lightRag;
+    IngestJobService(WorkspaceLightRagFactory workspaceLightRagFactory) {
+        this.workspaceLightRagFactory = workspaceLightRagFactory;
         this.executor = Executors.newSingleThreadExecutor(new ThreadFactory() {
             @Override
             public Thread newThread(Runnable runnable) {
@@ -33,13 +34,9 @@ class IngestJobService {
         });
     }
 
-    String submit(List<Document> documents) {
-        return submit(documents, true);
-    }
-
-    String submit(List<Document> documents, boolean async) {
+    String submit(String workspaceId, List<Document> documents, boolean async) {
         var jobId = UUID.randomUUID().toString();
-        var jobState = new JobState(jobId);
+        var jobState = new JobState(jobId, requireNonBlank(workspaceId, "workspaceId"));
         jobs.put(jobId, jobState);
         if (async) {
             executor.submit(() -> runJob(jobState, documents));
@@ -49,8 +46,11 @@ class IngestJobService {
         return jobId;
     }
 
-    Optional<JobSnapshot> getJob(String jobId) {
-        return Optional.ofNullable(jobs.get(jobId)).map(JobState::toSnapshot);
+    Optional<JobSnapshot> getJob(String workspaceId, String jobId) {
+        var targetWorkspaceId = requireNonBlank(workspaceId, "workspaceId");
+        return Optional.ofNullable(jobs.get(jobId))
+            .filter(jobState -> jobState.workspaceId().equals(targetWorkspaceId))
+            .map(JobState::toSnapshot);
     }
 
     @PreDestroy
@@ -61,7 +61,7 @@ class IngestJobService {
     private void runJob(JobState jobState, List<Document> documents) {
         jobState.setStatus(IngestJobStatus.RUNNING);
         try {
-            lightRag.ingest(documents);
+            workspaceLightRagFactory.get(jobState.workspaceId()).ingest(documents);
             jobState.setStatus(IngestJobStatus.SUCCEEDED);
         } catch (Throwable throwable) {
             jobState.setStatus(IngestJobStatus.FAILED);
@@ -81,11 +81,13 @@ class IngestJobService {
 
     private static final class JobState {
         private final String jobId;
+        private final String workspaceId;
         private final AtomicReference<IngestJobStatus> status = new AtomicReference<>(IngestJobStatus.PENDING);
         private final AtomicReference<String> errorMessage = new AtomicReference<>();
 
-        JobState(String jobId) {
+        JobState(String jobId, String workspaceId) {
             this.jobId = jobId;
+            this.workspaceId = workspaceId;
         }
 
         void setStatus(IngestJobStatus status) {
@@ -99,5 +101,17 @@ class IngestJobService {
         JobSnapshot toSnapshot() {
             return new JobSnapshot(jobId, status.get(), errorMessage.get());
         }
+
+        String workspaceId() {
+            return workspaceId;
+        }
+    }
+
+    private static String requireNonBlank(String value, String fieldName) {
+        var normalized = Objects.requireNonNull(value, fieldName).strip();
+        if (normalized.isEmpty()) {
+            throw new IllegalArgumentException(fieldName + " must not be blank");
+        }
+        return normalized;
     }
 }

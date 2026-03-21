@@ -30,6 +30,10 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 )
 @AutoConfigureMockMvc
 class DocumentStatusControllerTest {
+    private static final String WORKSPACE_HEADER = "X-Workspace-Id";
+    private static final String WORKSPACE_STATUS = "ws-status";
+    private static final String WORKSPACE_ISOLATED = "ws-isolated";
+    private static final String WORKSPACE_B = "ws-b";
     private static final String INGEST_PAYLOAD = """
         {
           "documents": [
@@ -52,6 +56,7 @@ class DocumentStatusControllerTest {
     @Test
     void jobLifecycleAndStatusEndpoints() throws Exception {
         var ingestResult = mockMvc.perform(post("/documents/ingest")
+                .header(WORKSPACE_HEADER, WORKSPACE_STATUS)
                 .contentType(APPLICATION_JSON)
                 .content(INGEST_PAYLOAD))
             .andExpect(status().isAccepted())
@@ -59,38 +64,85 @@ class DocumentStatusControllerTest {
             .andReturn();
 
         var jobId = objectMapper.readTree(ingestResult.getResponse().getContentAsString()).get("jobId").asText();
-        awaitJobSuccess(jobId);
+        awaitJobSuccess(WORKSPACE_STATUS, jobId);
 
-        mockMvc.perform(get("/documents/jobs/{jobId}", jobId))
+        mockMvc.perform(get("/documents/jobs/{jobId}", jobId)
+                .header(WORKSPACE_HEADER, WORKSPACE_STATUS))
             .andExpect(status().isOk())
             .andExpect(jsonPath("$.status").value("SUCCEEDED"));
 
-        mockMvc.perform(get("/documents/status"))
+        mockMvc.perform(get("/documents/status")
+                .header(WORKSPACE_HEADER, WORKSPACE_STATUS))
             .andExpect(status().isOk())
-            .andExpect(jsonPath("$[0].documentId").value("doc-1"));
+            .andExpect(jsonPath("$[?(@.documentId == 'doc-1')]").exists());
 
-        mockMvc.perform(get("/documents/status/{documentId}", "doc-1"))
+        mockMvc.perform(get("/documents/status/{documentId}", "doc-1")
+                .header(WORKSPACE_HEADER, WORKSPACE_STATUS))
             .andExpect(status().isOk())
             .andExpect(jsonPath("$.documentId").value("doc-1"));
 
-        mockMvc.perform(delete("/documents/{documentId}", "doc-1"))
+        mockMvc.perform(delete("/documents/{documentId}", "doc-1")
+                .header(WORKSPACE_HEADER, WORKSPACE_STATUS))
             .andExpect(status().isNoContent());
 
-        mockMvc.perform(get("/documents/status/{documentId}", "doc-1"))
+        mockMvc.perform(get("/documents/status/{documentId}", "doc-1")
+                .header(WORKSPACE_HEADER, WORKSPACE_STATUS))
             .andExpect(status().isNotFound());
     }
 
     @Test
     void missingJobAndDocumentReturn404() throws Exception {
-        mockMvc.perform(get("/documents/jobs/{jobId}", "missing-job"))
+        mockMvc.perform(get("/documents/jobs/{jobId}", "missing-job")
+                .header(WORKSPACE_HEADER, WORKSPACE_STATUS))
             .andExpect(status().isNotFound());
-        mockMvc.perform(get("/documents/status/{documentId}", "missing-doc"))
+        mockMvc.perform(get("/documents/status/{documentId}", "missing-doc")
+                .header(WORKSPACE_HEADER, WORKSPACE_STATUS))
             .andExpect(status().isNotFound());
     }
 
-    private void awaitJobSuccess(String jobId) throws Exception {
+    @Test
+    void isolatesJobsAndStatusesAcrossWorkspaces() throws Exception {
+        var ingestResult = mockMvc.perform(post("/documents/ingest")
+                .header(WORKSPACE_HEADER, WORKSPACE_ISOLATED)
+                .contentType(APPLICATION_JSON)
+                .content("""
+                    {
+                      "documents": [
+                        {
+                          "id": "doc-ws-a",
+                          "title": "Title",
+                          "content": "Alice works with Bob",
+                          "metadata": {"source": "demo"}
+                        }
+                      ]
+                    }
+                    """))
+            .andExpect(status().isAccepted())
+            .andExpect(jsonPath("$.jobId").isNotEmpty())
+            .andReturn();
+
+        var jobId = objectMapper.readTree(ingestResult.getResponse().getContentAsString()).get("jobId").asText();
+        awaitJobSuccess(WORKSPACE_ISOLATED, jobId);
+
+        mockMvc.perform(get("/documents/status")
+                .header(WORKSPACE_HEADER, WORKSPACE_ISOLATED))
+            .andExpect(status().isOk())
+            .andExpect(jsonPath("$[?(@.documentId == 'doc-ws-a')]").exists());
+
+        mockMvc.perform(get("/documents/status")
+                .header(WORKSPACE_HEADER, WORKSPACE_B))
+            .andExpect(status().isOk())
+            .andExpect(jsonPath("$[?(@.documentId == 'doc-ws-a')]").isEmpty());
+
+        mockMvc.perform(get("/documents/jobs/{jobId}", jobId)
+                .header(WORKSPACE_HEADER, WORKSPACE_B))
+            .andExpect(status().isNotFound());
+    }
+
+    private void awaitJobSuccess(String workspaceId, String jobId) throws Exception {
         for (int attempt = 0; attempt < 20; attempt++) {
-            var jobResult = mockMvc.perform(get("/documents/jobs/{jobId}", jobId))
+            var jobResult = mockMvc.perform(get("/documents/jobs/{jobId}", jobId)
+                    .header(WORKSPACE_HEADER, workspaceId))
                 .andExpect(status().isOk())
                 .andReturn();
             var statusValue = objectMapper.readTree(jobResult.getResponse().getContentAsString()).get("status").asText();
