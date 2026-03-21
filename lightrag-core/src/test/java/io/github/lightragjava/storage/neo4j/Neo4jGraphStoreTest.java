@@ -1,20 +1,32 @@
 package io.github.lightragjava.storage.neo4j;
 
 import io.github.lightragjava.storage.GraphStore;
+import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
+import org.testcontainers.junit.jupiter.Container;
+import org.testcontainers.junit.jupiter.Testcontainers;
 import org.testcontainers.containers.Neo4jContainer;
 
 import java.util.List;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
+@Testcontainers
 class Neo4jGraphStoreTest {
+    @Container
+    private static final Neo4jContainer<?> NEO4J = new Neo4jContainer<>("neo4j:5-community")
+        .withAdminPassword("password");
+
+    @BeforeEach
+    void resetGraph() {
+        try (var store = newGraphStore()) {
+            store.restore(new Neo4jGraphSnapshot(List.of(), List.of()));
+        }
+    }
+
     @Test
     void savesAndLoadsEntitiesAndRelations() {
-        try (
-            var container = newNeo4jContainer();
-            var store = newGraphStore(container)
-        ) {
+        try (var store = newGraphStore()) {
             var entity = new GraphStore.EntityRecord(
                 "entity-1",
                 "Alice",
@@ -43,10 +55,7 @@ class Neo4jGraphStoreTest {
 
     @Test
     void listsEntitiesAndRelationsInDeterministicOrder() {
-        try (
-            var container = newNeo4jContainer();
-            var store = newGraphStore(container)
-        ) {
+        try (var store = newGraphStore()) {
             var secondEntity = new GraphStore.EntityRecord("entity-2", "Bob", "person", "Engineer", List.of(), List.of("chunk-2"));
             var firstEntity = new GraphStore.EntityRecord("entity-1", "Alice", "person", "Researcher", List.of("A"), List.of("chunk-1"));
             var secondRelation = new GraphStore.RelationRecord(
@@ -80,10 +89,7 @@ class Neo4jGraphStoreTest {
 
     @Test
     void findsOneHopRelationsForEntity() {
-        try (
-            var container = newNeo4jContainer();
-            var store = newGraphStore(container)
-        ) {
+        try (var store = newGraphStore()) {
             var first = new GraphStore.RelationRecord(
                 "relation-1",
                 "entity-1",
@@ -112,10 +118,7 @@ class Neo4jGraphStoreTest {
 
     @Test
     void restoresGraphSnapshot() {
-        try (
-            var container = newNeo4jContainer();
-            var store = newGraphStore(container)
-        ) {
+        try (var store = newGraphStore()) {
             var originalEntity = new GraphStore.EntityRecord(
                 "entity-1",
                 "Alice",
@@ -165,17 +168,11 @@ class Neo4jGraphStoreTest {
         }
     }
 
-    private static Neo4jContainer<?> newNeo4jContainer() {
-        return new Neo4jContainer<>("neo4j:5-community")
-            .withAdminPassword("password");
-    }
-
-    private static Neo4jGraphStore newGraphStore(Neo4jContainer<?> container) {
-        container.start();
+    private static Neo4jGraphStore newGraphStore() {
         return new Neo4jGraphStore(new Neo4jGraphConfig(
-            container.getBoltUrl(),
+            NEO4J.getBoltUrl(),
             "neo4j",
-            container.getAdminPassword(),
+            NEO4J.getAdminPassword(),
             "neo4j"
         ));
     }
