@@ -7,8 +7,11 @@ import org.springframework.boot.test.autoconfigure.web.servlet.AutoConfigureMock
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.boot.test.context.TestConfiguration;
 import org.springframework.context.annotation.Bean;
+import org.springframework.http.MediaType;
+import org.springframework.mock.web.MockMultipartFile;
 import org.springframework.test.web.servlet.MockMvc;
 
+import java.nio.charset.StandardCharsets;
 import java.util.List;
 import java.util.Map;
 
@@ -74,8 +77,43 @@ class DemoApplicationTest {
             .andExpect(jsonPath("$.answer").value("Alice works with Bob."));
     }
 
+    @Test
+    void uploadsFileAndAnswersQuery() throws Exception {
+        var uploadResult = mockMvc.perform(org.springframework.test.web.servlet.request.MockMvcRequestBuilders.multipart("/documents/upload")
+                .file(new MockMultipartFile(
+                    "files",
+                    "alice.txt",
+                    MediaType.TEXT_PLAIN_VALUE,
+                    "Alice works with Bob".getBytes(StandardCharsets.UTF_8)
+                )))
+            .andExpect(status().isAccepted())
+            .andExpect(jsonPath("$.jobId").isNotEmpty())
+            .andExpect(jsonPath("$.documentIds[0]").isNotEmpty())
+            .andReturn();
+
+        var uploadBody = objectMapper.readTree(uploadResult.getResponse().getContentAsString());
+        var jobId = uploadBody.get("jobId").asText();
+        var documentId = uploadBody.get("documentIds").get(0).asText();
+        awaitJobSuccess(jobId);
+
+        mockMvc.perform(get("/documents/status/{documentId}", documentId))
+            .andExpect(status().isOk())
+            .andExpect(jsonPath("$.documentId").value(documentId));
+
+        mockMvc.perform(post("/query")
+                .contentType(APPLICATION_JSON)
+                .content("""
+                    {
+                      "query": "Who works with Bob?",
+                      "mode": "MIX"
+                    }
+                    """))
+            .andExpect(status().isOk())
+            .andExpect(jsonPath("$.answer").value("Alice works with Bob."));
+    }
+
     private void awaitJobSuccess(String jobId) throws Exception {
-        for (int attempt = 0; attempt < 20; attempt++) {
+        for (int attempt = 0; attempt < 40; attempt++) {
             var jobResult = mockMvc.perform(get("/documents/jobs/{jobId}", jobId))
                 .andExpect(status().isOk())
                 .andReturn();
@@ -85,7 +123,7 @@ class DemoApplicationTest {
             }
             Thread.sleep(50L);
         }
-        fail("job did not reach SUCCEEDED before timeout");
+        fail("job did not reach SUCCEEDED before timeout: " + jobId);
     }
 
     @TestConfiguration

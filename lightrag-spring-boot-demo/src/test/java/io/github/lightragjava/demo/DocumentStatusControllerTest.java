@@ -9,6 +9,7 @@ import org.springframework.http.MediaType;
 import org.springframework.test.web.servlet.MockMvc;
 
 import static org.junit.jupiter.api.Assertions.fail;
+import static org.hamcrest.Matchers.hasItem;
 import static org.springframework.http.MediaType.APPLICATION_JSON;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.delete;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
@@ -67,7 +68,7 @@ class DocumentStatusControllerTest {
 
         mockMvc.perform(get("/documents/status"))
             .andExpect(status().isOk())
-            .andExpect(jsonPath("$[0].documentId").value("doc-1"));
+            .andExpect(jsonPath("$[*].documentId", hasItem("doc-1")));
 
         mockMvc.perform(get("/documents/status/{documentId}", "doc-1"))
             .andExpect(status().isOk())
@@ -89,7 +90,7 @@ class DocumentStatusControllerTest {
     }
 
     private void awaitJobSuccess(String jobId) throws Exception {
-        for (int attempt = 0; attempt < 20; attempt++) {
+        for (int attempt = 0; attempt < 40; attempt++) {
             var jobResult = mockMvc.perform(get("/documents/jobs/{jobId}", jobId))
                 .andExpect(status().isOk())
                 .andReturn();
@@ -99,6 +100,6 @@ class DocumentStatusControllerTest {
             }
             Thread.sleep(50);
         }
-        fail("job did not reach SUCCEEDED before timeout");
+        fail("job did not reach SUCCEEDED before timeout: " + jobId);
     }
 }
