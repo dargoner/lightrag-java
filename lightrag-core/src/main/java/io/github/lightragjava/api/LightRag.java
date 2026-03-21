@@ -4,6 +4,7 @@ import io.github.lightragjava.config.LightRagConfig;
 import io.github.lightragjava.indexing.DeletionPipeline;
 import io.github.lightragjava.indexing.GraphManagementPipeline;
 import io.github.lightragjava.indexing.IndexingPipeline;
+import io.github.lightragjava.indexing.Chunker;
 import io.github.lightragjava.query.ContextAssembler;
 import io.github.lightragjava.query.GlobalQueryStrategy;
 import io.github.lightragjava.query.HybridQueryStrategy;
@@ -19,19 +20,30 @@ import java.util.NoSuchElementException;
 
 public final class LightRag {
     private final LightRagConfig config;
+    private final Chunker chunker;
+    private final boolean automaticQueryKeywordExtraction;
+    private final int rerankCandidateMultiplier;
     private final IndexingPipeline indexingPipeline;
     private final DeletionPipeline deletionPipeline;
     private final GraphManagementPipeline graphManagementPipeline;
     private final QueryEngine queryEngine;
 
-    LightRag(LightRagConfig config) {
+    LightRag(
+        LightRagConfig config,
+        Chunker chunker,
+        boolean automaticQueryKeywordExtraction,
+        int rerankCandidateMultiplier
+    ) {
         this.config = config;
+        this.chunker = chunker;
+        this.automaticQueryKeywordExtraction = automaticQueryKeywordExtraction;
+        this.rerankCandidateMultiplier = rerankCandidateMultiplier;
         this.indexingPipeline = new IndexingPipeline(
             config.chatModel(),
             config.embeddingModel(),
             config.storageProvider(),
             config.snapshotPath(),
-            config.chunker()
+            chunker
         );
         this.deletionPipeline = new DeletionPipeline(
             config.storageProvider(),
@@ -60,8 +72,8 @@ public final class LightRag {
             contextAssembler,
             strategies,
             config.rerankModel(),
-            config.automaticQueryKeywordExtraction(),
-            config.rerankCandidateMultiplier()
+            automaticQueryKeywordExtraction,
+            rerankCandidateMultiplier
         );
     }
 
@@ -136,6 +148,18 @@ public final class LightRag {
 
     LightRagConfig config() {
         return config;
+    }
+
+    Chunker chunker() {
+        return chunker;
+    }
+
+    boolean automaticQueryKeywordExtraction() {
+        return automaticQueryKeywordExtraction;
+    }
+
+    int rerankCandidateMultiplier() {
+        return rerankCandidateMultiplier;
     }
 
     private static DocumentProcessingStatus toDocumentProcessingStatus(

@@ -2,11 +2,13 @@ package io.github.lightragjava.demo;
 
 import io.github.lightragjava.api.DocumentProcessingStatus;
 import io.github.lightragjava.api.LightRag;
+import io.github.lightragjava.spring.boot.LightRagProperties;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.DeleteMapping;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
+import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RestController;
@@ -21,10 +23,12 @@ import java.util.NoSuchElementException;
 class DocumentStatusController {
     private final LightRag lightRag;
     private final IngestJobService ingestJobService;
+    private final LightRagProperties properties;
 
-    DocumentStatusController(LightRag lightRag, IngestJobService ingestJobService) {
+    DocumentStatusController(LightRag lightRag, IngestJobService ingestJobService, LightRagProperties properties) {
         this.lightRag = lightRag;
         this.ingestJobService = ingestJobService;
+        this.properties = properties;
     }
 
     @GetMapping("/jobs")
@@ -46,6 +50,17 @@ class DocumentStatusController {
         return ingestJobService.getJob(jobId)
             .map(DocumentStatusController::toResponse)
             .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "job not found: " + jobId));
+    }
+
+    @PostMapping("/jobs/{jobId}/cancel")
+    ResponseEntity<IngestJobStatusResponse> cancelJob(@PathVariable String jobId) {
+        return ResponseEntity.accepted().body(toResponse(ingestJobService.cancel(jobId)));
+    }
+
+    @PostMapping("/jobs/{jobId}/retry")
+    ResponseEntity<IngestJobStatusResponse> retryJob(@PathVariable String jobId) {
+        return ResponseEntity.accepted()
+            .body(toResponse(ingestJobService.retry(jobId, properties.getDemo().isAsyncIngestEnabled())));
     }
 
     @GetMapping("/status")
@@ -76,7 +91,11 @@ class DocumentStatusController {
             snapshot.createdAt(),
             snapshot.startedAt(),
             snapshot.finishedAt(),
-            snapshot.errorMessage()
+            snapshot.errorMessage(),
+            snapshot.cancellable(),
+            snapshot.retriable(),
+            snapshot.retriedFromJobId(),
+            snapshot.attempt()
         );
     }
 
@@ -90,7 +109,11 @@ class DocumentStatusController {
         Instant createdAt,
         Instant startedAt,
         Instant finishedAt,
-        String errorMessage
+        String errorMessage,
+        boolean cancellable,
+        boolean retriable,
+        String retriedFromJobId,
+        int attempt
     ) {
     }
 }

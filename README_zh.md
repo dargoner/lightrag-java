@@ -205,6 +205,8 @@ lightrag:
 - `POST /documents/ingest`
 - `GET /documents/jobs?page=0&size=20`
 - `GET /documents/jobs/{jobId}`
+- `POST /documents/jobs/{jobId}/cancel`
+- `POST /documents/jobs/{jobId}/retry`
 - `GET /documents/status`
 - `GET /documents/status/{documentId}`
 - `DELETE /documents/{documentId}`
@@ -221,10 +223,24 @@ lightrag:
 - `documentCount`
 - `createdAt` / `startedAt` / `finishedAt`
 - `errorMessage`
+- `cancellable` / `retriable` / `retriedFromJobId` / `attempt`
+
+当前阶段的 cancel / retry 语义：
+
+- `PENDING` job 取消后会直接进入 `CANCELLED`
+- `RUNNING` job 取消是 best-effort，状态会先进入 `CANCELLING`
+- retry 只会重提还没到 `PROCESSED` 的文档，避免部分成功批次直接撞上重复 `documentId`
 
 Demo 默认配置文件：
 
 - `lightrag-spring-boot-demo/src/main/resources/application.yml`
+
+Starter 还额外暴露了几项 pipeline 配置：
+
+- `lightrag.indexing.chunking.window-size`
+- `lightrag.indexing.chunking.overlap`
+- `lightrag.query.automatic-keyword-extraction`
+- `lightrag.query.rerank-candidate-multiplier`
 
 ## RAGAS 评测
 
@@ -243,10 +259,28 @@ Demo 默认配置文件：
 python3 evaluation/ragas/eval_rag_quality_java.py
 ```
 
+如果你要把当前结果固化成 baseline：
+
+```bash
+python3 evaluation/ragas/eval_rag_quality_java.py \
+  --run-label baseline \
+  --baseline-name sample-default \
+  --update-baseline
+```
+
+如果你要跑候选配置并和 baseline 比较：
+
+```bash
+python3 evaluation/ragas/eval_rag_quality_java.py \
+  --run-label candidate-rerank-4 \
+  --baseline-name sample-default
+```
+
 兼容性说明：
 
 - `eval_rag_quality_java.py` 同时兼容旧版 batch `list` 输出和新版 `{request, summary, results}` envelope
 - Java 侧评测结果里的 `contexts` 现在是结构化 `QueryResult.Context`，如果你之前消费的是字符串列表，请改为读取 `context.text()`
+- 如果存在 `evaluation/ragas/baselines/<name>.json`，脚本会自动比较平均分，并在退化超过阈值时返回非 0 退出码
 
 如果要使用 PG/Neo4j Testcontainers 评测，需要：
 

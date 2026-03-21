@@ -1,5 +1,6 @@
 package io.github.lightragjava.demo;
 
+import io.github.lightragjava.api.DocumentStatus;
 import io.github.lightragjava.api.LightRag;
 import io.github.lightragjava.types.Document;
 import jakarta.annotation.PreDestroy;
@@ -7,18 +8,22 @@ import org.springframework.stereotype.Service;
 
 import java.time.Instant;
 import java.util.List;
+import java.util.NoSuchElementException;
+import java.util.Objects;
 import java.util.Optional;
 import java.util.UUID;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ConcurrentMap;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
+import java.util.concurrent.FutureTask;
 import java.util.concurrent.ThreadFactory;
 import java.util.concurrent.atomic.AtomicLong;
-import java.util.concurrent.atomic.AtomicReference;
 
 @Service
 class IngestJobService {
+    private static final String JOB_CANCELLED_MESSAGE = "job cancelled";
+
     private final LightRag lightRag;
     private final ExecutorService executor;
     private final ConcurrentMap<String, JobState> jobs = new ConcurrentHashMap<>();
@@ -41,15 +46,46 @@ class IngestJobService {
     }
 
     String submit(List<Document> documents, boolean async) {
+        return createJob(documents, async, null, 1).jobId();
+    }
+
+    JobSnapshot cancel(String jobId) {
+        return requireJob(jobId).cancel();
+    }
+
+    JobSnapshot retry(String jobId, boolean async) {
+        var original = requireJob(jobId);
+        var retryDocuments = retryableDocuments(original);
+        if (retryDocuments.isEmpty()) {
+            throw new JobConflictException("job has no retryable documents: " + jobId);
+        }
+        return createJob(retryDocuments, async, jobId, original.attempt() + 1).toSnapshot();
+    }
+
+    private JobState createJob(List<Document> documents, boolean async, String retriedFromJobId, int attempt) {
+        var copiedDocuments = List.copyOf(Objects.requireNonNull(documents, "documents"));
         var jobId = UUID.randomUUID().toString();
-        var jobState = new JobState(jobId, documents.size(), sequence.incrementAndGet(), Instant.now());
+        var jobState = new JobState(
+            jobId,
+            copiedDocuments,
+            copiedDocuments.size(),
+            sequence.incrementAndGet(),
+            Instant.now(),
+            retriedFromJobId,
+            attempt
+        );
         jobs.put(jobId, jobState);
         if (async) {
-            executor.submit(() -> runJob(jobState, documents));
+            var futureTask = new FutureTask<Void>(() -> {
+                runJob(jobState);
+                return null;
+            });
+            jobState.attachFuture(futureTask);
+            executor.execute(futureTask);
         } else {
-            runJob(jobState, documents);
+            runJob(jobState);
         }
-        return jobId;
+        return jobState;
     }
 
     Optional<JobSnapshot> getJob(String jobId) {
@@ -78,12 +114,42 @@ class IngestJobService {
         executor.shutdownNow();
     }
 
-    private void runJob(JobState jobState, List<Document> documents) {
-        jobState.markStarted();
+    private JobState requireJob(String jobId) {
+        return Optional.ofNullable(jobs.get(jobId))
+            .orElseThrow(() -> new NoSuchElementException("job not found: " + jobId));
+    }
+
+    private List<Document> retryableDocuments(JobState jobState) {
+        if (!jobState.isRetriable()) {
+            throw new JobConflictException("job is not retriable: " + jobState.jobId());
+        }
+        return jobState.documents().stream()
+            .filter(this::shouldRetryDocument)
+            .toList();
+    }
+
+    private boolean shouldRetryDocument(Document document) {
         try {
-            lightRag.ingest(documents);
-            jobState.markFinished(IngestJobStatus.SUCCEEDED);
+            var status = lightRag.getDocumentStatus(document.id());
+            return status == null || status.status() != DocumentStatus.PROCESSED;
+        } catch (NoSuchElementException ignored) {
+            return true;
+        }
+    }
+
+    private void runJob(JobState jobState) {
+        if (!jobState.markStarted()) {
+            return;
+        }
+        try {
+            lightRag.ingest(jobState.documents());
+            jobState.markSucceeded();
         } catch (Throwable throwable) {
+            if (jobState.isCancelling()) {
+                jobState.markCancelled(JOB_CANCELLED_MESSAGE);
+                Thread.currentThread().interrupt();
+                return;
+            }
             jobState.markFailed(throwable.getMessage());
         }
     }
@@ -95,7 +161,11 @@ class IngestJobService {
         Instant createdAt,
         Instant startedAt,
         Instant finishedAt,
-        String errorMessage
+        String errorMessage,
+        boolean cancellable,
+        boolean retriable,
+        String retriedFromJobId,
+        int attempt
     ) {
     }
 
@@ -105,57 +175,150 @@ class IngestJobService {
     enum IngestJobStatus {
         PENDING,
         RUNNING,
+        CANCELLING,
         SUCCEEDED,
-        FAILED
+        FAILED,
+        CANCELLED
+    }
+
+    static final class JobConflictException extends RuntimeException {
+        JobConflictException(String message) {
+            super(message);
+        }
     }
 
     private static final class JobState {
         private final String jobId;
+        private final List<Document> documents;
         private final int documentCount;
         private final long sequence;
         private final Instant createdAt;
-        private final AtomicReference<IngestJobStatus> status = new AtomicReference<>(IngestJobStatus.PENDING);
-        private final AtomicReference<Instant> startedAt = new AtomicReference<>();
-        private final AtomicReference<Instant> finishedAt = new AtomicReference<>();
-        private final AtomicReference<String> errorMessage = new AtomicReference<>();
+        private final String retriedFromJobId;
+        private final int attempt;
+        private IngestJobStatus status = IngestJobStatus.PENDING;
+        private Instant startedAt;
+        private Instant finishedAt;
+        private String errorMessage;
+        private FutureTask<Void> futureTask;
 
-        JobState(String jobId, int documentCount, long sequence, Instant createdAt) {
+        JobState(
+            String jobId,
+            List<Document> documents,
+            int documentCount,
+            long sequence,
+            Instant createdAt,
+            String retriedFromJobId,
+            int attempt
+        ) {
             this.jobId = jobId;
+            this.documents = documents;
             this.documentCount = documentCount;
             this.sequence = sequence;
             this.createdAt = createdAt;
+            this.retriedFromJobId = retriedFromJobId;
+            this.attempt = attempt;
         }
 
         long sequence() {
             return sequence;
         }
 
-        void markStarted() {
-            startedAt.compareAndSet(null, Instant.now());
-            status.set(IngestJobStatus.RUNNING);
+        String jobId() {
+            return jobId;
         }
 
-        void markFinished(IngestJobStatus status) {
-            this.status.set(status);
-            finishedAt.set(Instant.now());
+        int attempt() {
+            return attempt;
         }
 
-        void markFailed(String message) {
-            status.set(IngestJobStatus.FAILED);
-            errorMessage.set(message == null ? null : message.strip());
-            finishedAt.set(Instant.now());
+        List<Document> documents() {
+            return documents;
         }
 
-        JobSnapshot toSnapshot() {
+        synchronized void attachFuture(FutureTask<Void> futureTask) {
+            this.futureTask = futureTask;
+        }
+
+        synchronized boolean markStarted() {
+            if (status != IngestJobStatus.PENDING) {
+                return false;
+            }
+            startedAt = Instant.now();
+            status = IngestJobStatus.RUNNING;
+            errorMessage = null;
+            return true;
+        }
+
+        synchronized void markSucceeded() {
+            status = IngestJobStatus.SUCCEEDED;
+            errorMessage = null;
+            finishedAt = Instant.now();
+        }
+
+        synchronized void markFailed(String message) {
+            status = IngestJobStatus.FAILED;
+            errorMessage = normalizeMessage(message);
+            finishedAt = Instant.now();
+        }
+
+        synchronized void markCancelled(String message) {
+            status = IngestJobStatus.CANCELLED;
+            errorMessage = normalizeMessage(message);
+            finishedAt = Instant.now();
+        }
+
+        synchronized boolean isRetriable() {
+            return status == IngestJobStatus.FAILED || status == IngestJobStatus.CANCELLED;
+        }
+
+        synchronized boolean isCancelling() {
+            return status == IngestJobStatus.CANCELLING;
+        }
+
+        synchronized JobSnapshot cancel() {
+            switch (status) {
+                case PENDING -> {
+                    status = IngestJobStatus.CANCELLED;
+                    errorMessage = JOB_CANCELLED_MESSAGE;
+                    finishedAt = Instant.now();
+                    if (futureTask != null) {
+                        futureTask.cancel(false);
+                    }
+                    return toSnapshot();
+                }
+                case RUNNING -> {
+                    status = IngestJobStatus.CANCELLING;
+                    errorMessage = JOB_CANCELLED_MESSAGE;
+                    if (futureTask != null) {
+                        futureTask.cancel(true);
+                    }
+                    return toSnapshot();
+                }
+                case CANCELLING -> {
+                    return toSnapshot();
+                }
+                default -> throw new JobConflictException("job is not cancellable: " + jobId);
+            }
+        }
+
+        synchronized JobSnapshot toSnapshot() {
             return new JobSnapshot(
                 jobId,
-                status.get(),
+                status,
                 documentCount,
                 createdAt,
-                startedAt.get(),
-                finishedAt.get(),
-                errorMessage.get()
+                startedAt,
+                finishedAt,
+                errorMessage,
+                status == IngestJobStatus.PENDING || status == IngestJobStatus.RUNNING,
+                isRetriable(),
+                retriedFromJobId,
+                attempt
             );
+        }
+
+        private static String normalizeMessage(String message) {
+            return message == null ? null : message.strip();
         }
     }
 }

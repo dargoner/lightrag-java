@@ -90,9 +90,9 @@ class LightRagBuilderTest {
             .rerankCandidateMultiplier(4)
             .build();
 
-        assertThat(rag.config().chunker()).isSameAs(chunker);
-        assertThat(rag.config().automaticQueryKeywordExtraction()).isFalse();
-        assertThat(rag.config().rerankCandidateMultiplier()).isEqualTo(4);
+        assertThat(rag.chunker()).isSameAs(chunker);
+        assertThat(rag.automaticQueryKeywordExtraction()).isFalse();
+        assertThat(rag.rerankCandidateMultiplier()).isEqualTo(4);
     }
 
     @Test

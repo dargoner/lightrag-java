@@ -106,11 +106,8 @@ public final class LightRagBuilder {
             atomicStorageProvider,
             storageProvider.documentStatusStore(),
             snapshotPath,
-            rerankModel,
-            chunker,
-            automaticQueryKeywordExtraction,
-            rerankCandidateMultiplier
-        ));
+            rerankModel
+        ), chunker, automaticQueryKeywordExtraction, rerankCandidateMultiplier);
     }
 
     private static <T> T requireStore(String componentName, T store, Class<T> storeType) {

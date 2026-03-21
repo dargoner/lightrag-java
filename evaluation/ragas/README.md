@@ -62,12 +62,35 @@ Optional:
 ```bash
 python3 evaluation/ragas/eval_rag_quality_java.py \
   --dataset evaluation/ragas/sample_dataset.json \
-  --documents-dir evaluation/ragas/sample_documents
+  --documents-dir evaluation/ragas/sample_documents \
+  --run-label candidate-rerank-4 \
+  --baseline-name sample-default
+```
+
+Create or refresh the named baseline:
+
+```bash
+python3 evaluation/ragas/eval_rag_quality_java.py \
+  --run-label baseline \
+  --baseline-name sample-default \
+  --update-baseline
 ```
 
 Compatibility notes:
 
 - the Python wrapper accepts both the legacy batch `list` payload and the new Java CLI envelope `{request, summary, results}`
 - when the Java CLI returns structured context objects, the wrapper automatically converts them to the plain context strings expected by RAGAS
+- when a baseline file exists, the wrapper prints average deltas and exits non-zero if the regression threshold is exceeded
 
-Results are written to `evaluation/ragas/results/`.
+Outputs:
+
+- `evaluation/ragas/results/results_<timestamp>.json|csv`
+- `evaluation/ragas/results/latest_<run-label>.json|csv`
+- `evaluation/ragas/baselines/<baseline-name>.json|csv` when `--update-baseline` is used
+
+Lightweight verification without live model calls:
+
+```bash
+python3 -m unittest evaluation/ragas/test_eval_rag_quality_java.py
+python3 -m py_compile evaluation/ragas/eval_rag_quality_java.py
+```

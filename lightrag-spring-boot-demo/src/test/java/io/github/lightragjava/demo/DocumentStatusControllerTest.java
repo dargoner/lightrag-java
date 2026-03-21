@@ -4,6 +4,7 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import io.github.lightragjava.api.DocumentProcessingStatus;
 import io.github.lightragjava.api.DocumentStatus;
 import io.github.lightragjava.api.LightRag;
+import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.autoconfigure.web.servlet.AutoConfigureMockMvc;
@@ -11,14 +12,22 @@ import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.boot.test.mock.mockito.MockBean;
 import org.springframework.http.MediaType;
 import org.springframework.test.web.servlet.MockMvc;
+import org.springframework.test.util.ReflectionTestUtils;
 
 import java.util.List;
 import java.util.NoSuchElementException;
+import java.util.concurrent.ConcurrentMap;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicLong;
 import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicInteger;
 
 import static org.junit.jupiter.api.Assertions.fail;
+import static org.mockito.ArgumentMatchers.anyList;
 import static org.mockito.ArgumentMatchers.argThat;
 import static org.mockito.Mockito.doNothing;
+import static org.mockito.Mockito.doAnswer;
 import static org.mockito.Mockito.doThrow;
 import static org.mockito.Mockito.when;
 import static org.springframework.http.MediaType.APPLICATION_JSON;
@@ -78,6 +87,18 @@ class DocumentStatusControllerTest {
           ]
         }
         """;
+    private static final String BLOCKING_INGEST_PAYLOAD = """
+        {
+          "documents": [
+            {
+              "id": "doc-block",
+              "title": "Blocking Title",
+              "content": "Block the worker thread",
+              "metadata": {"source": "demo"}
+            }
+          ]
+        }
+        """;
     private static final String FAILING_INGEST_PAYLOAD = """
         {
           "documents": [
@@ -97,8 +118,17 @@ class DocumentStatusControllerTest {
     @Autowired
     private ObjectMapper objectMapper;
 
+    @Autowired
+    private IngestJobService ingestJobService;
+
     @MockBean
     private LightRag lightRag;
+
+    @BeforeEach
+    void resetInMemoryJobs() {
+        ((ConcurrentMap<?, ?>) ReflectionTestUtils.getField(ingestJobService, "jobs")).clear();
+        ((AtomicLong) ReflectionTestUtils.getField(ingestJobService, "sequence")).set(0L);
+    }
 
     @Test
     void jobLifecycleAndStatusEndpoints() throws Exception {
@@ -215,6 +245,89 @@ class DocumentStatusControllerTest {
             .andExpect(jsonPath("$.items[0].jobId").value(failedJobId))
             .andExpect(jsonPath("$.items[0].status").value("FAILED"))
             .andExpect(jsonPath("$.items[0].errorMessage").value("simulated ingest failure"));
+    }
+
+    @Test
+    void cancelPendingJobAndRetryCreatesNewAttempt() throws Exception {
+        var firstJobStarted = new CountDownLatch(1);
+        var releaseFirstJob = new CountDownLatch(1);
+        doAnswer(invocation -> {
+            var documents = invocation.getArgument(0, List.class);
+            var firstDocument = (io.github.lightragjava.types.Document) documents.get(0);
+            if ("doc-block".equals(firstDocument.id())) {
+                firstJobStarted.countDown();
+                if (!releaseFirstJob.await(5, TimeUnit.SECONDS)) {
+                    throw new IllegalStateException("timed out waiting to release blocking job");
+                }
+            }
+            return null;
+        }).when(lightRag).ingest(anyList());
+
+        var blockingJobId = submitJob(BLOCKING_INGEST_PAYLOAD);
+        awaitJobStatus(blockingJobId, "RUNNING");
+        if (!firstJobStarted.await(1, TimeUnit.SECONDS)) {
+            fail("blocking job did not start");
+        }
+
+        var pendingJobId = submitJob(SECOND_INGEST_PAYLOAD);
+
+        mockMvc.perform(post("/documents/jobs/{jobId}/cancel", pendingJobId))
+            .andExpect(status().isAccepted())
+            .andExpect(jsonPath("$.jobId").value(pendingJobId))
+            .andExpect(jsonPath("$.status").value("CANCELLED"))
+            .andExpect(jsonPath("$.cancellable").value(false))
+            .andExpect(jsonPath("$.retriable").value(true))
+            .andExpect(jsonPath("$.attempt").value(1));
+
+        mockMvc.perform(get("/documents/jobs/{jobId}", pendingJobId))
+            .andExpect(status().isOk())
+            .andExpect(jsonPath("$.status").value("CANCELLED"))
+            .andExpect(jsonPath("$.errorMessage").value("job cancelled"));
+
+        var retryResult = mockMvc.perform(post("/documents/jobs/{jobId}/retry", pendingJobId))
+            .andExpect(status().isAccepted())
+            .andExpect(jsonPath("$.status").value("PENDING"))
+            .andExpect(jsonPath("$.retriedFromJobId").value(pendingJobId))
+            .andExpect(jsonPath("$.attempt").value(2))
+            .andReturn();
+        var retriedJobId = objectMapper.readTree(retryResult.getResponse().getContentAsString()).get("jobId").asText();
+
+        releaseFirstJob.countDown();
+        awaitJobStatus(blockingJobId, "SUCCEEDED");
+        awaitJobStatus(retriedJobId, "SUCCEEDED");
+    }
+
+    @Test
+    void retryFailedJobCreatesNewAttemptAndRejectsSucceededTransitions() throws Exception {
+        var attempts = new AtomicInteger();
+        doAnswer(invocation -> {
+            var documents = invocation.getArgument(0, List.class);
+            var firstDocument = (io.github.lightragjava.types.Document) documents.get(0);
+            if ("doc-fail".equals(firstDocument.id()) && attempts.getAndIncrement() == 0) {
+                throw new IllegalStateException("simulated ingest failure");
+            }
+            return null;
+        }).when(lightRag).ingest(anyList());
+
+        var failedJobId = submitJob(FAILING_INGEST_PAYLOAD);
+        awaitJobStatus(failedJobId, "FAILED");
+
+        var retriedResult = mockMvc.perform(post("/documents/jobs/{jobId}/retry", failedJobId))
+            .andExpect(status().isAccepted())
+            .andExpect(jsonPath("$.status").value("PENDING"))
+            .andExpect(jsonPath("$.retriedFromJobId").value(failedJobId))
+            .andExpect(jsonPath("$.attempt").value(2))
+            .andReturn();
+        var retriedJobId = objectMapper.readTree(retriedResult.getResponse().getContentAsString()).get("jobId").asText();
+        awaitJobStatus(retriedJobId, "SUCCEEDED");
+
+        mockMvc.perform(post("/documents/jobs/{jobId}/cancel", retriedJobId))
+            .andExpect(status().isConflict())
+            .andExpect(jsonPath("$.message").value("job is not cancellable: " + retriedJobId));
+
+        mockMvc.perform(post("/documents/jobs/{jobId}/retry", retriedJobId))
+            .andExpect(status().isConflict())
+            .andExpect(jsonPath("$.message").value("job is not retriable: " + retriedJobId));
     }
 
     @Test
