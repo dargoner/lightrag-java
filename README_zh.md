@@ -200,9 +200,14 @@ lightrag:
 ./gradlew :lightrag-spring-boot-demo:bootRun
 ```
 
-当前提供两个最小接口：
+当前 demo 提供这些最小接口：
 
 - `POST /documents/ingest`
+- `GET /documents/jobs?page=0&size=20`
+- `GET /documents/jobs/{jobId}`
+- `GET /documents/status`
+- `GET /documents/status/{documentId}`
+- `DELETE /documents/{documentId}`
 - `POST /query`
 
 适合用来验证：
@@ -210,6 +215,12 @@ lightrag:
 - starter 自动装配是否生效
 - 模型服务是否联通
 - 基础 ingest / query 链路是否正常
+
+其中 job 查询接口额外暴露了最小可观测字段：
+
+- `documentCount`
+- `createdAt` / `startedAt` / `finishedAt`
+- `errorMessage`
 
 Demo 默认配置文件：
 
