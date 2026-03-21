@@ -1,5 +1,6 @@
 package io.github.lightragjava.demo;
 
+import jakarta.servlet.ServletException;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.ExceptionHandler;
@@ -27,6 +28,18 @@ class ApiExceptionHandler {
     ResponseEntity<ErrorResponse> handleResponseStatus(ResponseStatusException exception) {
         var message = exception.getReason() == null ? exception.getMessage() : exception.getReason();
         return ResponseEntity.status(exception.getStatusCode()).body(new ErrorResponse(message));
+    }
+
+    @ExceptionHandler(ServletException.class)
+    ResponseEntity<ErrorResponse> handleServletException(ServletException exception) {
+        if (exception.getCause() instanceof IllegalArgumentException illegalArgumentException) {
+            return ResponseEntity.badRequest().body(new ErrorResponse(illegalArgumentException.getMessage()));
+        }
+        if (exception.getCause() instanceof ResponseStatusException responseStatusException) {
+            return handleResponseStatus(responseStatusException);
+        }
+        return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR)
+            .body(new ErrorResponse(exception.getMessage() == null ? "unexpected server error" : exception.getMessage()));
     }
 
     @ExceptionHandler(Exception.class)
