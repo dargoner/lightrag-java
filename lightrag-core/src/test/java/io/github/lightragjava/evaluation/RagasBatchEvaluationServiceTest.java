@@ -26,7 +26,7 @@ class RagasBatchEvaluationServiceTest {
         Files.writeString(tempDir.resolve("dataset.json"), """
             {
               "test_cases": [
-                {"question": "Who works with Bob?", "ground_truth": "Alice works with Bob."},
+                {"question": "Who works with Bob?", "ground_truth": "Alice works with Bob.", "project": "alpha"},
                 {"question": "What does Alice work on?", "ground_truth": "Retrieval systems."}
               ]
             }
@@ -50,6 +50,11 @@ class RagasBatchEvaluationServiceTest {
         assertThat(results)
             .extracting(RagasBatchEvaluationService.Result::answer)
             .containsExactly("Alice works with Bob.", "Retrieval systems.");
+        assertThat(results.get(0).groundTruth()).isEqualTo("Alice works with Bob.");
+        assertThat(results.get(0).caseMetadata()).containsEntry("project", "alpha");
+        assertThat(results.get(0).contexts()).hasSize(1);
+        assertThat(results.get(0).contexts().get(0).sourceId()).isNotBlank();
+        assertThat(results.get(0).contexts().get(0).text()).contains("Alice works with Bob");
     }
 
     @Test

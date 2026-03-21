@@ -37,7 +37,16 @@ public final class RagasEvaluationCli {
             )
         );
 
-        System.out.println(OBJECT_MAPPER.writeValueAsString(result));
+        System.out.println(OBJECT_MAPPER.writeValueAsString(new OutputEnvelope(
+            new RequestMetadata(documentsDir, question, mode, topK, chunkTopK),
+            result
+        )));
+    }
+
+    record OutputEnvelope(RequestMetadata request, RagasEvaluationService.EvaluationResult result) {
+    }
+
+    record RequestMetadata(Path documentsDir, String question, QueryMode mode, int topK, int chunkTopK) {
     }
 
     private static Map<String, String> parseArgs(String[] args) {

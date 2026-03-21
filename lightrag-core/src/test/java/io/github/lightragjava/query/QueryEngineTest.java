@@ -520,6 +520,28 @@ class QueryEngineTest {
     }
 
     @Test
+    void usesConfiguredRerankCandidateMultiplier() {
+        var strategy = new RecordingQueryStrategy(baseContext());
+        var engine = new QueryEngine(
+            new RecordingChatModel(),
+            new ContextAssembler(),
+            strategiesReturning(strategy),
+            new StubRerankModel(List.of(
+                new RerankModel.RerankResult("chunk-1", 0.99d),
+                new RerankModel.RerankResult("chunk-2", 0.88d),
+                new RerankModel.RerankResult("chunk-3", 0.77d)
+            )),
+            true,
+            4
+        );
+
+        engine.query(baseRequest());
+
+        assertThat(strategy.lastRequest()).isNotNull();
+        assertThat(strategy.lastRequest().chunkTopK()).isEqualTo(12);
+    }
+
+    @Test
     void preservesPromptCustomizationAndGraphBudgetsWhenRerankExpandsChunkRequest() {
         var history = List.of(
             new ChatModel.ChatRequest.ConversationMessage("user", "Earlier question"),

@@ -5,6 +5,7 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import io.github.lightragjava.api.LightRag;
 import io.github.lightragjava.api.QueryMode;
 import io.github.lightragjava.api.QueryRequest;
+import io.github.lightragjava.api.QueryResult;
 import io.github.lightragjava.model.ChatModel;
 import io.github.lightragjava.model.EmbeddingModel;
 import io.github.lightragjava.persistence.FileSnapshotStore;
@@ -21,7 +22,9 @@ import org.testcontainers.utility.DockerImageName;
 import java.io.IOException;
 import java.nio.file.Path;
 import java.util.ArrayList;
+import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Map;
 import java.util.Objects;
 
 public final class RagasBatchEvaluationService {
@@ -29,23 +32,27 @@ public final class RagasBatchEvaluationService {
 
     public List<Result> evaluateBatch(BatchRequest request, ChatModel chatModel, EmbeddingModel embeddingModel) throws IOException {
         var batchRequest = Objects.requireNonNull(request, "request");
-        var questions = loadQuestions(batchRequest.datasetPath());
+        var testCases = loadTestCases(batchRequest.datasetPath());
         var documents = RagasEvaluationService.loadDocuments(batchRequest.documentsDir());
 
         try (var runtime = createRuntime(batchRequest.storageProfile(), chatModel, embeddingModel)) {
             runtime.rag().ingest(documents);
-            var results = new ArrayList<Result>(questions.size());
-            for (var question : questions) {
+            var results = new ArrayList<Result>(testCases.size());
+            for (int index = 0; index < testCases.size(); index++) {
+                var testCase = testCases.get(index);
                 var queryResult = runtime.rag().query(QueryRequest.builder()
-                    .query(question)
+                    .query(testCase.question())
                     .mode(batchRequest.mode())
                     .topK(batchRequest.topK())
                     .chunkTopK(batchRequest.chunkTopK())
                     .build());
                 results.add(new Result(
-                    question,
+                    index,
+                    testCase.question(),
+                    testCase.groundTruth(),
+                    testCase.metadata(),
                     queryResult.answer(),
-                    queryResult.contexts().stream().map(context -> context.text()).toList()
+                    queryResult.contexts()
                 ));
             }
             return List.copyOf(results);
@@ -124,16 +131,26 @@ public final class RagasBatchEvaluationService {
         }
     }
 
-    private static List<String> loadQuestions(Path datasetPath) throws IOException {
+    private static List<TestCase> loadTestCases(Path datasetPath) throws IOException {
         var root = OBJECT_MAPPER.readTree(Objects.requireNonNull(datasetPath, "datasetPath").toFile());
-        var questions = new ArrayList<String>();
+        var testCases = new ArrayList<TestCase>();
         for (JsonNode testCase : root.path("test_cases")) {
             var question = testCase.path("question").asText("").strip();
             if (!question.isEmpty()) {
-                questions.add(question);
+                var metadata = new LinkedHashMap<String, Object>();
+                testCase.fields().forEachRemaining(entry -> {
+                    if (!"question".equals(entry.getKey()) && !"ground_truth".equals(entry.getKey())) {
+                        metadata.put(entry.getKey(), OBJECT_MAPPER.convertValue(entry.getValue(), Object.class));
+                    }
+                });
+                testCases.add(new TestCase(
+                    question,
+                    testCase.path("ground_truth").asText(""),
+                    Map.copyOf(metadata)
+                ));
             }
         }
-        return List.copyOf(questions);
+        return List.copyOf(testCases);
     }
 
     public record BatchRequest(
@@ -152,12 +169,24 @@ public final class RagasBatchEvaluationService {
         }
     }
 
-    public record Result(String question, String answer, List<String> contexts) {
+    public record Result(
+        int caseIndex,
+        String question,
+        String groundTruth,
+        Map<String, Object> caseMetadata,
+        String answer,
+        List<QueryResult.Context> contexts
+    ) {
         public Result {
             question = Objects.requireNonNull(question, "question");
+            groundTruth = Objects.requireNonNull(groundTruth, "groundTruth");
+            caseMetadata = Map.copyOf(Objects.requireNonNull(caseMetadata, "caseMetadata"));
             answer = Objects.requireNonNull(answer, "answer");
             contexts = List.copyOf(Objects.requireNonNull(contexts, "contexts"));
         }
+    }
+
+    private record TestCase(String question, String groundTruth, Map<String, Object> metadata) {
     }
 
     @FunctionalInterface

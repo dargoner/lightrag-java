@@ -243,6 +243,11 @@ Demo 默认配置文件：
 python3 evaluation/ragas/eval_rag_quality_java.py
 ```
 
+兼容性说明：
+
+- `eval_rag_quality_java.py` 同时兼容旧版 batch `list` 输出和新版 `{request, summary, results}` envelope
+- Java 侧评测结果里的 `contexts` 现在是结构化 `QueryResult.Context`，如果你之前消费的是字符串列表，请改为读取 `context.text()`
+
 如果要使用 PG/Neo4j Testcontainers 评测，需要：
 
 - Docker 可用

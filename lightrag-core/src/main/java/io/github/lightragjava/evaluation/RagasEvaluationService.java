@@ -3,6 +3,7 @@ package io.github.lightragjava.evaluation;
 import io.github.lightragjava.api.LightRag;
 import io.github.lightragjava.api.QueryMode;
 import io.github.lightragjava.api.QueryRequest;
+import io.github.lightragjava.api.QueryResult;
 import io.github.lightragjava.model.ChatModel;
 import io.github.lightragjava.model.EmbeddingModel;
 import io.github.lightragjava.storage.InMemoryStorageProvider;
@@ -34,7 +35,7 @@ public final class RagasEvaluationService {
             .build());
         return new EvaluationResult(
             result.answer(),
-            result.contexts().stream().map(context -> context.text()).toList()
+            result.contexts()
         );
     }
 
@@ -94,7 +95,7 @@ public final class RagasEvaluationService {
         }
     }
 
-    public record EvaluationResult(String answer, List<String> contexts) {
+    public record EvaluationResult(String answer, List<QueryResult.Context> contexts) {
         public EvaluationResult {
             answer = Objects.requireNonNull(answer, "answer");
             contexts = List.copyOf(Objects.requireNonNull(contexts, "contexts"));
