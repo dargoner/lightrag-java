@@ -69,6 +69,7 @@ The demo application exposes:
 - `GET /documents/status/{documentId}`
 - `DELETE /documents/{documentId}`
 - `POST /query`
+- `POST /query/stream`
 - `POST /graph/entities`
 - `PUT /graph/entities`
 - `POST /graph/entities/merge`
@@ -89,7 +90,7 @@ The demo's default config lives in:
 
 - `lightrag-spring-boot-demo/src/main/resources/application.yml`
 
-It defaults to `in-memory` storage, OpenAI-compatible model settings resolved from environment variables, buffered `/query` responses, and async ingest enabled.
+It defaults to `in-memory` storage, OpenAI-compatible model settings resolved from environment variables, buffered `/query` responses, SSE `/query/stream` responses, and async ingest enabled.
 
 ## Chunking
 
@@ -161,8 +162,7 @@ The job endpoints expose lightweight observability fields for demo troubleshooti
 - `documentCount`: number of submitted documents in the job
 - `createdAt`, `startedAt`, `finishedAt`: basic ingest timeline
 - `errorMessage`: populated when the job reaches `FAILED`
-
-The demo `/query` endpoint accepts the core query controls used most often in service mode, including:
+The demo `/query` and `/query/stream` endpoints accept the core query controls used most often in service mode, including:
 
 - `mode`, `topK`, `chunkTopK`
 - `maxEntityTokens`, `maxRelationTokens`, `maxTotalTokens`
@@ -170,7 +170,17 @@ The demo `/query` endpoint accepts the core query controls used most often in se
 - `includeReferences`, `onlyNeedContext`, `onlyNeedPrompt`
 - `userPrompt`, `hlKeywords`, `llKeywords`, `conversationHistory`
 
-`stream=true` is intentionally rejected on `/query`; the demo currently exposes buffered HTTP responses only.
+Use `POST /query` for buffered JSON responses. `stream=true` is intentionally rejected there to keep the contract unambiguous.
+
+Use `POST /query/stream` with `Accept: text/event-stream` for SSE output. The stream protocol emits:
+
+- `meta`: always first; includes `streaming`, `contexts`, and `references`
+- `chunk`: incremental answer text when core streaming is active
+- `answer`: single buffered payload when `onlyNeedContext(true)` or `onlyNeedPrompt(true)` bypasses streaming
+- `complete`: terminal success marker
+- `error`: terminal failure marker when streaming work aborts after the response starts
+
+`/query/stream` always maps to `QueryRequest.stream(true)`. The core still applies its existing shortcut semantics, so `onlyNeedContext(true)` and `onlyNeedPrompt(true)` return `meta + answer + complete` instead of chunked output. `BYPASS` mode still streams chunk events, with empty retrieval metadata.
 
 ## Query Modes
 

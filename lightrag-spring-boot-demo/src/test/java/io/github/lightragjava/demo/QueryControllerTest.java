@@ -4,12 +4,14 @@ import io.github.lightragjava.api.LightRag;
 import io.github.lightragjava.api.QueryMode;
 import io.github.lightragjava.api.QueryRequest;
 import io.github.lightragjava.api.QueryResult;
+import io.github.lightragjava.model.ChatModel;
 import io.github.lightragjava.spring.boot.LightRagProperties;
 import org.junit.jupiter.api.Test;
 import org.mockito.ArgumentCaptor;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.autoconfigure.web.servlet.WebMvcTest;
 import org.springframework.boot.test.mock.mockito.MockBean;
+import org.springframework.boot.test.mock.mockito.SpyBean;
 import org.springframework.boot.test.context.TestConfiguration;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Import;
@@ -36,11 +38,19 @@ class QueryControllerTest {
     @MockBean
     private LightRag lightRag;
 
+    @SpyBean
+    private QueryRequestMapper queryRequestMapper;
+
     @TestConfiguration
     static class TestConfig {
         @Bean
         LightRagProperties lightRagProperties() {
             return new LightRagProperties();
+        }
+
+        @Bean
+        QueryRequestMapper queryRequestMapper(LightRagProperties properties) {
+            return new QueryRequestMapper(properties);
         }
     }
 
@@ -56,7 +66,7 @@ class QueryControllerTest {
                 .contentType(MediaType.APPLICATION_JSON)
                 .content("""
                     {
-                      "query": "Who works with Bob?",
+                      "query": "  Who works with Bob?  ",
                       "mode": "GLOBAL",
                       "topK": 5,
                       "chunkTopK": 8,
@@ -68,12 +78,12 @@ class QueryControllerTest {
                       "includeReferences": true,
                       "onlyNeedContext": true,
                       "onlyNeedPrompt": false,
-                      "userPrompt": "Answer briefly.",
+                      "userPrompt": "  Answer briefly.  ",
                       "hlKeywords": ["organization"],
                       "llKeywords": ["Alice"],
                       "conversationHistory": [
-                        {"role": "user", "content": "Earlier question"},
-                        {"role": "assistant", "content": "Earlier answer"}
+                        {"role": " user ", "content": " Earlier question "},
+                        {"role": "assistant", "content": " Earlier answer "}
                       ]
                     }
                     """))
@@ -82,8 +92,20 @@ class QueryControllerTest {
             .andExpect(jsonPath("$.contexts[0].sourceId").value("chunk-1"))
             .andExpect(jsonPath("$.references[0].referenceId").value("1"));
 
+        var payloadCaptor = ArgumentCaptor.forClass(QueryRequestMapper.QueryPayload.class);
         var requestCaptor = ArgumentCaptor.forClass(QueryRequest.class);
+        verify(queryRequestMapper).toBufferedRequest(payloadCaptor.capture());
         verify(lightRag).query(requestCaptor.capture());
+
+        var payload = payloadCaptor.getValue();
+        assertThat(payload.query()).isEqualTo("  Who works with Bob?  ");
+        assertThat(payload.userPrompt()).isEqualTo("  Answer briefly.  ");
+        assertThat(payload.includeReferences()).isTrue();
+        assertThat(payload.onlyNeedContext()).isTrue();
+        assertThat(payload.stream()).isNull();
+        assertThat(payload.conversationHistory())
+            .extracting(message -> message.role() + ":" + message.content())
+            .containsExactly(" user : Earlier question ", "assistant: Earlier answer ");
 
         var request = requestCaptor.getValue();
         assertThat(request.query()).isEqualTo("Who works with Bob?");
@@ -98,12 +120,54 @@ class QueryControllerTest {
         assertThat(request.includeReferences()).isTrue();
         assertThat(request.onlyNeedContext()).isTrue();
         assertThat(request.onlyNeedPrompt()).isFalse();
+        assertThat(request.stream()).isFalse();
         assertThat(request.userPrompt()).isEqualTo("Answer briefly.");
         assertThat(request.hlKeywords()).containsExactly("organization");
         assertThat(request.llKeywords()).containsExactly("Alice");
         assertThat(request.conversationHistory())
             .extracting(message -> message.role() + ":" + message.content())
             .containsExactly("user:Earlier question", "assistant:Earlier answer");
+    }
+
+    @Test
+    void appliesConfiguredDefaultsWhenOptionalFieldsAreOmitted() throws Exception {
+        when(lightRag.query(any())).thenReturn(new QueryResult(
+            "Alice works with Bob.",
+            List.of(),
+            List.of()
+        ));
+
+        mockMvc.perform(post("/query")
+                .contentType(MediaType.APPLICATION_JSON)
+                .content("""
+                    {
+                      "query": "  Who works with Bob?  "
+                    }
+                    """))
+            .andExpect(status().isOk())
+            .andExpect(jsonPath("$.answer").value("Alice works with Bob."));
+
+        var requestCaptor = ArgumentCaptor.forClass(QueryRequest.class);
+        verify(lightRag).query(requestCaptor.capture());
+
+        var request = requestCaptor.getValue();
+        assertThat(request.query()).isEqualTo("Who works with Bob?");
+        assertThat(request.mode()).isEqualTo(QueryMode.MIX);
+        assertThat(request.topK()).isEqualTo(10);
+        assertThat(request.chunkTopK()).isEqualTo(10);
+        assertThat(request.maxEntityTokens()).isEqualTo(QueryRequest.DEFAULT_MAX_ENTITY_TOKENS);
+        assertThat(request.maxRelationTokens()).isEqualTo(QueryRequest.DEFAULT_MAX_RELATION_TOKENS);
+        assertThat(request.maxTotalTokens()).isEqualTo(QueryRequest.DEFAULT_MAX_TOTAL_TOKENS);
+        assertThat(request.responseType()).isEqualTo("Multiple Paragraphs");
+        assertThat(request.enableRerank()).isTrue();
+        assertThat(request.includeReferences()).isFalse();
+        assertThat(request.onlyNeedContext()).isFalse();
+        assertThat(request.onlyNeedPrompt()).isFalse();
+        assertThat(request.stream()).isFalse();
+        assertThat(request.userPrompt()).isEmpty();
+        assertThat(request.hlKeywords()).isEmpty();
+        assertThat(request.llKeywords()).isEmpty();
+        assertThat(request.conversationHistory()).isEmpty();
     }
 
     @Test
