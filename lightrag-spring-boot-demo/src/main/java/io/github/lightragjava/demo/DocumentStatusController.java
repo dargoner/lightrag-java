@@ -2,6 +2,7 @@ package io.github.lightragjava.demo;
 
 import io.github.lightragjava.api.DocumentProcessingStatus;
 import io.github.lightragjava.api.LightRag;
+import io.github.lightragjava.spring.boot.LightRagProperties;
 import io.github.lightragjava.spring.boot.WorkspaceLightRagFactory;
 import jakarta.servlet.http.HttpServletRequest;
 import org.springframework.http.HttpStatus;
@@ -9,14 +10,16 @@ import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.DeleteMapping;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
-import org.springframework.web.bind.annotation.RequestParam;
+import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestMapping;
+import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 import org.springframework.web.server.ResponseStatusException;
 
 import java.time.Instant;
 import java.util.List;
 import java.util.NoSuchElementException;
+import java.util.Optional;
 
 @RestController
 @RequestMapping("/documents")
@@ -24,15 +27,18 @@ class DocumentStatusController {
     private final WorkspaceLightRagFactory workspaceLightRagFactory;
     private final WorkspaceResolver workspaceResolver;
     private final IngestJobService ingestJobService;
+    private final LightRagProperties properties;
 
     DocumentStatusController(
         WorkspaceLightRagFactory workspaceLightRagFactory,
         WorkspaceResolver workspaceResolver,
-        IngestJobService ingestJobService
+        IngestJobService ingestJobService,
+        LightRagProperties properties
     ) {
         this.workspaceLightRagFactory = workspaceLightRagFactory;
         this.workspaceResolver = workspaceResolver;
         this.ingestJobService = ingestJobService;
+        this.properties = properties;
     }
 
     @GetMapping("/jobs")
@@ -59,9 +65,22 @@ class DocumentStatusController {
             .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "job not found: " + jobId));
     }
 
+    @PostMapping("/jobs/{jobId}/cancel")
+    ResponseEntity<IngestJobStatusResponse> cancelJob(@PathVariable String jobId, HttpServletRequest request) {
+        var workspaceId = workspaceResolver.resolve(request);
+        return ResponseEntity.accepted().body(toResponse(ingestJobService.cancel(workspaceId, jobId)));
+    }
+
+    @PostMapping("/jobs/{jobId}/retry")
+    ResponseEntity<IngestJobStatusResponse> retryJob(@PathVariable String jobId, HttpServletRequest request) {
+        var workspaceId = workspaceResolver.resolve(request);
+        return ResponseEntity.accepted()
+            .body(toResponse(ingestJobService.retry(workspaceId, jobId, properties.getDemo().isAsyncIngestEnabled())));
+    }
+
     @GetMapping("/status")
     List<DocumentProcessingStatus> listDocumentStatus(HttpServletRequest request) {
-        return workspaceLightRagFactory.find(workspaceResolver.resolve(request))
+        return existingLightRag(request)
             .map(LightRag::listDocumentStatuses)
             .orElseGet(List::of);
     }
@@ -83,7 +102,7 @@ class DocumentStatusController {
         return ResponseEntity.noContent().build();
     }
 
-    private java.util.Optional<LightRag> existingLightRag(HttpServletRequest request) {
+    private Optional<LightRag> existingLightRag(HttpServletRequest request) {
         return workspaceLightRagFactory.find(workspaceResolver.resolve(request));
     }
 
@@ -95,7 +114,11 @@ class DocumentStatusController {
             snapshot.createdAt(),
             snapshot.startedAt(),
             snapshot.finishedAt(),
-            snapshot.errorMessage()
+            snapshot.errorMessage(),
+            snapshot.cancellable(),
+            snapshot.retriable(),
+            snapshot.retriedFromJobId(),
+            snapshot.attempt()
         );
     }
 
@@ -109,7 +132,11 @@ class DocumentStatusController {
         Instant createdAt,
         Instant startedAt,
         Instant finishedAt,
-        String errorMessage
+        String errorMessage,
+        boolean cancellable,
+        boolean retriable,
+        String retriedFromJobId,
+        int attempt
     ) {
     }
 }

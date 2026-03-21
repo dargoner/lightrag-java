@@ -4,9 +4,24 @@ These markdown files correspond to test questions in `../sample_dataset.json`.
 
 ## Usage
 
-1. **Index documents** into LightRAG (via WebUI, API, or Python)
-2. **Run evaluation**: `python lightrag/evaluation/eval_rag_quality.py`
-3. **Expected results**: ~91-100% RAGAS score per question
+1. These files are the default Java evaluation corpus.
+2. Run the bundled evaluator from the repository root:
+
+```bash
+python3 evaluation/ragas/eval_rag_quality_java.py \
+  --documents-dir evaluation/ragas/sample_documents \
+  --dataset evaluation/ragas/sample_dataset.json
+```
+
+3. Refresh the named baseline explicitly when you want to accept the current run:
+
+```bash
+python3 evaluation/ragas/eval_rag_quality_java.py \
+  --documents-dir evaluation/ragas/sample_documents \
+  --dataset evaluation/ragas/sample_dataset.json \
+  --baseline-name sample-default \
+  --update-baseline
+```
 
 ## Files
 
@@ -18,4 +33,4 @@ These markdown files correspond to test questions in `../sample_dataset.json`.
 
 ## Note
 
-Documents use clear entity-relationship patterns for LightRAG's default entity extraction prompts. For better results with your data, customize `lightrag/prompt.py`.
+Documents use clear entity-relationship patterns for LightRAG's default entity extraction prompts. For better results with your data, customize the Java-side chunking and retrieval settings through `LightRag.builder()` or Spring Boot properties.

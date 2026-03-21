@@ -57,6 +57,8 @@ The starter auto-configures `LightRag` from `application.yml` when you provide:
 - chat model base URL, model name, and API key
 - embedding model base URL, model name, and API key
 - storage type: `in-memory`, `postgres`, or `postgres-neo4j`
+- indexing defaults for chunk window and overlap
+- query defaults for automatic keyword extraction and rerank candidate expansion
 - demo defaults for query mode, top-k, response type, and async ingest behavior
 
 The demo application exposes:
@@ -65,6 +67,8 @@ The demo application exposes:
 - `POST /documents/upload`: upload one or more text files and receive a `jobId` plus generated `documentIds`
 - `GET /documents/jobs?page=0&size=20`: list recent ingest jobs with pagination
 - `GET /documents/jobs/{jobId}`: poll async ingest state
+- `POST /documents/jobs/{jobId}/cancel`: cancel a pending job or request cancellation for a running job
+- `POST /documents/jobs/{jobId}/retry`: create a new attempt from a `FAILED` or `CANCELLED` job
 - `GET /documents/status`
 - `GET /documents/status/{documentId}`
 - `DELETE /documents/{documentId}`
@@ -154,7 +158,6 @@ Workspace routing is configured through the starter properties:
 - `lightrag.workspace.header-name`: request header used by the demo, default `X-Workspace-Id`
 - `lightrag.workspace.default-id`: fallback workspace when the header is missing, default `default`
 - `lightrag.workspace.max-active-workspaces`: upper bound for cached workspace instances, default `32`
-- `lightrag.workspace.max-active-workspaces`: upper bound for cached workspace instances, default `32`
 
 Upload example:
 
@@ -172,6 +175,7 @@ The job endpoints expose lightweight observability fields for demo troubleshooti
 - `documentCount`: number of submitted documents in the job
 - `createdAt`, `startedAt`, `finishedAt`: basic ingest timeline
 - `errorMessage`: populated when the job reaches `FAILED`
+- `cancellable`, `retriable`, `retriedFromJobId`, `attempt`: basic job lifecycle controls
 
 Workspace-scoped structured ingest example:
 
@@ -196,6 +200,12 @@ Workspace isolation support in this phase:
 - `postgres`: each workspace gets an isolated table prefix and snapshot path
 - `postgres-neo4j`: current behavior is preserved for the default workspace only; non-default workspaces are not supported yet
 - custom `StorageProvider` beans remain default-workspace only unless you provide your own workspace-aware routing layer
+
+Cancel/retry semantics in this phase:
+
+- cancelling a `PENDING` job moves it directly to `CANCELLED`
+- cancelling a `RUNNING` job is best-effort and temporarily reports `CANCELLING`
+- retry skips documents that are already `PROCESSED`, so partial-success batches do not immediately fail on duplicate ids
 
 The demo `/query` and `/query/stream` endpoints accept the core query controls used most often in service mode, including:
 
@@ -689,10 +699,24 @@ Defaults in this phase:
 
 These controls change indexing or retrieval internals only. They do not alter the `QueryRequest` surface or default query semantics unless you opt in through the builder.
 
+Spring Boot properties mirror the same knobs:
+
+```yaml
+lightrag:
+  indexing:
+    chunking:
+      window-size: 600
+      overlap: 80
+  query:
+    automatic-keyword-extraction: false
+    rerank-candidate-multiplier: 4
+```
+
 Compatibility note:
 
-- these controls stay on `LightRag.builder()` and internal runtime wiring; the public `LightRagConfig(...)` constructor remains backward compatible in this phase
-- external integrations should prefer `LightRag.builder()` unless they intentionally construct `LightRagConfig` directly
+- these controls stay on `LightRag.builder()` and starter/runtime wiring; the public `LightRagConfig(...)` constructor remains backward compatible in this phase
+- the new pipeline controls are builder-level and starter-level options, not new `QueryRequest` fields
+- external integrations should prefer `LightRag.builder()` for new pipeline tuning
 
 ## Evaluation CLI
 

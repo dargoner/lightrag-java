@@ -31,7 +31,6 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 class LightRagBuilderTest {
     private static final ObjectMapper OBJECT_MAPPER = new ObjectMapper();
 
-
     @Test
     void buildsWithRequiredDependencies() {
         var chatModel = new FakeChatModel();
@@ -78,10 +77,10 @@ class LightRagBuilderTest {
     }
 
     @Test
-    void buildsWithCustomChunkerAndRetrievalQualityOptions() {
+    void buildsWithCustomRetrievalQualityOptions() {
         Chunker chunker = document -> List.of();
 
-        var built = LightRag.builder()
+        var rag = LightRag.builder()
             .chatModel(new FakeChatModel())
             .embeddingModel(new FakeEmbeddingModel())
             .storage(new FakeStorageProvider())
@@ -90,7 +89,9 @@ class LightRagBuilderTest {
             .rerankCandidateMultiplier(4)
             .build();
 
-        assertThat(built).isNotNull();
+        assertThat(rag.chunker()).isSameAs(chunker);
+        assertThat(rag.automaticQueryKeywordExtraction()).isFalse();
+        assertThat(rag.rerankCandidateMultiplier()).isEqualTo(4);
     }
 
     @Test
@@ -655,52 +656,52 @@ class LightRagBuilderTest {
     }
 
     private static final class FakeDocumentStore implements DocumentStore {
-        private final java.util.LinkedHashMap<String, DocumentRecord> documents = new java.util.LinkedHashMap<>();
+        private final List<DocumentRecord> documents = new ArrayList<>();
 
         @Override
         public void save(DocumentRecord document) {
-            documents.put(document.id(), document);
+            documents.removeIf(existing -> existing.id().equals(document.id()));
+            documents.add(document);
         }
 
         @Override
         public Optional<DocumentRecord> load(String documentId) {
-            return Optional.ofNullable(documents.get(documentId));
+            return documents.stream().filter(record -> record.id().equals(documentId)).findFirst();
         }
 
         @Override
         public List<DocumentRecord> list() {
-            return List.copyOf(documents.values());
+            return List.copyOf(documents);
         }
 
         @Override
         public boolean contains(String documentId) {
-            return documents.containsKey(documentId);
+            return documents.stream().anyMatch(record -> record.id().equals(documentId));
         }
     }
 
     private static final class FakeChunkStore implements ChunkStore {
-        private final java.util.LinkedHashMap<String, ChunkRecord> chunks = new java.util.LinkedHashMap<>();
+        private final List<ChunkRecord> chunks = new ArrayList<>();
 
         @Override
         public void save(ChunkRecord chunk) {
-            chunks.put(chunk.id(), chunk);
+            chunks.removeIf(existing -> existing.id().equals(chunk.id()));
+            chunks.add(chunk);
         }
 
         @Override
         public Optional<ChunkRecord> load(String chunkId) {
-            return Optional.ofNullable(chunks.get(chunkId));
+            return chunks.stream().filter(record -> record.id().equals(chunkId)).findFirst();
         }
 
         @Override
         public List<ChunkRecord> list() {
-            return List.copyOf(chunks.values());
+            return List.copyOf(chunks);
         }
 
         @Override
         public List<ChunkRecord> listByDocument(String documentId) {
-            return chunks.values().stream()
-                .filter(chunk -> chunk.documentId().equals(documentId))
-                .toList();
+            return chunks.stream().filter(record -> record.documentId().equals(documentId)).toList();
         }
     }
 

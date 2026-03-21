@@ -76,10 +76,13 @@ public class WorkspaceLightRagFactory {
     }
 
     private LightRag create(String workspaceId) {
+        var query = properties.getQuery();
         var builder = LightRag.builder()
             .chatModel(chatModel)
             .embeddingModel(embeddingModel)
-            .storage(createStorageProvider(workspaceId));
+            .storage(createStorageProvider(workspaceId))
+            .automaticQueryKeywordExtraction(query.isAutomaticKeywordExtraction())
+            .rerankCandidateMultiplier(query.getRerankCandidateMultiplier());
         if (chunker != null) {
             builder.chunker(chunker);
         }

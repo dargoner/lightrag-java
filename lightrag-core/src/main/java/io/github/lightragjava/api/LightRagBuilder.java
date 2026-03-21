@@ -2,13 +2,14 @@ package io.github.lightragjava.api;
 
 import io.github.lightragjava.config.LightRagConfig;
 import io.github.lightragjava.indexing.Chunker;
+import io.github.lightragjava.indexing.FixedWindowChunker;
 import io.github.lightragjava.model.ChatModel;
 import io.github.lightragjava.model.EmbeddingModel;
 import io.github.lightragjava.model.RerankModel;
 import io.github.lightragjava.storage.AtomicStorageProvider;
 import io.github.lightragjava.storage.ChunkStore;
-import io.github.lightragjava.storage.DocumentStore;
 import io.github.lightragjava.storage.DocumentStatusStore;
+import io.github.lightragjava.storage.DocumentStore;
 import io.github.lightragjava.storage.GraphStore;
 import io.github.lightragjava.storage.SnapshotStore;
 import io.github.lightragjava.storage.StorageProvider;
@@ -19,12 +20,15 @@ import java.util.NoSuchElementException;
 import java.util.Objects;
 
 public final class LightRagBuilder {
+    private static final int DEFAULT_CHUNK_WINDOW = 1_000;
+    private static final int DEFAULT_CHUNK_OVERLAP = 100;
+
     private ChatModel chatModel;
     private EmbeddingModel embeddingModel;
     private StorageProvider storageProvider;
     private Path snapshotPath;
     private RerankModel rerankModel;
-    private Chunker chunker;
+    private Chunker chunker = new FixedWindowChunker(DEFAULT_CHUNK_WINDOW, DEFAULT_CHUNK_OVERLAP);
     private boolean automaticQueryKeywordExtraction = true;
     private int rerankCandidateMultiplier = 2;
 
@@ -69,6 +73,7 @@ public final class LightRagBuilder {
         this.rerankCandidateMultiplier = rerankCandidateMultiplier;
         return this;
     }
+
     public LightRagBuilder loadFromSnapshot(Path path) {
         this.snapshotPath = Objects.requireNonNull(path, "path");
         return this;

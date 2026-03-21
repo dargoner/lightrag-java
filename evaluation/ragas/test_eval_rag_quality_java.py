@@ -116,5 +116,66 @@ class NormalizeBatchResultsTest(unittest.TestCase):
         )
 
 
+class BaselineComparisonTest(unittest.TestCase):
+    def test_slugify_normalizes_labels(self):
+        module = load_module()
+
+        self.assertEqual(module._slugify("Candidate Rerank #4"), "candidate-rerank-4")
+        self.assertEqual(module._slugify("   "), "baseline")
+
+    def test_compare_with_baseline_reports_average_delta(self):
+        module = load_module()
+
+        comparison = module._compare_with_baseline(
+            [
+                {"question": "q1", "ragas_score": 0.81},
+                {"question": "q2", "ragas_score": 0.71},
+            ],
+            {
+                "results": [
+                    {"question": "q1", "ragas_score": 0.91},
+                    {"question": "q2", "ragas_score": 0.76},
+                ]
+            },
+        )
+
+        self.assertEqual(comparison["shared_case_count"], 2)
+        self.assertAlmostEqual(comparison["average_delta"], -0.075, places=4)
+        self.assertEqual(comparison["per_case"][0]["question"], "q1")
+
+    def test_build_summary_flags_regression_only_when_threshold_exceeded(self):
+        module = load_module()
+
+        summary = module._build_summary(
+            results=[{"ragas_score": 0.81}, {"ragas_score": 0.71}],
+            comparison={
+                "baseline_average": 0.90,
+                "average_delta": -0.09,
+                "shared_case_count": 2,
+            },
+            max_average_regression=0.05,
+            baseline_updated=False,
+        )
+
+        self.assertTrue(summary["regressed"])
+        self.assertAlmostEqual(summary["average_ragas_score"], 0.76, places=4)
+
+    def test_build_summary_ignores_regression_when_updating_baseline(self):
+        module = load_module()
+
+        summary = module._build_summary(
+            results=[{"ragas_score": 0.81}],
+            comparison={
+                "baseline_average": 0.90,
+                "average_delta": -0.09,
+                "shared_case_count": 1,
+            },
+            max_average_regression=0.05,
+            baseline_updated=True,
+        )
+
+        self.assertFalse(summary["regressed"])
+
+
 if __name__ == "__main__":
     unittest.main()

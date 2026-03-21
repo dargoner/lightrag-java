@@ -9,13 +9,15 @@ lightrag:
     api-key: ${LIGHTRAG_EMBEDDING_API_KEY:dummy}
   indexing:
     chunking:
-      window-size: ${LIGHTRAG_INDEXING_CHUNKING_WINDOW_SIZE:1000}
-      overlap: ${LIGHTRAG_INDEXING_CHUNKING_OVERLAP:100}
+      window-size: ${LIGHTRAG_INDEXING_CHUNK_WINDOW_SIZE:${LIGHTRAG_INDEXING_CHUNKING_WINDOW_SIZE:1000}}
+      overlap: ${LIGHTRAG_INDEXING_CHUNK_OVERLAP:${LIGHTRAG_INDEXING_CHUNKING_OVERLAP:100}}
   query:
     default-mode: ${LIGHTRAG_QUERY_DEFAULT_MODE:MIX}
     default-top-k: ${LIGHTRAG_QUERY_DEFAULT_TOP_K:10}
     default-chunk-top-k: ${LIGHTRAG_QUERY_DEFAULT_CHUNK_TOP_K:10}
     default-response-type: ${LIGHTRAG_QUERY_DEFAULT_RESPONSE_TYPE:Multiple Paragraphs}
+    automatic-keyword-extraction: ${LIGHTRAG_QUERY_AUTOMATIC_KEYWORD_EXTRACTION:true}
+    rerank-candidate-multiplier: ${LIGHTRAG_QUERY_RERANK_CANDIDATE_MULTIPLIER:2}
   demo:
     async-ingest-enabled: ${LIGHTRAG_DEMO_ASYNC_INGEST_ENABLED:true}
   storage:

@@ -102,11 +102,42 @@ public class LightRagProperties {
         }
     }
 
+    public static class IndexingProperties {
+        private final ChunkingProperties chunking = new ChunkingProperties();
+
+        public ChunkingProperties getChunking() {
+            return chunking;
+        }
+    }
+
+    public static class ChunkingProperties {
+        private int windowSize = FixedWindowChunker.DEFAULT_WINDOW_SIZE;
+        private int overlap = FixedWindowChunker.DEFAULT_OVERLAP;
+
+        public int getWindowSize() {
+            return windowSize;
+        }
+
+        public void setWindowSize(int windowSize) {
+            this.windowSize = windowSize;
+        }
+
+        public int getOverlap() {
+            return overlap;
+        }
+
+        public void setOverlap(int overlap) {
+            this.overlap = overlap;
+        }
+    }
+
     public static class QueryProperties {
         private String defaultMode = "MIX";
         private int defaultTopK = 10;
         private int defaultChunkTopK = 10;
         private String defaultResponseType = "Multiple Paragraphs";
+        private boolean automaticKeywordExtraction = true;
+        private int rerankCandidateMultiplier = 2;
 
         public String getDefaultMode() {
             return defaultMode;
@@ -139,34 +170,21 @@ public class LightRagProperties {
         public void setDefaultResponseType(String defaultResponseType) {
             this.defaultResponseType = defaultResponseType;
         }
-    }
 
-    public static class IndexingProperties {
-        private final ChunkingProperties chunking = new ChunkingProperties();
-
-        public ChunkingProperties getChunking() {
-            return chunking;
-        }
-    }
-
-    public static class ChunkingProperties {
-        private int windowSize = FixedWindowChunker.DEFAULT_WINDOW_SIZE;
-        private int overlap = FixedWindowChunker.DEFAULT_OVERLAP;
-
-        public int getWindowSize() {
-            return windowSize;
+        public boolean isAutomaticKeywordExtraction() {
+            return automaticKeywordExtraction;
         }
 
-        public void setWindowSize(int windowSize) {
-            this.windowSize = windowSize;
+        public void setAutomaticKeywordExtraction(boolean automaticKeywordExtraction) {
+            this.automaticKeywordExtraction = automaticKeywordExtraction;
         }
 
-        public int getOverlap() {
-            return overlap;
+        public int getRerankCandidateMultiplier() {
+            return rerankCandidateMultiplier;
         }
 
-        public void setOverlap(int overlap) {
-            this.overlap = overlap;
+        public void setRerankCandidateMultiplier(int rerankCandidateMultiplier) {
+            this.rerankCandidateMultiplier = rerankCandidateMultiplier;
         }
     }
 

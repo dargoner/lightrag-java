@@ -26,6 +26,12 @@ class ApiExceptionHandler {
         return new ErrorResponse(exception.getMessage());
     }
 
+    @ExceptionHandler(IngestJobService.JobConflictException.class)
+    @ResponseStatus(HttpStatus.CONFLICT)
+    ErrorResponse handleJobConflict(IngestJobService.JobConflictException exception) {
+        return new ErrorResponse(exception.getMessage());
+    }
+
     @ExceptionHandler(ResponseStatusException.class)
     ResponseEntity<ErrorResponse> handleResponseStatus(ResponseStatusException exception) {
         var message = exception.getReason() == null ? exception.getMessage() : exception.getReason();

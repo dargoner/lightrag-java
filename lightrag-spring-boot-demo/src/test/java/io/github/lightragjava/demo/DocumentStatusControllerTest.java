@@ -11,14 +11,21 @@ import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.autoconfigure.web.servlet.AutoConfigureMockMvc;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.boot.test.mock.mockito.MockBean;
+import org.springframework.test.util.ReflectionTestUtils;
 import org.springframework.test.web.servlet.MockMvc;
 
 import java.util.List;
 import java.util.NoSuchElementException;
 import java.util.Optional;
+import java.util.concurrent.ConcurrentMap;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicInteger;
+import java.util.concurrent.atomic.AtomicLong;
 
 import static org.junit.jupiter.api.Assertions.fail;
+import static org.mockito.ArgumentMatchers.anyList;
 import static org.mockito.ArgumentMatchers.argThat;
 import static org.mockito.Mockito.doAnswer;
 import static org.mockito.Mockito.doNothing;
@@ -86,6 +93,18 @@ class DocumentStatusControllerTest {
           ]
         }
         """;
+    private static final String BLOCKING_INGEST_PAYLOAD = """
+        {
+          "documents": [
+            {
+              "id": "doc-block",
+              "title": "Blocking Title",
+              "content": "Block the worker thread",
+              "metadata": {"source": "demo"}
+            }
+          ]
+        }
+        """;
     private static final String FAILING_INGEST_PAYLOAD = """
         {
           "documents": [
@@ -105,6 +124,9 @@ class DocumentStatusControllerTest {
     @Autowired
     private ObjectMapper objectMapper;
 
+    @Autowired
+    private IngestJobService ingestJobService;
+
     @MockBean
     private WorkspaceLightRagFactory workspaceLightRagFactory;
 
@@ -116,6 +138,9 @@ class DocumentStatusControllerTest {
 
     @BeforeEach
     void setUp() {
+        ((ConcurrentMap<?, ?>) ReflectionTestUtils.getField(ingestJobService, "jobs")).clear();
+        ((AtomicLong) ReflectionTestUtils.getField(ingestJobService, "sequence")).set(0L);
+
         statusLightRag = mock(LightRag.class);
         isolatedLightRag = mock(LightRag.class);
 
@@ -156,7 +181,10 @@ class DocumentStatusControllerTest {
             .andExpect(jsonPath("$.documentCount").value(1))
             .andExpect(jsonPath("$.createdAt").isNotEmpty())
             .andExpect(jsonPath("$.startedAt").isNotEmpty())
-            .andExpect(jsonPath("$.finishedAt").isNotEmpty());
+            .andExpect(jsonPath("$.finishedAt").isNotEmpty())
+            .andExpect(jsonPath("$.cancellable").value(false))
+            .andExpect(jsonPath("$.retriable").value(false))
+            .andExpect(jsonPath("$.attempt").value(1));
 
         mockMvc.perform(get("/documents/status")
                 .header(WORKSPACE_HEADER, WORKSPACE_STATUS))
@@ -235,6 +263,7 @@ class DocumentStatusControllerTest {
             .andExpect(status().isOk())
             .andExpect(jsonPath("$.status").value("FAILED"))
             .andExpect(jsonPath("$.errorMessage").value("simulated ingest failure"))
+            .andExpect(jsonPath("$.retriable").value(true))
             .andExpect(jsonPath("$.createdAt").isNotEmpty())
             .andExpect(jsonPath("$.startedAt").isNotEmpty())
             .andExpect(jsonPath("$.finishedAt").isNotEmpty());
@@ -250,6 +279,95 @@ class DocumentStatusControllerTest {
     }
 
     @Test
+    void cancelPendingJobAndRetryCreatesNewAttempt() throws Exception {
+        var firstJobStarted = new CountDownLatch(1);
+        var releaseFirstJob = new CountDownLatch(1);
+        doAnswer(invocation -> {
+            var documents = invocation.getArgument(0, List.class);
+            var firstDocument = (io.github.lightragjava.types.Document) documents.get(0);
+            if ("doc-block".equals(firstDocument.id())) {
+                firstJobStarted.countDown();
+                if (!releaseFirstJob.await(5, TimeUnit.SECONDS)) {
+                    throw new IllegalStateException("timed out waiting to release blocking job");
+                }
+            }
+            return null;
+        }).when(statusLightRag).ingest(anyList());
+
+        var blockingJobId = submitJob(WORKSPACE_STATUS, BLOCKING_INGEST_PAYLOAD);
+        awaitJobStatus(WORKSPACE_STATUS, blockingJobId, "RUNNING");
+        if (!firstJobStarted.await(1, TimeUnit.SECONDS)) {
+            fail("blocking job did not start");
+        }
+
+        var pendingJobId = submitJob(WORKSPACE_STATUS, SECOND_INGEST_PAYLOAD);
+
+        mockMvc.perform(post("/documents/jobs/{jobId}/cancel", pendingJobId)
+                .header(WORKSPACE_HEADER, WORKSPACE_STATUS))
+            .andExpect(status().isAccepted())
+            .andExpect(jsonPath("$.jobId").value(pendingJobId))
+            .andExpect(jsonPath("$.status").value("CANCELLED"))
+            .andExpect(jsonPath("$.cancellable").value(false))
+            .andExpect(jsonPath("$.retriable").value(true))
+            .andExpect(jsonPath("$.attempt").value(1));
+
+        mockMvc.perform(get("/documents/jobs/{jobId}", pendingJobId)
+                .header(WORKSPACE_HEADER, WORKSPACE_STATUS))
+            .andExpect(status().isOk())
+            .andExpect(jsonPath("$.status").value("CANCELLED"))
+            .andExpect(jsonPath("$.errorMessage").value("job cancelled"));
+
+        var retryResult = mockMvc.perform(post("/documents/jobs/{jobId}/retry", pendingJobId)
+                .header(WORKSPACE_HEADER, WORKSPACE_STATUS))
+            .andExpect(status().isAccepted())
+            .andExpect(jsonPath("$.status").value("PENDING"))
+            .andExpect(jsonPath("$.retriedFromJobId").value(pendingJobId))
+            .andExpect(jsonPath("$.attempt").value(2))
+            .andReturn();
+        var retriedJobId = objectMapper.readTree(retryResult.getResponse().getContentAsString()).get("jobId").asText();
+
+        releaseFirstJob.countDown();
+        awaitJobStatus(WORKSPACE_STATUS, blockingJobId, "SUCCEEDED");
+        awaitJobStatus(WORKSPACE_STATUS, retriedJobId, "SUCCEEDED");
+    }
+
+    @Test
+    void retryFailedJobCreatesNewAttemptAndRejectsSucceededTransitions() throws Exception {
+        var attempts = new AtomicInteger();
+        doAnswer(invocation -> {
+            var documents = invocation.getArgument(0, List.class);
+            var firstDocument = (io.github.lightragjava.types.Document) documents.get(0);
+            if ("doc-fail".equals(firstDocument.id()) && attempts.getAndIncrement() == 0) {
+                throw new IllegalStateException("simulated ingest failure");
+            }
+            return null;
+        }).when(statusLightRag).ingest(anyList());
+
+        var failedJobId = submitJob(WORKSPACE_STATUS, FAILING_INGEST_PAYLOAD);
+        awaitJobStatus(WORKSPACE_STATUS, failedJobId, "FAILED");
+
+        var retriedResult = mockMvc.perform(post("/documents/jobs/{jobId}/retry", failedJobId)
+                .header(WORKSPACE_HEADER, WORKSPACE_STATUS))
+            .andExpect(status().isAccepted())
+            .andExpect(jsonPath("$.status").value("PENDING"))
+            .andExpect(jsonPath("$.retriedFromJobId").value(failedJobId))
+            .andExpect(jsonPath("$.attempt").value(2))
+            .andReturn();
+        var retriedJobId = objectMapper.readTree(retriedResult.getResponse().getContentAsString()).get("jobId").asText();
+        awaitJobStatus(WORKSPACE_STATUS, retriedJobId, "SUCCEEDED");
+
+        mockMvc.perform(post("/documents/jobs/{jobId}/cancel", retriedJobId)
+                .header(WORKSPACE_HEADER, WORKSPACE_STATUS))
+            .andExpect(status().isConflict())
+            .andExpect(jsonPath("$.message").value("job is not cancellable: " + retriedJobId));
+
+        mockMvc.perform(post("/documents/jobs/{jobId}/retry", retriedJobId)
+                .header(WORKSPACE_HEADER, WORKSPACE_STATUS))
+            .andExpect(status().isConflict())
+            .andExpect(jsonPath("$.message").value("job is not retriable: " + retriedJobId));
+    }
+
+    @Test
     void rejectsInvalidJobPaginationParams() throws Exception {
         mockMvc.perform(get("/documents/jobs")
                 .header(WORKSPACE_HEADER, WORKSPACE_STATUS)
@@ -260,7 +378,7 @@ class DocumentStatusControllerTest {
     }
 
     @Test
-    void isolatesJobsAndStatusesAcrossWorkspaces() throws Exception {
+    void isolatesJobsStatusesAndControlsAcrossWorkspaces() throws Exception {
         doNothing().when(isolatedLightRag).ingest(argThat(documents ->
             documents.size() == 1 && "doc-ws-a".equals(documents.get(0).id())
         ));
@@ -293,6 +411,14 @@ class DocumentStatusControllerTest {
             .andExpect(jsonPath("$").isEmpty());
 
         mockMvc.perform(get("/documents/jobs/{jobId}", jobId)
+                .header(WORKSPACE_HEADER, WORKSPACE_B))
+            .andExpect(status().isNotFound());
+
+        mockMvc.perform(post("/documents/jobs/{jobId}/cancel", jobId)
+                .header(WORKSPACE_HEADER, WORKSPACE_B))
+            .andExpect(status().isNotFound());
+
+        mockMvc.perform(post("/documents/jobs/{jobId}/retry", jobId)
                 .header(WORKSPACE_HEADER, WORKSPACE_B))
             .andExpect(status().isNotFound());
     }

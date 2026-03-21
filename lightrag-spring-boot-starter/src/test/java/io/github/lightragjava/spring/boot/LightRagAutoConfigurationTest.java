@@ -18,6 +18,7 @@ import org.springframework.boot.test.context.runner.ApplicationContextRunner;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 
+import java.lang.reflect.Field;
 import java.util.List;
 import java.util.Map;
 
@@ -41,6 +42,8 @@ class LightRagAutoConfigurationTest {
             "lightrag.query.default-top-k=12",
             "lightrag.query.default-chunk-top-k=18",
             "lightrag.query.default-response-type=Bullet Points",
+            "lightrag.query.automatic-keyword-extraction=false",
+            "lightrag.query.rerank-candidate-multiplier=4",
             "lightrag.demo.async-ingest-enabled=false"
         );
 
@@ -57,7 +60,7 @@ class LightRagAutoConfigurationTest {
     }
 
     @Test
-    void bindsQueryDemoAndChunkingDefaults() {
+    void bindsPipelineWorkspaceAndDemoDefaults() {
         contextRunner.run(context -> {
             var properties = context.getBean(LightRagProperties.class);
 
@@ -67,10 +70,23 @@ class LightRagAutoConfigurationTest {
             assertThat(properties.getQuery().getDefaultTopK()).isEqualTo(12);
             assertThat(properties.getQuery().getDefaultChunkTopK()).isEqualTo(18);
             assertThat(properties.getQuery().getDefaultResponseType()).isEqualTo("Bullet Points");
+            assertThat(properties.getQuery().isAutomaticKeywordExtraction()).isFalse();
+            assertThat(properties.getQuery().getRerankCandidateMultiplier()).isEqualTo(4);
             assertThat(properties.getDemo().isAsyncIngestEnabled()).isFalse();
             assertThat(properties.getWorkspace().getHeaderName()).isEqualTo("X-Workspace-Id");
             assertThat(properties.getWorkspace().getDefaultId()).isEqualTo("default");
             assertThat(properties.getWorkspace().getMaxActiveWorkspaces()).isEqualTo(32);
+        });
+    }
+
+    @Test
+    void wiresPipelineSettingsIntoLightRag() {
+        contextRunner.run(context -> {
+            var lightRag = context.getBean(LightRag.class);
+
+            assertThat(extractField(lightRag, "chunker")).isInstanceOf(Chunker.class);
+            assertThat(extractField(lightRag, "automaticQueryKeywordExtraction")).isEqualTo(false);
+            assertThat(extractField(lightRag, "rerankCandidateMultiplier")).isEqualTo(4);
         });
     }
 
@@ -90,12 +106,14 @@ class LightRagAutoConfigurationTest {
             .run(context -> {
                 var properties = context.getBean(LightRagProperties.class);
 
-                assertThat(properties.getIndexing().getChunking().getWindowSize()).isEqualTo(1000);
+                assertThat(properties.getIndexing().getChunking().getWindowSize()).isEqualTo(1_000);
                 assertThat(properties.getIndexing().getChunking().getOverlap()).isEqualTo(100);
                 assertThat(properties.getQuery().getDefaultMode()).isEqualTo("MIX");
                 assertThat(properties.getQuery().getDefaultTopK()).isEqualTo(10);
                 assertThat(properties.getQuery().getDefaultChunkTopK()).isEqualTo(10);
                 assertThat(properties.getQuery().getDefaultResponseType()).isEqualTo("Multiple Paragraphs");
+                assertThat(properties.getQuery().isAutomaticKeywordExtraction()).isTrue();
+                assertThat(properties.getQuery().getRerankCandidateMultiplier()).isEqualTo(2);
                 assertThat(properties.getDemo().isAsyncIngestEnabled()).isTrue();
                 assertThat(properties.getWorkspace().getHeaderName()).isEqualTo("X-Workspace-Id");
                 assertThat(properties.getWorkspace().getDefaultId()).isEqualTo("default");
@@ -310,5 +328,11 @@ class LightRagAutoConfigurationTest {
         public void restore(SnapshotStore.Snapshot snapshot) {
             delegate.restore(snapshot);
         }
+    }
+
+    private static Object extractField(LightRag lightRag, String fieldName) throws Exception {
+        Field field = LightRag.class.getDeclaredField(fieldName);
+        field.setAccessible(true);
+        return field.get(lightRag);
     }
 }

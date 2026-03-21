@@ -20,6 +20,9 @@ import java.util.NoSuchElementException;
 
 public final class LightRag {
     private final LightRagConfig config;
+    private final Chunker chunker;
+    private final boolean automaticQueryKeywordExtraction;
+    private final int rerankCandidateMultiplier;
     private final IndexingPipeline indexingPipeline;
     private final DeletionPipeline deletionPipeline;
     private final GraphManagementPipeline graphManagementPipeline;
@@ -40,6 +43,9 @@ public final class LightRag {
         int rerankCandidateMultiplier
     ) {
         this.config = config;
+        this.chunker = chunker;
+        this.automaticQueryKeywordExtraction = automaticQueryKeywordExtraction;
+        this.rerankCandidateMultiplier = rerankCandidateMultiplier;
         this.indexingPipeline = new IndexingPipeline(
             config.chatModel(),
             config.embeddingModel(),
@@ -150,6 +156,18 @@ public final class LightRag {
 
     LightRagConfig config() {
         return config;
+    }
+
+    Chunker chunker() {
+        return chunker;
+    }
+
+    boolean automaticQueryKeywordExtraction() {
+        return automaticQueryKeywordExtraction;
+    }
+
+    int rerankCandidateMultiplier() {
+        return rerankCandidateMultiplier;
     }
 
     private static DocumentProcessingStatus toDocumentProcessingStatus(
