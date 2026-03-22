@@ -68,6 +68,29 @@ class DocumentParsingOrchestratorTest {
     }
 
     @Test
+    void fallsBackToTikaWhenMineruProviderIsMissingForPdf() {
+        var orchestrator = new DocumentParsingOrchestrator(
+            new PlainTextParsingProvider(),
+            null,
+            new TikaFallbackParsingProvider(source -> "Recovered without mineru provider")
+        );
+        var source = RawDocumentSource.bytes(
+            "guide.pdf",
+            "%PDF".getBytes(StandardCharsets.UTF_8),
+            "application/pdf",
+            Map.of()
+        );
+
+        var parsed = orchestrator.parse(source, DocumentIngestOptions.defaults());
+
+        assertThat(parsed.plainText()).isEqualTo("Recovered without mineru provider");
+        assertThat(parsed.metadata())
+            .containsEntry("parse_mode", "tika")
+            .containsEntry("parse_backend", "tika")
+            .containsEntry("parse_error_reason", "MinerU provider is not configured");
+    }
+
+    @Test
     void failsInsteadOfUsingTikaWhenImageMineruParsingFails() {
         var orchestrator = new DocumentParsingOrchestrator(
             new PlainTextParsingProvider(),
@@ -89,6 +112,32 @@ class DocumentParsingOrchestratorTest {
         assertThatThrownBy(() -> orchestrator.parse(source, DocumentIngestOptions.defaults()))
             .isInstanceOf(MineruUnavailableException.class)
             .hasMessageContaining("mineru image parse failed");
+    }
+
+    @Test
+    void fallsBackToTikaWhenMineruThrowsUnexpectedRuntimeExceptionForHtml() {
+        var orchestrator = new DocumentParsingOrchestrator(
+            new PlainTextParsingProvider(),
+            new MineruParsingProvider(
+                new CrashingMineruClient("mineru_api", "socket reset"),
+                new MineruDocumentAdapter()
+            ),
+            new TikaFallbackParsingProvider(source -> "Recovered after runtime failure")
+        );
+        var source = RawDocumentSource.bytes(
+            "page.html",
+            "<html><body>Recovered after runtime failure</body></html>".getBytes(StandardCharsets.UTF_8),
+            "text/html",
+            Map.of()
+        );
+
+        var parsed = orchestrator.parse(source, DocumentIngestOptions.defaults());
+
+        assertThat(parsed.plainText()).isEqualTo("Recovered after runtime failure");
+        assertThat(parsed.metadata())
+            .containsEntry("parse_mode", "tika")
+            .containsEntry("parse_backend", "tika")
+            .containsEntry("parse_error_reason", "socket reset");
     }
 
     @Test
@@ -134,6 +183,26 @@ class DocumentParsingOrchestratorTest {
         @Override
         public ParseResult parse(RawDocumentSource source) {
             throw new MineruUnavailableException(message);
+        }
+    }
+
+    private static final class CrashingMineruClient implements MineruClient {
+        private final String backend;
+        private final String message;
+
+        private CrashingMineruClient(String backend, String message) {
+            this.backend = backend;
+            this.message = message;
+        }
+
+        @Override
+        public String backend() {
+            return backend;
+        }
+
+        @Override
+        public ParseResult parse(RawDocumentSource source) {
+            throw new IllegalStateException(message);
         }
     }
 }

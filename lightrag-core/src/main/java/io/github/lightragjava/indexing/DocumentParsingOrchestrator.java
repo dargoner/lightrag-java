@@ -51,27 +51,34 @@ public final class DocumentParsingOrchestrator {
         }
         if (isImageSource(source) || isComplexDocumentSource(source)) {
             if (mineruProvider == null) {
-                throw unsupportedMediaType(source);
+                if (isImageSource(source) || tikaProvider == null) {
+                    throw unsupportedMediaType(source);
+                }
+                return downgradeToTika(source, "MinerU provider is not configured");
             }
             try {
                 return mineruProvider.parse(source);
-            } catch (MineruUnavailableException exception) {
+            } catch (RuntimeException exception) {
                 if (isImageSource(source) || tikaProvider == null) {
                     throw exception;
                 }
-                var downgraded = tikaProvider.parse(source);
-                var metadata = new LinkedHashMap<String, String>(downgraded.metadata());
-                metadata.put("parse_error_reason", exception.getMessage());
-                return new ParsedDocument(
-                    downgraded.documentId(),
-                    downgraded.title(),
-                    downgraded.plainText(),
-                    downgraded.blocks(),
-                    Map.copyOf(metadata)
-                );
+                return downgradeToTika(source, exception.getMessage());
             }
         }
         throw unsupportedMediaType(source);
+    }
+
+    private ParsedDocument downgradeToTika(RawDocumentSource source, String reason) {
+        var downgraded = tikaProvider.parse(source);
+        var metadata = new LinkedHashMap<String, String>(downgraded.metadata());
+        metadata.put("parse_error_reason", reason == null ? "MinerU parsing unavailable" : reason);
+        return new ParsedDocument(
+            downgraded.documentId(),
+            downgraded.title(),
+            downgraded.plainText(),
+            downgraded.blocks(),
+            Map.copyOf(metadata)
+        );
     }
 
     private static IllegalArgumentException unsupportedMediaType(RawDocumentSource source) {
