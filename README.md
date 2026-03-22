@@ -138,9 +138,12 @@ lightrag:
       window-size: 1200
       overlap: 150
     embedding-batch-size: 32
+    max-parallel-insert: 4
 ```
 
 `embedding-batch-size` controls how many texts are sent in each indexing-time embedding request. Leave it unset or `0` to preserve the current single-batch behavior.
+`max-parallel-insert` controls how many documents ingest can process concurrently. It defaults to `1` so existing runtime behavior stays serial unless you opt in.
+When `max-parallel-insert` is greater than `1`, custom `Chunker`, `ChatModel`, and `EmbeddingModel` implementations must be safe for concurrent use.
 
 If the application provides its own `Chunker` bean, the starter backs off and uses that bean instead.
 
@@ -699,18 +702,24 @@ var rag = LightRag.builder()
     .embeddingModel(embeddingModel)
     .storage(storage)
     .chunker(new FixedWindowChunker(600, 80))
+    .embeddingBatchSize(32)
+    .maxParallelInsert(4)
     .automaticQueryKeywordExtraction(false)
     .rerankCandidateMultiplier(4)
     .build();
 ```
 
 - `chunker(...)`: replaces the default fixed-window chunker used during ingest
+- `embeddingBatchSize(...)`: caps the number of texts per embedding request during indexing
+- `maxParallelInsert(...)`: caps how many documents `ingest(...)` processes concurrently
 - `automaticQueryKeywordExtraction(...)`: turns graph-mode keyword extraction on or off
 - `rerankCandidateMultiplier(...)`: controls how far `QueryEngine` expands `chunkTopK` before reranking
 
 Defaults in this phase:
 
 - chunker: `FixedWindowChunker(1000, 100)`
+- embedding batch size: unbounded single batch
+- max parallel insert: `1`
 - automatic keyword extraction: `true`
 - rerank candidate multiplier: `2`
 
@@ -724,6 +733,8 @@ lightrag:
     chunking:
       window-size: 600
       overlap: 80
+    embedding-batch-size: 32
+    max-parallel-insert: 4
   query:
     automatic-keyword-extraction: false
     rerank-candidate-multiplier: 4

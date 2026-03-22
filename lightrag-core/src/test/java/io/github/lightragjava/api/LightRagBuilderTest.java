@@ -10,6 +10,7 @@ import io.github.lightragjava.storage.ChunkStore;
 import io.github.lightragjava.storage.DocumentStore;
 import io.github.lightragjava.storage.DocumentStatusStore;
 import io.github.lightragjava.storage.GraphStore;
+import io.github.lightragjava.storage.InMemoryStorageProvider;
 import io.github.lightragjava.storage.SnapshotStore;
 import io.github.lightragjava.storage.StorageProvider;
 import io.github.lightragjava.storage.VectorStore;
@@ -24,6 +25,12 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.Executors;
+import java.util.concurrent.Future;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.ConcurrentLinkedQueue;
+import java.util.concurrent.atomic.AtomicInteger;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
@@ -88,12 +95,14 @@ class LightRagBuilderTest {
             .automaticQueryKeywordExtraction(false)
             .rerankCandidateMultiplier(4)
             .embeddingBatchSize(3)
+            .maxParallelInsert(2)
             .build();
 
         assertThat(rag.chunker()).isSameAs(chunker);
         assertThat(rag.automaticQueryKeywordExtraction()).isFalse();
         assertThat(rag.rerankCandidateMultiplier()).isEqualTo(4);
         assertThat(rag.embeddingBatchSize()).isEqualTo(3);
+        assertThat(rag.maxParallelInsert()).isEqualTo(2);
     }
 
     @Test
@@ -137,6 +146,72 @@ class LightRagBuilderTest {
         rag.ingest(List.of(new Document("doc-1", "Title", "ignored source text", Map.of())));
 
         assertThat(embeddingModel.batchSizes()).containsExactly(2, 2, 1);
+    }
+
+    @Test
+    void ingestsDocumentsConcurrentlyWhenMaxParallelInsertIsEnabled() throws Exception {
+        var storageProvider = InMemoryStorageProvider.create();
+        var chunker = new BlockingChunker();
+        var rag = LightRag.builder()
+            .chatModel(new IngestionChatModel())
+            .embeddingModel(new FakeEmbeddingModel())
+            .storage(storageProvider)
+            .chunker(chunker)
+            .maxParallelInsert(2)
+            .build();
+
+        Future<?> future;
+        var executor = Executors.newSingleThreadExecutor();
+        try {
+            future = executor.submit(() -> rag.ingest(List.of(
+                new Document("doc-1", "Doc 1", "alpha", Map.of()),
+                new Document("doc-2", "Doc 2", "beta", Map.of())
+            )));
+            assertThat(chunker.awaitBothDocuments()).as("entered=%s", chunker.enteredDocumentIds()).isTrue();
+            assertThat(chunker.maxInFlight()).isEqualTo(2);
+            chunker.release();
+            future.get(2, TimeUnit.SECONDS);
+        } finally {
+            chunker.release();
+            executor.shutdownNow();
+        }
+
+        assertThat(storageProvider.documentStore().list())
+            .extracting(DocumentStore.DocumentRecord::id)
+            .containsExactlyInAnyOrder("doc-1", "doc-2");
+    }
+
+    @Test
+    void doesNotCommitOtherDocumentsAfterConcurrentFailure() throws Exception {
+        var storageProvider = InMemoryStorageProvider.create();
+        var chunker = new InterruptIgnoringChunker("doc-slow");
+        var rag = LightRag.builder()
+            .chatModel(new SelectiveFailingIngestionChatModel("explode"))
+            .embeddingModel(new FakeEmbeddingModel())
+            .storage(storageProvider)
+            .chunker(chunker)
+            .maxParallelInsert(2)
+            .build();
+
+        Future<?> future;
+        var executor = Executors.newSingleThreadExecutor();
+        try {
+            future = executor.submit(() -> rag.ingest(List.of(
+                new Document("doc-fail", "Doc fail", "explode", Map.of()),
+                new Document("doc-slow", "Doc slow", "steady", Map.of())
+            )));
+            assertThat(chunker.awaitBlockedDocument()).isTrue();
+            chunker.release();
+            assertThatThrownBy(() -> future.get(2, TimeUnit.SECONDS))
+                .isInstanceOf(java.util.concurrent.ExecutionException.class)
+                .hasCauseInstanceOf(IllegalStateException.class);
+        } finally {
+            chunker.release();
+            executor.shutdownNow();
+        }
+
+        assertThat(storageProvider.documentStore().contains("doc-slow")).isFalse();
+        assertThat(rag.getDocumentStatus("doc-slow").status()).isEqualTo(DocumentStatus.FAILED);
     }
 
     @Test
@@ -215,6 +290,13 @@ class LightRagBuilderTest {
         assertThatThrownBy(() -> LightRag.builder().embeddingBatchSize(0))
             .isInstanceOf(IllegalArgumentException.class)
             .hasMessage("embeddingBatchSize must be positive");
+    }
+
+    @Test
+    void rejectsNonPositiveMaxParallelInsert() {
+        assertThatThrownBy(() -> LightRag.builder().maxParallelInsert(0))
+            .isInstanceOf(IllegalArgumentException.class)
+            .hasMessage("maxParallelInsert must be positive");
     }
 
     @Test
@@ -555,6 +637,27 @@ class LightRagBuilderTest {
         }
     }
 
+    private static final class SelectiveFailingIngestionChatModel implements ChatModel {
+        private final String failingMarker;
+
+        private SelectiveFailingIngestionChatModel(String failingMarker) {
+            this.failingMarker = failingMarker;
+        }
+
+        @Override
+        public String generate(ChatRequest request) {
+            if (request.userPrompt().contains(failingMarker)) {
+                throw new IllegalStateException("boom");
+            }
+            return """
+                {
+                  "entities": [],
+                  "relations": []
+                }
+                """;
+        }
+    }
+
     private static final class FakeEmbeddingModel implements EmbeddingModel {
         @Override
         public List<List<Double>> embedAll(List<String> texts) {
@@ -577,6 +680,84 @@ class LightRagBuilderTest {
 
         List<Integer> batchSizes() {
             return List.copyOf(batchSizes);
+        }
+    }
+
+    private static final class BlockingChunker implements Chunker {
+        private final AtomicInteger inFlight = new AtomicInteger();
+        private final AtomicInteger maxInFlight = new AtomicInteger();
+        private final ConcurrentLinkedQueue<String> enteredDocumentIds = new ConcurrentLinkedQueue<>();
+        private final CountDownLatch twoEntered = new CountDownLatch(2);
+        private final CountDownLatch release = new CountDownLatch(1);
+
+        @Override
+        public List<Chunk> chunk(Document document) {
+            int current = inFlight.incrementAndGet();
+            maxInFlight.accumulateAndGet(current, Math::max);
+            enteredDocumentIds.add(document.id());
+            twoEntered.countDown();
+            try {
+                if (!release.await(1, TimeUnit.SECONDS)) {
+                    throw new IllegalStateException("timed out waiting to release chunking");
+                }
+            } catch (InterruptedException exception) {
+                Thread.currentThread().interrupt();
+                throw new RuntimeException(exception);
+            } finally {
+                inFlight.decrementAndGet();
+            }
+            return List.of(new Chunk(document.id() + ":0", document.id(), document.content(), 1, 0, Map.of()));
+        }
+
+        boolean awaitBothDocuments() throws InterruptedException {
+            return twoEntered.await(2, TimeUnit.SECONDS);
+        }
+
+        void release() {
+            release.countDown();
+        }
+
+        int maxInFlight() {
+            return maxInFlight.get();
+        }
+
+        List<String> enteredDocumentIds() {
+            return List.copyOf(enteredDocumentIds);
+        }
+    }
+
+    private static final class InterruptIgnoringChunker implements Chunker {
+        private final String blockedDocumentId;
+        private final CountDownLatch blockedDocumentEntered = new CountDownLatch(1);
+        private final CountDownLatch release = new CountDownLatch(1);
+
+        private InterruptIgnoringChunker(String blockedDocumentId) {
+            this.blockedDocumentId = blockedDocumentId;
+        }
+
+        @Override
+        public List<Chunk> chunk(Document document) {
+            if (document.id().equals(blockedDocumentId)) {
+                blockedDocumentEntered.countDown();
+                while (true) {
+                    try {
+                        if (release.await(50, TimeUnit.MILLISECONDS)) {
+                            break;
+                        }
+                    } catch (InterruptedException ignored) {
+                        // Simulate a user model implementation that does not stop immediately on interruption.
+                    }
+                }
+            }
+            return List.of(new Chunk(document.id() + ":0", document.id(), document.content(), 1, 0, Map.of()));
+        }
+
+        boolean awaitBlockedDocument() throws InterruptedException {
+            return blockedDocumentEntered.await(2, TimeUnit.SECONDS);
+        }
+
+        void release() {
+            release.countDown();
         }
     }
 

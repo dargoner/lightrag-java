@@ -86,6 +86,7 @@ public class WorkspaceLightRagFactory {
         if (properties.getIndexing().getEmbeddingBatchSize() > 0) {
             builder.embeddingBatchSize(properties.getIndexing().getEmbeddingBatchSize());
         }
+        builder.maxParallelInsert(properties.getIndexing().getMaxParallelInsert());
         if (chunker != null) {
             builder.chunker(chunker);
         }

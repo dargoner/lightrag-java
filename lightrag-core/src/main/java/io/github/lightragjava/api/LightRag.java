@@ -24,17 +24,18 @@ public final class LightRag {
     private final boolean automaticQueryKeywordExtraction;
     private final int rerankCandidateMultiplier;
     private final int embeddingBatchSize;
+    private final int maxParallelInsert;
     private final IndexingPipeline indexingPipeline;
     private final DeletionPipeline deletionPipeline;
     private final GraphManagementPipeline graphManagementPipeline;
     private final QueryEngine queryEngine;
 
     LightRag(LightRagConfig config) {
-        this(config, null, true, 2, Integer.MAX_VALUE);
+        this(config, null, true, 2, Integer.MAX_VALUE, 1);
     }
 
     LightRag(LightRagConfig config, Chunker chunker) {
-        this(config, chunker, true, 2, Integer.MAX_VALUE);
+        this(config, chunker, true, 2, Integer.MAX_VALUE, 1);
     }
 
     LightRag(
@@ -42,20 +43,23 @@ public final class LightRag {
         Chunker chunker,
         boolean automaticQueryKeywordExtraction,
         int rerankCandidateMultiplier,
-        int embeddingBatchSize
+        int embeddingBatchSize,
+        int maxParallelInsert
     ) {
         this.config = config;
         this.chunker = chunker;
         this.automaticQueryKeywordExtraction = automaticQueryKeywordExtraction;
         this.rerankCandidateMultiplier = rerankCandidateMultiplier;
         this.embeddingBatchSize = embeddingBatchSize;
+        this.maxParallelInsert = maxParallelInsert;
         this.indexingPipeline = new IndexingPipeline(
             config.chatModel(),
             config.embeddingModel(),
             config.storageProvider(),
             config.snapshotPath(),
             chunker,
-            embeddingBatchSize
+            embeddingBatchSize,
+            maxParallelInsert
         );
         this.deletionPipeline = new DeletionPipeline(
             config.storageProvider(),
@@ -176,6 +180,10 @@ public final class LightRag {
 
     int embeddingBatchSize() {
         return embeddingBatchSize;
+    }
+
+    int maxParallelInsert() {
+        return maxParallelInsert;
     }
 
     private static DocumentProcessingStatus toDocumentProcessingStatus(

@@ -32,6 +32,7 @@ public final class LightRagBuilder {
     private boolean automaticQueryKeywordExtraction = true;
     private int rerankCandidateMultiplier = 2;
     private int embeddingBatchSize = Integer.MAX_VALUE;
+    private int maxParallelInsert = 1;
 
     public LightRagBuilder chatModel(ChatModel chatModel) {
         this.chatModel = Objects.requireNonNull(chatModel, "chatModel");
@@ -83,6 +84,14 @@ public final class LightRagBuilder {
         return this;
     }
 
+    public LightRagBuilder maxParallelInsert(int maxParallelInsert) {
+        if (maxParallelInsert <= 0) {
+            throw new IllegalArgumentException("maxParallelInsert must be positive");
+        }
+        this.maxParallelInsert = maxParallelInsert;
+        return this;
+    }
+
     public LightRagBuilder loadFromSnapshot(Path path) {
         this.snapshotPath = Objects.requireNonNull(path, "path");
         return this;
@@ -116,7 +125,7 @@ public final class LightRagBuilder {
             storageProvider.documentStatusStore(),
             snapshotPath,
             rerankModel
-        ), chunker, automaticQueryKeywordExtraction, rerankCandidateMultiplier, embeddingBatchSize);
+        ), chunker, automaticQueryKeywordExtraction, rerankCandidateMultiplier, embeddingBatchSize, maxParallelInsert);
     }
 
     private static <T> T requireStore(String componentName, T store, Class<T> storeType) {

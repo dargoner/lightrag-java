@@ -44,6 +44,7 @@ class LightRagAutoConfigurationTest {
             "lightrag.indexing.chunking.window-size=4",
             "lightrag.indexing.chunking.overlap=1",
             "lightrag.indexing.embedding-batch-size=2",
+            "lightrag.indexing.max-parallel-insert=3",
             "lightrag.query.default-mode=GLOBAL",
             "lightrag.query.default-top-k=12",
             "lightrag.query.default-chunk-top-k=18",
@@ -75,6 +76,7 @@ class LightRagAutoConfigurationTest {
             assertThat(properties.getIndexing().getChunking().getWindowSize()).isEqualTo(4);
             assertThat(properties.getIndexing().getChunking().getOverlap()).isEqualTo(1);
             assertThat(properties.getIndexing().getEmbeddingBatchSize()).isEqualTo(2);
+            assertThat(properties.getIndexing().getMaxParallelInsert()).isEqualTo(3);
             assertThat(properties.getQuery().getDefaultMode()).isEqualTo("GLOBAL");
             assertThat(properties.getQuery().getDefaultTopK()).isEqualTo(12);
             assertThat(properties.getQuery().getDefaultChunkTopK()).isEqualTo(18);
@@ -97,6 +99,7 @@ class LightRagAutoConfigurationTest {
             assertThat(extractField(lightRag, "automaticQueryKeywordExtraction")).isEqualTo(false);
             assertThat(extractField(lightRag, "rerankCandidateMultiplier")).isEqualTo(4);
             assertThat(extractField(lightRag, "embeddingBatchSize")).isEqualTo(2);
+            assertThat(extractField(lightRag, "maxParallelInsert")).isEqualTo(3);
         });
     }
 
@@ -132,6 +135,7 @@ class LightRagAutoConfigurationTest {
                 assertThat(properties.getIndexing().getChunking().getWindowSize()).isEqualTo(1_000);
                 assertThat(properties.getIndexing().getChunking().getOverlap()).isEqualTo(100);
                 assertThat(properties.getIndexing().getEmbeddingBatchSize()).isZero();
+                assertThat(properties.getIndexing().getMaxParallelInsert()).isEqualTo(1);
                 assertThat(properties.getQuery().getDefaultMode()).isEqualTo("MIX");
                 assertThat(properties.getQuery().getDefaultTopK()).isEqualTo(10);
                 assertThat(properties.getQuery().getDefaultChunkTopK()).isEqualTo(10);
@@ -242,6 +246,29 @@ class LightRagAutoConfigurationTest {
                 assertThat(context.getStartupFailure())
                     .hasRootCauseInstanceOf(IllegalArgumentException.class)
                     .hasMessageContaining("overlap must be smaller than windowSize");
+            });
+    }
+
+    @Test
+    void failsFastWhenMaxParallelInsertIsInvalid() {
+        new ApplicationContextRunner()
+            .withConfiguration(AutoConfigurations.of(LightRagAutoConfiguration.class))
+            .withPropertyValues(
+                "lightrag.chat.base-url=http://localhost:11434/v1/",
+                "lightrag.chat.model=qwen2.5:7b",
+                "lightrag.chat.api-key=dummy",
+                "lightrag.embedding.base-url=http://localhost:11434/v1/",
+                "lightrag.embedding.model=nomic-embed-text",
+                "lightrag.embedding.api-key=dummy",
+                "lightrag.storage.type=in-memory",
+                "lightrag.indexing.max-parallel-insert=0"
+            )
+            .run(context -> {
+                assertThat(context).hasFailed();
+                assertThat(context.getStartupFailure())
+                    .rootCause()
+                    .isInstanceOf(IllegalArgumentException.class)
+                    .hasMessage("maxParallelInsert must be positive");
             });
     }
 

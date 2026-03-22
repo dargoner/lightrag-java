@@ -116,6 +116,7 @@ public class LightRagProperties {
     public static class IndexingProperties {
         private final ChunkingProperties chunking = new ChunkingProperties();
         private int embeddingBatchSize;
+        private int maxParallelInsert = 1;
 
         public ChunkingProperties getChunking() {
             return chunking;
@@ -127,6 +128,17 @@ public class LightRagProperties {
 
         public void setEmbeddingBatchSize(int embeddingBatchSize) {
             this.embeddingBatchSize = embeddingBatchSize;
+        }
+
+        public int getMaxParallelInsert() {
+            return maxParallelInsert;
+        }
+
+        public void setMaxParallelInsert(int maxParallelInsert) {
+            if (maxParallelInsert <= 0) {
+                throw new IllegalArgumentException("maxParallelInsert must be positive");
+            }
+            this.maxParallelInsert = maxParallelInsert;
         }
     }
 

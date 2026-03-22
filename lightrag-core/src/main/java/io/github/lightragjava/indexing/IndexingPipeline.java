@@ -13,10 +13,18 @@ import io.github.lightragjava.types.Entity;
 import io.github.lightragjava.types.Relation;
 
 import java.nio.file.Path;
+import java.util.Collection;
+import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
+import java.util.concurrent.ExecutionException;
+import java.util.concurrent.ExecutorCompletionService;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.Future;
+import java.util.concurrent.TimeUnit;
 
 public final class IndexingPipeline {
     private final AtomicStorageProvider storageProvider;
@@ -26,6 +34,8 @@ public final class IndexingPipeline {
     private final EmbeddingModel embeddingModel;
     private final Path snapshotPath;
     private final int embeddingBatchSize;
+    private final int maxParallelInsert;
+    private final Object storageMutationMonitor = new Object();
 
     public IndexingPipeline(
         ChatModel chatModel,
@@ -33,12 +43,14 @@ public final class IndexingPipeline {
         AtomicStorageProvider storageProvider,
         Path snapshotPath,
         Chunker chunker,
-        int embeddingBatchSize
+        int embeddingBatchSize,
+        int maxParallelInsert
     ) {
         this.storageProvider = Objects.requireNonNull(storageProvider, "storageProvider");
         this.embeddingModel = Objects.requireNonNull(embeddingModel, "embeddingModel");
         this.snapshotPath = snapshotPath;
         this.embeddingBatchSize = embeddingBatchSize <= 0 ? Integer.MAX_VALUE : embeddingBatchSize;
+        this.maxParallelInsert = Math.max(1, maxParallelInsert);
         this.documentIngestor = new DocumentIngestor(
             storageProvider,
             chunker == null ? new FixedWindowChunker(FixedWindowChunker.DEFAULT_WINDOW_SIZE, FixedWindowChunker.DEFAULT_OVERLAP) : chunker
@@ -53,65 +65,156 @@ public final class IndexingPipeline {
         AtomicStorageProvider storageProvider,
         Path snapshotPath
     ) {
-        this(chatModel, embeddingModel, storageProvider, snapshotPath, null, Integer.MAX_VALUE);
+        this(chatModel, embeddingModel, storageProvider, snapshotPath, null, Integer.MAX_VALUE, 1);
     }
 
     public void ingest(List<Document> documents) {
-        for (var document : List.copyOf(Objects.requireNonNull(documents, "documents"))) {
-            try {
-                ingestOne(document);
-                persistSnapshotIfConfigured();
-            } catch (RuntimeException | Error failure) {
-                persistSnapshotIfConfigured();
-                throw failure;
+        var sources = List.copyOf(Objects.requireNonNull(documents, "documents"));
+        if (sources.size() <= 1 || maxParallelInsert <= 1) {
+            for (var document : sources) {
+                ingestSequentially(document);
             }
+            return;
         }
+        ingestConcurrently(sources);
     }
 
-    private void ingestOne(Document document) {
+    private void ingestSequentially(Document document) {
         var source = Objects.requireNonNull(document, "document");
-        saveStatus(new DocumentStatusStore.StatusRecord(source.id(), DocumentStatus.PROCESSING, "", null));
+        saveStatus(processingStatus(source.id()));
         try {
-            var prepared = documentIngestor.prepare(List.of(source));
-            var chunks = prepared.chunks();
-            var chunkVectors = chunkVectors(chunks);
-
-            var graph = graphAssembler.assemble(chunks.stream()
-                .map(chunk -> new GraphAssembler.ChunkExtraction(chunk.id(), knowledgeExtractor.extract(chunk)))
-                .toList());
-            var entityVectors = entityVectors(graph.entities());
-            var relationVectors = relationVectors(graph.relations());
-
-            storageProvider.writeAtomically(storage -> {
-                saveDocumentsAndChunks(prepared, storage);
-                saveVectors(StorageSnapshots.CHUNK_NAMESPACE, chunkVectors, storage.vectorStore());
-                saveGraph(graph.entities(), graph.relations(), storage);
-                saveVectors(StorageSnapshots.ENTITY_NAMESPACE, entityVectors, storage.vectorStore());
-                saveVectors(StorageSnapshots.RELATION_NAMESPACE, relationVectors, storage.vectorStore());
-                storage.documentStatusStore().save(new DocumentStatusStore.StatusRecord(
-                    source.id(),
-                    DocumentStatus.PROCESSED,
-                    "processed %d chunks".formatted(chunks.size()),
-                    null
-                ));
-                return null;
-            });
+            commitComputedIngest(computeDocument(source));
+            persistSnapshotIfConfigured();
         } catch (RuntimeException | Error failure) {
-            saveStatus(new DocumentStatusStore.StatusRecord(
-                source.id(),
-                DocumentStatus.FAILED,
-                "",
-                failure.getMessage()
-            ));
+            saveFailureStatus(source.id(), failure);
+            persistSnapshotIfConfigured();
             throw failure;
         }
     }
 
+    private void ingestConcurrently(List<Document> documents) {
+        ExecutorService executor = Executors.newFixedThreadPool(Math.min(maxParallelInsert, documents.size()));
+        var completionService = new ExecutorCompletionService<ComputedIngest>(executor);
+        var pendingTasks = new LinkedHashMap<Future<ComputedIngest>, Document>();
+        try {
+            for (var document : documents) {
+                saveStatus(processingStatus(document.id()));
+                pendingTasks.put(completionService.submit(() -> computeDocument(document)), document);
+            }
+            while (!pendingTasks.isEmpty()) {
+                var completed = completionService.take();
+                var source = pendingTasks.remove(completed);
+                try {
+                    commitComputedIngest(completed.get());
+                    persistSnapshotIfConfigured();
+                } catch (ExecutionException exception) {
+                    cancelPending(pendingTasks.keySet());
+                    saveFailureStatus(source.id(), exception.getCause());
+                    markPendingDocumentsFailed(pendingTasks.values(), "ingest aborted because another document failed");
+                    persistSnapshotIfConfigured();
+                    rethrowTaskFailure(exception.getCause());
+                }
+            }
+        } catch (InterruptedException exception) {
+            cancelPending(pendingTasks.keySet());
+            Thread.currentThread().interrupt();
+            markPendingDocumentsFailed(pendingTasks.values(), "document ingest interrupted");
+            persistSnapshotIfConfigured();
+            throw new RuntimeException("document ingest interrupted", exception);
+        } finally {
+            shutdownExecutor(executor);
+        }
+    }
+
+    private void markPendingDocumentsFailed(Collection<Document> documents, String errorMessage) {
+        for (var document : documents) {
+            saveStatus(new DocumentStatusStore.StatusRecord(
+                document.id(),
+                DocumentStatus.FAILED,
+                "",
+                errorMessage
+            ));
+        }
+    }
+
+    private ComputedIngest computeDocument(Document document) {
+        var source = Objects.requireNonNull(document, "document");
+        var prepared = documentIngestor.prepare(List.of(source));
+        var chunks = prepared.chunks();
+        var chunkVectors = chunkVectors(chunks);
+        var graph = graphAssembler.assemble(chunks.stream()
+            .map(chunk -> new GraphAssembler.ChunkExtraction(chunk.id(), knowledgeExtractor.extract(chunk)))
+            .toList());
+        var entityVectors = entityVectors(graph.entities());
+        var relationVectors = relationVectors(graph.relations());
+        return new ComputedIngest(source, prepared, chunkVectors, graph, entityVectors, relationVectors);
+    }
+
+    private static void cancelPending(Collection<? extends Future<?>> futures) {
+        for (var future : futures) {
+            future.cancel(true);
+        }
+    }
+
+    private static void shutdownExecutor(ExecutorService executor) {
+        executor.shutdownNow();
+        try {
+            executor.awaitTermination(5, TimeUnit.SECONDS);
+        } catch (InterruptedException exception) {
+            Thread.currentThread().interrupt();
+        }
+    }
+
+    private static void rethrowTaskFailure(Throwable failure) {
+        if (failure instanceof RuntimeException runtimeException) {
+            throw runtimeException;
+        }
+        if (failure instanceof Error error) {
+            throw error;
+        }
+        throw new IllegalStateException("document ingest failed", failure);
+    }
+
+    private void commitComputedIngest(ComputedIngest computed) {
+        try {
+            synchronized (storageMutationMonitor) {
+                storageProvider.writeAtomically(storage -> {
+                    saveDocumentsAndChunks(computed.prepared(), storage);
+                    saveVectors(StorageSnapshots.CHUNK_NAMESPACE, computed.chunkVectors(), storage.vectorStore());
+                    saveGraph(computed.graph().entities(), computed.graph().relations(), storage);
+                    saveVectors(StorageSnapshots.ENTITY_NAMESPACE, computed.entityVectors(), storage.vectorStore());
+                    saveVectors(StorageSnapshots.RELATION_NAMESPACE, computed.relationVectors(), storage.vectorStore());
+                    storage.documentStatusStore().save(new DocumentStatusStore.StatusRecord(
+                        computed.source().id(),
+                        DocumentStatus.PROCESSED,
+                        "processed %d chunks".formatted(computed.prepared().chunks().size()),
+                        null
+                    ));
+                    return null;
+                });
+            }
+        } catch (RuntimeException | Error failure) {
+            saveFailureStatus(computed.source().id(), failure);
+            throw failure;
+        }
+    }
+
+    private void saveFailureStatus(String documentId, Throwable failure) {
+        saveStatus(new DocumentStatusStore.StatusRecord(
+            documentId,
+            DocumentStatus.FAILED,
+            "",
+            failure == null ? null : failure.getMessage()
+        ));
+    }
+
     private void saveStatus(DocumentStatusStore.StatusRecord statusRecord) {
-        storageProvider.writeAtomically(storage -> {
-            storage.documentStatusStore().save(statusRecord);
-            return null;
-        });
+        synchronized (storageMutationMonitor) {
+            storageProvider.writeAtomically(storage -> {
+                storage.documentStatusStore().save(statusRecord);
+                return null;
+            });
+        }
     }
 
     private void saveDocumentsAndChunks(
@@ -150,7 +253,13 @@ public final class IndexingPipeline {
     }
 
     private void persistSnapshotIfConfigured() {
-        StorageSnapshots.persistIfConfigured(storageProvider, snapshotPath);
+        synchronized (storageMutationMonitor) {
+            StorageSnapshots.persistIfConfigured(storageProvider, snapshotPath);
+        }
+    }
+
+    private static DocumentStatusStore.StatusRecord processingStatus(String documentId) {
+        return new DocumentStatusStore.StatusRecord(documentId, DocumentStatus.PROCESSING, "", null);
     }
 
     private static List<VectorStore.VectorRecord> toVectorRecords(List<String> ids, List<List<Double>> embeddings) {
@@ -271,5 +380,15 @@ public final class IndexingPipeline {
         merged.addAll(left);
         merged.addAll(right);
         return List.copyOf(merged);
+    }
+
+    private record ComputedIngest(
+        Document source,
+        DocumentIngestor.PreparedIngest prepared,
+        List<VectorStore.VectorRecord> chunkVectors,
+        GraphAssembler.Graph graph,
+        List<VectorStore.VectorRecord> entityVectors,
+        List<VectorStore.VectorRecord> relationVectors
+    ) {
     }
 }
