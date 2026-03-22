@@ -5,6 +5,7 @@ import io.github.lightragjava.indexing.Chunker;
 import io.github.lightragjava.indexing.FixedWindowChunker;
 import io.github.lightragjava.indexing.SmartChunker;
 import io.github.lightragjava.indexing.SmartChunkerConfig;
+import io.github.lightragjava.indexing.DocumentTypeHint;
 import io.github.lightragjava.model.ChatModel;
 import io.github.lightragjava.model.EmbeddingModel;
 import io.github.lightragjava.model.RerankModel;
@@ -230,11 +231,34 @@ class LightRagBuilderTest {
     @Test
     void ingestsUtf8MarkdownSourceWithoutCallingMineruOrTika() {
         var rag = testLightRag();
-        var source = RawDocumentSource.bytes("guide.md", "# Title\nBody".getBytes(StandardCharsets.UTF_8));
+        var source = RawDocumentSource.bytes(
+            "guide.md",
+            "# Title\nBody".getBytes(StandardCharsets.UTF_8),
+            "text/markdown",
+            Map.of("source", "unit-test")
+        );
+        var options = new DocumentIngestOptions(DocumentTypeHint.LAW, ChunkGranularity.COARSE);
 
-        rag.ingestSources(List.of(source), DocumentIngestOptions.defaults());
+        rag.ingestSources(List.of(source), options);
 
-        assertThat(chunkTexts(rag)).isNotEmpty();
+        var documentRecord = rag.config().storageProvider().documentStore()
+            .load(source.sourceId())
+            .orElseThrow();
+        assertThat(documentRecord.title()).isEqualTo("guide.md");
+        assertThat(documentRecord.content()).isEqualTo("# Title\nBody");
+        assertThat(documentRecord.metadata())
+            .containsEntry("source", "unit-test")
+            .containsEntry(DocumentIngestOptions.METADATA_DOCUMENT_TYPE_HINT, DocumentTypeHint.LAW.name())
+            .containsEntry(DocumentIngestOptions.METADATA_CHUNK_GRANULARITY, ChunkGranularity.COARSE.name());
+
+        var chunkRecords = rag.config().storageProvider().chunkStore().listByDocument(source.sourceId());
+        assertThat(chunkRecords).hasSize(1);
+        var chunk = chunkRecords.get(0);
+        assertThat(chunk.text()).isEqualTo("# Title\nBody");
+        assertThat(chunk.metadata())
+            .containsEntry("source", "unit-test")
+            .containsEntry(DocumentIngestOptions.METADATA_DOCUMENT_TYPE_HINT, DocumentTypeHint.LAW.name())
+            .containsEntry(DocumentIngestOptions.METADATA_CHUNK_GRANULARITY, ChunkGranularity.COARSE.name());
     }
 
     @Test

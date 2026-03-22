@@ -14,7 +14,7 @@ public record RawDocumentSource(
     public RawDocumentSource {
         sourceId = requireNonBlank(sourceId, "sourceId");
         fileName = requireNonBlank(fileName, "fileName");
-        mediaType = Objects.requireNonNull(mediaType, "mediaType");
+        mediaType = requireNonBlank(mediaType, "mediaType");
         bytes = Objects.requireNonNull(bytes, "bytes").clone();
         metadata = Map.copyOf(Objects.requireNonNull(metadata, "metadata"));
     }

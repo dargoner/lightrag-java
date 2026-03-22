@@ -115,7 +115,7 @@ public final class IndexingPipeline {
         var rawSources = List.copyOf(Objects.requireNonNull(sources, "sources"));
         Objects.requireNonNull(options, "options");
         var documents = rawSources.stream()
-            .map(source -> toDocument(documentParsingOrchestrator.parse(source)))
+            .map(source -> toDocument(documentParsingOrchestrator.parse(source, options)))
             .toList();
         ingest(documents);
     }
