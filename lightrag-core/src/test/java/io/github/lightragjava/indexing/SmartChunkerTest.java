@@ -235,6 +235,50 @@ class SmartChunkerTest {
     }
 
     @Test
+    void fallsBackWhenListLeadExceedsMaxTokens() {
+        var chunker = new SmartChunker(SmartChunkerConfig.builder()
+            .targetTokens(8)
+            .maxTokens(8)
+            .overlapTokens(0)
+            .build());
+
+        var document = new Document(
+            "doc-long_list_lead",
+            "Guide",
+            "1234567890123456\n- Short",
+            Map.of()
+        );
+
+        var chunks = chunker.chunk(document);
+
+        assertThat(chunks).isNotEmpty();
+        assertThat(chunks).allSatisfy(chunk ->
+            assertThat(chunk.text().codePointCount(0, chunk.text().length())).isLessThanOrEqualTo(8));
+    }
+
+    @Test
+    void fallsBackWhenListLeadAndItemTogetherExceedMaxTokens() {
+        var chunker = new SmartChunker(SmartChunkerConfig.builder()
+            .targetTokens(8)
+            .maxTokens(8)
+            .overlapTokens(0)
+            .build());
+
+        var document = new Document(
+            "doc-long_list_combo",
+            "Guide",
+            "Lead\n- 1234",
+            Map.of()
+        );
+
+        var chunks = chunker.chunk(document);
+
+        assertThat(chunks).isNotEmpty();
+        assertThat(chunks).allSatisfy(chunk ->
+            assertThat(chunk.text().codePointCount(0, chunk.text().length())).isLessThanOrEqualTo(8));
+    }
+
+    @Test
     void fallsBackWhenTableRowExceedsMaxTokens() {
         var chunker = new SmartChunker(SmartChunkerConfig.builder()
             .targetTokens(16)
@@ -246,6 +290,28 @@ class SmartChunkerTest {
             "doc-long_table",
             "Guide",
             "# Data\n| Name | Value |\n| --- | --- |\n| 12345678901234 | Extra |",
+            Map.of()
+        );
+
+        var chunks = chunker.chunk(document);
+
+        assertThat(chunks).isNotEmpty();
+        assertThat(chunks).allSatisfy(chunk ->
+            assertThat(chunk.text().codePointCount(0, chunk.text().length())).isLessThanOrEqualTo(16));
+    }
+
+    @Test
+    void fallsBackWhenTwoLineTableExceedsMaxTokens() {
+        var chunker = new SmartChunker(SmartChunkerConfig.builder()
+            .targetTokens(16)
+            .maxTokens(16)
+            .overlapTokens(0)
+            .build());
+
+        var document = new Document(
+            "doc-long_table_header",
+            "Guide",
+            "| 123456789 | 123456789 |\n| --------- | --------- |",
             Map.of()
         );
 

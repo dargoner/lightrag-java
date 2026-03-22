@@ -53,7 +53,7 @@ public final class SmartChunker implements Chunker {
         var structured = structuredDocumentParser.parse(source);
         var drafts = new ArrayList<ChunkDraft>();
         for (var block : structured.blocks()) {
-            drafts.addAll(chunkBlock(block, source.content()));
+            drafts.addAll(chunkBlock(block));
         }
         return buildChunks(source, drafts);
     }
@@ -82,7 +82,7 @@ public final class SmartChunker implements Chunker {
         return List.copyOf(chunks);
     }
 
-    private List<ChunkDraft> chunkBlock(StructuredBlock block, String sourceContent) {
+    private List<ChunkDraft> chunkBlock(StructuredBlock block) {
         return switch (block.type()) {
             case PARAGRAPH -> buildParagraphDrafts(block.content(), block.sectionPath(), block.id());
             case LIST -> buildListDrafts(block);
@@ -154,6 +154,9 @@ public final class SmartChunker implements Chunker {
             return List.of();
         }
         var lead = isListItem(lines.get(0)) ? "" : lines.get(0);
+        if (!lead.isEmpty() && lead.codePointCount(0, lead.length()) > config.maxTokens()) {
+            return fallbackChunks(block.content(), block.sectionPath(), block.id(), "list", Map.of());
+        }
         int itemStart = lead.isEmpty() ? 0 : 1;
         var drafts = new ArrayList<ChunkDraft>();
         var current = new ArrayList<String>();
@@ -169,6 +172,10 @@ public final class SmartChunker implements Chunker {
                 if (!lead.isEmpty()) {
                     current.add(lead);
                 }
+                candidate = current.isEmpty() ? item : String.join("\n", current) + "\n" + item;
+                if (candidate.codePointCount(0, candidate.length()) > config.maxTokens()) {
+                    return fallbackChunks(block.content(), block.sectionPath(), block.id(), "list", Map.of());
+                }
             }
             current.add(item);
         }
@@ -180,11 +187,14 @@ public final class SmartChunker implements Chunker {
 
     private List<ChunkDraft> buildTableDrafts(StructuredBlock block) {
         var lines = List.of(block.content().split("\\R"));
-        if (lines.size() <= 2 || block.content().codePointCount(0, block.content().length()) <= config.maxTokens()) {
+        if (block.content().codePointCount(0, block.content().length()) <= config.maxTokens()) {
             return List.of(new ChunkDraft(block.content(), block.sectionPath(), "table", block.id(), Map.of(
                 SmartChunkMetadata.TABLE_PART_INDEX, "1",
                 SmartChunkMetadata.TABLE_PART_TOTAL, "1"
             )));
+        }
+        if (lines.size() <= 2) {
+            return fallbackChunks(block.content(), block.sectionPath(), block.id(), "table", Map.of());
         }
         var header = lines.get(0) + "\n" + lines.get(1);
         var rows = lines.subList(2, lines.size());
@@ -194,7 +204,6 @@ public final class SmartChunker implements Chunker {
                 return fallbackChunks(block.content(), block.sectionPath(), block.id(), "table", Map.of());
             }
         }
-        var rows = lines.subList(2, lines.size());
         var chunkTexts = new ArrayList<String>();
         var currentRows = new ArrayList<String>();
         for (var row : rows) {
