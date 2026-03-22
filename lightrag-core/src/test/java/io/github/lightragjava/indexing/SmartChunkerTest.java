@@ -183,10 +183,76 @@ class SmartChunkerTest {
         var document = new Document(
             "doc-2",
             "Guide",
-            "12345678. tail.",
+            "1234567. tail.",
             Map.of()
         );
 
         assertThat(chunker.chunk(document)).isNotEmpty();
+    }
+
+    @Test
+    void fallsBackWhenSentenceExceedsMaxTokens() {
+        var chunker = new SmartChunker(SmartChunkerConfig.builder()
+            .targetTokens(8)
+            .maxTokens(8)
+            .overlapTokens(0)
+            .build());
+
+        var document = new Document(
+            "doc-long_sentence",
+            "Guide",
+            "1234567890. Follow-up short sentence.",
+            Map.of()
+        );
+
+        var chunks = chunker.chunk(document);
+
+        assertThat(chunks).isNotEmpty();
+        assertThat(chunks).allSatisfy(chunk ->
+            assertThat(chunk.text().codePointCount(0, chunk.text().length())).isLessThanOrEqualTo(8));
+    }
+
+    @Test
+    void fallsBackWhenListItemExceedsMaxTokens() {
+        var chunker = new SmartChunker(SmartChunkerConfig.builder()
+            .targetTokens(8)
+            .maxTokens(8)
+            .overlapTokens(0)
+            .build());
+
+        var document = new Document(
+            "doc-long_list",
+            "Guide",
+            "List:\n- 1234567890123456\n- Short",
+            Map.of()
+        );
+
+        var chunks = chunker.chunk(document);
+
+        assertThat(chunks).isNotEmpty();
+        assertThat(chunks).allSatisfy(chunk ->
+            assertThat(chunk.text().codePointCount(0, chunk.text().length())).isLessThanOrEqualTo(8));
+    }
+
+    @Test
+    void fallsBackWhenTableRowExceedsMaxTokens() {
+        var chunker = new SmartChunker(SmartChunkerConfig.builder()
+            .targetTokens(16)
+            .maxTokens(16)
+            .overlapTokens(0)
+            .build());
+
+        var document = new Document(
+            "doc-long_table",
+            "Guide",
+            "# Data\n| Name | Value |\n| --- | --- |\n| 12345678901234 | Extra |",
+            Map.of()
+        );
+
+        var chunks = chunker.chunk(document);
+
+        assertThat(chunks).isNotEmpty();
+        assertThat(chunks).allSatisfy(chunk ->
+            assertThat(chunk.text().codePointCount(0, chunk.text().length())).isLessThanOrEqualTo(16));
     }
 }

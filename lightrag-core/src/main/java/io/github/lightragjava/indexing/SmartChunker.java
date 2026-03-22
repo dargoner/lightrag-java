@@ -100,6 +100,9 @@ public final class SmartChunker implements Chunker {
         }
 
         var sentences = sentenceBoundaryAnalyzer.split(content);
+        if (sentences.stream().anyMatch(sentence -> sentence.codePointCount(0, sentence.length()) > config.maxTokens())) {
+            return fallbackChunks(content, sectionPath, blockId, "text", Map.of());
+        }
         if (sentences.size() <= 1) {
             return fallbackChunks(content, sectionPath, blockId, "text", Map.of());
         }
@@ -144,6 +147,9 @@ public final class SmartChunker implements Chunker {
             return List.of(new ChunkDraft(block.content(), block.sectionPath(), "list", block.id(), Map.of()));
         }
         var lines = List.of(block.content().split("\\R"));
+        if (lines.stream().anyMatch(line -> isListItem(line) && line.codePointCount(0, line.length()) > config.maxTokens())) {
+            return fallbackChunks(block.content(), block.sectionPath(), block.id(), "list", Map.of());
+        }
         if (lines.isEmpty()) {
             return List.of();
         }
@@ -181,6 +187,13 @@ public final class SmartChunker implements Chunker {
             )));
         }
         var header = lines.get(0) + "\n" + lines.get(1);
+        var rows = lines.subList(2, lines.size());
+        for (var row : rows) {
+            var rowWithHeader = header + "\n" + row;
+            if (rowWithHeader.codePointCount(0, rowWithHeader.length()) > config.maxTokens()) {
+                return fallbackChunks(block.content(), block.sectionPath(), block.id(), "table", Map.of());
+            }
+        }
         var rows = lines.subList(2, lines.size());
         var chunkTexts = new ArrayList<String>();
         var currentRows = new ArrayList<String>();
