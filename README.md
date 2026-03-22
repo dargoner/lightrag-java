@@ -56,6 +56,7 @@ The starter auto-configures `LightRag` from `application.yml` when you provide:
 
 - chat model base URL, model name, and API key
 - embedding model base URL, model name, and API key
+- optional chat and embedding request timeouts
 - storage type: `in-memory`, `postgres`, or `postgres-neo4j`
 - indexing defaults for chunk window and overlap
 - query defaults for automatic keyword extraction and rerank candidate expansion
@@ -97,6 +98,18 @@ The demo's default config lives in:
 - `lightrag-spring-boot-demo/src/main/resources/application.yml`
 
 It defaults to `in-memory` storage, OpenAI-compatible model settings resolved from environment variables, buffered `/query` responses, SSE `/query/stream` responses, and async ingest enabled.
+
+When you need stricter network control, the starter also exposes OpenAI-compatible timeout settings:
+
+```yaml
+lightrag:
+  chat:
+    timeout: PT45S
+  embedding:
+    timeout: PT15S
+```
+
+Both values use ISO-8601 `Duration` syntax and default to `PT30S`.
 
 ## Chunking
 

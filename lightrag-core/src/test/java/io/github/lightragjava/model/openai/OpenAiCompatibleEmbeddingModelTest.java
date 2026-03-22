@@ -6,6 +6,7 @@ import okhttp3.mockwebserver.MockResponse;
 import okhttp3.mockwebserver.MockWebServer;
 import org.junit.jupiter.api.Test;
 
+import java.time.Duration;
 import java.util.List;
 
 import static org.assertj.core.api.Assertions.assertThat;
@@ -96,6 +97,33 @@ class OpenAiCompatibleEmbeddingModelTest {
                 .isInstanceOf(ModelException.class);
             assertThatThrownBy(() -> model.embedAll(List.of("hello")))
                 .isInstanceOf(ModelException.class);
+        }
+    }
+
+    @Test
+    void embeddingAdapterSupportsCustomRequestTimeout() throws Exception {
+        try (var server = new MockWebServer()) {
+            server.enqueue(new MockResponse()
+                .setBody("""
+                    {
+                      "data": [
+                        {
+                          "embedding": [1.0, 0.0]
+                        }
+                      ]
+                    }
+                    """)
+                .setBodyDelay(1500, java.util.concurrent.TimeUnit.MILLISECONDS));
+            server.start();
+            var model = new OpenAiCompatibleEmbeddingModel(
+                server.url("/v1/").toString(),
+                "text-embedding-test",
+                "secret",
+                Duration.ofSeconds(5)
+            );
+
+            assertThat(model.embedAll(List.of("hello")))
+                .containsExactly(List.of(1.0d, 0.0d));
         }
     }
 }

@@ -5,6 +5,8 @@ import io.github.lightragjava.indexing.Chunker;
 import io.github.lightragjava.indexing.FixedWindowChunker;
 import io.github.lightragjava.model.ChatModel;
 import io.github.lightragjava.model.EmbeddingModel;
+import io.github.lightragjava.model.openai.OpenAiCompatibleChatModel;
+import io.github.lightragjava.model.openai.OpenAiCompatibleEmbeddingModel;
 import io.github.lightragjava.storage.AtomicStorageProvider;
 import io.github.lightragjava.storage.InMemoryStorageProvider;
 import io.github.lightragjava.storage.SnapshotStore;
@@ -18,6 +20,7 @@ import org.springframework.boot.test.context.runner.ApplicationContextRunner;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 
+import java.time.Duration;
 import java.lang.reflect.Field;
 import java.util.List;
 import java.util.Map;
@@ -32,9 +35,11 @@ class LightRagAutoConfigurationTest {
             "lightrag.chat.base-url=http://localhost:11434/v1/",
             "lightrag.chat.model=qwen2.5:7b",
             "lightrag.chat.api-key=dummy",
+            "lightrag.chat.timeout=PT45S",
             "lightrag.embedding.base-url=http://localhost:11434/v1/",
             "lightrag.embedding.model=nomic-embed-text",
             "lightrag.embedding.api-key=dummy",
+            "lightrag.embedding.timeout=PT12S",
             "lightrag.storage.type=in-memory",
             "lightrag.indexing.chunking.window-size=4",
             "lightrag.indexing.chunking.overlap=1",
@@ -64,6 +69,8 @@ class LightRagAutoConfigurationTest {
         contextRunner.run(context -> {
             var properties = context.getBean(LightRagProperties.class);
 
+            assertThat(properties.getChat().getTimeout()).isEqualTo(Duration.ofSeconds(45));
+            assertThat(properties.getEmbedding().getTimeout()).isEqualTo(Duration.ofSeconds(12));
             assertThat(properties.getIndexing().getChunking().getWindowSize()).isEqualTo(4);
             assertThat(properties.getIndexing().getChunking().getOverlap()).isEqualTo(1);
             assertThat(properties.getQuery().getDefaultMode()).isEqualTo("GLOBAL");
@@ -91,6 +98,17 @@ class LightRagAutoConfigurationTest {
     }
 
     @Test
+    void wiresConfiguredTimeoutsIntoDefaultOpenAiModels() {
+        contextRunner.run(context -> {
+            var chatModel = (OpenAiCompatibleChatModel) context.getBean(ChatModel.class);
+            var embeddingModel = (OpenAiCompatibleEmbeddingModel) context.getBean(EmbeddingModel.class);
+
+            assertThat(extractTimeout(chatModel)).isEqualTo(Duration.ofSeconds(45));
+            assertThat(extractTimeout(embeddingModel)).isEqualTo(Duration.ofSeconds(12));
+        });
+    }
+
+    @Test
     void providesP0DefaultsWhenNotConfigured() {
         new ApplicationContextRunner()
             .withConfiguration(AutoConfigurations.of(LightRagAutoConfiguration.class))
@@ -106,6 +124,8 @@ class LightRagAutoConfigurationTest {
             .run(context -> {
                 var properties = context.getBean(LightRagProperties.class);
 
+                assertThat(properties.getChat().getTimeout()).isEqualTo(Duration.ofSeconds(30));
+                assertThat(properties.getEmbedding().getTimeout()).isEqualTo(Duration.ofSeconds(30));
                 assertThat(properties.getIndexing().getChunking().getWindowSize()).isEqualTo(1_000);
                 assertThat(properties.getIndexing().getChunking().getOverlap()).isEqualTo(100);
                 assertThat(properties.getQuery().getDefaultMode()).isEqualTo("MIX");
@@ -334,5 +354,13 @@ class LightRagAutoConfigurationTest {
         Field field = LightRag.class.getDeclaredField(fieldName);
         field.setAccessible(true);
         return field.get(lightRag);
+    }
+
+    private static Duration extractTimeout(Object model) throws Exception {
+        Field httpClientField = model.getClass().getDeclaredField("httpClient");
+        httpClientField.setAccessible(true);
+        Object httpClient = httpClientField.get(model);
+        int callTimeoutMillis = (int) httpClient.getClass().getMethod("callTimeoutMillis").invoke(httpClient);
+        return Duration.ofMillis(callTimeoutMillis);
     }
 }

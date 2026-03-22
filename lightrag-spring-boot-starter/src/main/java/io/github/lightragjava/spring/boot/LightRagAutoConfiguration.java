@@ -34,7 +34,8 @@ public class LightRagAutoConfiguration {
         return new OpenAiCompatibleChatModel(
             requireValue(chat.getBaseUrl(), "lightrag.chat.base-url"),
             requireValue(chat.getModel(), "lightrag.chat.model"),
-            requireValue(chat.getApiKey(), "lightrag.chat.api-key")
+            requireValue(chat.getApiKey(), "lightrag.chat.api-key"),
+            chat.getTimeout()
         );
     }
 
@@ -45,7 +46,8 @@ public class LightRagAutoConfiguration {
         return new OpenAiCompatibleEmbeddingModel(
             requireValue(embedding.getBaseUrl(), "lightrag.embedding.base-url"),
             requireValue(embedding.getModel(), "lightrag.embedding.model"),
-            requireValue(embedding.getApiKey(), "lightrag.embedding.api-key")
+            requireValue(embedding.getApiKey(), "lightrag.embedding.api-key"),
+            embedding.getTimeout()
         );
     }
 

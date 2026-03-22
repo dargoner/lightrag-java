@@ -278,6 +278,21 @@ Starter 还额外暴露了几项 pipeline 配置：
 - `lightrag.query.automatic-keyword-extraction`
 - `lightrag.query.rerank-candidate-multiplier`
 
+模型超时也可以直接通过 Starter 配置：
+
+- `lightrag.chat.timeout`
+- `lightrag.embedding.timeout`
+
+两者都使用 ISO-8601 `Duration` 格式，默认值是 `PT30S`，例如：
+
+```yaml
+lightrag:
+  chat:
+    timeout: PT45S
+  embedding:
+    timeout: PT15S
+```
+
 ## RAGAS 评测
 
 仓库内已经集成 upstream 风格的 RAGAS 评测：

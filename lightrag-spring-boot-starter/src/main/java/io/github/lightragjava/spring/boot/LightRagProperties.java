@@ -3,6 +3,8 @@ package io.github.lightragjava.spring.boot;
 import io.github.lightragjava.indexing.FixedWindowChunker;
 import org.springframework.boot.context.properties.ConfigurationProperties;
 
+import java.time.Duration;
+
 @ConfigurationProperties(prefix = "lightrag")
 public class LightRagProperties {
     private final ModelProperties chat = new ModelProperties();
@@ -54,6 +56,7 @@ public class LightRagProperties {
         private String baseUrl;
         private String model;
         private String apiKey;
+        private Duration timeout = Duration.ofSeconds(30);
 
         public String getBaseUrl() {
             return baseUrl;
@@ -77,6 +80,14 @@ public class LightRagProperties {
 
         public void setApiKey(String apiKey) {
             this.apiKey = apiKey;
+        }
+
+        public Duration getTimeout() {
+            return timeout;
+        }
+
+        public void setTimeout(Duration timeout) {
+            this.timeout = timeout;
         }
     }
 

@@ -10,6 +10,7 @@ import okhttp3.Request;
 import okhttp3.RequestBody;
 
 import java.io.IOException;
+import java.time.Duration;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
@@ -19,15 +20,26 @@ public final class OpenAiCompatibleEmbeddingModel implements EmbeddingModel {
     private static final ObjectMapper OBJECT_MAPPER = new ObjectMapper();
     private static final MediaType JSON = MediaType.get("application/json");
 
-    private final OkHttpClient httpClient = new OkHttpClient();
+    private final OkHttpClient httpClient;
     private final String baseUrl;
     private final String modelName;
     private final String apiKey;
 
     public OpenAiCompatibleEmbeddingModel(String baseUrl, String modelName, String apiKey) {
+        this(baseUrl, modelName, apiKey, Duration.ofSeconds(30));
+    }
+
+    public OpenAiCompatibleEmbeddingModel(String baseUrl, String modelName, String apiKey, Duration timeout) {
         this.baseUrl = normalizeBaseUrl(baseUrl);
         this.modelName = requireNonBlank(modelName, "modelName");
         this.apiKey = requireNonBlank(apiKey, "apiKey");
+        var effectiveTimeout = Objects.requireNonNull(timeout, "timeout");
+        this.httpClient = new OkHttpClient.Builder()
+            .callTimeout(effectiveTimeout)
+            .connectTimeout(effectiveTimeout)
+            .readTimeout(effectiveTimeout)
+            .writeTimeout(effectiveTimeout)
+            .build();
     }
 
     @Override
