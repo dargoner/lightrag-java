@@ -46,20 +46,25 @@ public final class DocumentParsingOrchestrator {
     }
 
     private ParsedDocument parseWithRouting(RawDocumentSource source) {
+        var imageSource = isImageSource(source);
+        var complexSource = isComplexDocumentSource(source);
         if (isPlainTextSource(source)) {
             return plainTextProvider.parse(source);
         }
-        if (isImageSource(source) || isComplexDocumentSource(source)) {
+        if (imageSource || complexSource) {
             if (mineruProvider == null) {
-                if (isImageSource(source) || tikaProvider == null) {
-                    throw unsupportedMediaType(source);
+                if (imageSource) {
+                    throw new MineruUnavailableException("MinerU provider is not configured");
+                }
+                if (tikaProvider == null) {
+                    throw new MineruUnavailableException("No parser is configured for complex document: " + source.fileName());
                 }
                 return downgradeToTika(source, "MinerU provider is not configured");
             }
             try {
                 return mineruProvider.parse(source);
             } catch (RuntimeException exception) {
-                if (isImageSource(source) || tikaProvider == null) {
+                if (imageSource || tikaProvider == null) {
                     throw exception;
                 }
                 return downgradeToTika(source, exception.getMessage());

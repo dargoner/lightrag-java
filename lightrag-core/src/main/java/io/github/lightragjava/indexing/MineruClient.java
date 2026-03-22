@@ -36,9 +36,9 @@ public interface MineruClient {
             blockId = Objects.requireNonNull(blockId, "blockId");
             blockType = Objects.requireNonNull(blockType, "blockType");
             text = Objects.requireNonNull(text, "text");
-            sectionPath = Objects.requireNonNull(sectionPath, "sectionPath");
-            sectionHierarchy = List.copyOf(Objects.requireNonNull(sectionHierarchy, "sectionHierarchy"));
-            metadata = Map.copyOf(Objects.requireNonNull(metadata, "metadata"));
+            sectionPath = sectionPath == null ? "" : sectionPath;
+            sectionHierarchy = sectionHierarchy == null ? List.of() : List.copyOf(sectionHierarchy);
+            metadata = metadata == null ? Map.of() : Map.copyOf(metadata);
         }
     }
 }

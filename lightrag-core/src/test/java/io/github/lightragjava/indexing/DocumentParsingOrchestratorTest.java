@@ -91,6 +91,27 @@ class DocumentParsingOrchestratorTest {
     }
 
     @Test
+    void failsClearlyWhenImageMineruProviderIsMissing() {
+        var orchestrator = new DocumentParsingOrchestrator(
+            new PlainTextParsingProvider(),
+            null,
+            new TikaFallbackParsingProvider(source -> {
+                throw new AssertionError("tika fallback must not be used for images without mineru");
+            })
+        );
+        var source = RawDocumentSource.bytes(
+            "scan.png",
+            new byte[] {1, 2, 3},
+            "image/png",
+            Map.of()
+        );
+
+        assertThatThrownBy(() -> orchestrator.parse(source, DocumentIngestOptions.defaults()))
+            .isInstanceOf(MineruUnavailableException.class)
+            .hasMessageContaining("MinerU provider is not configured");
+    }
+
+    @Test
     void failsInsteadOfUsingTikaWhenImageMineruParsingFails() {
         var orchestrator = new DocumentParsingOrchestrator(
             new PlainTextParsingProvider(),

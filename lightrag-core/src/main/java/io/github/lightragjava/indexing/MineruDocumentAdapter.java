@@ -6,6 +6,7 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
+import java.util.stream.Collectors;
 
 public final class MineruDocumentAdapter {
     public ParsedDocument adapt(MineruClient.ParseResult result, RawDocumentSource source) {
@@ -38,8 +39,7 @@ public final class MineruDocumentAdapter {
         var structuredText = blocks.stream()
             .map(ParsedBlock::text)
             .filter(text -> !text.isBlank())
-            .reduce((left, right) -> left + "\n\n" + right)
-            .orElse("");
+            .collect(Collectors.joining("\n\n"));
         if (!structuredText.isBlank()) {
             return structuredText;
         }

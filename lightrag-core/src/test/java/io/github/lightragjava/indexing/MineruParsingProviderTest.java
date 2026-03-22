@@ -74,6 +74,44 @@ class MineruParsingProviderTest {
             .containsEntry("parse_backend", "mineru_self_hosted");
     }
 
+    @Test
+    void normalizesMissingSectionFieldsFromMineruBlocks() {
+        var provider = new MineruParsingProvider(
+            new FakeMineruClient(
+                "mineru_api",
+                new MineruClient.ParseResult(
+                    List.of(new MineruClient.Block(
+                        "block-1",
+                        "paragraph",
+                        "Loose paragraph",
+                        null,
+                        null,
+                        null,
+                        null,
+                        null,
+                        null
+                    )),
+                    ""
+                )
+            ),
+            new MineruDocumentAdapter()
+        );
+        var source = RawDocumentSource.bytes(
+            "guide.pdf",
+            "%PDF".getBytes(StandardCharsets.UTF_8),
+            "application/pdf",
+            Map.of()
+        );
+
+        var parsed = provider.parse(source);
+
+        assertThat(parsed.blocks()).singleElement().satisfies(block -> {
+            assertThat(block.sectionPath()).isEmpty();
+            assertThat(block.sectionHierarchy()).isEmpty();
+            assertThat(block.metadata()).isEmpty();
+        });
+    }
+
     private record FakeMineruClient(String backend, MineruClient.ParseResult result) implements MineruClient {
         @Override
         public ParseResult parse(RawDocumentSource source) {
