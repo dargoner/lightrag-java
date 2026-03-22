@@ -23,6 +23,8 @@ import java.util.Objects;
 public final class LightRagBuilder {
     private static final int DEFAULT_CHUNK_WINDOW = 1_000;
     private static final int DEFAULT_CHUNK_OVERLAP = 100;
+    static final boolean DEFAULT_EMBEDDING_SEMANTIC_MERGE_ENABLED = false;
+    static final double DEFAULT_EMBEDDING_SEMANTIC_MERGE_THRESHOLD = 0.80d;
 
     private ChatModel chatModel;
     private EmbeddingModel embeddingModel;
@@ -36,8 +38,8 @@ public final class LightRagBuilder {
     private int maxParallelInsert = 1;
     private int entityExtractMaxGleaning = io.github.lightragjava.indexing.KnowledgeExtractor.DEFAULT_ENTITY_EXTRACT_MAX_GLEANING;
     private int maxExtractInputTokens = io.github.lightragjava.indexing.KnowledgeExtractor.DEFAULT_MAX_EXTRACT_INPUT_TOKENS;
-    private boolean embeddingSemanticMergeEnabled = false;
-    private double embeddingSemanticMergeThreshold = 0.80d;
+    private boolean embeddingSemanticMergeEnabled = DEFAULT_EMBEDDING_SEMANTIC_MERGE_ENABLED;
+    private double embeddingSemanticMergeThreshold = DEFAULT_EMBEDDING_SEMANTIC_MERGE_THRESHOLD;
 
     public LightRagBuilder chatModel(ChatModel chatModel) {
         this.chatModel = Objects.requireNonNull(chatModel, "chatModel");
@@ -74,7 +76,7 @@ public final class LightRagBuilder {
     }
 
     public LightRagBuilder embeddingSemanticMergeThreshold(double threshold) {
-        if (threshold < 0.0d || threshold > 1.0d) {
+        if (!Double.isFinite(threshold) || threshold < 0.0d || threshold > 1.0d) {
             throw new IllegalArgumentException("embeddingSemanticMergeThreshold must be between 0.0 and 1.0");
         }
         this.embeddingSemanticMergeThreshold = threshold;

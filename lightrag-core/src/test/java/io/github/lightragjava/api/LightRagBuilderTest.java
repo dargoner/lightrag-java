@@ -2,6 +2,9 @@ package io.github.lightragjava.api;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 import io.github.lightragjava.indexing.Chunker;
+import io.github.lightragjava.indexing.FixedWindowChunker;
+import io.github.lightragjava.indexing.SmartChunker;
+import io.github.lightragjava.indexing.SmartChunkerConfig;
 import io.github.lightragjava.model.ChatModel;
 import io.github.lightragjava.model.EmbeddingModel;
 import io.github.lightragjava.model.RerankModel;
@@ -107,6 +110,37 @@ class LightRagBuilderTest {
         assertThat(rag.maxParallelInsert()).isEqualTo(2);
         assertThat(rag.entityExtractMaxGleaning()).isEqualTo(2);
         assertThat(rag.maxExtractInputTokens()).isEqualTo(4_096);
+    }
+
+    @Test
+    void usesEmbeddingSemanticMergeDefaults() {
+        var rag = LightRag.builder()
+            .chatModel(new FakeChatModel())
+            .embeddingModel(new FakeEmbeddingModel())
+            .storage(new FakeStorageProvider())
+            .build();
+
+        assertThat(rag.embeddingSemanticMergeEnabled()).isFalse();
+        assertThat(rag.embeddingSemanticMergeThreshold()).isEqualTo(0.80d);
+    }
+
+    @Test
+    void retainsConfiguredEmbeddingSemanticMergeOptions() {
+        var rag = LightRag.builder()
+            .chatModel(new FakeChatModel())
+            .embeddingModel(new FakeEmbeddingModel())
+            .storage(new FakeStorageProvider())
+            .chunker(new SmartChunker(SmartChunkerConfig.builder()
+                .targetTokens(128)
+                .maxTokens(256)
+                .overlapTokens(32)
+                .build()))
+            .enableEmbeddingSemanticMerge(true)
+            .embeddingSemanticMergeThreshold(0.65d)
+            .build();
+
+        assertThat(rag.embeddingSemanticMergeEnabled()).isTrue();
+        assertThat(rag.embeddingSemanticMergeThreshold()).isEqualTo(0.65d);
     }
 
     @Test
@@ -289,6 +323,30 @@ class LightRagBuilderTest {
             .embeddingModel(new FakeEmbeddingModel())
             .storage(new FakeStorageProvider())
             .embeddingSemanticMergeThreshold(1.1d))
+            .isInstanceOf(IllegalArgumentException.class)
+            .hasMessageContaining("between 0.0 and 1.0");
+
+        assertThatThrownBy(() -> LightRag.builder()
+            .chatModel(new FakeChatModel())
+            .embeddingModel(new FakeEmbeddingModel())
+            .storage(new FakeStorageProvider())
+            .embeddingSemanticMergeThreshold(Double.NaN))
+            .isInstanceOf(IllegalArgumentException.class)
+            .hasMessageContaining("between 0.0 and 1.0");
+
+        assertThatThrownBy(() -> LightRag.builder()
+            .chatModel(new FakeChatModel())
+            .embeddingModel(new FakeEmbeddingModel())
+            .storage(new FakeStorageProvider())
+            .embeddingSemanticMergeThreshold(Double.POSITIVE_INFINITY))
+            .isInstanceOf(IllegalArgumentException.class)
+            .hasMessageContaining("between 0.0 and 1.0");
+
+        assertThatThrownBy(() -> LightRag.builder()
+            .chatModel(new FakeChatModel())
+            .embeddingModel(new FakeEmbeddingModel())
+            .storage(new FakeStorageProvider())
+            .embeddingSemanticMergeThreshold(Double.NEGATIVE_INFINITY))
             .isInstanceOf(IllegalArgumentException.class)
             .hasMessageContaining("between 0.0 and 1.0");
     }

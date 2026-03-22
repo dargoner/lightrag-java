@@ -38,14 +38,16 @@ public final class LightRag {
         this(config, null, true, 2, Integer.MAX_VALUE, 1,
             io.github.lightragjava.indexing.KnowledgeExtractor.DEFAULT_ENTITY_EXTRACT_MAX_GLEANING,
             io.github.lightragjava.indexing.KnowledgeExtractor.DEFAULT_MAX_EXTRACT_INPUT_TOKENS,
-            false, 0.80d);
+            LightRagBuilder.DEFAULT_EMBEDDING_SEMANTIC_MERGE_ENABLED,
+            LightRagBuilder.DEFAULT_EMBEDDING_SEMANTIC_MERGE_THRESHOLD);
     }
 
     LightRag(LightRagConfig config, Chunker chunker) {
         this(config, chunker, true, 2, Integer.MAX_VALUE, 1,
             io.github.lightragjava.indexing.KnowledgeExtractor.DEFAULT_ENTITY_EXTRACT_MAX_GLEANING,
             io.github.lightragjava.indexing.KnowledgeExtractor.DEFAULT_MAX_EXTRACT_INPUT_TOKENS,
-            false, 0.80d);
+            LightRagBuilder.DEFAULT_EMBEDDING_SEMANTIC_MERGE_ENABLED,
+            LightRagBuilder.DEFAULT_EMBEDDING_SEMANTIC_MERGE_THRESHOLD);
     }
 
     LightRag(
