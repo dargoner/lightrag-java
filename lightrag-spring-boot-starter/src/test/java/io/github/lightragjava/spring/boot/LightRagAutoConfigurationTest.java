@@ -43,6 +43,7 @@ class LightRagAutoConfigurationTest {
             "lightrag.storage.type=in-memory",
             "lightrag.indexing.chunking.window-size=4",
             "lightrag.indexing.chunking.overlap=1",
+            "lightrag.indexing.embedding-batch-size=2",
             "lightrag.query.default-mode=GLOBAL",
             "lightrag.query.default-top-k=12",
             "lightrag.query.default-chunk-top-k=18",
@@ -73,6 +74,7 @@ class LightRagAutoConfigurationTest {
             assertThat(properties.getEmbedding().getTimeout()).isEqualTo(Duration.ofSeconds(12));
             assertThat(properties.getIndexing().getChunking().getWindowSize()).isEqualTo(4);
             assertThat(properties.getIndexing().getChunking().getOverlap()).isEqualTo(1);
+            assertThat(properties.getIndexing().getEmbeddingBatchSize()).isEqualTo(2);
             assertThat(properties.getQuery().getDefaultMode()).isEqualTo("GLOBAL");
             assertThat(properties.getQuery().getDefaultTopK()).isEqualTo(12);
             assertThat(properties.getQuery().getDefaultChunkTopK()).isEqualTo(18);
@@ -94,6 +96,7 @@ class LightRagAutoConfigurationTest {
             assertThat(extractField(lightRag, "chunker")).isInstanceOf(Chunker.class);
             assertThat(extractField(lightRag, "automaticQueryKeywordExtraction")).isEqualTo(false);
             assertThat(extractField(lightRag, "rerankCandidateMultiplier")).isEqualTo(4);
+            assertThat(extractField(lightRag, "embeddingBatchSize")).isEqualTo(2);
         });
     }
 
@@ -128,6 +131,7 @@ class LightRagAutoConfigurationTest {
                 assertThat(properties.getEmbedding().getTimeout()).isEqualTo(Duration.ofSeconds(30));
                 assertThat(properties.getIndexing().getChunking().getWindowSize()).isEqualTo(1_000);
                 assertThat(properties.getIndexing().getChunking().getOverlap()).isEqualTo(100);
+                assertThat(properties.getIndexing().getEmbeddingBatchSize()).isZero();
                 assertThat(properties.getQuery().getDefaultMode()).isEqualTo("MIX");
                 assertThat(properties.getQuery().getDefaultTopK()).isEqualTo(10);
                 assertThat(properties.getQuery().getDefaultChunkTopK()).isEqualTo(10);

@@ -31,6 +31,7 @@ public final class LightRagBuilder {
     private Chunker chunker = new FixedWindowChunker(DEFAULT_CHUNK_WINDOW, DEFAULT_CHUNK_OVERLAP);
     private boolean automaticQueryKeywordExtraction = true;
     private int rerankCandidateMultiplier = 2;
+    private int embeddingBatchSize = Integer.MAX_VALUE;
 
     public LightRagBuilder chatModel(ChatModel chatModel) {
         this.chatModel = Objects.requireNonNull(chatModel, "chatModel");
@@ -74,6 +75,14 @@ public final class LightRagBuilder {
         return this;
     }
 
+    public LightRagBuilder embeddingBatchSize(int embeddingBatchSize) {
+        if (embeddingBatchSize <= 0) {
+            throw new IllegalArgumentException("embeddingBatchSize must be positive");
+        }
+        this.embeddingBatchSize = embeddingBatchSize;
+        return this;
+    }
+
     public LightRagBuilder loadFromSnapshot(Path path) {
         this.snapshotPath = Objects.requireNonNull(path, "path");
         return this;
@@ -107,7 +116,7 @@ public final class LightRagBuilder {
             storageProvider.documentStatusStore(),
             snapshotPath,
             rerankModel
-        ), chunker, automaticQueryKeywordExtraction, rerankCandidateMultiplier);
+        ), chunker, automaticQueryKeywordExtraction, rerankCandidateMultiplier, embeddingBatchSize);
     }
 
     private static <T> T requireStore(String componentName, T store, Class<T> storeType) {

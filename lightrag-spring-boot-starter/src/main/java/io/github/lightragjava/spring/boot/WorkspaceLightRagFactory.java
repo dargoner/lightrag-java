@@ -83,6 +83,9 @@ public class WorkspaceLightRagFactory {
             .storage(createStorageProvider(workspaceId))
             .automaticQueryKeywordExtraction(query.isAutomaticKeywordExtraction())
             .rerankCandidateMultiplier(query.getRerankCandidateMultiplier());
+        if (properties.getIndexing().getEmbeddingBatchSize() > 0) {
+            builder.embeddingBatchSize(properties.getIndexing().getEmbeddingBatchSize());
+        }
         if (chunker != null) {
             builder.chunker(chunker);
         }

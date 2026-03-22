@@ -87,11 +87,13 @@ class LightRagBuilderTest {
             .chunker(chunker)
             .automaticQueryKeywordExtraction(false)
             .rerankCandidateMultiplier(4)
+            .embeddingBatchSize(3)
             .build();
 
         assertThat(rag.chunker()).isSameAs(chunker);
         assertThat(rag.automaticQueryKeywordExtraction()).isFalse();
         assertThat(rag.rerankCandidateMultiplier()).isEqualTo(4);
+        assertThat(rag.embeddingBatchSize()).isEqualTo(3);
     }
 
     @Test
@@ -112,6 +114,29 @@ class LightRagBuilderTest {
         assertThat(storageProvider.chunkStore().listByDocument("doc-1"))
             .extracting(ChunkStore.ChunkRecord::id)
             .containsExactly("doc-1:custom-1", "doc-1:custom-2");
+    }
+
+    @Test
+    void batchesEmbeddingRequestsDuringIngest() {
+        var storageProvider = new FakeStorageProvider();
+        var embeddingModel = new CountingEmbeddingModel();
+        var rag = LightRag.builder()
+            .chatModel(new IngestionChatModel())
+            .embeddingModel(embeddingModel)
+            .storage(storageProvider)
+            .chunker(document -> List.of(
+                new Chunk(document.id() + ":0", document.id(), "alpha", 1, 0, Map.of()),
+                new Chunk(document.id() + ":1", document.id(), "beta", 1, 1, Map.of()),
+                new Chunk(document.id() + ":2", document.id(), "gamma", 1, 2, Map.of()),
+                new Chunk(document.id() + ":3", document.id(), "delta", 1, 3, Map.of()),
+                new Chunk(document.id() + ":4", document.id(), "epsilon", 1, 4, Map.of())
+            ))
+            .embeddingBatchSize(2)
+            .build();
+
+        rag.ingest(List.of(new Document("doc-1", "Title", "ignored source text", Map.of())));
+
+        assertThat(embeddingModel.batchSizes()).containsExactly(2, 2, 1);
     }
 
     @Test
@@ -183,6 +208,13 @@ class LightRagBuilderTest {
         assertThatThrownBy(() -> LightRag.builder().rerankCandidateMultiplier(0))
             .isInstanceOf(IllegalArgumentException.class)
             .hasMessage("rerankCandidateMultiplier must be positive");
+    }
+
+    @Test
+    void rejectsNonPositiveEmbeddingBatchSize() {
+        assertThatThrownBy(() -> LightRag.builder().embeddingBatchSize(0))
+            .isInstanceOf(IllegalArgumentException.class)
+            .hasMessage("embeddingBatchSize must be positive");
     }
 
     @Test
@@ -529,6 +561,22 @@ class LightRagBuilderTest {
             return texts.stream()
                 .map(text -> List.of((double) text.length()))
                 .toList();
+        }
+    }
+
+    private static final class CountingEmbeddingModel implements EmbeddingModel {
+        private final List<Integer> batchSizes = new ArrayList<>();
+
+        @Override
+        public List<List<Double>> embedAll(List<String> texts) {
+            batchSizes.add(texts.size());
+            return texts.stream()
+                .map(text -> List.of((double) text.length()))
+                .toList();
+        }
+
+        List<Integer> batchSizes() {
+            return List.copyOf(batchSizes);
         }
     }
 

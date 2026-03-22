@@ -161,7 +161,10 @@ lightrag:
     chunking:
       window-size: 1200
       overlap: 150
+    embedding-batch-size: 32
 ```
+
+`embedding-batch-size` 用来控制 ingest 阶段每次 embedding 请求最多发送多少段文本。保持未配置或设为 `0`，就会继续沿用当前的单批次行为。
 
 如果不配置这两个字段，starter 默认仍然使用 `window-size=1000`、`overlap=100`。
 

@@ -25,17 +25,20 @@ public final class IndexingPipeline {
     private final GraphAssembler graphAssembler;
     private final EmbeddingModel embeddingModel;
     private final Path snapshotPath;
+    private final int embeddingBatchSize;
 
     public IndexingPipeline(
         ChatModel chatModel,
         EmbeddingModel embeddingModel,
         AtomicStorageProvider storageProvider,
         Path snapshotPath,
-        Chunker chunker
+        Chunker chunker,
+        int embeddingBatchSize
     ) {
         this.storageProvider = Objects.requireNonNull(storageProvider, "storageProvider");
         this.embeddingModel = Objects.requireNonNull(embeddingModel, "embeddingModel");
         this.snapshotPath = snapshotPath;
+        this.embeddingBatchSize = embeddingBatchSize <= 0 ? Integer.MAX_VALUE : embeddingBatchSize;
         this.documentIngestor = new DocumentIngestor(
             storageProvider,
             chunker == null ? new FixedWindowChunker(FixedWindowChunker.DEFAULT_WINDOW_SIZE, FixedWindowChunker.DEFAULT_OVERLAP) : chunker
@@ -50,7 +53,7 @@ public final class IndexingPipeline {
         AtomicStorageProvider storageProvider,
         Path snapshotPath
     ) {
-        this(chatModel, embeddingModel, storageProvider, snapshotPath, null);
+        this(chatModel, embeddingModel, storageProvider, snapshotPath, null, Integer.MAX_VALUE);
     }
 
     public void ingest(List<Document> documents) {
@@ -164,7 +167,7 @@ public final class IndexingPipeline {
         if (chunks.isEmpty()) {
             return List.of();
         }
-        var embeddings = embeddingModel.embedAll(chunks.stream().map(io.github.lightragjava.types.Chunk::text).toList());
+        var embeddings = embedInBatches(chunks.stream().map(io.github.lightragjava.types.Chunk::text).toList());
         return toVectorRecords(chunks.stream().map(io.github.lightragjava.types.Chunk::id).toList(), embeddings);
     }
 
@@ -172,7 +175,7 @@ public final class IndexingPipeline {
         if (entities.isEmpty()) {
             return List.of();
         }
-        var embeddings = embeddingModel.embedAll(entities.stream().map(IndexingPipeline::entitySummary).toList());
+        var embeddings = embedInBatches(entities.stream().map(IndexingPipeline::entitySummary).toList());
         return toVectorRecords(entities.stream().map(Entity::id).toList(), embeddings);
     }
 
@@ -180,8 +183,23 @@ public final class IndexingPipeline {
         if (relations.isEmpty()) {
             return List.of();
         }
-        var embeddings = embeddingModel.embedAll(relations.stream().map(IndexingPipeline::relationSummary).toList());
+        var embeddings = embedInBatches(relations.stream().map(IndexingPipeline::relationSummary).toList());
         return toVectorRecords(relations.stream().map(Relation::id).toList(), embeddings);
+    }
+
+    private List<List<Double>> embedInBatches(List<String> texts) {
+        if (texts.isEmpty()) {
+            return List.of();
+        }
+        if (embeddingBatchSize >= texts.size()) {
+            return embeddingModel.embedAll(texts);
+        }
+        var embeddings = new java.util.ArrayList<List<Double>>(texts.size());
+        for (int start = 0; start < texts.size(); start += embeddingBatchSize) {
+            var end = Math.min(texts.size(), start + embeddingBatchSize);
+            embeddings.addAll(embeddingModel.embedAll(texts.subList(start, end)));
+        }
+        return List.copyOf(embeddings);
     }
 
     private static GraphStore.EntityRecord mergeEntity(GraphStore.EntityRecord existing, Entity incoming) {

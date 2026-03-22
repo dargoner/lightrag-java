@@ -23,35 +23,39 @@ public final class LightRag {
     private final Chunker chunker;
     private final boolean automaticQueryKeywordExtraction;
     private final int rerankCandidateMultiplier;
+    private final int embeddingBatchSize;
     private final IndexingPipeline indexingPipeline;
     private final DeletionPipeline deletionPipeline;
     private final GraphManagementPipeline graphManagementPipeline;
     private final QueryEngine queryEngine;
 
     LightRag(LightRagConfig config) {
-        this(config, null, true, 2);
+        this(config, null, true, 2, Integer.MAX_VALUE);
     }
 
     LightRag(LightRagConfig config, Chunker chunker) {
-        this(config, chunker, true, 2);
+        this(config, chunker, true, 2, Integer.MAX_VALUE);
     }
 
     LightRag(
         LightRagConfig config,
         Chunker chunker,
         boolean automaticQueryKeywordExtraction,
-        int rerankCandidateMultiplier
+        int rerankCandidateMultiplier,
+        int embeddingBatchSize
     ) {
         this.config = config;
         this.chunker = chunker;
         this.automaticQueryKeywordExtraction = automaticQueryKeywordExtraction;
         this.rerankCandidateMultiplier = rerankCandidateMultiplier;
+        this.embeddingBatchSize = embeddingBatchSize;
         this.indexingPipeline = new IndexingPipeline(
             config.chatModel(),
             config.embeddingModel(),
             config.storageProvider(),
             config.snapshotPath(),
-            chunker
+            chunker,
+            embeddingBatchSize
         );
         this.deletionPipeline = new DeletionPipeline(
             config.storageProvider(),
@@ -168,6 +172,10 @@ public final class LightRag {
 
     int rerankCandidateMultiplier() {
         return rerankCandidateMultiplier;
+    }
+
+    int embeddingBatchSize() {
+        return embeddingBatchSize;
     }
 
     private static DocumentProcessingStatus toDocumentProcessingStatus(

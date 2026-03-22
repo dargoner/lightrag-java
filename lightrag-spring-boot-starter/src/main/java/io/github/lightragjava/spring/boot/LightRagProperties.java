@@ -115,9 +115,18 @@ public class LightRagProperties {
 
     public static class IndexingProperties {
         private final ChunkingProperties chunking = new ChunkingProperties();
+        private int embeddingBatchSize;
 
         public ChunkingProperties getChunking() {
             return chunking;
+        }
+
+        public int getEmbeddingBatchSize() {
+            return embeddingBatchSize;
+        }
+
+        public void setEmbeddingBatchSize(int embeddingBatchSize) {
+            this.embeddingBatchSize = embeddingBatchSize;
         }
     }
 

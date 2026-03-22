@@ -59,6 +59,7 @@ The starter auto-configures `LightRag` from `application.yml` when you provide:
 - optional chat and embedding request timeouts
 - storage type: `in-memory`, `postgres`, or `postgres-neo4j`
 - indexing defaults for chunk window and overlap
+- optional indexing embedding batch size
 - query defaults for automatic keyword extraction and rerank candidate expansion
 - demo defaults for query mode, top-k, response type, and async ingest behavior
 
@@ -136,7 +137,10 @@ lightrag:
     chunking:
       window-size: 1200
       overlap: 150
+    embedding-batch-size: 32
 ```
+
+`embedding-batch-size` controls how many texts are sent in each indexing-time embedding request. Leave it unset or `0` to preserve the current single-batch behavior.
 
 If the application provides its own `Chunker` bean, the starter backs off and uses that bean instead.
 
