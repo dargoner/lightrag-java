@@ -89,6 +89,8 @@ public class WorkspaceLightRagFactory {
         builder.maxParallelInsert(properties.getIndexing().getMaxParallelInsert());
         builder.entityExtractMaxGleaning(properties.getIndexing().getEntityExtractMaxGleaning());
         builder.maxExtractInputTokens(properties.getIndexing().getMaxExtractInputTokens());
+        builder.entityExtractionLanguage(properties.getIndexing().getLanguage());
+        builder.entityTypes(properties.getIndexing().getEntityTypes());
         if (chunker != null) {
             builder.chunker(chunker);
         }

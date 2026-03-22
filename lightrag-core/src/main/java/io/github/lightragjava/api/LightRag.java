@@ -17,6 +17,7 @@ import io.github.lightragjava.types.Document;
 import java.util.EnumMap;
 import java.util.List;
 import java.util.NoSuchElementException;
+import java.util.Objects;
 
 public final class LightRag {
     private final LightRagConfig config;
@@ -27,6 +28,8 @@ public final class LightRag {
     private final int maxParallelInsert;
     private final int entityExtractMaxGleaning;
     private final int maxExtractInputTokens;
+    private final String entityExtractionLanguage;
+    private final List<String> entityTypes;
     private final IndexingPipeline indexingPipeline;
     private final DeletionPipeline deletionPipeline;
     private final GraphManagementPipeline graphManagementPipeline;
@@ -35,13 +38,17 @@ public final class LightRag {
     LightRag(LightRagConfig config) {
         this(config, null, true, 2, Integer.MAX_VALUE, 1,
             io.github.lightragjava.indexing.KnowledgeExtractor.DEFAULT_ENTITY_EXTRACT_MAX_GLEANING,
-            io.github.lightragjava.indexing.KnowledgeExtractor.DEFAULT_MAX_EXTRACT_INPUT_TOKENS);
+            io.github.lightragjava.indexing.KnowledgeExtractor.DEFAULT_MAX_EXTRACT_INPUT_TOKENS,
+            io.github.lightragjava.indexing.KnowledgeExtractor.DEFAULT_LANGUAGE,
+            io.github.lightragjava.indexing.KnowledgeExtractor.DEFAULT_ENTITY_TYPES);
     }
 
     LightRag(LightRagConfig config, Chunker chunker) {
         this(config, chunker, true, 2, Integer.MAX_VALUE, 1,
             io.github.lightragjava.indexing.KnowledgeExtractor.DEFAULT_ENTITY_EXTRACT_MAX_GLEANING,
-            io.github.lightragjava.indexing.KnowledgeExtractor.DEFAULT_MAX_EXTRACT_INPUT_TOKENS);
+            io.github.lightragjava.indexing.KnowledgeExtractor.DEFAULT_MAX_EXTRACT_INPUT_TOKENS,
+            io.github.lightragjava.indexing.KnowledgeExtractor.DEFAULT_LANGUAGE,
+            io.github.lightragjava.indexing.KnowledgeExtractor.DEFAULT_ENTITY_TYPES);
     }
 
     LightRag(
@@ -52,7 +59,9 @@ public final class LightRag {
         int embeddingBatchSize,
         int maxParallelInsert,
         int entityExtractMaxGleaning,
-        int maxExtractInputTokens
+        int maxExtractInputTokens,
+        String entityExtractionLanguage,
+        List<String> entityTypes
     ) {
         this.config = config;
         this.chunker = chunker;
@@ -62,6 +71,8 @@ public final class LightRag {
         this.maxParallelInsert = maxParallelInsert;
         this.entityExtractMaxGleaning = entityExtractMaxGleaning;
         this.maxExtractInputTokens = maxExtractInputTokens;
+        this.entityExtractionLanguage = Objects.requireNonNull(entityExtractionLanguage, "entityExtractionLanguage");
+        this.entityTypes = List.copyOf(Objects.requireNonNull(entityTypes, "entityTypes"));
         this.indexingPipeline = new IndexingPipeline(
             config.chatModel(),
             config.embeddingModel(),
@@ -71,7 +82,9 @@ public final class LightRag {
             embeddingBatchSize,
             maxParallelInsert,
             entityExtractMaxGleaning,
-            maxExtractInputTokens
+            maxExtractInputTokens,
+            this.entityExtractionLanguage,
+            this.entityTypes
         );
         this.deletionPipeline = new DeletionPipeline(
             config.storageProvider(),
@@ -204,6 +217,14 @@ public final class LightRag {
 
     int maxExtractInputTokens() {
         return maxExtractInputTokens;
+    }
+
+    String entityExtractionLanguage() {
+        return entityExtractionLanguage;
+    }
+
+    List<String> entityTypes() {
+        return entityTypes;
     }
 
     private static DocumentProcessingStatus toDocumentProcessingStatus(

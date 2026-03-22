@@ -4,6 +4,7 @@ import io.github.lightragjava.indexing.FixedWindowChunker;
 import org.springframework.boot.context.properties.ConfigurationProperties;
 
 import java.time.Duration;
+import java.util.List;
 
 @ConfigurationProperties(prefix = "lightrag")
 public class LightRagProperties {
@@ -119,6 +120,8 @@ public class LightRagProperties {
         private int maxParallelInsert = 1;
         private int entityExtractMaxGleaning = io.github.lightragjava.indexing.KnowledgeExtractor.DEFAULT_ENTITY_EXTRACT_MAX_GLEANING;
         private int maxExtractInputTokens = io.github.lightragjava.indexing.KnowledgeExtractor.DEFAULT_MAX_EXTRACT_INPUT_TOKENS;
+        private String language = io.github.lightragjava.indexing.KnowledgeExtractor.DEFAULT_LANGUAGE;
+        private List<String> entityTypes = io.github.lightragjava.indexing.KnowledgeExtractor.DEFAULT_ENTITY_TYPES;
 
         public ChunkingProperties getChunking() {
             return chunking;
@@ -163,6 +166,35 @@ public class LightRagProperties {
                 throw new IllegalArgumentException("maxExtractInputTokens must be positive");
             }
             this.maxExtractInputTokens = maxExtractInputTokens;
+        }
+
+        public String getLanguage() {
+            return language;
+        }
+
+        public void setLanguage(String language) {
+            this.language = requireNonBlank(language, "language");
+        }
+
+        public List<String> getEntityTypes() {
+            return entityTypes;
+        }
+
+        public void setEntityTypes(List<String> entityTypes) {
+            var normalizedEntityTypes = List.copyOf(entityTypes).stream()
+                .map(type -> requireNonBlank(type, "entityTypes entry"))
+                .toList();
+            if (normalizedEntityTypes.isEmpty()) {
+                throw new IllegalArgumentException("entityTypes must not be empty");
+            }
+            this.entityTypes = normalizedEntityTypes;
+        }
+
+        private static String requireNonBlank(String value, String fieldName) {
+            if (value == null || value.isBlank()) {
+                throw new IllegalArgumentException(fieldName + " must not be blank");
+            }
+            return value.strip();
         }
     }
 

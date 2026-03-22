@@ -98,6 +98,8 @@ class LightRagBuilderTest {
             .maxParallelInsert(2)
             .entityExtractMaxGleaning(2)
             .maxExtractInputTokens(4_096)
+            .entityExtractionLanguage("Chinese")
+            .entityTypes(List.of("Person", "Organization"))
             .build();
 
         assertThat(rag.chunker()).isSameAs(chunker);
@@ -107,6 +109,8 @@ class LightRagBuilderTest {
         assertThat(rag.maxParallelInsert()).isEqualTo(2);
         assertThat(rag.entityExtractMaxGleaning()).isEqualTo(2);
         assertThat(rag.maxExtractInputTokens()).isEqualTo(4_096);
+        assertThat(rag.entityExtractionLanguage()).isEqualTo("Chinese");
+        assertThat(rag.entityTypes()).containsExactly("Person", "Organization");
     }
 
     @Test
@@ -315,6 +319,20 @@ class LightRagBuilderTest {
         assertThatThrownBy(() -> LightRag.builder().maxExtractInputTokens(0))
             .isInstanceOf(IllegalArgumentException.class)
             .hasMessage("maxExtractInputTokens must be positive");
+    }
+
+    @Test
+    void rejectsBlankEntityExtractionLanguage() {
+        assertThatThrownBy(() -> LightRag.builder().entityExtractionLanguage(" "))
+            .isInstanceOf(IllegalArgumentException.class)
+            .hasMessage("entityExtractionLanguage must not be blank");
+    }
+
+    @Test
+    void rejectsEmptyEntityTypes() {
+        assertThatThrownBy(() -> LightRag.builder().entityTypes(List.of()))
+            .isInstanceOf(IllegalArgumentException.class)
+            .hasMessage("entityTypes must not be empty");
     }
 
     @Test

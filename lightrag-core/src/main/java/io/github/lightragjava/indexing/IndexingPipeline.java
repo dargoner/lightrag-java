@@ -37,6 +37,8 @@ public final class IndexingPipeline {
     private final int maxParallelInsert;
     private final int entityExtractMaxGleaning;
     private final int maxExtractInputTokens;
+    private final String entityExtractionLanguage;
+    private final List<String> entityTypes;
     private final Object storageMutationMonitor = new Object();
 
     public IndexingPipeline(
@@ -48,7 +50,9 @@ public final class IndexingPipeline {
         int embeddingBatchSize,
         int maxParallelInsert,
         int entityExtractMaxGleaning,
-        int maxExtractInputTokens
+        int maxExtractInputTokens,
+        String entityExtractionLanguage,
+        List<String> entityTypes
     ) {
         this.storageProvider = Objects.requireNonNull(storageProvider, "storageProvider");
         this.embeddingModel = Objects.requireNonNull(embeddingModel, "embeddingModel");
@@ -59,6 +63,12 @@ public final class IndexingPipeline {
         this.maxExtractInputTokens = maxExtractInputTokens <= 0
             ? KnowledgeExtractor.DEFAULT_MAX_EXTRACT_INPUT_TOKENS
             : maxExtractInputTokens;
+        this.entityExtractionLanguage = entityExtractionLanguage == null || entityExtractionLanguage.isBlank()
+            ? KnowledgeExtractor.DEFAULT_LANGUAGE
+            : entityExtractionLanguage.strip();
+        this.entityTypes = entityTypes == null || entityTypes.isEmpty()
+            ? KnowledgeExtractor.DEFAULT_ENTITY_TYPES
+            : List.copyOf(entityTypes);
         this.documentIngestor = new DocumentIngestor(
             storageProvider,
             chunker == null ? new FixedWindowChunker(FixedWindowChunker.DEFAULT_WINDOW_SIZE, FixedWindowChunker.DEFAULT_OVERLAP) : chunker
@@ -66,7 +76,9 @@ public final class IndexingPipeline {
         this.knowledgeExtractor = new KnowledgeExtractor(
             Objects.requireNonNull(chatModel, "chatModel"),
             this.entityExtractMaxGleaning,
-            this.maxExtractInputTokens
+            this.maxExtractInputTokens,
+            this.entityExtractionLanguage,
+            this.entityTypes
         );
         this.graphAssembler = new GraphAssembler();
     }
@@ -86,7 +98,9 @@ public final class IndexingPipeline {
             Integer.MAX_VALUE,
             1,
             KnowledgeExtractor.DEFAULT_ENTITY_EXTRACT_MAX_GLEANING,
-            KnowledgeExtractor.DEFAULT_MAX_EXTRACT_INPUT_TOKENS
+            KnowledgeExtractor.DEFAULT_MAX_EXTRACT_INPUT_TOKENS,
+            KnowledgeExtractor.DEFAULT_LANGUAGE,
+            KnowledgeExtractor.DEFAULT_ENTITY_TYPES
         );
     }
 

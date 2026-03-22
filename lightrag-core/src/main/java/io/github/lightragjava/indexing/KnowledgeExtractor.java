@@ -21,9 +21,16 @@ public final class KnowledgeExtractor {
     private static final ObjectMapper OBJECT_MAPPER = new ObjectMapper();
     public static final int DEFAULT_ENTITY_EXTRACT_MAX_GLEANING = 1;
     public static final int DEFAULT_MAX_EXTRACT_INPUT_TOKENS = 20_480;
+    public static final String DEFAULT_LANGUAGE = "English";
+    public static final List<String> DEFAULT_ENTITY_TYPES = List.of(
+        "Person", "Creature", "Organization", "Location", "Event",
+        "Concept", "Method", "Content", "Data", "Artifact", "NaturalObject", "Other"
+    );
 
-    private static final String SYSTEM_PROMPT = """
+    private static final String SYSTEM_PROMPT_TEMPLATE = """
         Extract entities and relations from the provided text.
+        Write all entity types and descriptions in %s.
+        Use one of these entity types whenever possible: %s.
         Return JSON with this shape:
         {
           "entities": [
@@ -58,12 +65,30 @@ public final class KnowledgeExtractor {
     private final ChatModel chatModel;
     private final int entityExtractMaxGleaning;
     private final int maxExtractInputTokens;
+    private final String language;
+    private final List<String> entityTypes;
 
     public KnowledgeExtractor(ChatModel chatModel) {
-        this(chatModel, DEFAULT_ENTITY_EXTRACT_MAX_GLEANING, DEFAULT_MAX_EXTRACT_INPUT_TOKENS);
+        this(
+            chatModel,
+            DEFAULT_ENTITY_EXTRACT_MAX_GLEANING,
+            DEFAULT_MAX_EXTRACT_INPUT_TOKENS,
+            DEFAULT_LANGUAGE,
+            DEFAULT_ENTITY_TYPES
+        );
     }
 
     public KnowledgeExtractor(ChatModel chatModel, int entityExtractMaxGleaning, int maxExtractInputTokens) {
+        this(chatModel, entityExtractMaxGleaning, maxExtractInputTokens, DEFAULT_LANGUAGE, DEFAULT_ENTITY_TYPES);
+    }
+
+    public KnowledgeExtractor(
+        ChatModel chatModel,
+        int entityExtractMaxGleaning,
+        int maxExtractInputTokens,
+        String language,
+        List<String> entityTypes
+    ) {
         this.chatModel = Objects.requireNonNull(chatModel, "chatModel");
         if (entityExtractMaxGleaning < 0) {
             throw new IllegalArgumentException("entityExtractMaxGleaning must not be negative");
@@ -73,6 +98,14 @@ public final class KnowledgeExtractor {
         }
         this.entityExtractMaxGleaning = entityExtractMaxGleaning;
         this.maxExtractInputTokens = maxExtractInputTokens;
+        this.language = requireNonBlank(language, "language");
+        var normalizedEntityTypes = List.copyOf(Objects.requireNonNull(entityTypes, "entityTypes")).stream()
+            .map(type -> requireNonBlank(type, "entityTypes entry"))
+            .toList();
+        if (normalizedEntityTypes.isEmpty()) {
+            throw new IllegalArgumentException("entityTypes must not be empty");
+        }
+        this.entityTypes = normalizedEntityTypes;
     }
 
     public ExtractionResult extract(Chunk chunk) {
@@ -80,7 +113,8 @@ public final class KnowledgeExtractor {
 
         var warnings = new ArrayList<String>();
         var userPrompt = buildUserPrompt(chunk);
-        var response = chatModel.generate(new ChatRequest(SYSTEM_PROMPT, userPrompt));
+        var systemPrompt = buildSystemPrompt();
+        var response = chatModel.generate(new ChatRequest(systemPrompt, userPrompt));
         var current = parseExtractionResult(response);
 
         var history = new ArrayList<ChatRequest.ConversationMessage>();
@@ -89,11 +123,11 @@ public final class KnowledgeExtractor {
 
         for (int attempt = 0; attempt < entityExtractMaxGleaning; attempt++) {
             var continuePrompt = buildContinuePrompt(chunk);
-            if (estimateTokenCount(SYSTEM_PROMPT + continuePrompt + conversationText(history)) > maxExtractInputTokens) {
+            if (estimateTokenCount(systemPrompt + continuePrompt + conversationText(history)) > maxExtractInputTokens) {
                 warnings.add("skipped gleaning because extraction context exceeded maxExtractInputTokens");
                 break;
             }
-            var gleanResponse = chatModel.generate(new ChatRequest(SYSTEM_PROMPT, continuePrompt, history));
+            var gleanResponse = chatModel.generate(new ChatRequest(systemPrompt, continuePrompt, history));
             var gleaned = parseExtractionResult(gleanResponse);
             current = merge(current, gleaned);
             history.add(new ChatRequest.ConversationMessage("user", continuePrompt));
@@ -259,6 +293,10 @@ public final class KnowledgeExtractor {
         return CONTINUE_USER_PROMPT.formatted(chunk.id(), chunk.documentId(), chunk.text());
     }
 
+    private String buildSystemPrompt() {
+        return SYSTEM_PROMPT_TEMPLATE.formatted(language, String.join(", ", entityTypes));
+    }
+
     private static int estimateTokenCount(String value) {
         var normalized = value == null ? "" : value.strip();
         if (normalized.isEmpty()) {
@@ -325,5 +363,14 @@ public final class KnowledgeExtractor {
 
     private static String longerText(String left, String right) {
         return (right != null && right.strip().length() > (left == null ? 0 : left.strip().length())) ? right : left;
+    }
+
+    private static String requireNonBlank(String value, String fieldName) {
+        Objects.requireNonNull(value, fieldName);
+        var normalized = value.strip();
+        if (normalized.isEmpty()) {
+            throw new IllegalArgumentException(fieldName + " must not be blank");
+        }
+        return normalized;
     }
 }

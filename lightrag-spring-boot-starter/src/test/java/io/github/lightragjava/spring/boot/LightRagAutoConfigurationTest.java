@@ -47,6 +47,8 @@ class LightRagAutoConfigurationTest {
             "lightrag.indexing.max-parallel-insert=3",
             "lightrag.indexing.entity-extract-max-gleaning=2",
             "lightrag.indexing.max-extract-input-tokens=4096",
+            "lightrag.indexing.language=Chinese",
+            "lightrag.indexing.entity-types=Person,Organization",
             "lightrag.query.default-mode=GLOBAL",
             "lightrag.query.default-top-k=12",
             "lightrag.query.default-chunk-top-k=18",
@@ -81,6 +83,8 @@ class LightRagAutoConfigurationTest {
             assertThat(properties.getIndexing().getMaxParallelInsert()).isEqualTo(3);
             assertThat(properties.getIndexing().getEntityExtractMaxGleaning()).isEqualTo(2);
             assertThat(properties.getIndexing().getMaxExtractInputTokens()).isEqualTo(4_096);
+            assertThat(properties.getIndexing().getLanguage()).isEqualTo("Chinese");
+            assertThat(properties.getIndexing().getEntityTypes()).containsExactly("Person", "Organization");
             assertThat(properties.getQuery().getDefaultMode()).isEqualTo("GLOBAL");
             assertThat(properties.getQuery().getDefaultTopK()).isEqualTo(12);
             assertThat(properties.getQuery().getDefaultChunkTopK()).isEqualTo(18);
@@ -106,6 +110,8 @@ class LightRagAutoConfigurationTest {
             assertThat(extractField(lightRag, "maxParallelInsert")).isEqualTo(3);
             assertThat(extractField(lightRag, "entityExtractMaxGleaning")).isEqualTo(2);
             assertThat(extractField(lightRag, "maxExtractInputTokens")).isEqualTo(4_096);
+            assertThat(extractField(lightRag, "entityExtractionLanguage")).isEqualTo("Chinese");
+            assertThat(extractField(lightRag, "entityTypes")).isEqualTo(List.of("Person", "Organization"));
         });
     }
 
@@ -144,6 +150,11 @@ class LightRagAutoConfigurationTest {
                 assertThat(properties.getIndexing().getMaxParallelInsert()).isEqualTo(1);
                 assertThat(properties.getIndexing().getEntityExtractMaxGleaning()).isEqualTo(1);
                 assertThat(properties.getIndexing().getMaxExtractInputTokens()).isEqualTo(20_480);
+                assertThat(properties.getIndexing().getLanguage()).isEqualTo("English");
+                assertThat(properties.getIndexing().getEntityTypes()).containsExactly(
+                    "Person", "Creature", "Organization", "Location", "Event",
+                    "Concept", "Method", "Content", "Data", "Artifact", "NaturalObject", "Other"
+                );
                 assertThat(properties.getQuery().getDefaultMode()).isEqualTo("MIX");
                 assertThat(properties.getQuery().getDefaultTopK()).isEqualTo(10);
                 assertThat(properties.getQuery().getDefaultChunkTopK()).isEqualTo(10);

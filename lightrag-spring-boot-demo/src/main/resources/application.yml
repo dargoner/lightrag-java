@@ -17,6 +17,8 @@ lightrag:
     max-parallel-insert: ${LIGHTRAG_INDEXING_MAX_PARALLEL_INSERT:1}
     entity-extract-max-gleaning: ${LIGHTRAG_INDEXING_ENTITY_EXTRACT_MAX_GLEANING:1}
     max-extract-input-tokens: ${LIGHTRAG_INDEXING_MAX_EXTRACT_INPUT_TOKENS:20480}
+    language: ${LIGHTRAG_INDEXING_LANGUAGE:English}
+    entity-types: ${LIGHTRAG_INDEXING_ENTITY_TYPES:Person,Creature,Organization,Location,Event,Concept,Method,Content,Data,Artifact,NaturalObject,Other}
   query:
     default-mode: ${LIGHTRAG_QUERY_DEFAULT_MODE:MIX}
     default-top-k: ${LIGHTRAG_QUERY_DEFAULT_TOP_K:10}

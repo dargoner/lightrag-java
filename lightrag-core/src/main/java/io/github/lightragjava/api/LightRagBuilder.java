@@ -16,6 +16,7 @@ import io.github.lightragjava.storage.StorageProvider;
 import io.github.lightragjava.storage.VectorStore;
 
 import java.nio.file.Path;
+import java.util.List;
 import java.util.NoSuchElementException;
 import java.util.Objects;
 
@@ -35,6 +36,8 @@ public final class LightRagBuilder {
     private int maxParallelInsert = 1;
     private int entityExtractMaxGleaning = io.github.lightragjava.indexing.KnowledgeExtractor.DEFAULT_ENTITY_EXTRACT_MAX_GLEANING;
     private int maxExtractInputTokens = io.github.lightragjava.indexing.KnowledgeExtractor.DEFAULT_MAX_EXTRACT_INPUT_TOKENS;
+    private String entityExtractionLanguage = io.github.lightragjava.indexing.KnowledgeExtractor.DEFAULT_LANGUAGE;
+    private List<String> entityTypes = io.github.lightragjava.indexing.KnowledgeExtractor.DEFAULT_ENTITY_TYPES;
 
     public LightRagBuilder chatModel(ChatModel chatModel) {
         this.chatModel = Objects.requireNonNull(chatModel, "chatModel");
@@ -110,6 +113,32 @@ public final class LightRagBuilder {
         return this;
     }
 
+    public LightRagBuilder entityExtractionLanguage(String entityExtractionLanguage) {
+        Objects.requireNonNull(entityExtractionLanguage, "entityExtractionLanguage");
+        if (entityExtractionLanguage.isBlank()) {
+            throw new IllegalArgumentException("entityExtractionLanguage must not be blank");
+        }
+        this.entityExtractionLanguage = entityExtractionLanguage.strip();
+        return this;
+    }
+
+    public LightRagBuilder entityTypes(List<String> entityTypes) {
+        var normalizedEntityTypes = List.copyOf(Objects.requireNonNull(entityTypes, "entityTypes")).stream()
+            .map(type -> {
+                Objects.requireNonNull(type, "entityTypes entry");
+                if (type.isBlank()) {
+                    throw new IllegalArgumentException("entityTypes entries must not be blank");
+                }
+                return type.strip();
+            })
+            .toList();
+        if (normalizedEntityTypes.isEmpty()) {
+            throw new IllegalArgumentException("entityTypes must not be empty");
+        }
+        this.entityTypes = normalizedEntityTypes;
+        return this;
+    }
+
     public LightRagBuilder loadFromSnapshot(Path path) {
         this.snapshotPath = Objects.requireNonNull(path, "path");
         return this;
@@ -144,7 +173,7 @@ public final class LightRagBuilder {
             snapshotPath,
             rerankModel
         ), chunker, automaticQueryKeywordExtraction, rerankCandidateMultiplier, embeddingBatchSize, maxParallelInsert,
-            entityExtractMaxGleaning, maxExtractInputTokens);
+            entityExtractMaxGleaning, maxExtractInputTokens, entityExtractionLanguage, entityTypes);
     }
 
     private static <T> T requireStore(String componentName, T store, Class<T> storeType) {

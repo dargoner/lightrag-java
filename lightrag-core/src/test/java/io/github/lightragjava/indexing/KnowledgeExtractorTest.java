@@ -103,6 +103,23 @@ class KnowledgeExtractorTest {
     }
 
     @Test
+    void includesConfiguredLanguageAndEntityTypesInPrompt() {
+        var chatModel = new RecordingChatModel("""
+            {
+              "entities": [],
+              "relations": []
+            }
+            """);
+        var extractor = new KnowledgeExtractor(chatModel, 0, 10_000, "Chinese", List.of("Person", "Organization"));
+
+        extractor.extract(chunk("Alice works at OpenAI"));
+
+        assertThat(chatModel.requests()).hasSize(1);
+        assertThat(chatModel.requests().get(0).systemPrompt()).contains("Chinese");
+        assertThat(chatModel.requests().get(0).systemPrompt()).contains("Person, Organization");
+    }
+
+    @Test
     void dropsBlankExtractedEntityNames() {
         var extractor = new KnowledgeExtractor(new StubChatModel("""
             {

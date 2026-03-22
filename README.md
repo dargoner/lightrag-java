@@ -141,12 +141,16 @@ lightrag:
     max-parallel-insert: 4
     entity-extract-max-gleaning: 1
     max-extract-input-tokens: 20480
+    language: Chinese
+    entity-types: Person,Organization
 ```
 
 `embedding-batch-size` controls how many texts are sent in each indexing-time embedding request. Leave it unset or `0` to preserve the current single-batch behavior.
 `max-parallel-insert` controls how many documents ingest can process concurrently. It defaults to `1` so existing runtime behavior stays serial unless you opt in.
 `entity-extract-max-gleaning` controls how many follow-up extraction passes run for the same chunk after the first LLM extraction.
 `max-extract-input-tokens` caps the estimated extraction context budget before a glean pass is skipped.
+`language` controls the language used in entity descriptions and extraction guidance. It defaults to `English`.
+`entity-types` narrows or extends the preferred extraction taxonomy. The default list is `Person, Creature, Organization, Location, Event, Concept, Method, Content, Data, Artifact, NaturalObject, Other`.
 When `max-parallel-insert` is greater than `1`, custom `Chunker`, `ChatModel`, and `EmbeddingModel` implementations must be safe for concurrent use.
 
 If the application provides its own `Chunker` bean, the starter backs off and uses that bean instead.
@@ -710,6 +714,8 @@ var rag = LightRag.builder()
     .maxParallelInsert(4)
     .entityExtractMaxGleaning(1)
     .maxExtractInputTokens(20_480)
+    .entityExtractionLanguage("Chinese")
+    .entityTypes(List.of("Person", "Organization"))
     .automaticQueryKeywordExtraction(false)
     .rerankCandidateMultiplier(4)
     .build();
@@ -720,6 +726,8 @@ var rag = LightRag.builder()
 - `maxParallelInsert(...)`: caps how many documents `ingest(...)` processes concurrently
 - `entityExtractMaxGleaning(...)`: controls how many follow-up extraction passes run per chunk
 - `maxExtractInputTokens(...)`: caps estimated extraction context before gleaning is skipped
+- `entityExtractionLanguage(...)`: changes the language used in extraction-time guidance and generated descriptions
+- `entityTypes(...)`: overrides the preferred entity taxonomy used in extraction prompts
 - `automaticQueryKeywordExtraction(...)`: turns graph-mode keyword extraction on or off
 - `rerankCandidateMultiplier(...)`: controls how far `QueryEngine` expands `chunkTopK` before reranking
 
@@ -730,6 +738,8 @@ Defaults in this phase:
 - max parallel insert: `1`
 - entity extract max gleaning: `1`
 - max extract input tokens: `20480`
+- entity extraction language: `English`
+- entity types: `Person, Creature, Organization, Location, Event, Concept, Method, Content, Data, Artifact, NaturalObject, Other`
 - automatic keyword extraction: `true`
 - rerank candidate multiplier: `2`
 
@@ -747,6 +757,8 @@ lightrag:
     max-parallel-insert: 4
     entity-extract-max-gleaning: 1
     max-extract-input-tokens: 20480
+    language: Chinese
+    entity-types: Person,Organization
   query:
     automatic-keyword-extraction: false
     rerank-candidate-multiplier: 4
