@@ -21,6 +21,7 @@ class RagasCliOutputTest {
             "--top-k", "10",
             "--chunk-top-k", "12",
             "--storage-profile", "in-memory",
+            "--retrieval-only", "true",
             "--run-label", "candidate-rerank-4"
         ));
         var output = new RagasBatchEvaluationCli.OutputEnvelope(
@@ -31,6 +32,7 @@ class RagasCliOutputTest {
                 config.batchRequest().topK(),
                 config.batchRequest().chunkTopK(),
                 config.batchRequest().storageProfile(),
+                config.batchRequest().retrievalOnly(),
                 config.runLabel()
             ),
             new RagasBatchEvaluationCli.Summary(1),
@@ -48,6 +50,7 @@ class RagasCliOutputTest {
         var json = OBJECT_MAPPER.readTree(OBJECT_MAPPER.writeValueAsString(output));
 
         assertThat(json.path("request").path("mode").asText()).isEqualTo("MIX");
+        assertThat(json.path("request").path("retrievalOnly").asBoolean()).isTrue();
         assertThat(json.path("request").path("runLabel").asText()).isEqualTo("candidate-rerank-4");
         assertThat(json.path("summary").path("totalCases").asInt()).isEqualTo(1);
         assertThat(json.path("results").isArray()).isTrue();
@@ -89,6 +92,28 @@ class RagasCliOutputTest {
         assertThat(config.batchRequest().topK()).isEqualTo(10);
         assertThat(config.batchRequest().chunkTopK()).isEqualTo(10);
         assertThat(config.batchRequest().storageProfile()).isEqualTo(RagasStorageProfile.IN_MEMORY);
+        assertThat(config.batchRequest().retrievalOnly()).isFalse();
         assertThat(config.runLabel()).isEqualTo("baseline");
+    }
+
+    @Test
+    void retrievalOnlyCliUsesLocalNoOpChatModel() {
+        var chatModel = RagasBatchEvaluationCli.createChatModel(new RagasBatchEvaluationService.BatchRequest(
+            Path.of("docs"),
+            Path.of("dataset.json"),
+            QueryMode.MIX,
+            10,
+            10,
+            RagasStorageProfile.IN_MEMORY,
+            true
+        ));
+
+        var response = chatModel.generate(new io.github.lightragjava.model.ChatModel.ChatRequest(
+            "Extract entities and relations from the provided text.",
+            "Chunk text"
+        ));
+
+        assertThat(response).contains("\"entities\": []");
+        assertThat(response).contains("\"relations\": []");
     }
 }

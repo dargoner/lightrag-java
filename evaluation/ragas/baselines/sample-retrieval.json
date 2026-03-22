@@ -1,0 +1,110 @@
+{
+  "metadata": {
+    "generated_at": "2026-03-22T08:38:38.550087",
+    "run_label": "sample-retrieval",
+    "baseline_name": "sample-retrieval",
+    "dataset_path": "/home/dargoner/work/lightrag-java/.worktrees/main-merge-sdk-alignment/evaluation/ragas/sample_dataset.json",
+    "documents_dir": "/home/dargoner/work/lightrag-java/.worktrees/main-merge-sdk-alignment/evaluation/ragas/sample_documents",
+    "query_mode": "MIX",
+    "top_k": 10,
+    "chunk_top_k": 10
+  },
+  "summary": {
+    "total_cases": 6,
+    "top1_hit_rate": 0.0,
+    "top3_hit_rate": 0.0,
+    "average_recall": 0.0,
+    "shared_case_count": 6,
+    "top1_hit_rate_delta": 0.0,
+    "top3_hit_rate_delta": 0.0,
+    "average_recall_delta": 0.0,
+    "baseline_updated": true
+  },
+  "results": [
+    {
+      "question": "How does LightRAG solve the hallucination problem in large language models?",
+      "expected_doc_ids": [],
+      "matched_doc_ids": [
+        "01-lightrag-overview",
+        "readme",
+        "03-lightrag-improvements",
+        "04-supported-databases",
+        "05-evaluation-and-deployment"
+      ],
+      "top1_hit": false,
+      "top3_hit": false,
+      "recall": 0.0
+    },
+    {
+      "question": "What are the three main components required in a RAG system?",
+      "expected_doc_ids": [],
+      "matched_doc_ids": [
+        "02-rag-architecture",
+        "05-evaluation-and-deployment",
+        "readme",
+        "03-lightrag-improvements",
+        "01-lightrag-overview"
+      ],
+      "top1_hit": false,
+      "top3_hit": false,
+      "recall": 0.0
+    },
+    {
+      "question": "How does LightRAG's retrieval performance compare to traditional RAG approaches?",
+      "expected_doc_ids": [],
+      "matched_doc_ids": [
+        "03-lightrag-improvements",
+        "01-lightrag-overview",
+        "04-supported-databases",
+        "05-evaluation-and-deployment",
+        "readme"
+      ],
+      "top1_hit": false,
+      "top3_hit": false,
+      "recall": 0.0
+    },
+    {
+      "question": "What vector databases does LightRAG support and what are their key characteristics?",
+      "expected_doc_ids": [],
+      "matched_doc_ids": [
+        "04-supported-databases",
+        "01-lightrag-overview",
+        "03-lightrag-improvements",
+        "05-evaluation-and-deployment",
+        "02-rag-architecture",
+        "readme"
+      ],
+      "top1_hit": false,
+      "top3_hit": false,
+      "recall": 0.0
+    },
+    {
+      "question": "What are the four key metrics for evaluating RAG system quality and what does each metric measure?",
+      "expected_doc_ids": [],
+      "matched_doc_ids": [
+        "05-evaluation-and-deployment",
+        "02-rag-architecture",
+        "readme",
+        "03-lightrag-improvements",
+        "01-lightrag-overview"
+      ],
+      "top1_hit": false,
+      "top3_hit": false,
+      "recall": 0.0
+    },
+    {
+      "question": "What are the core benefits of LightRAG and how does it improve upon traditional RAG systems?",
+      "expected_doc_ids": [],
+      "matched_doc_ids": [
+        "03-lightrag-improvements",
+        "01-lightrag-overview",
+        "04-supported-databases",
+        "05-evaluation-and-deployment",
+        "readme"
+      ],
+      "top1_hit": false,
+      "top3_hit": false,
+      "recall": 0.0
+    }
+  ]
+}
