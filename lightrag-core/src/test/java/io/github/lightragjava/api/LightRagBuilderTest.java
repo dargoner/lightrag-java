@@ -283,6 +283,30 @@ class LightRagBuilderTest {
     }
 
     @Test
+    void rejectsEmbeddingSemanticMergeThresholdOutsideUnitRange() {
+        assertThatThrownBy(() -> LightRag.builder()
+            .chatModel(new FakeChatModel())
+            .embeddingModel(new FakeEmbeddingModel())
+            .storage(new FakeStorageProvider())
+            .embeddingSemanticMergeThreshold(1.1d))
+            .isInstanceOf(IllegalArgumentException.class)
+            .hasMessageContaining("between 0.0 and 1.0");
+    }
+
+    @Test
+    void failsBuildWhenEmbeddingSemanticMergeIsEnabledForNonSmartChunker() {
+        assertThatThrownBy(() -> LightRag.builder()
+            .chatModel(new FakeChatModel())
+            .embeddingModel(new FakeEmbeddingModel())
+            .storage(new FakeStorageProvider())
+            .chunker(new FixedWindowChunker(100, 10))
+            .enableEmbeddingSemanticMerge(true)
+            .build())
+            .isInstanceOf(IllegalStateException.class)
+            .hasMessageContaining("SmartChunker");
+    }
+
+    @Test
     void rejectsNonPositiveRerankCandidateMultiplier() {
         assertThatThrownBy(() -> LightRag.builder().rerankCandidateMultiplier(0))
             .isInstanceOf(IllegalArgumentException.class)

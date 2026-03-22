@@ -3,6 +3,7 @@ package io.github.lightragjava.api;
 import io.github.lightragjava.config.LightRagConfig;
 import io.github.lightragjava.indexing.Chunker;
 import io.github.lightragjava.indexing.FixedWindowChunker;
+import io.github.lightragjava.indexing.SmartChunker;
 import io.github.lightragjava.model.ChatModel;
 import io.github.lightragjava.model.EmbeddingModel;
 import io.github.lightragjava.model.RerankModel;
@@ -35,6 +36,8 @@ public final class LightRagBuilder {
     private int maxParallelInsert = 1;
     private int entityExtractMaxGleaning = io.github.lightragjava.indexing.KnowledgeExtractor.DEFAULT_ENTITY_EXTRACT_MAX_GLEANING;
     private int maxExtractInputTokens = io.github.lightragjava.indexing.KnowledgeExtractor.DEFAULT_MAX_EXTRACT_INPUT_TOKENS;
+    private boolean embeddingSemanticMergeEnabled = false;
+    private double embeddingSemanticMergeThreshold = 0.80d;
 
     public LightRagBuilder chatModel(ChatModel chatModel) {
         this.chatModel = Objects.requireNonNull(chatModel, "chatModel");
@@ -62,6 +65,19 @@ public final class LightRagBuilder {
 
     public LightRagBuilder chunker(Chunker chunker) {
         this.chunker = Objects.requireNonNull(chunker, "chunker");
+        return this;
+    }
+
+    public LightRagBuilder enableEmbeddingSemanticMerge(boolean enabled) {
+        this.embeddingSemanticMergeEnabled = enabled;
+        return this;
+    }
+
+    public LightRagBuilder embeddingSemanticMergeThreshold(double threshold) {
+        if (threshold < 0.0d || threshold > 1.0d) {
+            throw new IllegalArgumentException("embeddingSemanticMergeThreshold must be between 0.0 and 1.0");
+        }
+        this.embeddingSemanticMergeThreshold = threshold;
         return this;
     }
 
@@ -125,6 +141,9 @@ public final class LightRagBuilder {
         if (storageProvider == null) {
             throw new IllegalStateException("storageProvider is required");
         }
+        if (embeddingSemanticMergeEnabled && !(chunker instanceof SmartChunker)) {
+            throw new IllegalStateException("embedding semantic merge requires SmartChunker");
+        }
         requireStore("documentStore", storageProvider.documentStore(), DocumentStore.class);
         requireStore("chunkStore", storageProvider.chunkStore(), ChunkStore.class);
         requireStore("graphStore", storageProvider.graphStore(), GraphStore.class);
@@ -144,7 +163,7 @@ public final class LightRagBuilder {
             snapshotPath,
             rerankModel
         ), chunker, automaticQueryKeywordExtraction, rerankCandidateMultiplier, embeddingBatchSize, maxParallelInsert,
-            entityExtractMaxGleaning, maxExtractInputTokens);
+            entityExtractMaxGleaning, maxExtractInputTokens, embeddingSemanticMergeEnabled, embeddingSemanticMergeThreshold);
     }
 
     private static <T> T requireStore(String componentName, T store, Class<T> storeType) {

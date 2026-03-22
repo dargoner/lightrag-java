@@ -27,6 +27,8 @@ public final class LightRag {
     private final int maxParallelInsert;
     private final int entityExtractMaxGleaning;
     private final int maxExtractInputTokens;
+    private final boolean embeddingSemanticMergeEnabled;
+    private final double embeddingSemanticMergeThreshold;
     private final IndexingPipeline indexingPipeline;
     private final DeletionPipeline deletionPipeline;
     private final GraphManagementPipeline graphManagementPipeline;
@@ -35,13 +37,15 @@ public final class LightRag {
     LightRag(LightRagConfig config) {
         this(config, null, true, 2, Integer.MAX_VALUE, 1,
             io.github.lightragjava.indexing.KnowledgeExtractor.DEFAULT_ENTITY_EXTRACT_MAX_GLEANING,
-            io.github.lightragjava.indexing.KnowledgeExtractor.DEFAULT_MAX_EXTRACT_INPUT_TOKENS);
+            io.github.lightragjava.indexing.KnowledgeExtractor.DEFAULT_MAX_EXTRACT_INPUT_TOKENS,
+            false, 0.80d);
     }
 
     LightRag(LightRagConfig config, Chunker chunker) {
         this(config, chunker, true, 2, Integer.MAX_VALUE, 1,
             io.github.lightragjava.indexing.KnowledgeExtractor.DEFAULT_ENTITY_EXTRACT_MAX_GLEANING,
-            io.github.lightragjava.indexing.KnowledgeExtractor.DEFAULT_MAX_EXTRACT_INPUT_TOKENS);
+            io.github.lightragjava.indexing.KnowledgeExtractor.DEFAULT_MAX_EXTRACT_INPUT_TOKENS,
+            false, 0.80d);
     }
 
     LightRag(
@@ -52,7 +56,9 @@ public final class LightRag {
         int embeddingBatchSize,
         int maxParallelInsert,
         int entityExtractMaxGleaning,
-        int maxExtractInputTokens
+        int maxExtractInputTokens,
+        boolean embeddingSemanticMergeEnabled,
+        double embeddingSemanticMergeThreshold
     ) {
         this.config = config;
         this.chunker = chunker;
@@ -62,6 +68,8 @@ public final class LightRag {
         this.maxParallelInsert = maxParallelInsert;
         this.entityExtractMaxGleaning = entityExtractMaxGleaning;
         this.maxExtractInputTokens = maxExtractInputTokens;
+        this.embeddingSemanticMergeEnabled = embeddingSemanticMergeEnabled;
+        this.embeddingSemanticMergeThreshold = embeddingSemanticMergeThreshold;
         this.indexingPipeline = new IndexingPipeline(
             config.chatModel(),
             config.embeddingModel(),
@@ -204,6 +212,14 @@ public final class LightRag {
 
     int maxExtractInputTokens() {
         return maxExtractInputTokens;
+    }
+
+    boolean embeddingSemanticMergeEnabled() {
+        return embeddingSemanticMergeEnabled;
+    }
+
+    double embeddingSemanticMergeThreshold() {
+        return embeddingSemanticMergeThreshold;
     }
 
     private static DocumentProcessingStatus toDocumentProcessingStatus(
