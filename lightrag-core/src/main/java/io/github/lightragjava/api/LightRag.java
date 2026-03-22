@@ -13,6 +13,7 @@ import io.github.lightragjava.query.MixQueryStrategy;
 import io.github.lightragjava.query.NaiveQueryStrategy;
 import io.github.lightragjava.query.QueryEngine;
 import io.github.lightragjava.types.Document;
+import io.github.lightragjava.types.RawDocumentSource;
 
 import java.util.EnumMap;
 import java.util.List;
@@ -81,7 +82,9 @@ public final class LightRag {
             embeddingBatchSize,
             maxParallelInsert,
             entityExtractMaxGleaning,
-            maxExtractInputTokens
+            maxExtractInputTokens,
+            embeddingSemanticMergeEnabled,
+            embeddingSemanticMergeThreshold
         );
         this.deletionPipeline = new DeletionPipeline(
             config.storageProvider(),
@@ -121,6 +124,10 @@ public final class LightRag {
 
     public void ingest(List<Document> documents) {
         indexingPipeline.ingest(documents);
+    }
+
+    public void ingestSources(List<RawDocumentSource> sources, DocumentIngestOptions options) {
+        indexingPipeline.ingestSources(sources, options);
     }
 
     public GraphEntity createEntity(CreateEntityRequest request) {
