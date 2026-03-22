@@ -26,7 +26,7 @@ public final class SemanticChunkRefiner {
         return refine(documentId, chunks, maxTokens, threshold, semanticSimilarity, MergeMode.GREEDY_CASCADING);
     }
 
-    public List<Chunk> refine(
+    List<Chunk> refine(
         String documentId,
         List<Chunk> chunks,
         int maxTokens,
@@ -36,17 +36,25 @@ public final class SemanticChunkRefiner {
     ) {
         Objects.requireNonNull(documentId, "documentId");
         var sourceChunks = List.copyOf(Objects.requireNonNull(chunks, "chunks"));
-        if (sourceChunks.size() <= 1) {
-            return sourceChunks;
-        }
-
         Objects.requireNonNull(similarity, "similarity");
         Objects.requireNonNull(mergeMode, "mergeMode");
 
-        List<MergedChunk> merged = switch (mergeMode) {
-            case GREEDY_CASCADING -> mergeGreedy(sourceChunks, maxTokens, threshold, similarity);
-            case PAIRWISE_SINGLE_PASS -> mergePairwiseSinglePass(sourceChunks, maxTokens, threshold, similarity);
-        };
+        if (sourceChunks.isEmpty()) {
+            return List.of();
+        }
+
+        List<MergedChunk> merged;
+        if (sourceChunks.size() == 1) {
+            if (mergeMode == MergeMode.PAIRWISE_SINGLE_PASS) {
+                validateEmbeddingMetadata(sourceChunks);
+            }
+            merged = List.of(MergedChunk.from(sourceChunks.get(0)));
+        } else {
+            merged = switch (mergeMode) {
+                case GREEDY_CASCADING -> mergeGreedy(sourceChunks, maxTokens, threshold, similarity);
+                case PAIRWISE_SINGLE_PASS -> mergePairwiseSinglePass(sourceChunks, maxTokens, threshold, similarity);
+            };
+        }
 
         var normalized = new ArrayList<Chunk>(merged.size());
         for (int index = 0; index < merged.size(); index++) {

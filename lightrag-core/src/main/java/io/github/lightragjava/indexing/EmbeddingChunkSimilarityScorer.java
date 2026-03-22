@@ -6,10 +6,10 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Objects;
 
-public final class EmbeddingChunkSimilarityScorer implements ChunkSimilarityScorer {
+final class EmbeddingChunkSimilarityScorer implements ChunkSimilarityScorer {
     private final EmbeddingBatcher embeddingBatcher;
 
-    public EmbeddingChunkSimilarityScorer(EmbeddingBatcher embeddingBatcher) {
+    EmbeddingChunkSimilarityScorer(EmbeddingBatcher embeddingBatcher) {
         this.embeddingBatcher = Objects.requireNonNull(embeddingBatcher, "embeddingBatcher");
     }
 

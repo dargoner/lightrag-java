@@ -4,6 +4,6 @@ import io.github.lightragjava.types.Chunk;
 
 import java.util.List;
 
-public interface ChunkSimilarityScorer {
+interface ChunkSimilarityScorer {
     SemanticSimilarity similarityFor(List<Chunk> chunks);
 }

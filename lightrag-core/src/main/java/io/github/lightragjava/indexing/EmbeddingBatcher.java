@@ -21,14 +21,24 @@ final class EmbeddingBatcher {
             return List.of();
         }
         if (embeddingBatchSize >= sources.size()) {
-            return embeddingModel.embedAll(sources);
+            return validateBatchEmbeddings(sources, embeddingModel.embedAll(sources));
         }
         // 按批次调用 embedding，避免单次请求过大
         var embeddings = new ArrayList<List<Double>>(sources.size());
         for (int start = 0; start < sources.size(); start += embeddingBatchSize) {
             var end = Math.min(sources.size(), start + embeddingBatchSize);
-            embeddings.addAll(embeddingModel.embedAll(sources.subList(start, end)));
+            var batchTexts = sources.subList(start, end);
+            embeddings.addAll(validateBatchEmbeddings(batchTexts, embeddingModel.embedAll(batchTexts)));
         }
         return List.copyOf(embeddings);
+    }
+
+    private static List<List<Double>> validateBatchEmbeddings(List<String> batchTexts, List<List<Double>> batchEmbeddings) {
+        if (batchEmbeddings.size() != batchTexts.size()) {
+            throw new IllegalStateException(
+                "Embedding size mismatch for batch: expected " + batchTexts.size() + " but got " + batchEmbeddings.size()
+            );
+        }
+        return batchEmbeddings;
     }
 }

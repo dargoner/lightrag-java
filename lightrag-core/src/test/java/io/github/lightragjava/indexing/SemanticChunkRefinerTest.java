@@ -1,5 +1,6 @@
 package io.github.lightragjava.indexing;
 
+import io.github.lightragjava.model.EmbeddingModel;
 import io.github.lightragjava.types.Chunk;
 import org.junit.jupiter.api.Test;
 
@@ -42,6 +43,23 @@ class SemanticChunkRefinerTest {
         assertThat(refined)
             .extracting(Chunk::id)
             .containsExactly("doc-1:0", "doc-1:1");
+    }
+
+    @Test
+    void singleChunkIsNormalized() {
+        var refiner = new SemanticChunkRefiner((left, right) -> 0.95d);
+        var chunks = List.of(
+            chunk("doc-1:9", 9, "Alpha retrieval.", "paragraph:9")
+        );
+
+        var refined = refiner.refine("doc-1", chunks, 120, 0.8d);
+
+        assertThat(refined).hasSize(1);
+        assertThat(refined.get(0).id()).isEqualTo("doc-1:0");
+        assertThat(refined.get(0).order()).isEqualTo(0);
+        assertThat(refined.get(0).metadata())
+            .containsEntry(SmartChunkMetadata.PREV_CHUNK_ID, "")
+            .containsEntry(SmartChunkMetadata.NEXT_CHUNK_ID, "");
     }
 
     @Test
@@ -115,6 +133,65 @@ class SemanticChunkRefinerTest {
         ))
             .isInstanceOf(IllegalStateException.class)
             .hasMessageContaining(SmartChunkMetadata.SECTION_PATH);
+    }
+
+    @Test
+    void embeddingBatcherPreservesOrderAcrossBatches() {
+        var model = new EmbeddingModel() {
+            private int counter;
+
+            @Override
+            public List<List<Double>> embedAll(List<String> texts) {
+                return texts.stream()
+                    .map(text -> List.of((double) counter++))
+                    .toList();
+            }
+        };
+        var batcher = new EmbeddingBatcher(model, 2);
+
+        var embeddings = batcher.embedAll(List.of("A", "B", "C"));
+
+        assertThat(embeddings).containsExactly(
+            List.of(0.0d),
+            List.of(1.0d),
+            List.of(2.0d)
+        );
+    }
+
+    @Test
+    void embeddingBatcherFailsWhenBatchResultCountDoesNotMatchInputCount() {
+        var model = new EmbeddingModel() {
+            private boolean firstBatch = true;
+
+            @Override
+            public List<List<Double>> embedAll(List<String> texts) {
+                if (firstBatch) {
+                    firstBatch = false;
+                    return List.of(List.of(0.0d), List.of(1.0d));
+                }
+                return List.of();
+            }
+        };
+        var batcher = new EmbeddingBatcher(model, 2);
+
+        assertThatThrownBy(() -> batcher.embedAll(List.of("A", "B", "C")))
+            .isInstanceOf(IllegalStateException.class)
+            .hasMessageContaining("Embedding size mismatch for batch");
+    }
+
+    @Test
+    void embeddingBatcherFailsWhenSingleBatchResultCountDoesNotMatchInputCount() {
+        var model = new EmbeddingModel() {
+            @Override
+            public List<List<Double>> embedAll(List<String> texts) {
+                return List.of(List.of(0.0d));
+            }
+        };
+        var batcher = new EmbeddingBatcher(model, 8);
+
+        assertThatThrownBy(() -> batcher.embedAll(List.of("A", "B")))
+            .isInstanceOf(IllegalStateException.class)
+            .hasMessageContaining("Embedding size mismatch for batch");
     }
 
     private static Chunk chunk(String id, int order, String text, String sourceBlockId) {
