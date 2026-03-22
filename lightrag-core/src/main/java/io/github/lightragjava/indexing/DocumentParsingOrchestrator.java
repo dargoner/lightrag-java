@@ -10,9 +10,21 @@ import java.util.Objects;
 
 public final class DocumentParsingOrchestrator {
     private final PlainTextParsingProvider plainTextProvider;
+    private final MineruParsingProvider mineruProvider;
+    private final TikaFallbackParsingProvider tikaProvider;
 
     public DocumentParsingOrchestrator(PlainTextParsingProvider plainTextProvider) {
+        this(plainTextProvider, null, null);
+    }
+
+    public DocumentParsingOrchestrator(
+        PlainTextParsingProvider plainTextProvider,
+        MineruParsingProvider mineruProvider,
+        TikaFallbackParsingProvider tikaProvider
+    ) {
         this.plainTextProvider = Objects.requireNonNull(plainTextProvider, "plainTextProvider");
+        this.mineruProvider = mineruProvider;
+        this.tikaProvider = tikaProvider;
     }
 
     public ParsedDocument parse(RawDocumentSource source) {
@@ -22,8 +34,7 @@ public final class DocumentParsingOrchestrator {
     public ParsedDocument parse(RawDocumentSource source, DocumentIngestOptions options) {
         var resolved = Objects.requireNonNull(source, "source");
         var resolvedOptions = Objects.requireNonNull(options, "options");
-        ensurePlainTextSupported(resolved);
-        var parsed = plainTextProvider.parse(resolved);
+        var parsed = parseWithRouting(resolved);
         var mergedMetadata = mergeMetadata(parsed.metadata(), resolvedOptions);
         return new ParsedDocument(
             parsed.documentId(),
@@ -34,16 +45,43 @@ public final class DocumentParsingOrchestrator {
         );
     }
 
-    private static void ensurePlainTextSupported(RawDocumentSource source) {
+    private ParsedDocument parseWithRouting(RawDocumentSource source) {
+        if (isPlainTextSource(source)) {
+            return plainTextProvider.parse(source);
+        }
+        if (isImageSource(source) || isComplexDocumentSource(source)) {
+            if (mineruProvider == null) {
+                throw unsupportedMediaType(source);
+            }
+            try {
+                return mineruProvider.parse(source);
+            } catch (MineruUnavailableException exception) {
+                if (isImageSource(source) || tikaProvider == null) {
+                    throw exception;
+                }
+                var downgraded = tikaProvider.parse(source);
+                var metadata = new LinkedHashMap<String, String>(downgraded.metadata());
+                metadata.put("parse_error_reason", exception.getMessage());
+                return new ParsedDocument(
+                    downgraded.documentId(),
+                    downgraded.title(),
+                    downgraded.plainText(),
+                    downgraded.blocks(),
+                    Map.copyOf(metadata)
+                );
+            }
+        }
+        throw unsupportedMediaType(source);
+    }
+
+    private static IllegalArgumentException unsupportedMediaType(RawDocumentSource source) {
+        return new IllegalArgumentException("Unsupported media type for document parsing: "
+            + source.mediaType() + " (file: " + source.fileName() + ")");
+    }
+
+    private static boolean isPlainTextSource(RawDocumentSource source) {
         var mediaType = normalizeMediaType(source.mediaType());
-        if (!mediaType.startsWith("text/")) {
-            throw new IllegalArgumentException("Unsupported media type for plain-text ingest: "
-                + source.mediaType() + " (file: " + source.fileName() + ")");
-        }
-        if (!isSupportedMediaType(mediaType) && !hasSupportedExtension(source.fileName())) {
-            throw new IllegalArgumentException("Unsupported media type for plain-text ingest: "
-                + source.mediaType() + " (file: " + source.fileName() + ")");
-        }
+        return isSupportedPlainTextMediaType(mediaType) || hasPlainTextExtension(source.fileName());
     }
 
     private static String normalizeMediaType(String mediaType) {
@@ -53,17 +91,48 @@ public final class DocumentParsingOrchestrator {
         return normalized.toLowerCase(Locale.ROOT);
     }
 
-    private static boolean isSupportedMediaType(String mediaType) {
+    private static boolean isSupportedPlainTextMediaType(String mediaType) {
         return "text/plain".equals(mediaType)
             || "text/markdown".equals(mediaType)
             || "text/x-markdown".equals(mediaType);
     }
 
-    private static boolean hasSupportedExtension(String fileName) {
+    private static boolean hasPlainTextExtension(String fileName) {
         var normalized = Objects.requireNonNull(fileName, "fileName").toLowerCase(Locale.ROOT);
         return normalized.endsWith(".txt")
             || normalized.endsWith(".md")
             || normalized.endsWith(".markdown");
+    }
+
+    private static boolean isComplexDocumentSource(RawDocumentSource source) {
+        var mediaType = normalizeMediaType(source.mediaType());
+        var fileName = source.fileName().toLowerCase(Locale.ROOT);
+        return "application/pdf".equals(mediaType)
+            || "application/msword".equals(mediaType)
+            || "application/vnd.openxmlformats-officedocument.wordprocessingml.document".equals(mediaType)
+            || "application/vnd.ms-powerpoint".equals(mediaType)
+            || "application/vnd.openxmlformats-officedocument.presentationml.presentation".equals(mediaType)
+            || "text/html".equals(mediaType)
+            || "application/xhtml+xml".equals(mediaType)
+            || fileName.endsWith(".pdf")
+            || fileName.endsWith(".doc")
+            || fileName.endsWith(".docx")
+            || fileName.endsWith(".ppt")
+            || fileName.endsWith(".pptx")
+            || fileName.endsWith(".html")
+            || fileName.endsWith(".htm");
+    }
+
+    private static boolean isImageSource(RawDocumentSource source) {
+        var mediaType = normalizeMediaType(source.mediaType());
+        var fileName = source.fileName().toLowerCase(Locale.ROOT);
+        return mediaType.startsWith("image/")
+            || fileName.endsWith(".png")
+            || fileName.endsWith(".jpg")
+            || fileName.endsWith(".jpeg")
+            || fileName.endsWith(".webp")
+            || fileName.endsWith(".gif")
+            || fileName.endsWith(".bmp");
     }
 
     private static Map<String, String> mergeMetadata(Map<String, String> metadata, DocumentIngestOptions options) {
