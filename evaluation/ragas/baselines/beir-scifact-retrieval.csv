@@ -1,0 +1,26 @@
+question,expected_doc_ids,matched_doc_ids,top1_hit,top3_hit,recall
+0-dimensional biomaterials show inductive properties.,31715818,13940200|31715818|16626264|4381486|9745001|6277638|11603066|20381484|5373138,false,true,1.0000
+All hematopoietic stem cells segregate their chromosomes randomly.,4381486,4381486|16626264|13923140|25254425|5373138|12486491|33370,true,true,1.0000
+Radioiodine treatment of non-toxic multinodular goitre reduces thyroid volume.,9745001,9745001|3898784|6157837|39281140|13940200,true,true,1.0000
+Rapamycin decreases the concentration of triacylglycerols in fruit flies.,6277638,6277638|17997584|9283422|11603066|33370|3898784|13770184,true,true,1.0000
+Rapid phosphotransfer rates govern fidelity in two component systems,11603066,11603066|6157837|13940200|20381484|4456756|33499189|25254425,true,true,1.0000
+Rapid up-regulation and higher basal expression of interferon-induced genes increase survival of granule cell neurons that are infected by West Nile virus.,9433958,9433958|6157837|6277638|17997584|12486491|13923140|20381484|5373138,true,true,1.0000
+Rapid up-regulation and higher basal expression of interferon-induced genes reduce survival of granule cell neurons that are infected by West Nile virus.,9433958,9433958|13923140|17997584|6277638|6157837|20381484|13940200|12486491|33370,true,true,1.0000
+Recurrent mutations occur frequently within CTCF anchor sites adjacent to oncogenes.,5373138,5373138|9283422|33370|37549932|11603066|13940200|33499189|25254425|6157837,true,true,1.0000
+Reduced responsiveness to interleukin-2 in regulatory T cells is associated with greater resistance to autoimmune diseases such as Type 1 Diabetes.,11899391|13923140|13940200,13923140|11899391|13940200|17997584|6157837|6277638|5373138,true,true,1.0000
+Replacement of histone H2A with H2A.Z slows gene activation in yeasts by stabilizing +1 nucleosomes.,16626264|25254425,16626264|25254425|11603066|33370|20381484,true,true,1.0000
+Ribosomopathies have a low degree of cell and tissue specific pathology.,12486491,12486491|33370|4381486|13940200|9433958|9745001|5373138|13923140,true,true,1.0000
+S-nitrosylated GAPDH physiologically transnitrosylates histone deacetylases.,20381484,20381484|13940200|6277638|11603066|17628888|4456756|9745001|16626264,true,true,1.0000
+Sildenafil improves erectile function in men who experience sexual dysfunction as a result of the use of SSRI antidepressants.,39281140,39281140|6157837|17997584|11899391|9745001|6277638,true,true,1.0000
+Silencing of Bcl2 is important for the maintenance and progression of tumors.,37549932,37549932|33370|9283422|25254425|13770184|17628888|6157837,true,true,1.0000
+Smc5/6 engagment drives the activation of SUMO E3 ligase Mms21 by ATP-dependent remolding.,17628888,17628888|33499189|20381484|33370|17997584|9283422|12486491|16626264,true,true,1.0000
+Statins decrease blood cholesterol.,7662206,7662206|13770184|39281140|6157837|33370|9745001,true,true,1.0000
+Statins increase blood cholesterol.,7662206,7662206|13770184|6157837|3898784|39281140|33370,true,true,1.0000
+Stroke patients with prior use of direct oral anticoagulants have a lower risk of in-hospital mortality than stroke patients with prior use of warfarin.,3898784,3898784|9745001|6157837|39281140|7662206|6277638,true,true,1.0000
+Subcutaneous fat depots undergo extensive browning processes after cold exposure.,20532591,20532591|13770184|4381486|20381484|6277638|4456756|9283422|17628888,true,true,1.0000
+Suboptimal nutrition is not predictive of chronic disease,13770184,13770184|7662206|37549932|4381486|11899391|9745001,true,true,1.0000
+Synaptic activity enhances local release of brain derived neurotrophic factor from postsynaptic dendrites.,4456756,4456756|9433958|12486491|20381484|39281140,true,true,1.0000
+Angiotensin converting enzyme inhibitors are associated with increased risk for functional renal insufficiency.,6157837,6157837|3898784|25254425|11899391|9745001|6277638|13940200,true,true,1.0000
+T regulatory cells (tTregs) lacking αvβ8 are more adept at suppressing pathogenic T-cell responses during active inflammation.,17997584,17997584|11899391|13923140|33370|6157837|13940200|9283422|33499189,true,true,1.0000
+TCR/CD3 microdomains are a required to induce the immunologic synapse to activate T cells.,33499189|9283422,33499189|9283422|17997584|13923140|5373138|9433958|4456756,true,true,1.0000
+TNFAIP3 is a tumor suppressor in glioblastoma.,33370,33370|17997584|20381484|6277638|37549932|9745001|11899391,true,true,1.0000

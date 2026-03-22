@@ -35,7 +35,7 @@ public final class RagasBatchEvaluationService {
         var testCases = loadTestCases(batchRequest.datasetPath());
         var documents = RagasEvaluationService.loadDocuments(batchRequest.documentsDir());
 
-        try (var runtime = createRuntime(batchRequest.storageProfile(), chatModel, embeddingModel)) {
+        try (var runtime = createRuntime(batchRequest.storageProfile(), chatModel, embeddingModel, batchRequest.retrievalOnly())) {
             runtime.rag().ingest(documents);
             var results = new ArrayList<Result>(testCases.size());
             for (int index = 0; index < testCases.size(); index++) {
@@ -45,6 +45,7 @@ public final class RagasBatchEvaluationService {
                     .mode(batchRequest.mode())
                     .topK(batchRequest.topK())
                     .chunkTopK(batchRequest.chunkTopK())
+                    .onlyNeedContext(batchRequest.retrievalOnly())
                     .build());
                 results.add(new Result(
                     index,
@@ -63,7 +64,8 @@ public final class RagasBatchEvaluationService {
     private static EvaluationRuntime createRuntime(
         RagasStorageProfile profile,
         ChatModel chatModel,
-        EmbeddingModel embeddingModel
+        EmbeddingModel embeddingModel,
+        boolean retrievalOnly
     ) {
         return switch (profile) {
             case IN_MEMORY -> new EvaluationRuntime(
@@ -71,15 +73,16 @@ public final class RagasBatchEvaluationService {
                     .chatModel(chatModel)
                     .embeddingModel(embeddingModel)
                     .storage(InMemoryStorageProvider.create())
+                    .automaticQueryKeywordExtraction(!retrievalOnly)
                     .build(),
                 () -> {
                 }
             );
-            case POSTGRES_NEO4J_TESTCONTAINERS -> postgresNeo4jRuntime(chatModel, embeddingModel);
+            case POSTGRES_NEO4J_TESTCONTAINERS -> postgresNeo4jRuntime(chatModel, embeddingModel, retrievalOnly);
         };
     }
 
-    private static EvaluationRuntime postgresNeo4jRuntime(ChatModel chatModel, EmbeddingModel embeddingModel) {
+    private static EvaluationRuntime postgresNeo4jRuntime(ChatModel chatModel, EmbeddingModel embeddingModel, boolean retrievalOnly) {
         var postgres = new PostgreSQLContainer<>(
             DockerImageName.parse("pgvector/pgvector:pg16").asCompatibleSubstituteFor("postgres")
         );
@@ -110,6 +113,7 @@ public final class RagasBatchEvaluationService {
                 .chatModel(chatModel)
                 .embeddingModel(embeddingModel)
                 .storage(storage)
+                .automaticQueryKeywordExtraction(!retrievalOnly)
                 .build();
             return new EvaluationRuntime(
                 rag,
@@ -160,7 +164,8 @@ public final class RagasBatchEvaluationService {
         QueryMode mode,
         int topK,
         int chunkTopK,
-        RagasStorageProfile storageProfile
+        RagasStorageProfile storageProfile,
+        boolean retrievalOnly
     ) {
         public BatchRequest {
             documentsDir = Objects.requireNonNull(documentsDir, "documentsDir");

@@ -40,7 +40,8 @@ class RagasBatchEvaluationServiceTest {
                 QueryMode.NAIVE,
                 10,
                 10,
-                RagasStorageProfile.IN_MEMORY
+                RagasStorageProfile.IN_MEMORY,
+                false
             ),
             new FakeChatModel(),
             new FakeEmbeddingModel()
@@ -80,7 +81,8 @@ class RagasBatchEvaluationServiceTest {
                 QueryMode.NAIVE,
                 10,
                 10,
-                RagasStorageProfile.POSTGRES_NEO4J_TESTCONTAINERS
+                RagasStorageProfile.POSTGRES_NEO4J_TESTCONTAINERS,
+                false
             ),
             new FakeChatModel(),
             new FakeEmbeddingModel()
@@ -88,6 +90,45 @@ class RagasBatchEvaluationServiceTest {
 
         assertThat(results).hasSize(1);
         assertThat(results.get(0).answer()).isEqualTo("Alice works with Bob.");
+    }
+
+    @Test
+    void retrievalOnlyBatchSkipsQueryStageChatCalls() throws Exception {
+        Files.writeString(tempDir.resolve("01_notes.md"), """
+            # Notes
+
+            Alice works with Bob on retrieval systems.
+            """);
+        Files.writeString(tempDir.resolve("dataset.json"), """
+            {
+              "test_cases": [
+                {"question": "Who works with Bob?", "ground_truth": "Alice works with Bob."},
+                {"question": "What does Alice work on?", "ground_truth": "Retrieval systems."}
+              ]
+            }
+            """);
+
+        var chatModel = new CountingChatModel();
+        var service = new RagasBatchEvaluationService();
+        var results = service.evaluateBatch(
+            new RagasBatchEvaluationService.BatchRequest(
+                tempDir,
+                tempDir.resolve("dataset.json"),
+                QueryMode.MIX,
+                10,
+                10,
+                RagasStorageProfile.IN_MEMORY,
+                true
+            ),
+            chatModel,
+            new FakeEmbeddingModel()
+        );
+
+        assertThat(results).hasSize(2);
+        assertThat(chatModel.knowledgeExtractionCalls).isEqualTo(1);
+        assertThat(chatModel.keywordExtractionCalls).isZero();
+        assertThat(chatModel.answerCalls).isZero();
+        assertThat(results).allSatisfy(result -> assertThat(result.contexts()).isNotEmpty());
     }
 
     private static final class FakeChatModel implements ChatModel {
@@ -150,6 +191,57 @@ class RagasBatchEvaluationServiceTest {
                     return List.of(0.0d, 1.0d);
                 })
                 .toList();
+        }
+    }
+
+    private static final class CountingChatModel implements ChatModel {
+        private int knowledgeExtractionCalls;
+        private int keywordExtractionCalls;
+        private int answerCalls;
+
+        @Override
+        public String generate(ChatRequest request) {
+            if (request.systemPrompt().contains("Extract entities and relations from the provided text.")) {
+                knowledgeExtractionCalls++;
+                return """
+                    {
+                      "entities": [
+                        {
+                          "name": "Alice",
+                          "type": "person",
+                          "description": "Researcher",
+                          "aliases": []
+                        },
+                        {
+                          "name": "Bob",
+                          "type": "person",
+                          "description": "Engineer",
+                          "aliases": []
+                        }
+                      ],
+                      "relations": [
+                        {
+                          "sourceEntityName": "Alice",
+                          "targetEntityName": "Bob",
+                          "type": "works_with",
+                          "description": "collaboration",
+                          "weight": 0.8
+                        }
+                      ]
+                    }
+                    """;
+            }
+            if (request.userPrompt().contains("You are an expert keyword extractor")) {
+                keywordExtractionCalls++;
+                return """
+                    {
+                      "high_level_keywords": [],
+                      "low_level_keywords": ["Alice", "Bob", "retrieval systems"]
+                    }
+                    """;
+            }
+            answerCalls++;
+            return "unexpected answer generation";
         }
     }
 }

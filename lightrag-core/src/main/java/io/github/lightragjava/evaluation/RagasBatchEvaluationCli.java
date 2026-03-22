@@ -2,6 +2,7 @@ package io.github.lightragjava.evaluation;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 import io.github.lightragjava.api.QueryMode;
+import io.github.lightragjava.model.ChatModel;
 import io.github.lightragjava.model.openai.OpenAiCompatibleChatModel;
 import io.github.lightragjava.model.openai.OpenAiCompatibleEmbeddingModel;
 
@@ -15,6 +16,12 @@ public final class RagasBatchEvaluationCli {
     private static final String DEFAULT_DOCUMENTS_DIR = "evaluation/ragas/sample_documents";
     private static final String DEFAULT_DATASET_PATH = "evaluation/ragas/sample_dataset.json";
     private static final String DEFAULT_RUN_LABEL = "baseline";
+    private static final String EMPTY_GRAPH_EXTRACTION_RESPONSE = """
+        {
+          "entities": [],
+          "relations": []
+        }
+        """;
 
     public static void main(String[] args) throws Exception {
         var config = buildConfig(parseArgs(args));
@@ -22,12 +29,7 @@ public final class RagasBatchEvaluationCli {
         var service = new RagasBatchEvaluationService();
         var results = service.evaluateBatch(
             batchRequest,
-            new OpenAiCompatibleChatModel(
-                envOrDefault("LIGHTRAG_JAVA_EVAL_CHAT_BASE_URL", "https://api.openai.com/v1/"),
-                envOrDefault("LIGHTRAG_JAVA_EVAL_CHAT_MODEL", "gpt-4o-mini"),
-                requiredEnv("LIGHTRAG_JAVA_EVAL_CHAT_API_KEY", "OPENAI_API_KEY"),
-                Duration.ofSeconds(Long.parseLong(envOrDefault("LIGHTRAG_JAVA_EVAL_CHAT_TIMEOUT_SECONDS", "120")))
-            ),
+            createChatModel(batchRequest),
             new OpenAiCompatibleEmbeddingModel(
                 envOrFallback("LIGHTRAG_JAVA_EVAL_EMBEDDING_BASE_URL", "LIGHTRAG_JAVA_EVAL_CHAT_BASE_URL", "https://api.openai.com/v1/"),
                 envOrDefault("LIGHTRAG_JAVA_EVAL_EMBEDDING_MODEL", "text-embedding-3-small"),
@@ -42,6 +44,7 @@ public final class RagasBatchEvaluationCli {
                 batchRequest.topK(),
                 batchRequest.chunkTopK(),
                 batchRequest.storageProfile(),
+                batchRequest.retrievalOnly(),
                 config.runLabel()
             ),
             new Summary(results.size()),
@@ -57,7 +60,8 @@ public final class RagasBatchEvaluationCli {
                 QueryMode.valueOf(arguments.getOrDefault("--mode", QueryMode.MIX.name()).toUpperCase(java.util.Locale.ROOT)),
                 Integer.parseInt(arguments.getOrDefault("--top-k", "10")),
                 Integer.parseInt(arguments.getOrDefault("--chunk-top-k", "10")),
-                RagasStorageProfile.fromValue(arguments.getOrDefault("--storage-profile", "in-memory"))
+                RagasStorageProfile.fromValue(arguments.getOrDefault("--storage-profile", "in-memory")),
+                Boolean.parseBoolean(arguments.getOrDefault("--retrieval-only", "false"))
             ),
             arguments.getOrDefault("--run-label", DEFAULT_RUN_LABEL)
         );
@@ -76,11 +80,24 @@ public final class RagasBatchEvaluationCli {
         int topK,
         int chunkTopK,
         RagasStorageProfile storageProfile,
+        boolean retrievalOnly,
         String runLabel
     ) {
     }
 
     record Summary(int totalCases) {
+    }
+
+    static ChatModel createChatModel(RagasBatchEvaluationService.BatchRequest batchRequest) {
+        if (batchRequest.retrievalOnly()) {
+            return request -> EMPTY_GRAPH_EXTRACTION_RESPONSE;
+        }
+        return new OpenAiCompatibleChatModel(
+            envOrDefault("LIGHTRAG_JAVA_EVAL_CHAT_BASE_URL", "https://api.openai.com/v1/"),
+            envOrDefault("LIGHTRAG_JAVA_EVAL_CHAT_MODEL", "gpt-4o-mini"),
+            requiredEnv("LIGHTRAG_JAVA_EVAL_CHAT_API_KEY", "OPENAI_API_KEY"),
+            Duration.ofSeconds(Long.parseLong(envOrDefault("LIGHTRAG_JAVA_EVAL_CHAT_TIMEOUT_SECONDS", "120")))
+        );
     }
 
     private static Map<String, String> parseArgs(String[] args) {
