@@ -139,10 +139,14 @@ lightrag:
       overlap: 150
     embedding-batch-size: 32
     max-parallel-insert: 4
+    entity-extract-max-gleaning: 1
+    max-extract-input-tokens: 20480
 ```
 
 `embedding-batch-size` controls how many texts are sent in each indexing-time embedding request. Leave it unset or `0` to preserve the current single-batch behavior.
 `max-parallel-insert` controls how many documents ingest can process concurrently. It defaults to `1` so existing runtime behavior stays serial unless you opt in.
+`entity-extract-max-gleaning` controls how many follow-up extraction passes run for the same chunk after the first LLM extraction.
+`max-extract-input-tokens` caps the estimated extraction context budget before a glean pass is skipped.
 When `max-parallel-insert` is greater than `1`, custom `Chunker`, `ChatModel`, and `EmbeddingModel` implementations must be safe for concurrent use.
 
 If the application provides its own `Chunker` bean, the starter backs off and uses that bean instead.
@@ -704,6 +708,8 @@ var rag = LightRag.builder()
     .chunker(new FixedWindowChunker(600, 80))
     .embeddingBatchSize(32)
     .maxParallelInsert(4)
+    .entityExtractMaxGleaning(1)
+    .maxExtractInputTokens(20_480)
     .automaticQueryKeywordExtraction(false)
     .rerankCandidateMultiplier(4)
     .build();
@@ -712,6 +718,8 @@ var rag = LightRag.builder()
 - `chunker(...)`: replaces the default fixed-window chunker used during ingest
 - `embeddingBatchSize(...)`: caps the number of texts per embedding request during indexing
 - `maxParallelInsert(...)`: caps how many documents `ingest(...)` processes concurrently
+- `entityExtractMaxGleaning(...)`: controls how many follow-up extraction passes run per chunk
+- `maxExtractInputTokens(...)`: caps estimated extraction context before gleaning is skipped
 - `automaticQueryKeywordExtraction(...)`: turns graph-mode keyword extraction on or off
 - `rerankCandidateMultiplier(...)`: controls how far `QueryEngine` expands `chunkTopK` before reranking
 
@@ -720,6 +728,8 @@ Defaults in this phase:
 - chunker: `FixedWindowChunker(1000, 100)`
 - embedding batch size: unbounded single batch
 - max parallel insert: `1`
+- entity extract max gleaning: `1`
+- max extract input tokens: `20480`
 - automatic keyword extraction: `true`
 - rerank candidate multiplier: `2`
 
@@ -735,6 +745,8 @@ lightrag:
       overlap: 80
     embedding-batch-size: 32
     max-parallel-insert: 4
+    entity-extract-max-gleaning: 1
+    max-extract-input-tokens: 20480
   query:
     automatic-keyword-extraction: false
     rerank-candidate-multiplier: 4

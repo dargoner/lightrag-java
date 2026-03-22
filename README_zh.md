@@ -163,10 +163,14 @@ lightrag:
       overlap: 150
     embedding-batch-size: 32
     max-parallel-insert: 4
+    entity-extract-max-gleaning: 1
+    max-extract-input-tokens: 20480
 ```
 
 `embedding-batch-size` 用来控制 ingest 阶段每次 embedding 请求最多发送多少段文本。保持未配置或设为 `0`，就会继续沿用当前的单批次行为。
 `max-parallel-insert` 用来控制 ingest 阶段最多同时处理多少个文档，默认值是 `1`，也就是不显式开启时仍按串行执行。
+`entity-extract-max-gleaning` 用来控制每个 chunk 在首次抽取之后还能继续做多少轮补抽。
+`max-extract-input-tokens` 用来限制补抽前允许的估算上下文预算，超过后会跳过该轮补抽。
 当 `max-parallel-insert` 大于 `1` 时，自定义 `Chunker`、`ChatModel`、`EmbeddingModel` 实现需要具备并发安全性。
 
 如果不配置这两个字段，starter 默认仍然使用 `window-size=1000`、`overlap=100`。
@@ -283,6 +287,8 @@ Starter 还额外暴露了几项 pipeline 配置：
 - `lightrag.indexing.chunking.overlap`
 - `lightrag.indexing.embedding-batch-size`
 - `lightrag.indexing.max-parallel-insert`
+- `lightrag.indexing.entity-extract-max-gleaning`
+- `lightrag.indexing.max-extract-input-tokens`
 - `lightrag.query.automatic-keyword-extraction`
 - `lightrag.query.rerank-candidate-multiplier`
 

@@ -96,6 +96,8 @@ class LightRagBuilderTest {
             .rerankCandidateMultiplier(4)
             .embeddingBatchSize(3)
             .maxParallelInsert(2)
+            .entityExtractMaxGleaning(2)
+            .maxExtractInputTokens(4_096)
             .build();
 
         assertThat(rag.chunker()).isSameAs(chunker);
@@ -103,6 +105,8 @@ class LightRagBuilderTest {
         assertThat(rag.rerankCandidateMultiplier()).isEqualTo(4);
         assertThat(rag.embeddingBatchSize()).isEqualTo(3);
         assertThat(rag.maxParallelInsert()).isEqualTo(2);
+        assertThat(rag.entityExtractMaxGleaning()).isEqualTo(2);
+        assertThat(rag.maxExtractInputTokens()).isEqualTo(4_096);
     }
 
     @Test
@@ -297,6 +301,20 @@ class LightRagBuilderTest {
         assertThatThrownBy(() -> LightRag.builder().maxParallelInsert(0))
             .isInstanceOf(IllegalArgumentException.class)
             .hasMessage("maxParallelInsert must be positive");
+    }
+
+    @Test
+    void rejectsNegativeEntityExtractMaxGleaning() {
+        assertThatThrownBy(() -> LightRag.builder().entityExtractMaxGleaning(-1))
+            .isInstanceOf(IllegalArgumentException.class)
+            .hasMessage("entityExtractMaxGleaning must not be negative");
+    }
+
+    @Test
+    void rejectsNonPositiveMaxExtractInputTokens() {
+        assertThatThrownBy(() -> LightRag.builder().maxExtractInputTokens(0))
+            .isInstanceOf(IllegalArgumentException.class)
+            .hasMessage("maxExtractInputTokens must be positive");
     }
 
     @Test

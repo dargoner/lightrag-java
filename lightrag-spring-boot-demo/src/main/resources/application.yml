@@ -15,6 +15,8 @@ lightrag:
       overlap: ${LIGHTRAG_INDEXING_CHUNK_OVERLAP:${LIGHTRAG_INDEXING_CHUNKING_OVERLAP:100}}
     embedding-batch-size: ${LIGHTRAG_INDEXING_EMBEDDING_BATCH_SIZE:0}
     max-parallel-insert: ${LIGHTRAG_INDEXING_MAX_PARALLEL_INSERT:1}
+    entity-extract-max-gleaning: ${LIGHTRAG_INDEXING_ENTITY_EXTRACT_MAX_GLEANING:1}
+    max-extract-input-tokens: ${LIGHTRAG_INDEXING_MAX_EXTRACT_INPUT_TOKENS:20480}
   query:
     default-mode: ${LIGHTRAG_QUERY_DEFAULT_MODE:MIX}
     default-top-k: ${LIGHTRAG_QUERY_DEFAULT_TOP_K:10}

@@ -25,17 +25,23 @@ public final class LightRag {
     private final int rerankCandidateMultiplier;
     private final int embeddingBatchSize;
     private final int maxParallelInsert;
+    private final int entityExtractMaxGleaning;
+    private final int maxExtractInputTokens;
     private final IndexingPipeline indexingPipeline;
     private final DeletionPipeline deletionPipeline;
     private final GraphManagementPipeline graphManagementPipeline;
     private final QueryEngine queryEngine;
 
     LightRag(LightRagConfig config) {
-        this(config, null, true, 2, Integer.MAX_VALUE, 1);
+        this(config, null, true, 2, Integer.MAX_VALUE, 1,
+            io.github.lightragjava.indexing.KnowledgeExtractor.DEFAULT_ENTITY_EXTRACT_MAX_GLEANING,
+            io.github.lightragjava.indexing.KnowledgeExtractor.DEFAULT_MAX_EXTRACT_INPUT_TOKENS);
     }
 
     LightRag(LightRagConfig config, Chunker chunker) {
-        this(config, chunker, true, 2, Integer.MAX_VALUE, 1);
+        this(config, chunker, true, 2, Integer.MAX_VALUE, 1,
+            io.github.lightragjava.indexing.KnowledgeExtractor.DEFAULT_ENTITY_EXTRACT_MAX_GLEANING,
+            io.github.lightragjava.indexing.KnowledgeExtractor.DEFAULT_MAX_EXTRACT_INPUT_TOKENS);
     }
 
     LightRag(
@@ -44,7 +50,9 @@ public final class LightRag {
         boolean automaticQueryKeywordExtraction,
         int rerankCandidateMultiplier,
         int embeddingBatchSize,
-        int maxParallelInsert
+        int maxParallelInsert,
+        int entityExtractMaxGleaning,
+        int maxExtractInputTokens
     ) {
         this.config = config;
         this.chunker = chunker;
@@ -52,6 +60,8 @@ public final class LightRag {
         this.rerankCandidateMultiplier = rerankCandidateMultiplier;
         this.embeddingBatchSize = embeddingBatchSize;
         this.maxParallelInsert = maxParallelInsert;
+        this.entityExtractMaxGleaning = entityExtractMaxGleaning;
+        this.maxExtractInputTokens = maxExtractInputTokens;
         this.indexingPipeline = new IndexingPipeline(
             config.chatModel(),
             config.embeddingModel(),
@@ -59,7 +69,9 @@ public final class LightRag {
             config.snapshotPath(),
             chunker,
             embeddingBatchSize,
-            maxParallelInsert
+            maxParallelInsert,
+            entityExtractMaxGleaning,
+            maxExtractInputTokens
         );
         this.deletionPipeline = new DeletionPipeline(
             config.storageProvider(),
@@ -184,6 +196,14 @@ public final class LightRag {
 
     int maxParallelInsert() {
         return maxParallelInsert;
+    }
+
+    int entityExtractMaxGleaning() {
+        return entityExtractMaxGleaning;
+    }
+
+    int maxExtractInputTokens() {
+        return maxExtractInputTokens;
     }
 
     private static DocumentProcessingStatus toDocumentProcessingStatus(

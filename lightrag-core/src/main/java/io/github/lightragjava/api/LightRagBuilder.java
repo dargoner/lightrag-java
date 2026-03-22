@@ -33,6 +33,8 @@ public final class LightRagBuilder {
     private int rerankCandidateMultiplier = 2;
     private int embeddingBatchSize = Integer.MAX_VALUE;
     private int maxParallelInsert = 1;
+    private int entityExtractMaxGleaning = io.github.lightragjava.indexing.KnowledgeExtractor.DEFAULT_ENTITY_EXTRACT_MAX_GLEANING;
+    private int maxExtractInputTokens = io.github.lightragjava.indexing.KnowledgeExtractor.DEFAULT_MAX_EXTRACT_INPUT_TOKENS;
 
     public LightRagBuilder chatModel(ChatModel chatModel) {
         this.chatModel = Objects.requireNonNull(chatModel, "chatModel");
@@ -92,6 +94,22 @@ public final class LightRagBuilder {
         return this;
     }
 
+    public LightRagBuilder entityExtractMaxGleaning(int entityExtractMaxGleaning) {
+        if (entityExtractMaxGleaning < 0) {
+            throw new IllegalArgumentException("entityExtractMaxGleaning must not be negative");
+        }
+        this.entityExtractMaxGleaning = entityExtractMaxGleaning;
+        return this;
+    }
+
+    public LightRagBuilder maxExtractInputTokens(int maxExtractInputTokens) {
+        if (maxExtractInputTokens <= 0) {
+            throw new IllegalArgumentException("maxExtractInputTokens must be positive");
+        }
+        this.maxExtractInputTokens = maxExtractInputTokens;
+        return this;
+    }
+
     public LightRagBuilder loadFromSnapshot(Path path) {
         this.snapshotPath = Objects.requireNonNull(path, "path");
         return this;
@@ -125,7 +143,8 @@ public final class LightRagBuilder {
             storageProvider.documentStatusStore(),
             snapshotPath,
             rerankModel
-        ), chunker, automaticQueryKeywordExtraction, rerankCandidateMultiplier, embeddingBatchSize, maxParallelInsert);
+        ), chunker, automaticQueryKeywordExtraction, rerankCandidateMultiplier, embeddingBatchSize, maxParallelInsert,
+            entityExtractMaxGleaning, maxExtractInputTokens);
     }
 
     private static <T> T requireStore(String componentName, T store, Class<T> storeType) {

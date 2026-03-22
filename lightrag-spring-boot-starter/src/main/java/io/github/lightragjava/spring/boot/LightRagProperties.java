@@ -117,6 +117,8 @@ public class LightRagProperties {
         private final ChunkingProperties chunking = new ChunkingProperties();
         private int embeddingBatchSize;
         private int maxParallelInsert = 1;
+        private int entityExtractMaxGleaning = io.github.lightragjava.indexing.KnowledgeExtractor.DEFAULT_ENTITY_EXTRACT_MAX_GLEANING;
+        private int maxExtractInputTokens = io.github.lightragjava.indexing.KnowledgeExtractor.DEFAULT_MAX_EXTRACT_INPUT_TOKENS;
 
         public ChunkingProperties getChunking() {
             return chunking;
@@ -139,6 +141,28 @@ public class LightRagProperties {
                 throw new IllegalArgumentException("maxParallelInsert must be positive");
             }
             this.maxParallelInsert = maxParallelInsert;
+        }
+
+        public int getEntityExtractMaxGleaning() {
+            return entityExtractMaxGleaning;
+        }
+
+        public void setEntityExtractMaxGleaning(int entityExtractMaxGleaning) {
+            if (entityExtractMaxGleaning < 0) {
+                throw new IllegalArgumentException("entityExtractMaxGleaning must not be negative");
+            }
+            this.entityExtractMaxGleaning = entityExtractMaxGleaning;
+        }
+
+        public int getMaxExtractInputTokens() {
+            return maxExtractInputTokens;
+        }
+
+        public void setMaxExtractInputTokens(int maxExtractInputTokens) {
+            if (maxExtractInputTokens <= 0) {
+                throw new IllegalArgumentException("maxExtractInputTokens must be positive");
+            }
+            this.maxExtractInputTokens = maxExtractInputTokens;
         }
     }
 

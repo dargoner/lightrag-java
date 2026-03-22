@@ -35,6 +35,8 @@ public final class IndexingPipeline {
     private final Path snapshotPath;
     private final int embeddingBatchSize;
     private final int maxParallelInsert;
+    private final int entityExtractMaxGleaning;
+    private final int maxExtractInputTokens;
     private final Object storageMutationMonitor = new Object();
 
     public IndexingPipeline(
@@ -44,18 +46,28 @@ public final class IndexingPipeline {
         Path snapshotPath,
         Chunker chunker,
         int embeddingBatchSize,
-        int maxParallelInsert
+        int maxParallelInsert,
+        int entityExtractMaxGleaning,
+        int maxExtractInputTokens
     ) {
         this.storageProvider = Objects.requireNonNull(storageProvider, "storageProvider");
         this.embeddingModel = Objects.requireNonNull(embeddingModel, "embeddingModel");
         this.snapshotPath = snapshotPath;
         this.embeddingBatchSize = embeddingBatchSize <= 0 ? Integer.MAX_VALUE : embeddingBatchSize;
         this.maxParallelInsert = Math.max(1, maxParallelInsert);
+        this.entityExtractMaxGleaning = Math.max(0, entityExtractMaxGleaning);
+        this.maxExtractInputTokens = maxExtractInputTokens <= 0
+            ? KnowledgeExtractor.DEFAULT_MAX_EXTRACT_INPUT_TOKENS
+            : maxExtractInputTokens;
         this.documentIngestor = new DocumentIngestor(
             storageProvider,
             chunker == null ? new FixedWindowChunker(FixedWindowChunker.DEFAULT_WINDOW_SIZE, FixedWindowChunker.DEFAULT_OVERLAP) : chunker
         );
-        this.knowledgeExtractor = new KnowledgeExtractor(Objects.requireNonNull(chatModel, "chatModel"));
+        this.knowledgeExtractor = new KnowledgeExtractor(
+            Objects.requireNonNull(chatModel, "chatModel"),
+            this.entityExtractMaxGleaning,
+            this.maxExtractInputTokens
+        );
         this.graphAssembler = new GraphAssembler();
     }
 
@@ -65,7 +77,17 @@ public final class IndexingPipeline {
         AtomicStorageProvider storageProvider,
         Path snapshotPath
     ) {
-        this(chatModel, embeddingModel, storageProvider, snapshotPath, null, Integer.MAX_VALUE, 1);
+        this(
+            chatModel,
+            embeddingModel,
+            storageProvider,
+            snapshotPath,
+            null,
+            Integer.MAX_VALUE,
+            1,
+            KnowledgeExtractor.DEFAULT_ENTITY_EXTRACT_MAX_GLEANING,
+            KnowledgeExtractor.DEFAULT_MAX_EXTRACT_INPUT_TOKENS
+        );
     }
 
     public void ingest(List<Document> documents) {
