@@ -3,6 +3,7 @@ package io.github.lightragjava.api;
 import io.github.lightragjava.config.LightRagConfig;
 import io.github.lightragjava.indexing.Chunker;
 import io.github.lightragjava.indexing.DeletionPipeline;
+import io.github.lightragjava.indexing.DocumentParsingOrchestrator;
 import io.github.lightragjava.indexing.GraphManagementPipeline;
 import io.github.lightragjava.indexing.IndexingPipeline;
 import io.github.lightragjava.query.ContextAssembler;
@@ -13,6 +14,7 @@ import io.github.lightragjava.query.MixQueryStrategy;
 import io.github.lightragjava.query.NaiveQueryStrategy;
 import io.github.lightragjava.query.QueryEngine;
 import io.github.lightragjava.types.Document;
+import io.github.lightragjava.types.RawDocumentSource;
 
 import java.util.EnumMap;
 import java.util.List;
@@ -30,30 +32,38 @@ public final class LightRag {
     private final int maxExtractInputTokens;
     private final String entityExtractionLanguage;
     private final List<String> entityTypes;
+    private final boolean embeddingSemanticMergeEnabled;
+    private final double embeddingSemanticMergeThreshold;
+    private final DocumentParsingOrchestrator documentParsingOrchestrator;
     private final IndexingPipeline indexingPipeline;
     private final DeletionPipeline deletionPipeline;
     private final GraphManagementPipeline graphManagementPipeline;
     private final QueryEngine queryEngine;
 
     LightRag(LightRagConfig config) {
-        this(config, null, true, 2, Integer.MAX_VALUE, 1,
+        this(config, null, null, true, 2, Integer.MAX_VALUE, 1,
             io.github.lightragjava.indexing.KnowledgeExtractor.DEFAULT_ENTITY_EXTRACT_MAX_GLEANING,
             io.github.lightragjava.indexing.KnowledgeExtractor.DEFAULT_MAX_EXTRACT_INPUT_TOKENS,
             io.github.lightragjava.indexing.KnowledgeExtractor.DEFAULT_LANGUAGE,
-            io.github.lightragjava.indexing.KnowledgeExtractor.DEFAULT_ENTITY_TYPES);
+            io.github.lightragjava.indexing.KnowledgeExtractor.DEFAULT_ENTITY_TYPES,
+            LightRagBuilder.DEFAULT_EMBEDDING_SEMANTIC_MERGE_ENABLED,
+            LightRagBuilder.DEFAULT_EMBEDDING_SEMANTIC_MERGE_THRESHOLD);
     }
 
     LightRag(LightRagConfig config, Chunker chunker) {
-        this(config, chunker, true, 2, Integer.MAX_VALUE, 1,
+        this(config, chunker, null, true, 2, Integer.MAX_VALUE, 1,
             io.github.lightragjava.indexing.KnowledgeExtractor.DEFAULT_ENTITY_EXTRACT_MAX_GLEANING,
             io.github.lightragjava.indexing.KnowledgeExtractor.DEFAULT_MAX_EXTRACT_INPUT_TOKENS,
             io.github.lightragjava.indexing.KnowledgeExtractor.DEFAULT_LANGUAGE,
-            io.github.lightragjava.indexing.KnowledgeExtractor.DEFAULT_ENTITY_TYPES);
+            io.github.lightragjava.indexing.KnowledgeExtractor.DEFAULT_ENTITY_TYPES,
+            LightRagBuilder.DEFAULT_EMBEDDING_SEMANTIC_MERGE_ENABLED,
+            LightRagBuilder.DEFAULT_EMBEDDING_SEMANTIC_MERGE_THRESHOLD);
     }
 
     LightRag(
         LightRagConfig config,
         Chunker chunker,
+        DocumentParsingOrchestrator documentParsingOrchestrator,
         boolean automaticQueryKeywordExtraction,
         int rerankCandidateMultiplier,
         int embeddingBatchSize,
@@ -61,7 +71,9 @@ public final class LightRag {
         int entityExtractMaxGleaning,
         int maxExtractInputTokens,
         String entityExtractionLanguage,
-        List<String> entityTypes
+        List<String> entityTypes,
+        boolean embeddingSemanticMergeEnabled,
+        double embeddingSemanticMergeThreshold
     ) {
         this.config = config;
         this.chunker = chunker;
@@ -73,18 +85,24 @@ public final class LightRag {
         this.maxExtractInputTokens = maxExtractInputTokens;
         this.entityExtractionLanguage = Objects.requireNonNull(entityExtractionLanguage, "entityExtractionLanguage");
         this.entityTypes = List.copyOf(Objects.requireNonNull(entityTypes, "entityTypes"));
+        this.embeddingSemanticMergeEnabled = embeddingSemanticMergeEnabled;
+        this.embeddingSemanticMergeThreshold = embeddingSemanticMergeThreshold;
+        this.documentParsingOrchestrator = documentParsingOrchestrator;
         this.indexingPipeline = new IndexingPipeline(
             config.chatModel(),
             config.embeddingModel(),
             config.storageProvider(),
             config.snapshotPath(),
             chunker,
+            documentParsingOrchestrator,
             embeddingBatchSize,
             maxParallelInsert,
             entityExtractMaxGleaning,
             maxExtractInputTokens,
             this.entityExtractionLanguage,
-            this.entityTypes
+            this.entityTypes,
+            embeddingSemanticMergeEnabled,
+            embeddingSemanticMergeThreshold
         );
         this.deletionPipeline = new DeletionPipeline(
             config.storageProvider(),
@@ -124,6 +142,10 @@ public final class LightRag {
 
     public void ingest(List<Document> documents) {
         indexingPipeline.ingest(documents);
+    }
+
+    public void ingestSources(List<RawDocumentSource> sources, DocumentIngestOptions options) {
+        indexingPipeline.ingestSources(sources, options);
     }
 
     public GraphEntity createEntity(CreateEntityRequest request) {
@@ -225,6 +247,14 @@ public final class LightRag {
 
     List<String> entityTypes() {
         return entityTypes;
+    }
+
+    boolean embeddingSemanticMergeEnabled() {
+        return embeddingSemanticMergeEnabled;
+    }
+
+    double embeddingSemanticMergeThreshold() {
+        return embeddingSemanticMergeThreshold;
     }
 
     private static DocumentProcessingStatus toDocumentProcessingStatus(

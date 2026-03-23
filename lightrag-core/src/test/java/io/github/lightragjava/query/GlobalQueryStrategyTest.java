@@ -2,6 +2,7 @@ package io.github.lightragjava.query;
 
 import io.github.lightragjava.api.QueryMode;
 import io.github.lightragjava.api.QueryRequest;
+import io.github.lightragjava.indexing.ParentChildChunkBuilder;
 import io.github.lightragjava.model.EmbeddingModel;
 import io.github.lightragjava.storage.InMemoryStorageProvider;
 import org.junit.jupiter.api.Test;
@@ -107,6 +108,65 @@ class GlobalQueryStrategyTest {
         assertThat(context.matchedRelations())
             .extracting(match -> match.relationId())
             .containsExactly("relation:entity:alice|works_with|entity:bob");
+    }
+
+    @Test
+    void fallsBackToSingleLevelChunksBeforeV3ConfigIsEnabled() {
+        var storage = InMemoryStorageProvider.create();
+        storage.chunkStore().save(new io.github.lightragjava.storage.ChunkStore.ChunkRecord(
+            "chunk-plain",
+            "doc-1",
+            "Single level chunk",
+            3,
+            0,
+            Map.of()
+        ));
+        storage.graphStore().saveRelation(new io.github.lightragjava.storage.GraphStore.RelationRecord(
+            "relation:plain",
+            "entity:a",
+            "entity:b",
+            "rel",
+            "Single level relation",
+            0.8d,
+            List.of("chunk-plain")
+        ));
+        storage.graphStore().saveEntity(new io.github.lightragjava.storage.GraphStore.EntityRecord(
+            "entity:a",
+            "A",
+            "type",
+            "A desc",
+            List.of(),
+            List.of("chunk-plain")
+        ));
+        storage.graphStore().saveEntity(new io.github.lightragjava.storage.GraphStore.EntityRecord(
+            "entity:b",
+            "B",
+            "type",
+            "B desc",
+            List.of(),
+            List.of("chunk-plain")
+        ));
+        storage.vectorStore().saveAll("relations", List.of(
+            new io.github.lightragjava.storage.VectorStore.VectorRecord("relation:plain", List.of(1.0d, 0.0d))
+        ));
+
+        var strategy = new GlobalQueryStrategy(
+            new FakeEmbeddingModel(Map.of("plain question", List.of(1.0d, 0.0d))),
+            storage,
+            new ContextAssembler()
+        );
+
+        var context = strategy.retrieve(QueryRequest.builder()
+            .query("plain question")
+            .mode(QueryMode.GLOBAL)
+            .topK(1)
+            .chunkTopK(1)
+            .build());
+
+        assertThat(context.matchedChunks())
+            .extracting(match -> match.chunkId())
+            .containsExactly("chunk-plain");
+        assertThat(context.matchedChunks().get(0).chunk().text()).isEqualTo("Single level chunk");
     }
 
     private record FakeEmbeddingModel(Map<String, List<Double>> vectorsByText) implements EmbeddingModel {

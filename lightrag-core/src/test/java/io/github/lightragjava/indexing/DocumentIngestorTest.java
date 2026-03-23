@@ -1,5 +1,6 @@
 package io.github.lightragjava.indexing;
 
+import io.github.lightragjava.api.DocumentIngestOptions;
 import io.github.lightragjava.storage.ChunkStore;
 import io.github.lightragjava.storage.DocumentStore;
 import io.github.lightragjava.storage.DocumentStatusStore;
@@ -40,6 +41,132 @@ class DocumentIngestorTest {
     }
 
     @Test
+    void preparesParsedDocumentChunksFromWeakStructuredBlocksForGenericDocuments() {
+        var storage = InMemoryStorageProvider.create();
+        var ingestor = new DocumentIngestor(
+            storage,
+            new FixedWindowChunker(4, 1),
+            new DefaultChunkPreparationStrategy(),
+            new ChunkingOrchestrator(
+                new DocumentTypeResolver(),
+                new SmartChunker(SmartChunkerConfig.builder()
+                    .targetTokens(12)
+                    .maxTokens(18)
+                    .overlapTokens(2)
+                    .build()),
+                new RegexChunker(new FixedWindowChunker(8, 2)),
+                new FixedWindowChunker(8, 2)
+            )
+        );
+        var parsed = new ParsedDocument(
+            "doc-1",
+            "Title",
+            "Alpha beta gamma delta epsilon zeta eta theta.",
+            List.of(
+                new ParsedBlock(
+                    "title-1",
+                    "title",
+                    "第一章",
+                    "第一章",
+                    List.of("第一章"),
+                    1,
+                    null,
+                    1,
+                    Map.of("level", "1")
+                ),
+                new ParsedBlock(
+                    "block-1",
+                    "paragraph",
+                    "结构化正文。",
+                    "",
+                    List.of(),
+                    1,
+                    null,
+                    2,
+                    Map.of()
+                )
+            ),
+            Map.of("source", "unit-test")
+        );
+
+        var prepared = ingestor.prepareParsed(parsed, DocumentIngestOptions.defaults());
+
+        assertThat(prepared.documentRecords())
+            .containsExactly(new DocumentStore.DocumentRecord(
+                "doc-1",
+                "Title",
+                "Alpha beta gamma delta epsilon zeta eta theta.",
+                Map.of(
+                    "source", "unit-test",
+                    DocumentIngestOptions.METADATA_DOCUMENT_TYPE_HINT, DocumentTypeHint.AUTO.name(),
+                    DocumentIngestOptions.METADATA_CHUNK_GRANULARITY, io.github.lightragjava.api.ChunkGranularity.MEDIUM.name()
+                )
+            ));
+        assertThat(prepared.chunks()).isNotEmpty();
+        var combinedText = prepared.chunks().stream()
+            .map(Chunk::text)
+            .collect(java.util.stream.Collectors.joining("\n"));
+        assertThat(combinedText).contains("结构化正文。");
+        assertThat(combinedText).doesNotContain("Alpha beta");
+        assertThat(combinedText).doesNotContain("theta.");
+        assertThat(prepared.chunks().get(0).metadata())
+            .containsEntry(SmartChunkMetadata.SECTION_PATH, "第一章")
+            .containsEntry(SmartChunkMetadata.SOURCE_BLOCK_IDS, "block-1");
+        assertThat(prepared.chunks())
+            .allSatisfy(chunk -> assertThat(chunk.metadata())
+                .containsEntry(ChunkingOrchestrator.METADATA_EFFECTIVE_MODE, ChunkingMode.SMART.name())
+                .containsEntry(ChunkingOrchestrator.METADATA_DOWNGRADED_TO_FIXED, Boolean.FALSE.toString()));
+    }
+
+    @Test
+    void preparesStructuredLawDocumentFromParsedBlocksWhenTemplateRequiresIt() {
+        var storage = InMemoryStorageProvider.create();
+        var ingestor = new DocumentIngestor(
+            storage,
+            new FixedWindowChunker(4, 1),
+            new DefaultChunkPreparationStrategy(),
+            new ChunkingOrchestrator(
+                new DocumentTypeResolver(),
+                new SmartChunker(SmartChunkerConfig.builder()
+                    .targetTokens(120)
+                    .maxTokens(120)
+                    .overlapTokens(8)
+                    .semanticMergeEnabled(true)
+                    .semanticMergeThreshold(0.2d)
+                    .build()),
+                new RegexChunker(new FixedWindowChunker(8, 2)),
+                new FixedWindowChunker(8, 2)
+            )
+        );
+        var parsed = new ParsedDocument(
+            "doc-law",
+            "Regulation",
+            "PLAIN TEXT SHOULD NOT WIN",
+            List.of(
+                new ParsedBlock("law-1", "paragraph", "第一条 检索规则。", "第一条", List.of("第一条"), 1, null, 1, Map.of()),
+                new ParsedBlock("law-2", "paragraph", "第二条 检索规则。", "第二条", List.of("第二条"), 1, null, 2, Map.of())
+            ),
+            Map.of("source", "mineru")
+        );
+        var options = new DocumentIngestOptions(
+            DocumentTypeHint.LAW,
+            io.github.lightragjava.api.ChunkGranularity.MEDIUM
+        );
+
+        var prepared = ingestor.prepareParsed(parsed, options);
+
+        assertThat(prepared.chunks())
+            .extracting(Chunk::text)
+            .containsExactly("第一条 检索规则。", "第二条 检索规则。");
+        assertThat(prepared.chunks())
+            .allSatisfy(chunk -> assertThat(chunk.text()).doesNotContain("PLAIN TEXT SHOULD NOT WIN"));
+        assertThat(prepared.chunks().get(0).metadata())
+            .containsEntry(SmartChunkMetadata.SECTION_PATH, "第一条");
+        assertThat(prepared.chunks().get(1).metadata())
+            .containsEntry(SmartChunkMetadata.SECTION_PATH, "第二条");
+    }
+
+    @Test
     void rejectsDuplicateIdsInSingleBatch() {
         var storage = InMemoryStorageProvider.create();
         var ingestor = new DocumentIngestor(storage, new FixedWindowChunker(4, 1));
@@ -73,6 +200,24 @@ class DocumentIngestorTest {
         assertThat(chunks)
             .extracting(Chunk::id)
             .containsExactly("doc-1:0", "doc-1:1", "doc-1:2");
+    }
+
+    @Test
+    void validatesPreparedChunksReturnedByCustomPreparationStrategy() {
+        var storage = InMemoryStorageProvider.create();
+        var ingestor = new DocumentIngestor(
+            storage,
+            new FixedWindowChunker(4, 1),
+            (document, chunker) -> List.of(new Chunk("doc-1:0", "other-doc", "abcd", 4, 0, document.metadata()))
+        );
+        var document = new Document("doc-1", "Title", "abcdefgh", Map.of("source", "unit-test"));
+
+        assertThatThrownBy(() -> ingestor.ingest(List.of(document)))
+            .isInstanceOf(IllegalArgumentException.class)
+            .hasMessageContaining("chunk documentId must match source document id");
+
+        assertThat(storage.documentStore().list()).isEmpty();
+        assertThat(storage.chunkStore().list()).isEmpty();
     }
 
     @Test

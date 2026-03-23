@@ -24,11 +24,13 @@ public final class GlobalQueryStrategy implements QueryStrategy {
     private final EmbeddingModel embeddingModel;
     private final StorageProvider storageProvider;
     private final ContextAssembler contextAssembler;
+    private final ParentChunkExpander parentChunkExpander;
 
     public GlobalQueryStrategy(EmbeddingModel embeddingModel, StorageProvider storageProvider, ContextAssembler contextAssembler) {
         this.embeddingModel = Objects.requireNonNull(embeddingModel, "embeddingModel");
         this.storageProvider = Objects.requireNonNull(storageProvider, "storageProvider");
         this.contextAssembler = Objects.requireNonNull(contextAssembler, "contextAssembler");
+        this.parentChunkExpander = new ParentChunkExpander(storageProvider.chunkStore());
     }
 
     @Override
@@ -69,14 +71,14 @@ public final class GlobalQueryStrategy implements QueryStrategy {
             .filter(Objects::nonNull)
             .sorted(scoreOrder(ScoredEntity::score, ScoredEntity::entityId))
             .toList(), query.maxEntityTokens());
-        var matchedChunks = chunkScores.entrySet().stream()
+        var matchedChunks = parentChunkExpander.expand(chunkScores.entrySet().stream()
             .map(entry -> storageProvider.chunkStore().load(entry.getKey())
                 .map(chunk -> new ScoredChunk(entry.getKey(), toChunk(chunk), entry.getValue()))
                 .orElse(null))
             .filter(Objects::nonNull)
             .sorted(scoreOrder(ScoredChunk::score, ScoredChunk::chunkId))
             .limit(query.chunkTopK())
-            .toList();
+            .toList(), query.chunkTopK());
 
         var context = new QueryContext(
             matchedEntities,

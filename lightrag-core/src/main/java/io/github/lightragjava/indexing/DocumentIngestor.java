@@ -1,5 +1,6 @@
 package io.github.lightragjava.indexing;
 
+import io.github.lightragjava.api.DocumentIngestOptions;
 import io.github.lightragjava.storage.ChunkStore;
 import io.github.lightragjava.storage.DocumentStore;
 import io.github.lightragjava.storage.AtomicStorageProvider;
@@ -14,10 +15,61 @@ import java.util.Objects;
 public final class DocumentIngestor {
     private final AtomicStorageProvider storageProvider;
     private final Chunker chunker;
+    private final DocumentChunkPreparationStrategy chunkPreparationStrategy;
+    private final ChunkingOrchestrator chunkingOrchestrator;
+    private final ParentChildChunkBuilder parentChildChunkBuilder;
 
     public DocumentIngestor(AtomicStorageProvider storageProvider, Chunker chunker) {
+        this(
+            storageProvider,
+            chunker,
+            new DefaultChunkPreparationStrategy(),
+            new ChunkingOrchestrator(),
+            new ParentChildChunkBuilder()
+        );
+    }
+
+    DocumentIngestor(
+        AtomicStorageProvider storageProvider,
+        Chunker chunker,
+        DocumentChunkPreparationStrategy chunkPreparationStrategy
+    ) {
+        this(
+            storageProvider,
+            chunker,
+            chunkPreparationStrategy,
+            new ChunkingOrchestrator(),
+            new ParentChildChunkBuilder()
+        );
+    }
+
+    DocumentIngestor(
+        AtomicStorageProvider storageProvider,
+        Chunker chunker,
+        DocumentChunkPreparationStrategy chunkPreparationStrategy,
+        ChunkingOrchestrator chunkingOrchestrator
+    ) {
+        this(
+            storageProvider,
+            chunker,
+            chunkPreparationStrategy,
+            chunkingOrchestrator,
+            new ParentChildChunkBuilder()
+        );
+    }
+
+    DocumentIngestor(
+        AtomicStorageProvider storageProvider,
+        Chunker chunker,
+        DocumentChunkPreparationStrategy chunkPreparationStrategy,
+        ChunkingOrchestrator chunkingOrchestrator,
+        ParentChildChunkBuilder parentChildChunkBuilder
+    ) {
         this.storageProvider = Objects.requireNonNull(storageProvider, "storageProvider");
         this.chunker = Objects.requireNonNull(chunker, "chunker");
+        this.chunkPreparationStrategy = Objects.requireNonNull(chunkPreparationStrategy, "chunkPreparationStrategy");
+        this.chunkingOrchestrator = Objects.requireNonNull(chunkingOrchestrator, "chunkingOrchestrator");
+        this.parentChildChunkBuilder = Objects.requireNonNull(parentChildChunkBuilder, "parentChildChunkBuilder");
     }
 
     public List<Chunk> ingest(List<Document> documents) {
@@ -45,7 +97,7 @@ public final class DocumentIngestor {
                 document.metadata()
             ));
 
-            var chunks = chunker.chunk(document);
+            var chunks = chunkPreparationStrategy.prepare(document, chunker);
             validateChunkContract(document, chunks);
             for (var chunk : chunks) {
                 chunkRecords.add(new ChunkStore.ChunkRecord(
@@ -65,6 +117,41 @@ public final class DocumentIngestor {
             List.copyOf(documentRecords),
             List.copyOf(chunkRecords),
             List.copyOf(stagedChunks)
+        );
+    }
+
+    PreparedIngest prepareParsed(ParsedDocument parsedDocument, DocumentIngestOptions options) {
+        var parsed = Objects.requireNonNull(parsedDocument, "parsedDocument");
+        var resolvedOptions = Objects.requireNonNull(options, "options");
+        var metadata = new java.util.LinkedHashMap<String, String>(parsed.metadata());
+        metadata.putAll(resolvedOptions.toMetadata());
+        var normalized = new ParsedDocument(
+            parsed.documentId(),
+            parsed.title(),
+            parsed.plainText(),
+            parsed.blocks(),
+            java.util.Map.copyOf(metadata)
+        );
+        var document = new Document(normalized.documentId(), normalized.title(), normalized.plainText(), normalized.metadata());
+        var chunkingResult = chunkingOrchestrator.chunk(normalized, resolvedOptions);
+        var parentChildChunkSet = parentChildChunkBuilder.build(chunkingResult, resolvedOptions.parentChildProfile());
+        validateChunkContract(document, parentChildChunkSet.searchableChunks());
+        return new PreparedIngest(
+            List.of(document),
+            List.of(new DocumentStore.DocumentRecord(document.id(), document.title(), document.content(), document.metadata())),
+            toChunkRecords(parentChildChunkSet.allChunks()),
+            parentChildChunkSet.searchableChunks()
+        );
+    }
+
+    void persist(PreparedIngest prepared, AtomicStorageProvider.AtomicStorageView storage) {
+        var source = Objects.requireNonNull(prepared, "prepared");
+        var storageView = Objects.requireNonNull(storage, "storage");
+        persist(
+            source.documentRecords(),
+            source.chunkRecords(),
+            storageView.documentStore(),
+            storageView.chunkStore()
         );
     }
 
@@ -114,6 +201,21 @@ public final class DocumentIngestor {
         for (var chunkRecord : chunkRecords) {
             chunkStore.save(chunkRecord);
         }
+    }
+
+    private static List<ChunkStore.ChunkRecord> toChunkRecords(List<Chunk> chunks) {
+        var records = new ArrayList<ChunkStore.ChunkRecord>(chunks.size());
+        for (var chunk : chunks) {
+            records.add(new ChunkStore.ChunkRecord(
+                chunk.id(),
+                chunk.documentId(),
+                chunk.text(),
+                chunk.tokenCount(),
+                chunk.order(),
+                chunk.metadata()
+            ));
+        }
+        return List.copyOf(records);
     }
 
     record PreparedIngest(

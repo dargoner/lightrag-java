@@ -1,0 +1,19 @@
+{
+  "test_cases": [
+    {
+      "question": "继续教育审核流程包括哪些环节？",
+      "expected_document_id": "01-word-toc-policy",
+      "expected_fragment": "形式审查、专家复核和结果公示"
+    },
+    {
+      "question": "医疗信息化政策重点一览图对应的说明是什么？",
+      "expected_document_id": "02-pdf-figure-medical",
+      "expected_fragment": "图 1-4：历次医疗改革中医疗信息化政策重点一览图"
+    },
+    {
+      "question": "数字治理试点阶段的工作目标是什么？",
+      "expected_document_id": "03-pdf-ocr-governance",
+      "expected_fragment": "形成跨部门协同机制"
+    }
+  ]
+}

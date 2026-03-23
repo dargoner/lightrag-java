@@ -2,6 +2,10 @@ package io.github.lightragjava.api;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 import io.github.lightragjava.indexing.Chunker;
+import io.github.lightragjava.indexing.FixedWindowChunker;
+import io.github.lightragjava.indexing.SmartChunker;
+import io.github.lightragjava.indexing.SmartChunkerConfig;
+import io.github.lightragjava.indexing.DocumentTypeHint;
 import io.github.lightragjava.model.ChatModel;
 import io.github.lightragjava.model.EmbeddingModel;
 import io.github.lightragjava.model.RerankModel;
@@ -18,8 +22,10 @@ import io.github.lightragjava.storage.memory.InMemoryDocumentStatusStore;
 import io.github.lightragjava.types.Chunk;
 import io.github.lightragjava.types.Document;
 import io.github.lightragjava.types.ExtractedRelation;
+import io.github.lightragjava.types.RawDocumentSource;
 import org.junit.jupiter.api.Test;
 
+import java.nio.charset.StandardCharsets;
 import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.List;
@@ -114,6 +120,99 @@ class LightRagBuilderTest {
     }
 
     @Test
+    void usesEmbeddingSemanticMergeDefaults() {
+        var rag = LightRag.builder()
+            .chatModel(new FakeChatModel())
+            .embeddingModel(new FakeEmbeddingModel())
+            .storage(new FakeStorageProvider())
+            .build();
+
+        assertThat(rag.embeddingSemanticMergeEnabled()).isFalse();
+        assertThat(rag.embeddingSemanticMergeThreshold()).isEqualTo(0.80d);
+    }
+
+    @Test
+    void retainsConfiguredEmbeddingSemanticMergeOptions() {
+        var rag = LightRag.builder()
+            .chatModel(new FakeChatModel())
+            .embeddingModel(new FakeEmbeddingModel())
+            .storage(new FakeStorageProvider())
+            .chunker(new SmartChunker(SmartChunkerConfig.builder()
+                .targetTokens(128)
+                .maxTokens(256)
+                .overlapTokens(32)
+                .build()))
+            .enableEmbeddingSemanticMerge(true)
+            .embeddingSemanticMergeThreshold(0.65d)
+            .build();
+
+        assertThat(rag.embeddingSemanticMergeEnabled()).isTrue();
+        assertThat(rag.embeddingSemanticMergeThreshold()).isEqualTo(0.65d);
+    }
+
+    @Test
+    void usesStructuralSmartChunksForEmbeddingSemanticMergeDuringIngest() {
+        var storageProvider = new FakeStorageProvider();
+        var embeddingModel = new ScriptedEmbeddingModel(Map.ofEntries(
+            Map.entry("Common anchor detail opens the section clearly.", List.of(1.0d, 0.0d)),
+            Map.entry("Common anchor detail extends the section further.", List.of(1.0d, 0.0d)),
+            Map.entry("Distinct ending sentence changes the subject entirely.", List.of(0.0d, 1.0d)),
+            Map.entry(
+                "Common anchor detail opens the section clearly.\nCommon anchor detail extends the section further.",
+                List.of(1.0d, 0.0d)
+            )
+        ));
+        var rag = LightRag.builder()
+            .chatModel(new IngestionChatModel())
+            .embeddingModel(embeddingModel)
+            .storage(storageProvider)
+            .chunker(smartChunkerWithStandaloneSemanticMerge())
+            .enableEmbeddingSemanticMerge(true)
+            .embeddingSemanticMergeThreshold(0.95d)
+            .embeddingBatchSize(2)
+            .build();
+
+        rag.ingest(List.of(semanticMergeDocument()));
+
+        assertThat(storageProvider.chunkStore().listByDocument("doc-1"))
+            .extracting(ChunkStore.ChunkRecord::text)
+            .containsExactly(
+                "Common anchor detail opens the section clearly.\nCommon anchor detail extends the section further.",
+                "Distinct ending sentence changes the subject entirely."
+            );
+        assertThat(embeddingModel.batchSizes()).containsExactly(2, 1, 2);
+    }
+
+    @Test
+    void preservesLegacyChunkerPathWhenEmbeddingSemanticMergeIsDisabled() {
+        var storageProvider = new FakeStorageProvider();
+        var embeddingModel = new ScriptedEmbeddingModel(Map.ofEntries(
+            Map.entry(
+                "Common anchor detail opens the section clearly.\nCommon anchor detail extends the section further.",
+                List.of(1.0d, 0.0d)
+            ),
+            Map.entry("Distinct ending sentence changes the subject entirely.", List.of(0.0d, 1.0d))
+        ));
+        var rag = LightRag.builder()
+            .chatModel(new IngestionChatModel())
+            .embeddingModel(embeddingModel)
+            .storage(storageProvider)
+            .chunker(smartChunkerWithStandaloneSemanticMerge())
+            .embeddingBatchSize(2)
+            .build();
+
+        rag.ingest(List.of(semanticMergeDocument()));
+
+        assertThat(storageProvider.chunkStore().listByDocument("doc-1"))
+            .extracting(ChunkStore.ChunkRecord::text)
+            .containsExactly(
+                "Common anchor detail opens the section clearly.\nCommon anchor detail extends the section further.",
+                "Distinct ending sentence changes the subject entirely."
+            );
+        assertThat(embeddingModel.batchSizes()).containsExactly(2);
+    }
+
+    @Test
     void usesConfiguredChunkerDuringIngest() {
         var storageProvider = new FakeStorageProvider();
         var rag = LightRag.builder()
@@ -131,6 +230,50 @@ class LightRagBuilderTest {
         assertThat(storageProvider.chunkStore().listByDocument("doc-1"))
             .extracting(ChunkStore.ChunkRecord::id)
             .containsExactly("doc-1:custom-1", "doc-1:custom-2");
+    }
+
+    @Test
+    void ingestsUtf8MarkdownSourceWithoutCallingMineruOrTika() {
+        var rag = testLightRag();
+        var source = RawDocumentSource.bytes(
+            "guide.md",
+            "# Title\nBody".getBytes(StandardCharsets.UTF_8),
+            "text/markdown",
+            Map.of("source", "unit-test")
+        );
+        var options = new DocumentIngestOptions(DocumentTypeHint.LAW, ChunkGranularity.COARSE);
+
+        rag.ingestSources(List.of(source), options);
+
+        var documentRecord = rag.config().storageProvider().documentStore()
+            .load(source.sourceId())
+            .orElseThrow();
+        assertThat(documentRecord.title()).isEqualTo("guide.md");
+        assertThat(documentRecord.content()).isEqualTo("# Title\nBody");
+        assertThat(documentRecord.metadata())
+            .containsEntry("source", "unit-test")
+            .containsEntry(DocumentIngestOptions.METADATA_DOCUMENT_TYPE_HINT, DocumentTypeHint.LAW.name())
+            .containsEntry(DocumentIngestOptions.METADATA_CHUNK_GRANULARITY, ChunkGranularity.COARSE.name());
+
+        var chunkRecords = rag.config().storageProvider().chunkStore().listByDocument(source.sourceId());
+        assertThat(chunkRecords).isNotEmpty();
+        assertThat(chunkRecords)
+            .allSatisfy(chunk -> assertThat(chunk.metadata())
+                .containsEntry("source", "unit-test")
+                .containsEntry(DocumentIngestOptions.METADATA_DOCUMENT_TYPE_HINT, DocumentTypeHint.LAW.name())
+                .containsEntry(DocumentIngestOptions.METADATA_CHUNK_GRANULARITY, ChunkGranularity.COARSE.name()));
+        assertThat(chunkRecords)
+            .extracting(ChunkStore.ChunkRecord::text)
+            .allSatisfy(text -> assertThat(text).contains("Body"));
+    }
+
+    @Test
+    void keepsLegacyDocumentIngestApiUnchanged() {
+        var rag = testLightRag();
+
+        rag.ingest(List.of(new Document("doc-1", "Title", "body", Map.of())));
+
+        assertThat(chunkTexts(rag)).isNotEmpty();
     }
 
     @Test
@@ -192,9 +335,10 @@ class LightRagBuilderTest {
     @Test
     void doesNotCommitOtherDocumentsAfterConcurrentFailure() throws Exception {
         var storageProvider = InMemoryStorageProvider.create();
-        var chunker = new InterruptIgnoringChunker("doc-slow");
+        var slowDocumentStarted = new CountDownLatch(1);
+        var chunker = new InterruptIgnoringChunker("doc-slow", slowDocumentStarted);
         var rag = LightRag.builder()
-            .chatModel(new SelectiveFailingIngestionChatModel("explode"))
+            .chatModel(new CoordinatedFailingIngestionChatModel("explode", slowDocumentStarted))
             .embeddingModel(new FakeEmbeddingModel())
             .storage(storageProvider)
             .chunker(chunker)
@@ -284,6 +428,54 @@ class LightRagBuilderTest {
         assertThatThrownBy(() -> LightRag.builder().chunker(null))
             .isInstanceOf(NullPointerException.class)
             .hasMessage("chunker");
+    }
+
+    @Test
+    void rejectsEmbeddingSemanticMergeThresholdOutsideUnitRange() {
+        assertThatThrownBy(() -> LightRag.builder()
+            .chatModel(new FakeChatModel())
+            .embeddingModel(new FakeEmbeddingModel())
+            .storage(new FakeStorageProvider())
+            .embeddingSemanticMergeThreshold(1.1d))
+            .isInstanceOf(IllegalArgumentException.class)
+            .hasMessageContaining("between 0.0 and 1.0");
+
+        assertThatThrownBy(() -> LightRag.builder()
+            .chatModel(new FakeChatModel())
+            .embeddingModel(new FakeEmbeddingModel())
+            .storage(new FakeStorageProvider())
+            .embeddingSemanticMergeThreshold(Double.NaN))
+            .isInstanceOf(IllegalArgumentException.class)
+            .hasMessageContaining("between 0.0 and 1.0");
+
+        assertThatThrownBy(() -> LightRag.builder()
+            .chatModel(new FakeChatModel())
+            .embeddingModel(new FakeEmbeddingModel())
+            .storage(new FakeStorageProvider())
+            .embeddingSemanticMergeThreshold(Double.POSITIVE_INFINITY))
+            .isInstanceOf(IllegalArgumentException.class)
+            .hasMessageContaining("between 0.0 and 1.0");
+
+        assertThatThrownBy(() -> LightRag.builder()
+            .chatModel(new FakeChatModel())
+            .embeddingModel(new FakeEmbeddingModel())
+            .storage(new FakeStorageProvider())
+            .embeddingSemanticMergeThreshold(Double.NEGATIVE_INFINITY))
+            .isInstanceOf(IllegalArgumentException.class)
+            .hasMessageContaining("between 0.0 and 1.0");
+    }
+
+    @Test
+    void failsBuildWhenEmbeddingSemanticMergeIsEnabledForNonSmartChunker() {
+        assertThatThrownBy(() -> LightRag.builder()
+            .chatModel(new FakeChatModel())
+            .embeddingModel(new FakeEmbeddingModel())
+            .storage(new FakeStorageProvider())
+            .chunker(new FixedWindowChunker(100, 10))
+            .enableEmbeddingSemanticMerge(true)
+            .build())
+            .isInstanceOf(IllegalStateException.class)
+            .hasMessageContaining("SmartChunker");
     }
 
     @Test
@@ -654,6 +846,20 @@ class LightRagBuilderTest {
         assertThat(relation.weight()).isEqualTo(0.0d);
     }
 
+    private static LightRag testLightRag() {
+        return LightRag.builder()
+            .chatModel(new IngestionChatModel())
+            .embeddingModel(new FakeEmbeddingModel())
+            .storage(new FakeStorageProvider())
+            .build();
+    }
+
+    private static List<String> chunkTexts(LightRag rag) {
+        return rag.config().storageProvider().chunkStore().list().stream()
+            .map(ChunkStore.ChunkRecord::text)
+            .toList();
+    }
+
     private static final class FakeChatModel implements ChatModel {
         @Override
         public String generate(ChatRequest request) {
@@ -694,6 +900,37 @@ class LightRagBuilderTest {
         }
     }
 
+    private static final class CoordinatedFailingIngestionChatModel implements ChatModel {
+        private final String failingMarker;
+        private final CountDownLatch releaseFailure;
+
+        private CoordinatedFailingIngestionChatModel(String failingMarker, CountDownLatch releaseFailure) {
+            this.failingMarker = failingMarker;
+            this.releaseFailure = releaseFailure;
+        }
+
+        @Override
+        public String generate(ChatRequest request) {
+            if (request.userPrompt().contains(failingMarker)) {
+                try {
+                    if (!releaseFailure.await(5, TimeUnit.SECONDS)) {
+                        throw new AssertionError("timed out waiting for concurrent document to start");
+                    }
+                } catch (InterruptedException exception) {
+                    Thread.currentThread().interrupt();
+                    throw new IllegalStateException("interrupted while waiting to fail", exception);
+                }
+                throw new IllegalStateException("boom");
+            }
+            return """
+                {
+                  "entities": [],
+                  "relations": []
+                }
+                """;
+        }
+    }
+
     private static final class FakeEmbeddingModel implements EmbeddingModel {
         @Override
         public List<List<Double>> embedAll(List<String> texts) {
@@ -711,6 +948,33 @@ class LightRagBuilderTest {
             batchSizes.add(texts.size());
             return texts.stream()
                 .map(text -> List.of((double) text.length()))
+                .toList();
+        }
+
+        List<Integer> batchSizes() {
+            return List.copyOf(batchSizes);
+        }
+    }
+
+    private static final class ScriptedEmbeddingModel implements EmbeddingModel {
+        private final Map<String, List<Double>> embeddingsByText;
+        private final List<Integer> batchSizes = new ArrayList<>();
+
+        private ScriptedEmbeddingModel(Map<String, List<Double>> embeddingsByText) {
+            this.embeddingsByText = Map.copyOf(embeddingsByText);
+        }
+
+        @Override
+        public List<List<Double>> embedAll(List<String> texts) {
+            batchSizes.add(texts.size());
+            return texts.stream()
+                .map(text -> {
+                    var embedding = embeddingsByText.get(text);
+                    if (embedding == null) {
+                        throw new IllegalStateException("Missing scripted embedding for text: " + text);
+                    }
+                    return embedding;
+                })
                 .toList();
         }
 
@@ -764,17 +1028,20 @@ class LightRagBuilderTest {
 
     private static final class InterruptIgnoringChunker implements Chunker {
         private final String blockedDocumentId;
+        private final CountDownLatch externalBlockedSignal;
         private final CountDownLatch blockedDocumentEntered = new CountDownLatch(1);
         private final CountDownLatch release = new CountDownLatch(1);
 
-        private InterruptIgnoringChunker(String blockedDocumentId) {
+        private InterruptIgnoringChunker(String blockedDocumentId, CountDownLatch externalBlockedSignal) {
             this.blockedDocumentId = blockedDocumentId;
+            this.externalBlockedSignal = externalBlockedSignal;
         }
 
         @Override
         public List<Chunk> chunk(Document document) {
             if (document.id().equals(blockedDocumentId)) {
                 blockedDocumentEntered.countDown();
+                externalBlockedSignal.countDown();
                 while (true) {
                     try {
                         if (release.await(50, TimeUnit.MILLISECONDS)) {
@@ -789,7 +1056,7 @@ class LightRagBuilderTest {
         }
 
         boolean awaitBlockedDocument() throws InterruptedException {
-            return blockedDocumentEntered.await(2, TimeUnit.SECONDS);
+            return blockedDocumentEntered.await(5, TimeUnit.SECONDS);
         }
 
         void release() {
@@ -1035,5 +1302,28 @@ class LightRagBuilderTest {
         public List<Path> list() {
             return List.of();
         }
+    }
+
+    private static SmartChunker smartChunkerWithStandaloneSemanticMerge() {
+        return new SmartChunker(SmartChunkerConfig.builder()
+            .targetTokens(32)
+            .maxTokens(120)
+            .overlapTokens(0)
+            .semanticMergeEnabled(true)
+            .semanticMergeThreshold(0.70d)
+            .build());
+    }
+
+    private static Document semanticMergeDocument() {
+        return new Document(
+            "doc-1",
+            "Semantic Merge Guide",
+            """
+                Common anchor detail opens the section clearly.
+                Common anchor detail extends the section further.
+                Distinct ending sentence changes the subject entirely.
+                """,
+            Map.of("source", "unit-test")
+        );
     }
 }

@@ -9,6 +9,7 @@ import io.github.lightragjava.storage.GraphStore;
 import io.github.lightragjava.storage.SnapshotStore;
 import io.github.lightragjava.storage.VectorStore;
 import io.github.lightragjava.types.Document;
+import io.github.lightragjava.types.RawDocumentSource;
 import io.github.lightragjava.types.Entity;
 import io.github.lightragjava.types.Relation;
 
@@ -31,9 +32,9 @@ public final class IndexingPipeline {
     private final DocumentIngestor documentIngestor;
     private final KnowledgeExtractor knowledgeExtractor;
     private final GraphAssembler graphAssembler;
-    private final EmbeddingModel embeddingModel;
+    private final EmbeddingBatcher embeddingBatcher;
+    private final DocumentParsingOrchestrator documentParsingOrchestrator;
     private final Path snapshotPath;
-    private final int embeddingBatchSize;
     private final int maxParallelInsert;
     private final int entityExtractMaxGleaning;
     private final int maxExtractInputTokens;
@@ -47,17 +48,19 @@ public final class IndexingPipeline {
         AtomicStorageProvider storageProvider,
         Path snapshotPath,
         Chunker chunker,
+        DocumentParsingOrchestrator documentParsingOrchestrator,
         int embeddingBatchSize,
         int maxParallelInsert,
         int entityExtractMaxGleaning,
         int maxExtractInputTokens,
         String entityExtractionLanguage,
-        List<String> entityTypes
+        List<String> entityTypes,
+        boolean embeddingSemanticMergeEnabled,
+        double embeddingSemanticMergeThreshold
     ) {
         this.storageProvider = Objects.requireNonNull(storageProvider, "storageProvider");
-        this.embeddingModel = Objects.requireNonNull(embeddingModel, "embeddingModel");
         this.snapshotPath = snapshotPath;
-        this.embeddingBatchSize = embeddingBatchSize <= 0 ? Integer.MAX_VALUE : embeddingBatchSize;
+        var effectiveEmbeddingBatchSize = embeddingBatchSize <= 0 ? Integer.MAX_VALUE : embeddingBatchSize;
         this.maxParallelInsert = Math.max(1, maxParallelInsert);
         this.entityExtractMaxGleaning = Math.max(0, entityExtractMaxGleaning);
         this.maxExtractInputTokens = maxExtractInputTokens <= 0
@@ -69,9 +72,15 @@ public final class IndexingPipeline {
         this.entityTypes = entityTypes == null || entityTypes.isEmpty()
             ? KnowledgeExtractor.DEFAULT_ENTITY_TYPES
             : List.copyOf(entityTypes);
+        this.embeddingBatcher = new EmbeddingBatcher(Objects.requireNonNull(embeddingModel, "embeddingModel"), effectiveEmbeddingBatchSize);
+        var effectiveChunker = chunker == null
+            ? new FixedWindowChunker(FixedWindowChunker.DEFAULT_WINDOW_SIZE, FixedWindowChunker.DEFAULT_OVERLAP)
+            : chunker;
         this.documentIngestor = new DocumentIngestor(
             storageProvider,
-            chunker == null ? new FixedWindowChunker(FixedWindowChunker.DEFAULT_WINDOW_SIZE, FixedWindowChunker.DEFAULT_OVERLAP) : chunker
+            effectiveChunker,
+            chunkPreparationStrategy(effectiveChunker, embeddingSemanticMergeEnabled, embeddingSemanticMergeThreshold),
+            new ChunkingOrchestrator()
         );
         this.knowledgeExtractor = new KnowledgeExtractor(
             Objects.requireNonNull(chatModel, "chatModel"),
@@ -81,6 +90,9 @@ public final class IndexingPipeline {
             this.entityTypes
         );
         this.graphAssembler = new GraphAssembler();
+        this.documentParsingOrchestrator = documentParsingOrchestrator == null
+            ? new DocumentParsingOrchestrator(new PlainTextParsingProvider())
+            : documentParsingOrchestrator;
     }
 
     public IndexingPipeline(
@@ -95,12 +107,15 @@ public final class IndexingPipeline {
             storageProvider,
             snapshotPath,
             null,
+            null,
             Integer.MAX_VALUE,
             1,
             KnowledgeExtractor.DEFAULT_ENTITY_EXTRACT_MAX_GLEANING,
             KnowledgeExtractor.DEFAULT_MAX_EXTRACT_INPUT_TOKENS,
             KnowledgeExtractor.DEFAULT_LANGUAGE,
-            KnowledgeExtractor.DEFAULT_ENTITY_TYPES
+            KnowledgeExtractor.DEFAULT_ENTITY_TYPES,
+            false,
+            0.80d
         );
     }
 
@@ -115,6 +130,37 @@ public final class IndexingPipeline {
         ingestConcurrently(sources);
     }
 
+    public void ingestSources(List<RawDocumentSource> sources, io.github.lightragjava.api.DocumentIngestOptions options) {
+        var rawSources = List.copyOf(Objects.requireNonNull(sources, "sources"));
+        var resolvedOptions = Objects.requireNonNull(options, "options");
+        for (var source : rawSources) {
+            saveStatus(processingStatus(source.sourceId()));
+        }
+        var parsedDocuments = new java.util.ArrayList<ParsedDocument>(rawSources.size());
+        for (int index = 0; index < rawSources.size(); index++) {
+            var source = rawSources.get(index);
+            try {
+                parsedDocuments.add(documentParsingOrchestrator.parse(source, resolvedOptions));
+            } catch (RuntimeException | Error failure) {
+                saveFailureStatus(source.sourceId(), failure);
+                markPendingRawSourcesFailed(rawSources.subList(0, index), "document parsing aborted because another document failed");
+                markPendingRawSourcesFailed(
+                    rawSources.subList(index + 1, rawSources.size()),
+                    "document parsing aborted because another document failed"
+                );
+                persistSnapshotIfConfigured();
+                throw failure;
+            }
+        }
+        if (parsedDocuments.size() <= 1 || maxParallelInsert <= 1) {
+            for (var parsed : parsedDocuments) {
+                ingestParsedSequentially(parsed, resolvedOptions);
+            }
+            return;
+        }
+        ingestParsedConcurrently(parsedDocuments, resolvedOptions);
+    }
+
     private void ingestSequentially(Document document) {
         var source = Objects.requireNonNull(document, "document");
         saveStatus(processingStatus(source.id()));
@@ -123,6 +169,19 @@ public final class IndexingPipeline {
             persistSnapshotIfConfigured();
         } catch (RuntimeException | Error failure) {
             saveFailureStatus(source.id(), failure);
+            persistSnapshotIfConfigured();
+            throw failure;
+        }
+    }
+
+    private void ingestParsedSequentially(ParsedDocument parsedDocument, io.github.lightragjava.api.DocumentIngestOptions options) {
+        var source = Objects.requireNonNull(parsedDocument, "parsedDocument");
+        saveStatus(processingStatus(source.documentId()));
+        try {
+            commitComputedIngest(computeDocument(source, options));
+            persistSnapshotIfConfigured();
+        } catch (RuntimeException | Error failure) {
+            saveFailureStatus(source.documentId(), failure);
             persistSnapshotIfConfigured();
             throw failure;
         }
@@ -162,10 +221,69 @@ public final class IndexingPipeline {
         }
     }
 
+    private void ingestParsedConcurrently(
+        List<ParsedDocument> parsedDocuments,
+        io.github.lightragjava.api.DocumentIngestOptions options
+    ) {
+        ExecutorService executor = Executors.newFixedThreadPool(Math.min(maxParallelInsert, parsedDocuments.size()));
+        var completionService = new ExecutorCompletionService<ComputedIngest>(executor);
+        var pendingTasks = new LinkedHashMap<Future<ComputedIngest>, ParsedDocument>();
+        try {
+            for (var parsed : parsedDocuments) {
+                saveStatus(processingStatus(parsed.documentId()));
+                pendingTasks.put(completionService.submit(() -> computeDocument(parsed, options)), parsed);
+            }
+            while (!pendingTasks.isEmpty()) {
+                var completed = completionService.take();
+                var source = pendingTasks.remove(completed);
+                try {
+                    commitComputedIngest(completed.get());
+                    persistSnapshotIfConfigured();
+                } catch (ExecutionException exception) {
+                    cancelPending(pendingTasks.keySet());
+                    saveFailureStatus(source.documentId(), exception.getCause());
+                    markPendingParsedDocumentsFailed(pendingTasks.values(), "ingest aborted because another document failed");
+                    persistSnapshotIfConfigured();
+                    rethrowTaskFailure(exception.getCause());
+                }
+            }
+        } catch (InterruptedException exception) {
+            cancelPending(pendingTasks.keySet());
+            Thread.currentThread().interrupt();
+            markPendingParsedDocumentsFailed(pendingTasks.values(), "document ingest interrupted");
+            persistSnapshotIfConfigured();
+            throw new RuntimeException("document ingest interrupted", exception);
+        } finally {
+            shutdownExecutor(executor);
+        }
+    }
+
     private void markPendingDocumentsFailed(Collection<Document> documents, String errorMessage) {
         for (var document : documents) {
             saveStatus(new DocumentStatusStore.StatusRecord(
                 document.id(),
+                DocumentStatus.FAILED,
+                "",
+                errorMessage
+            ));
+        }
+    }
+
+    private void markPendingParsedDocumentsFailed(Collection<ParsedDocument> documents, String errorMessage) {
+        for (var document : documents) {
+            saveStatus(new DocumentStatusStore.StatusRecord(
+                document.documentId(),
+                DocumentStatus.FAILED,
+                "",
+                errorMessage
+            ));
+        }
+    }
+
+    private void markPendingRawSourcesFailed(Collection<RawDocumentSource> sources, String errorMessage) {
+        for (var source : sources) {
+            saveStatus(new DocumentStatusStore.StatusRecord(
+                source.sourceId(),
                 DocumentStatus.FAILED,
                 "",
                 errorMessage
@@ -184,6 +302,22 @@ public final class IndexingPipeline {
         var entityVectors = entityVectors(graph.entities());
         var relationVectors = relationVectors(graph.relations());
         return new ComputedIngest(source, prepared, chunkVectors, graph, entityVectors, relationVectors);
+    }
+
+    private ComputedIngest computeDocument(
+        ParsedDocument parsedDocument,
+        io.github.lightragjava.api.DocumentIngestOptions options
+    ) {
+        var source = Objects.requireNonNull(parsedDocument, "parsedDocument");
+        var prepared = documentIngestor.prepareParsed(source, Objects.requireNonNull(options, "options"));
+        var chunks = prepared.chunks();
+        var chunkVectors = chunkVectors(chunks);
+        var graph = graphAssembler.assemble(chunks.stream()
+            .map(chunk -> new GraphAssembler.ChunkExtraction(chunk.id(), knowledgeExtractor.extract(chunk)))
+            .toList());
+        var entityVectors = entityVectors(graph.entities());
+        var relationVectors = relationVectors(graph.relations());
+        return new ComputedIngest(toDocument(source), prepared, chunkVectors, graph, entityVectors, relationVectors);
     }
 
     private static void cancelPending(Collection<? extends Future<?>> futures) {
@@ -215,7 +349,7 @@ public final class IndexingPipeline {
         try {
             synchronized (storageMutationMonitor) {
                 storageProvider.writeAtomically(storage -> {
-                    saveDocumentsAndChunks(computed.prepared(), storage);
+                    documentIngestor.persist(computed.prepared(), storage);
                     saveVectors(StorageSnapshots.CHUNK_NAMESPACE, computed.chunkVectors(), storage.vectorStore());
                     saveGraph(computed.graph().entities(), computed.graph().relations(), storage);
                     saveVectors(StorageSnapshots.ENTITY_NAMESPACE, computed.entityVectors(), storage.vectorStore());
@@ -253,18 +387,6 @@ public final class IndexingPipeline {
         }
     }
 
-    private void saveDocumentsAndChunks(
-        DocumentIngestor.PreparedIngest prepared,
-        AtomicStorageProvider.AtomicStorageView storage
-    ) {
-        for (var documentRecord : prepared.documentRecords()) {
-            storage.documentStore().save(documentRecord);
-        }
-        for (var chunkRecord : prepared.chunkRecords()) {
-            storage.chunkStore().save(chunkRecord);
-        }
-    }
-
     private void saveGraph(List<Entity> entities, List<Relation> relations, AtomicStorageProvider.AtomicStorageView storage) {
         for (var entity : entities) {
             var mergedEntity = storage.graphStore().loadEntity(entity.id())
@@ -298,6 +420,15 @@ public final class IndexingPipeline {
         return new DocumentStatusStore.StatusRecord(documentId, DocumentStatus.PROCESSING, "", null);
     }
 
+    private static Document toDocument(ParsedDocument parsed) {
+        return new Document(
+            parsed.documentId(),
+            parsed.title(),
+            parsed.plainText(),
+            parsed.metadata()
+        );
+    }
+
     private static List<VectorStore.VectorRecord> toVectorRecords(List<String> ids, List<List<Double>> embeddings) {
         if (ids.size() != embeddings.size()) {
             throw new IllegalStateException("embedding count does not match indexed item count");
@@ -312,15 +443,24 @@ public final class IndexingPipeline {
         if (chunks.isEmpty()) {
             return List.of();
         }
-        var embeddings = embedInBatches(chunks.stream().map(io.github.lightragjava.types.Chunk::text).toList());
+        var embeddings = embeddingBatcher.embedAll(chunks.stream().map(IndexingPipeline::chunkEmbeddingText).toList());
         return toVectorRecords(chunks.stream().map(io.github.lightragjava.types.Chunk::id).toList(), embeddings);
+    }
+
+    private static String chunkEmbeddingText(io.github.lightragjava.types.Chunk chunk) {
+        var summary = chunk.metadata().getOrDefault(ParentChildChunkBuilder.METADATA_PARENT_SUMMARY, "").strip();
+        var level = chunk.metadata().getOrDefault(ParentChildChunkBuilder.METADATA_CHUNK_LEVEL, "");
+        if (!summary.isBlank() && ParentChildChunkBuilder.CHUNK_LEVEL_CHILD.equals(level)) {
+            return summary + "\n" + chunk.text();
+        }
+        return chunk.text();
     }
 
     List<VectorStore.VectorRecord> entityVectors(List<Entity> entities) {
         if (entities.isEmpty()) {
             return List.of();
         }
-        var embeddings = embedInBatches(entities.stream().map(IndexingPipeline::entitySummary).toList());
+        var embeddings = embeddingBatcher.embedAll(entities.stream().map(IndexingPipeline::entitySummary).toList());
         return toVectorRecords(entities.stream().map(Entity::id).toList(), embeddings);
     }
 
@@ -328,23 +468,26 @@ public final class IndexingPipeline {
         if (relations.isEmpty()) {
             return List.of();
         }
-        var embeddings = embedInBatches(relations.stream().map(IndexingPipeline::relationSummary).toList());
+        var embeddings = embeddingBatcher.embedAll(relations.stream().map(IndexingPipeline::relationSummary).toList());
         return toVectorRecords(relations.stream().map(Relation::id).toList(), embeddings);
     }
 
-    private List<List<Double>> embedInBatches(List<String> texts) {
-        if (texts.isEmpty()) {
-            return List.of();
+    private DocumentChunkPreparationStrategy chunkPreparationStrategy(
+        Chunker chunker,
+        boolean embeddingSemanticMergeEnabled,
+        double embeddingSemanticMergeThreshold
+    ) {
+        if (!embeddingSemanticMergeEnabled) {
+            return new DefaultChunkPreparationStrategy();
         }
-        if (embeddingBatchSize >= texts.size()) {
-            return embeddingModel.embedAll(texts);
+        if (!(chunker instanceof SmartChunker)) {
+            throw new IllegalStateException("embedding semantic merge requires SmartChunker");
         }
-        var embeddings = new java.util.ArrayList<List<Double>>(texts.size());
-        for (int start = 0; start < texts.size(); start += embeddingBatchSize) {
-            var end = Math.min(texts.size(), start + embeddingBatchSize);
-            embeddings.addAll(embeddingModel.embedAll(texts.subList(start, end)));
-        }
-        return List.copyOf(embeddings);
+        return new SmartChunkerEmbeddingPreparationStrategy(
+            new SemanticChunkRefiner(),
+            new EmbeddingChunkSimilarityScorer(embeddingBatcher),
+            embeddingSemanticMergeThreshold
+        );
     }
 
     private static GraphStore.EntityRecord mergeEntity(GraphStore.EntityRecord existing, Entity incoming) {

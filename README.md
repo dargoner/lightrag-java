@@ -129,6 +129,105 @@ var rag = LightRag.builder()
     .build();
 ```
 
+For structure-aware chunking, use `SmartChunker` directly through the same builder hook:
+
+```java
+var rag = LightRag.builder()
+    .chatModel(chatModel)
+    .embeddingModel(embeddingModel)
+    .storage(storage)
+    .chunker(new SmartChunker(SmartChunkerConfig.builder()
+        .targetTokens(800)
+        .maxTokens(1200)
+        .overlapTokens(100)
+        .semanticMergeEnabled(true)
+        .semanticMergeThreshold(0.80d)
+        .build()))
+    .build();
+```
+
+`SmartChunker` currently adds three layers on top of the existing `Chunker` SPI:
+
+- V1: sentence-aware splitting and overlap while keeping the current `Chunk` contract
+- V2: markdown-like heading, list, and table preservation with string metadata such as `smart_chunker.section_path`
+- V3: optional adjacent-chunk semantic merge plus a reflection-based `LangChain4jChunkAdapter`
+
+Starting with this iteration, `SmartChunker` also enables **adaptive paragraph chunking** internally by default:
+
+- users still choose only `FINE / MEDIUM / COARSE`
+- long continuous prose is allowed to become coarser within that granularity band
+- adjacent short prose paragraphs in the same section can be regrouped before final sentence-aware splitting
+- the first paragraph after a heading is biased finer for retrieval precision
+- very short page chrome or short non-substantive snippets are intentionally kept conservative rather than blindly regrouped
+- `LIST` and `TABLE` stay conservative rather than aggressively adapting
+- `LAW` and `QA` only allow very small dynamic adjustment so template boundaries remain stable
+
+The standalone `SmartChunker.chunk(...)` path remains model-free. Its V3 merge still uses the local heuristic scorer from `SmartChunkerConfig` and does not require an `EmbeddingModel`.
+
+If you want embedding-driven semantic merge, enable it on the `LightRag` ingest pipeline instead of on the standalone chunker API:
+
+```java
+var rag = LightRag.builder()
+    .chatModel(chatModel)
+    .embeddingModel(embeddingModel)
+    .storage(storage)
+    .chunker(new SmartChunker(SmartChunkerConfig.builder()
+        .targetTokens(800)
+        .maxTokens(1200)
+        .overlapTokens(100)
+        .build()))
+    .enableEmbeddingSemanticMerge(true)
+    .embeddingSemanticMergeThreshold(0.80d)
+    .build();
+```
+
+That ingest-only path starts from `SmartChunker.chunkStructural(...)`, computes embeddings with the configured `EmbeddingModel`, and only then merges adjacent chunks when section and content-type boundaries allow it. Query-time chunking and standalone `SmartChunker.chunk(...)` behavior stay unchanged.
+
+The additional metadata is still stored as `Map<String, String>`, so it remains compatible with the current query, snapshot, and PostgreSQL persistence pipeline.
+
+If you need LangChain4j-compatible segments, adapt generated chunks explicitly:
+
+```java
+var chunker = new SmartChunker(SmartChunkerConfig.defaults());
+var chunks = chunker.chunk(new Document("doc-1", "Guide", "# Policies\nCarry your passport.", Map.of()));
+var adapter = new LangChain4jChunkAdapter();
+var segments = adapter.toTextSegments(chunks);
+```
+
+If you want the SDK to ingest files directly, use the raw-source entry instead of converting everything to `Document` yourself:
+
+```java
+var source = RawDocumentSource.bytes(
+    "contract.docx",
+    Files.readAllBytes(Path.of("contract.docx")),
+    "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+);
+
+rag.ingestSources(
+    List.of(source),
+    new DocumentIngestOptions(DocumentTypeHint.LAW, ChunkGranularity.MEDIUM)
+);
+```
+
+Raw-source ingest keeps parser backend selection internal:
+
+- `.txt`, `.md`, `.markdown`: direct UTF-8 plain-text parsing
+- `.pdf`, `.doc`, `.docx`, `.ppt`, `.pptx`, `.html`, `.htm`: `MinerU` first, then `Tika` fallback when enabled
+- `.png`, `.jpg`, `.jpeg`, `.webp`, `.gif`, `.bmp`: `MinerU` only; there is no OCR fallback outside MinerU
+- images and figures inside documents are first converted by `MinerU` into OCR text, captions, or layout text blocks before `SmartChunker` runs; pure visual content does not currently get its own image embedding path
+
+For the hosted `mineru.net` API mode, the source must also provide a public file URL in metadata such as `sourceUrl`.
+The hosted API does not accept local file bytes directly, so raw upload bytes still need either:
+
+- a self-hosted MinerU deployment, or
+- a staging/object-storage step that turns the upload into a reachable URL before parsing
+
+Chunk selection also stays business-oriented:
+
+- default `AUTO`: use regex/manual chunking when regex rules are supplied, otherwise use `SmartChunker`
+- force `SMART`, `REGEX`, or `FIXED` through `DocumentIngestOptions`
+- enable optional parent/child chunks when you want retrieval to recall child hits and expand them back to parent context
+
 With Spring Boot Starter, fixed-window chunking can be configured optionally in `application.yml`. If omitted, it still defaults to `window-size=1000` and `overlap=100`:
 
 ```yaml
@@ -137,6 +236,17 @@ lightrag:
     chunking:
       window-size: 1200
       overlap: 150
+    ingest:
+      preset: GENERAL
+      parent-child-window-size: 400
+      parent-child-overlap: 40
+    parsing:
+      tika-fallback-enabled: true
+      mineru:
+        enabled: false
+        mode: DISABLED
+        base-url: http://127.0.0.1:8000
+        api-key: ${MINERU_API_KEY:}
     embedding-batch-size: 32
     max-parallel-insert: 4
     entity-extract-max-gleaning: 1
@@ -144,6 +254,16 @@ lightrag:
     language: Chinese
     entity-types: Person,Organization
 ```
+
+`ingest.preset` is the primary product-facing option. Supported values are `GENERAL`, `LAW`, `BOOK`, `QA`, and `FIGURE`.
+
+The legacy properties below are still supported for backward compatibility:
+
+- `lightrag.indexing.ingest.document-type`
+- `lightrag.indexing.ingest.chunk-granularity`
+- `lightrag.indexing.ingest.parent-child-enabled`
+
+If no request-level `preset` override is provided, those legacy properties still override the preset-derived defaults.
 
 `embedding-batch-size` controls how many texts are sent in each indexing-time embedding request. Leave it unset or `0` to preserve the current single-batch behavior.
 `max-parallel-insert` controls how many documents ingest can process concurrently. It defaults to `1` so existing runtime behavior stays serial unless you opt in.
@@ -160,26 +280,46 @@ For lightweight operations visibility, the demo also exposes:
 - `/actuator/health`: application health plus a `lightrag` component with storage type and async ingest flags
 - `/actuator/info`: static runtime info such as storage type, async ingest setting, and default query mode
 
-Use `POST /documents/ingest` when you already have structured `Document` JSON payloads. Use `POST /documents/upload` when you want the demo to read text files for you and create `Document` objects automatically.
+Use `POST /documents/ingest` when you already have structured `Document` JSON payloads. Use `POST /documents/upload` when you want the demo to pass raw file bytes into the SDK and let the parsing pipeline choose `plain -> MinerU -> Tika` automatically.
 
-The upload endpoint accepts `multipart/form-data` with one or more `files` parts and an optional `async=true|false` query parameter. Supported file types are:
+The upload endpoint accepts `multipart/form-data` with one or more `files` parts, an optional `async=true|false` query parameter, and an optional `preset=GENERAL|LAW|BOOK|QA|FIGURE` override. Supported file types are:
 
 - `.txt`
 - `.md`
 - `.markdown`
+- `.pdf`
+- `.doc`
+- `.docx`
+- `.ppt`
+- `.pptx`
+- `.html`
+- `.htm`
+- `.png`
+- `.jpg`
+- `.jpeg`
+- `.webp`
+- `.gif`
+- `.bmp`
 
 Current demo limits:
 
 - maximum `20` files per request
 - maximum `1 MiB` per file
 - maximum `4 MiB` total request payload across all files
-- file content must decode as valid UTF-8
+- `.txt` / `.md` / `.markdown` content must decode as valid UTF-8
+- binary office, pdf, html, and image uploads keep raw bytes and are parsed later during ingest
 
-Each uploaded file becomes a `Document` with:
+Parsing behavior for upload jobs:
 
-- a generated URL-safe `documentId`
-- `title` set to the basename of the uploaded file
-- metadata including `source=upload`, `filename`, and `contentType`
+- office, pdf, and html files prefer `MinerU`; if `MinerU` is unavailable, the pipeline downgrades to `Tika` when fallback is enabled
+- image files require `MinerU`; the job fails instead of pretending OCR succeeded with empty text
+- chunking still follows `DocumentIngestOptions`, so you can keep the default smart strategy or switch to regex/manual chunking in SDK integrations
+
+Each uploaded file becomes a `RawDocumentSource` with:
+
+- a generated URL-safe `sourceId`
+- the original filename and media type
+- metadata including `source=upload`, `fileName`, and `contentType`
 
 Workspace routing is configured through the starter properties:
 

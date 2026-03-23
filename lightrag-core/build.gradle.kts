@@ -4,6 +4,8 @@ dependencies {
     testImplementation("org.assertj:assertj-core:3.27.3")
     implementation("com.fasterxml.jackson.core:jackson-databind:2.18.3")
     implementation("com.squareup.okhttp3:okhttp:4.12.0")
+    implementation("org.apache.tika:tika-core:3.2.1")
+    implementation("org.apache.tika:tika-parsers-standard-package:3.2.1")
     implementation("org.postgresql:postgresql:42.7.10")
     implementation("com.zaxxer:HikariCP:7.0.2")
     implementation("com.pgvector:pgvector:0.1.6")

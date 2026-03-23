@@ -15,6 +15,8 @@ import org.springframework.test.web.servlet.MvcResult;
 
 import java.nio.charset.StandardCharsets;
 import java.util.List;
+import java.util.zip.ZipEntry;
+import java.util.zip.ZipOutputStream;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.junit.jupiter.api.Assertions.fail;
@@ -140,6 +142,94 @@ class DemoApplicationTest {
     }
 
     @Test
+    void uploadsDocxAndAnswersQueryThroughRawSourcePath() throws Exception {
+        var uploadResult = mockMvc.perform(org.springframework.test.web.servlet.request.MockMvcRequestBuilders.multipart("/documents/upload")
+                .file(new MockMultipartFile(
+                    "files",
+                    "contract.docx",
+                    "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+                    minimalDocx("Alice works with Bob")
+                ))
+                .param("async", "false")
+                .header(WORKSPACE_HEADER, WORKSPACE_A))
+            .andExpect(status().isAccepted())
+            .andExpect(jsonPath("$.jobId").isNotEmpty())
+            .andExpect(jsonPath("$.documentIds[0]").isNotEmpty())
+            .andReturn();
+
+        var uploadBody = objectMapper.readTree(uploadResult.getResponse().getContentAsString());
+        var jobId = uploadBody.get("jobId").asText();
+        awaitJobSuccess(WORKSPACE_A, jobId);
+
+        mockMvc.perform(post("/query")
+                .header(WORKSPACE_HEADER, WORKSPACE_A)
+                .contentType(APPLICATION_JSON)
+                .content("""
+                    {
+                      "query": "Who works with Bob?",
+                      "mode": "MIX"
+                    }
+                    """))
+            .andExpect(status().isOk())
+            .andExpect(jsonPath("$.answer").value("Alice works with Bob."));
+    }
+
+    @Test
+    void returnsBadRequestForSyncImageUploadWhenParsingFails() throws Exception {
+        mockMvc.perform(org.springframework.test.web.servlet.request.MockMvcRequestBuilders.multipart("/documents/upload")
+                .file(new MockMultipartFile(
+                    "files",
+                    "scan.png",
+                    MediaType.IMAGE_PNG_VALUE,
+                    new byte[] {1, 2, 3, 4}
+                ))
+                .param("async", "false")
+                .header(WORKSPACE_HEADER, WORKSPACE_A))
+            .andExpect(status().isBadRequest())
+            .andExpect(jsonPath("$.message").value("MinerU provider is not configured"));
+    }
+
+    @Test
+    void marksAsyncImageUploadDocumentStatusFailedWhenParsingFails() throws Exception {
+        var uploadResult = mockMvc.perform(org.springframework.test.web.servlet.request.MockMvcRequestBuilders.multipart("/documents/upload")
+                .file(new MockMultipartFile(
+                    "files",
+                    "scan.png",
+                    MediaType.IMAGE_PNG_VALUE,
+                    new byte[] {1, 2, 3, 4}
+                ))
+                .header(WORKSPACE_HEADER, WORKSPACE_A))
+            .andExpect(status().isAccepted())
+            .andExpect(jsonPath("$.jobId").isNotEmpty())
+            .andExpect(jsonPath("$.documentIds[0]").isNotEmpty())
+            .andReturn();
+
+        var uploadBody = objectMapper.readTree(uploadResult.getResponse().getContentAsString());
+        var jobId = uploadBody.get("jobId").asText();
+        var documentId = uploadBody.get("documentIds").get(0).asText();
+
+        for (int attempt = 0; attempt < 10; attempt++) {
+            var jobResult = mockMvc.perform(get("/documents/jobs/{jobId}", jobId)
+                    .header(WORKSPACE_HEADER, WORKSPACE_A))
+                .andExpect(status().isOk())
+                .andReturn();
+            var body = objectMapper.readTree(jobResult.getResponse().getContentAsString());
+            if ("FAILED".equals(body.get("status").asText())) {
+                assertThat(body.get("errorMessage").asText()).contains("MinerU provider is not configured");
+                mockMvc.perform(get("/documents/status/{documentId}", documentId)
+                        .header(WORKSPACE_HEADER, WORKSPACE_A))
+                    .andExpect(status().isOk())
+                    .andExpect(jsonPath("$.documentId").value(documentId))
+                    .andExpect(jsonPath("$.status").value("FAILED"))
+                    .andExpect(jsonPath("$.errorMessage").value("MinerU provider is not configured"));
+                return;
+            }
+            Thread.sleep(25L);
+        }
+        fail("image upload job did not reach FAILED before timeout: " + jobId);
+    }
+
+    @Test
     void ingestsDocumentsAndStreamsQuery() throws Exception {
         var ingestResult = mockMvc.perform(post("/documents/ingest")
                 .header(WORKSPACE_HEADER, WORKSPACE_A)
@@ -223,6 +313,45 @@ class DemoApplicationTest {
         response.setCharacterEncoding(StandardCharsets.UTF_8.name());
         assertThat(response.getContentType()).startsWith(MediaType.TEXT_EVENT_STREAM_VALUE);
         return response.getContentAsString(StandardCharsets.UTF_8);
+    }
+
+    private static byte[] minimalDocx(String bodyText) {
+        try {
+            var output = new java.io.ByteArrayOutputStream();
+            try (var zip = new ZipOutputStream(output, StandardCharsets.UTF_8)) {
+                writeZipEntry(zip, "[Content_Types].xml", """
+                    <?xml version="1.0" encoding="UTF-8"?>
+                    <Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types">
+                      <Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/>
+                      <Default Extension="xml" ContentType="application/xml"/>
+                      <Override PartName="/word/document.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml"/>
+                    </Types>
+                    """);
+                writeZipEntry(zip, "_rels/.rels", """
+                    <?xml version="1.0" encoding="UTF-8"?>
+                    <Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">
+                      <Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="word/document.xml"/>
+                    </Relationships>
+                    """);
+                writeZipEntry(zip, "word/document.xml", """
+                    <?xml version="1.0" encoding="UTF-8"?>
+                    <w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">
+                      <w:body>
+                        <w:p><w:r><w:t>%s</w:t></w:r></w:p>
+                      </w:body>
+                    </w:document>
+                    """.formatted(bodyText));
+            }
+            return output.toByteArray();
+        } catch (java.io.IOException exception) {
+            throw new IllegalStateException("failed to build test docx", exception);
+        }
+    }
+
+    private static void writeZipEntry(ZipOutputStream zip, String path, String content) throws java.io.IOException {
+        zip.putNextEntry(new ZipEntry(path));
+        zip.write(content.getBytes(StandardCharsets.UTF_8));
+        zip.closeEntry();
     }
 
     @TestConfiguration

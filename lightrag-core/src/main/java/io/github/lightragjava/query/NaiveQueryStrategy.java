@@ -18,6 +18,7 @@ public final class NaiveQueryStrategy implements QueryStrategy {
     private final EmbeddingModel embeddingModel;
     private final StorageProvider storageProvider;
     private final ContextAssembler contextAssembler;
+    private final ParentChunkExpander parentChunkExpander;
 
     public NaiveQueryStrategy(
         EmbeddingModel embeddingModel,
@@ -27,6 +28,7 @@ public final class NaiveQueryStrategy implements QueryStrategy {
         this.embeddingModel = Objects.requireNonNull(embeddingModel, "embeddingModel");
         this.storageProvider = Objects.requireNonNull(storageProvider, "storageProvider");
         this.contextAssembler = Objects.requireNonNull(contextAssembler, "contextAssembler");
+        this.parentChunkExpander = new ParentChunkExpander(storageProvider.chunkStore());
     }
 
     @Override
@@ -40,7 +42,8 @@ public final class NaiveQueryStrategy implements QueryStrategy {
             .filter(Objects::nonNull)
             .sorted(scoreOrder())
             .toList();
-        var context = new QueryContext(List.of(), List.of(), matchedChunks, "");
+        var expandedChunks = parentChunkExpander.expand(matchedChunks, query.chunkTopK());
+        var context = new QueryContext(List.of(), List.of(), expandedChunks, "");
         return new QueryContext(
             context.matchedEntities(),
             context.matchedRelations(),

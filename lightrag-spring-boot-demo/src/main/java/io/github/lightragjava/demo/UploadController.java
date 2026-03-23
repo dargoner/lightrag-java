@@ -1,6 +1,9 @@
 package io.github.lightragjava.demo;
 
+import io.github.lightragjava.api.DocumentIngestOptions;
+import io.github.lightragjava.spring.boot.IngestPreset;
 import io.github.lightragjava.spring.boot.LightRagProperties;
+import io.github.lightragjava.types.RawDocumentSource;
 import jakarta.servlet.http.HttpServletRequest;
 import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
@@ -36,16 +39,25 @@ class UploadController {
     ResponseEntity<UploadJobResponse> upload(
         @RequestPart("files") List<MultipartFile> files,
         @RequestParam(name = "async", required = false) Boolean async,
+        @RequestParam(name = "preset", required = false) IngestPreset preset,
         HttpServletRequest request
     ) {
-        var documents = uploadedDocumentMapper.toDocuments(files);
+        var sources = uploadedDocumentMapper.toSources(files);
         var runAsync = async == null ? properties.getDemo().isAsyncIngestEnabled() : async;
         var workspaceId = workspaceResolver.resolve(request);
-        var jobId = ingestJobService.submit(workspaceId, documents, runAsync);
+        var ingestOptions = defaultIngestOptions(properties, preset);
+        var jobId = ingestJobService.submitSources(workspaceId, sources, ingestOptions, runAsync);
         return ResponseEntity.accepted().body(new UploadJobResponse(
             jobId,
-            documents.stream().map(document -> document.id()).toList()
+            sources.stream().map(RawDocumentSource::sourceId).toList()
         ));
+    }
+
+    private static DocumentIngestOptions defaultIngestOptions(
+        LightRagProperties properties,
+        IngestPreset requestPreset
+    ) {
+        return properties.getIndexing().getIngest().toDocumentIngestOptions(requestPreset);
     }
 
     record UploadJobResponse(String jobId, List<String> documentIds) {

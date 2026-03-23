@@ -2,7 +2,9 @@ package io.github.lightragjava.api;
 
 import io.github.lightragjava.config.LightRagConfig;
 import io.github.lightragjava.indexing.Chunker;
+import io.github.lightragjava.indexing.DocumentParsingOrchestrator;
 import io.github.lightragjava.indexing.FixedWindowChunker;
+import io.github.lightragjava.indexing.SmartChunker;
 import io.github.lightragjava.model.ChatModel;
 import io.github.lightragjava.model.EmbeddingModel;
 import io.github.lightragjava.model.RerankModel;
@@ -23,6 +25,8 @@ import java.util.Objects;
 public final class LightRagBuilder {
     private static final int DEFAULT_CHUNK_WINDOW = 1_000;
     private static final int DEFAULT_CHUNK_OVERLAP = 100;
+    static final boolean DEFAULT_EMBEDDING_SEMANTIC_MERGE_ENABLED = false;
+    static final double DEFAULT_EMBEDDING_SEMANTIC_MERGE_THRESHOLD = 0.80d;
 
     private ChatModel chatModel;
     private EmbeddingModel embeddingModel;
@@ -38,6 +42,9 @@ public final class LightRagBuilder {
     private int maxExtractInputTokens = io.github.lightragjava.indexing.KnowledgeExtractor.DEFAULT_MAX_EXTRACT_INPUT_TOKENS;
     private String entityExtractionLanguage = io.github.lightragjava.indexing.KnowledgeExtractor.DEFAULT_LANGUAGE;
     private List<String> entityTypes = io.github.lightragjava.indexing.KnowledgeExtractor.DEFAULT_ENTITY_TYPES;
+    private boolean embeddingSemanticMergeEnabled = DEFAULT_EMBEDDING_SEMANTIC_MERGE_ENABLED;
+    private double embeddingSemanticMergeThreshold = DEFAULT_EMBEDDING_SEMANTIC_MERGE_THRESHOLD;
+    private DocumentParsingOrchestrator documentParsingOrchestrator;
 
     public LightRagBuilder chatModel(ChatModel chatModel) {
         this.chatModel = Objects.requireNonNull(chatModel, "chatModel");
@@ -65,6 +72,24 @@ public final class LightRagBuilder {
 
     public LightRagBuilder chunker(Chunker chunker) {
         this.chunker = Objects.requireNonNull(chunker, "chunker");
+        return this;
+    }
+
+    public LightRagBuilder documentParsingOrchestrator(DocumentParsingOrchestrator documentParsingOrchestrator) {
+        this.documentParsingOrchestrator = Objects.requireNonNull(documentParsingOrchestrator, "documentParsingOrchestrator");
+        return this;
+    }
+
+    public LightRagBuilder enableEmbeddingSemanticMerge(boolean enabled) {
+        this.embeddingSemanticMergeEnabled = enabled;
+        return this;
+    }
+
+    public LightRagBuilder embeddingSemanticMergeThreshold(double threshold) {
+        if (!Double.isFinite(threshold) || threshold < 0.0d || threshold > 1.0d) {
+            throw new IllegalArgumentException("embeddingSemanticMergeThreshold must be between 0.0 and 1.0");
+        }
+        this.embeddingSemanticMergeThreshold = threshold;
         return this;
     }
 
@@ -154,6 +179,9 @@ public final class LightRagBuilder {
         if (storageProvider == null) {
             throw new IllegalStateException("storageProvider is required");
         }
+        if (embeddingSemanticMergeEnabled && !(chunker instanceof SmartChunker)) {
+            throw new IllegalStateException("embedding semantic merge requires SmartChunker");
+        }
         requireStore("documentStore", storageProvider.documentStore(), DocumentStore.class);
         requireStore("chunkStore", storageProvider.chunkStore(), ChunkStore.class);
         requireStore("graphStore", storageProvider.graphStore(), GraphStore.class);
@@ -172,8 +200,9 @@ public final class LightRagBuilder {
             storageProvider.documentStatusStore(),
             snapshotPath,
             rerankModel
-        ), chunker, automaticQueryKeywordExtraction, rerankCandidateMultiplier, embeddingBatchSize, maxParallelInsert,
-            entityExtractMaxGleaning, maxExtractInputTokens, entityExtractionLanguage, entityTypes);
+        ), chunker, documentParsingOrchestrator, automaticQueryKeywordExtraction, rerankCandidateMultiplier, embeddingBatchSize, maxParallelInsert,
+            entityExtractMaxGleaning, maxExtractInputTokens, entityExtractionLanguage, entityTypes,
+            embeddingSemanticMergeEnabled, embeddingSemanticMergeThreshold);
     }
 
     private static <T> T requireStore(String componentName, T store, Class<T> storeType) {
