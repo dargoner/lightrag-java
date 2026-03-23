@@ -1,8 +1,10 @@
 package io.github.lightragjava.demo;
 
+import io.github.lightragjava.api.DocumentIngestOptions;
 import io.github.lightragjava.api.DocumentStatus;
 import io.github.lightragjava.spring.boot.WorkspaceLightRagFactory;
 import io.github.lightragjava.types.Document;
+import io.github.lightragjava.types.RawDocumentSource;
 import jakarta.annotation.PreDestroy;
 import org.springframework.stereotype.Service;
 
@@ -42,7 +44,16 @@ class IngestJobService {
     }
 
     String submit(String workspaceId, List<Document> documents, boolean async) {
-        return createJob(workspaceId, documents, async, null, 1).jobId();
+        return createDocumentJob(workspaceId, documents, async, null, 1).jobId();
+    }
+
+    String submitSources(
+        String workspaceId,
+        List<RawDocumentSource> sources,
+        DocumentIngestOptions options,
+        boolean async
+    ) {
+        return createSourceJob(workspaceId, sources, options, async, null, 1).jobId();
     }
 
     Optional<JobSnapshot> getJob(String workspaceId, String jobId) {
@@ -77,11 +88,32 @@ class IngestJobService {
 
     JobSnapshot retry(String workspaceId, String jobId, boolean async) {
         var original = requireJob(workspaceId, jobId);
-        var retryDocuments = retryableDocuments(original);
+        if (!original.isRetriable()) {
+            throw new JobConflictException("job is not retriable: " + jobId);
+        }
+        if (original.hasRawSources()) {
+            var retrySources = original.rawSources().stream()
+                .filter(source -> shouldRetryDocument(workspaceId, source.sourceId()))
+                .toList();
+            if (retrySources.isEmpty()) {
+                throw new JobConflictException("job has no retryable documents: " + jobId);
+            }
+            return createSourceJob(
+                workspaceId,
+                retrySources,
+                original.ingestOptions(),
+                async,
+                jobId,
+                original.attempt() + 1
+            ).toSnapshot();
+        }
+        var retryDocuments = original.documents().stream()
+            .filter(document -> shouldRetryDocument(workspaceId, document.id()))
+            .toList();
         if (retryDocuments.isEmpty()) {
             throw new JobConflictException("job has no retryable documents: " + jobId);
         }
-        return createJob(workspaceId, retryDocuments, async, jobId, original.attempt() + 1).toSnapshot();
+        return createDocumentJob(workspaceId, retryDocuments, async, jobId, original.attempt() + 1).toSnapshot();
     }
 
     @PreDestroy
@@ -89,21 +121,66 @@ class IngestJobService {
         executor.shutdownNow();
     }
 
-    private JobState createJob(
+    private JobState createDocumentJob(
         String workspaceId,
         List<Document> documents,
         boolean async,
         String retriedFromJobId,
         int attempt
     ) {
-        var normalizedWorkspaceId = requireNonBlank(workspaceId, "workspaceId");
         var copiedDocuments = List.copyOf(Objects.requireNonNull(documents, "documents"));
+        return createJob(
+            workspaceId,
+            copiedDocuments,
+            List.of(),
+            null,
+            copiedDocuments.size(),
+            async,
+            retriedFromJobId,
+            attempt
+        );
+    }
+
+    private JobState createSourceJob(
+        String workspaceId,
+        List<RawDocumentSource> sources,
+        DocumentIngestOptions options,
+        boolean async,
+        String retriedFromJobId,
+        int attempt
+    ) {
+        var copiedSources = List.copyOf(Objects.requireNonNull(sources, "sources"));
+        return createJob(
+            workspaceId,
+            List.of(),
+            copiedSources,
+            Objects.requireNonNull(options, "options"),
+            copiedSources.size(),
+            async,
+            retriedFromJobId,
+            attempt
+        );
+    }
+
+    private JobState createJob(
+        String workspaceId,
+        List<Document> documents,
+        List<RawDocumentSource> rawSources,
+        DocumentIngestOptions ingestOptions,
+        int documentCount,
+        boolean async,
+        String retriedFromJobId,
+        int attempt
+    ) {
+        var normalizedWorkspaceId = requireNonBlank(workspaceId, "workspaceId");
         var jobId = UUID.randomUUID().toString();
         var jobState = new JobState(
             jobId,
             normalizedWorkspaceId,
-            copiedDocuments,
-            copiedDocuments.size(),
+            documents,
+            rawSources,
+            ingestOptions,
+            documentCount,
             sequence.incrementAndGet(),
             Instant.now(),
             retriedFromJobId,
@@ -119,6 +196,7 @@ class IngestJobService {
             executor.execute(futureTask);
         } else {
             runJob(jobState);
+            rethrowJobFailure(jobState.failureCause());
         }
         return jobState;
     }
@@ -130,18 +208,9 @@ class IngestJobService {
             .orElseThrow(() -> new NoSuchElementException("job not found: " + jobId));
     }
 
-    private List<Document> retryableDocuments(JobState jobState) {
-        if (!jobState.isRetriable()) {
-            throw new JobConflictException("job is not retriable: " + jobState.jobId());
-        }
-        return jobState.documents().stream()
-            .filter(document -> shouldRetryDocument(jobState.workspaceId(), document))
-            .toList();
-    }
-
-    private boolean shouldRetryDocument(String workspaceId, Document document) {
+    private boolean shouldRetryDocument(String workspaceId, String documentId) {
         try {
-            var status = workspaceLightRagFactory.get(workspaceId).getDocumentStatus(document.id());
+            var status = workspaceLightRagFactory.get(workspaceId).getDocumentStatus(documentId);
             return status == null || status.status() != DocumentStatus.PROCESSED;
         } catch (NoSuchElementException ignored) {
             return true;
@@ -153,7 +222,12 @@ class IngestJobService {
             return;
         }
         try {
-            workspaceLightRagFactory.get(jobState.workspaceId()).ingest(jobState.documents());
+            var rag = workspaceLightRagFactory.get(jobState.workspaceId());
+            if (jobState.hasRawSources()) {
+                rag.ingestSources(jobState.rawSources(), jobState.ingestOptions());
+            } else {
+                rag.ingest(jobState.documents());
+            }
             jobState.markSucceeded();
         } catch (Throwable throwable) {
             if (jobState.isCancelling()) {
@@ -161,8 +235,21 @@ class IngestJobService {
                 Thread.currentThread().interrupt();
                 return;
             }
-            jobState.markFailed(throwable.getMessage());
+            jobState.markFailed(throwable);
         }
+    }
+
+    private static void rethrowJobFailure(Throwable failure) {
+        if (failure == null) {
+            return;
+        }
+        if (failure instanceof RuntimeException runtimeException) {
+            throw runtimeException;
+        }
+        if (failure instanceof Error error) {
+            throw error;
+        }
+        throw new IllegalStateException("ingest job failed", failure);
     }
 
     record JobSnapshot(
@@ -202,6 +289,8 @@ class IngestJobService {
         private final String jobId;
         private final String workspaceId;
         private final List<Document> documents;
+        private final List<RawDocumentSource> rawSources;
+        private final DocumentIngestOptions ingestOptions;
         private final int documentCount;
         private final long sequence;
         private final Instant createdAt;
@@ -211,12 +300,15 @@ class IngestJobService {
         private Instant startedAt;
         private Instant finishedAt;
         private String errorMessage;
+        private Throwable failureCause;
         private FutureTask<Void> futureTask;
 
         JobState(
             String jobId,
             String workspaceId,
             List<Document> documents,
+            List<RawDocumentSource> rawSources,
+            DocumentIngestOptions ingestOptions,
             int documentCount,
             long sequence,
             Instant createdAt,
@@ -226,6 +318,8 @@ class IngestJobService {
             this.jobId = jobId;
             this.workspaceId = workspaceId;
             this.documents = documents;
+            this.rawSources = rawSources;
+            this.ingestOptions = ingestOptions;
             this.documentCount = documentCount;
             this.sequence = sequence;
             this.createdAt = createdAt;
@@ -243,6 +337,18 @@ class IngestJobService {
 
         List<Document> documents() {
             return documents;
+        }
+
+        List<RawDocumentSource> rawSources() {
+            return rawSources;
+        }
+
+        DocumentIngestOptions ingestOptions() {
+            return ingestOptions;
+        }
+
+        boolean hasRawSources() {
+            return !rawSources.isEmpty();
         }
 
         long sequence() {
@@ -270,18 +376,21 @@ class IngestJobService {
         synchronized void markSucceeded() {
             status = IngestJobStatus.SUCCEEDED;
             errorMessage = null;
+            failureCause = null;
             finishedAt = Instant.now();
         }
 
-        synchronized void markFailed(String message) {
+        synchronized void markFailed(Throwable failure) {
             status = IngestJobStatus.FAILED;
-            errorMessage = normalizeMessage(message);
+            errorMessage = normalizeMessage(failure == null ? null : failure.getMessage());
+            failureCause = failure;
             finishedAt = Instant.now();
         }
 
         synchronized void markCancelled(String message) {
             status = IngestJobStatus.CANCELLED;
             errorMessage = normalizeMessage(message);
+            failureCause = null;
             finishedAt = Instant.now();
         }
 
@@ -333,6 +442,10 @@ class IngestJobService {
                 retriedFromJobId,
                 attempt
             );
+        }
+
+        synchronized Throwable failureCause() {
+            return failureCause;
         }
 
         private static String normalizeMessage(String message) {

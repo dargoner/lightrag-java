@@ -25,11 +25,13 @@ public final class LocalQueryStrategy implements QueryStrategy {
     private final EmbeddingModel embeddingModel;
     private final StorageProvider storageProvider;
     private final ContextAssembler contextAssembler;
+    private final ParentChunkExpander parentChunkExpander;
 
     public LocalQueryStrategy(EmbeddingModel embeddingModel, StorageProvider storageProvider, ContextAssembler contextAssembler) {
         this.embeddingModel = Objects.requireNonNull(embeddingModel, "embeddingModel");
         this.storageProvider = Objects.requireNonNull(storageProvider, "storageProvider");
         this.contextAssembler = Objects.requireNonNull(contextAssembler, "contextAssembler");
+        this.parentChunkExpander = new ParentChunkExpander(storageProvider.chunkStore());
     }
 
     @Override
@@ -72,7 +74,10 @@ public final class LocalQueryStrategy implements QueryStrategy {
             .toList();
         var limitedEntities = QueryBudgeting.limitEntities(matchedEntities, query.maxEntityTokens());
         var limitedRelations = QueryBudgeting.limitRelations(matchedRelations, query.maxRelationTokens());
-        var matchedChunks = collectChunks(limitedEntities, limitedRelations, query.chunkTopK());
+        var matchedChunks = parentChunkExpander.expand(
+            collectChunks(limitedEntities, limitedRelations, query.chunkTopK()),
+            query.chunkTopK()
+        );
 
         var context = new QueryContext(
             limitedEntities,

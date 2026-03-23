@@ -1,6 +1,7 @@
 package io.github.lightragjava.evaluation;
 
 import io.github.lightragjava.api.QueryMode;
+import io.github.lightragjava.indexing.KnowledgeExtractor;
 import io.github.lightragjava.model.ChatModel;
 import io.github.lightragjava.model.EmbeddingModel;
 import org.junit.jupiter.api.Test;
@@ -125,7 +126,7 @@ class RagasBatchEvaluationServiceTest {
         );
 
         assertThat(results).hasSize(2);
-        assertThat(chatModel.knowledgeExtractionCalls).isEqualTo(1);
+        assertThat(chatModel.knowledgeExtractionCalls).isEqualTo(KnowledgeExtractor.DEFAULT_ENTITY_EXTRACT_MAX_GLEANING + 1);
         assertThat(chatModel.keywordExtractionCalls).isZero();
         assertThat(chatModel.answerCalls).isZero();
         assertThat(results).allSatisfy(result -> assertThat(result.contexts()).isNotEmpty());

@@ -2,6 +2,7 @@ package io.github.lightragjava.api;
 
 import io.github.lightragjava.config.LightRagConfig;
 import io.github.lightragjava.indexing.Chunker;
+import io.github.lightragjava.indexing.DocumentParsingOrchestrator;
 import io.github.lightragjava.indexing.FixedWindowChunker;
 import io.github.lightragjava.indexing.SmartChunker;
 import io.github.lightragjava.model.ChatModel;
@@ -40,6 +41,7 @@ public final class LightRagBuilder {
     private int maxExtractInputTokens = io.github.lightragjava.indexing.KnowledgeExtractor.DEFAULT_MAX_EXTRACT_INPUT_TOKENS;
     private boolean embeddingSemanticMergeEnabled = DEFAULT_EMBEDDING_SEMANTIC_MERGE_ENABLED;
     private double embeddingSemanticMergeThreshold = DEFAULT_EMBEDDING_SEMANTIC_MERGE_THRESHOLD;
+    private DocumentParsingOrchestrator documentParsingOrchestrator;
 
     public LightRagBuilder chatModel(ChatModel chatModel) {
         this.chatModel = Objects.requireNonNull(chatModel, "chatModel");
@@ -67,6 +69,11 @@ public final class LightRagBuilder {
 
     public LightRagBuilder chunker(Chunker chunker) {
         this.chunker = Objects.requireNonNull(chunker, "chunker");
+        return this;
+    }
+
+    public LightRagBuilder documentParsingOrchestrator(DocumentParsingOrchestrator documentParsingOrchestrator) {
+        this.documentParsingOrchestrator = Objects.requireNonNull(documentParsingOrchestrator, "documentParsingOrchestrator");
         return this;
     }
 
@@ -164,7 +171,7 @@ public final class LightRagBuilder {
             storageProvider.documentStatusStore(),
             snapshotPath,
             rerankModel
-        ), chunker, automaticQueryKeywordExtraction, rerankCandidateMultiplier, embeddingBatchSize, maxParallelInsert,
+        ), chunker, documentParsingOrchestrator, automaticQueryKeywordExtraction, rerankCandidateMultiplier, embeddingBatchSize, maxParallelInsert,
             entityExtractMaxGleaning, maxExtractInputTokens, embeddingSemanticMergeEnabled, embeddingSemanticMergeThreshold);
     }
 

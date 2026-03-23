@@ -46,6 +46,7 @@ public final class IndexingPipeline {
         AtomicStorageProvider storageProvider,
         Path snapshotPath,
         Chunker chunker,
+        DocumentParsingOrchestrator documentParsingOrchestrator,
         int embeddingBatchSize,
         int maxParallelInsert,
         int entityExtractMaxGleaning,
@@ -68,7 +69,8 @@ public final class IndexingPipeline {
         this.documentIngestor = new DocumentIngestor(
             storageProvider,
             effectiveChunker,
-            chunkPreparationStrategy(effectiveChunker, embeddingSemanticMergeEnabled, embeddingSemanticMergeThreshold)
+            chunkPreparationStrategy(effectiveChunker, embeddingSemanticMergeEnabled, embeddingSemanticMergeThreshold),
+            new ChunkingOrchestrator()
         );
         this.knowledgeExtractor = new KnowledgeExtractor(
             Objects.requireNonNull(chatModel, "chatModel"),
@@ -76,7 +78,9 @@ public final class IndexingPipeline {
             this.maxExtractInputTokens
         );
         this.graphAssembler = new GraphAssembler();
-        this.documentParsingOrchestrator = new DocumentParsingOrchestrator(new PlainTextParsingProvider());
+        this.documentParsingOrchestrator = documentParsingOrchestrator == null
+            ? new DocumentParsingOrchestrator(new PlainTextParsingProvider())
+            : documentParsingOrchestrator;
     }
 
     public IndexingPipeline(
@@ -90,6 +94,7 @@ public final class IndexingPipeline {
             embeddingModel,
             storageProvider,
             snapshotPath,
+            null,
             null,
             Integer.MAX_VALUE,
             1,
@@ -113,11 +118,33 @@ public final class IndexingPipeline {
 
     public void ingestSources(List<RawDocumentSource> sources, io.github.lightragjava.api.DocumentIngestOptions options) {
         var rawSources = List.copyOf(Objects.requireNonNull(sources, "sources"));
-        Objects.requireNonNull(options, "options");
-        var documents = rawSources.stream()
-            .map(source -> toDocument(documentParsingOrchestrator.parse(source, options)))
-            .toList();
-        ingest(documents);
+        var resolvedOptions = Objects.requireNonNull(options, "options");
+        for (var source : rawSources) {
+            saveStatus(processingStatus(source.sourceId()));
+        }
+        var parsedDocuments = new java.util.ArrayList<ParsedDocument>(rawSources.size());
+        for (int index = 0; index < rawSources.size(); index++) {
+            var source = rawSources.get(index);
+            try {
+                parsedDocuments.add(documentParsingOrchestrator.parse(source, resolvedOptions));
+            } catch (RuntimeException | Error failure) {
+                saveFailureStatus(source.sourceId(), failure);
+                markPendingRawSourcesFailed(rawSources.subList(0, index), "document parsing aborted because another document failed");
+                markPendingRawSourcesFailed(
+                    rawSources.subList(index + 1, rawSources.size()),
+                    "document parsing aborted because another document failed"
+                );
+                persistSnapshotIfConfigured();
+                throw failure;
+            }
+        }
+        if (parsedDocuments.size() <= 1 || maxParallelInsert <= 1) {
+            for (var parsed : parsedDocuments) {
+                ingestParsedSequentially(parsed, resolvedOptions);
+            }
+            return;
+        }
+        ingestParsedConcurrently(parsedDocuments, resolvedOptions);
     }
 
     private void ingestSequentially(Document document) {
@@ -128,6 +155,19 @@ public final class IndexingPipeline {
             persistSnapshotIfConfigured();
         } catch (RuntimeException | Error failure) {
             saveFailureStatus(source.id(), failure);
+            persistSnapshotIfConfigured();
+            throw failure;
+        }
+    }
+
+    private void ingestParsedSequentially(ParsedDocument parsedDocument, io.github.lightragjava.api.DocumentIngestOptions options) {
+        var source = Objects.requireNonNull(parsedDocument, "parsedDocument");
+        saveStatus(processingStatus(source.documentId()));
+        try {
+            commitComputedIngest(computeDocument(source, options));
+            persistSnapshotIfConfigured();
+        } catch (RuntimeException | Error failure) {
+            saveFailureStatus(source.documentId(), failure);
             persistSnapshotIfConfigured();
             throw failure;
         }
@@ -167,10 +207,69 @@ public final class IndexingPipeline {
         }
     }
 
+    private void ingestParsedConcurrently(
+        List<ParsedDocument> parsedDocuments,
+        io.github.lightragjava.api.DocumentIngestOptions options
+    ) {
+        ExecutorService executor = Executors.newFixedThreadPool(Math.min(maxParallelInsert, parsedDocuments.size()));
+        var completionService = new ExecutorCompletionService<ComputedIngest>(executor);
+        var pendingTasks = new LinkedHashMap<Future<ComputedIngest>, ParsedDocument>();
+        try {
+            for (var parsed : parsedDocuments) {
+                saveStatus(processingStatus(parsed.documentId()));
+                pendingTasks.put(completionService.submit(() -> computeDocument(parsed, options)), parsed);
+            }
+            while (!pendingTasks.isEmpty()) {
+                var completed = completionService.take();
+                var source = pendingTasks.remove(completed);
+                try {
+                    commitComputedIngest(completed.get());
+                    persistSnapshotIfConfigured();
+                } catch (ExecutionException exception) {
+                    cancelPending(pendingTasks.keySet());
+                    saveFailureStatus(source.documentId(), exception.getCause());
+                    markPendingParsedDocumentsFailed(pendingTasks.values(), "ingest aborted because another document failed");
+                    persistSnapshotIfConfigured();
+                    rethrowTaskFailure(exception.getCause());
+                }
+            }
+        } catch (InterruptedException exception) {
+            cancelPending(pendingTasks.keySet());
+            Thread.currentThread().interrupt();
+            markPendingParsedDocumentsFailed(pendingTasks.values(), "document ingest interrupted");
+            persistSnapshotIfConfigured();
+            throw new RuntimeException("document ingest interrupted", exception);
+        } finally {
+            shutdownExecutor(executor);
+        }
+    }
+
     private void markPendingDocumentsFailed(Collection<Document> documents, String errorMessage) {
         for (var document : documents) {
             saveStatus(new DocumentStatusStore.StatusRecord(
                 document.id(),
+                DocumentStatus.FAILED,
+                "",
+                errorMessage
+            ));
+        }
+    }
+
+    private void markPendingParsedDocumentsFailed(Collection<ParsedDocument> documents, String errorMessage) {
+        for (var document : documents) {
+            saveStatus(new DocumentStatusStore.StatusRecord(
+                document.documentId(),
+                DocumentStatus.FAILED,
+                "",
+                errorMessage
+            ));
+        }
+    }
+
+    private void markPendingRawSourcesFailed(Collection<RawDocumentSource> sources, String errorMessage) {
+        for (var source : sources) {
+            saveStatus(new DocumentStatusStore.StatusRecord(
+                source.sourceId(),
                 DocumentStatus.FAILED,
                 "",
                 errorMessage
@@ -189,6 +288,22 @@ public final class IndexingPipeline {
         var entityVectors = entityVectors(graph.entities());
         var relationVectors = relationVectors(graph.relations());
         return new ComputedIngest(source, prepared, chunkVectors, graph, entityVectors, relationVectors);
+    }
+
+    private ComputedIngest computeDocument(
+        ParsedDocument parsedDocument,
+        io.github.lightragjava.api.DocumentIngestOptions options
+    ) {
+        var source = Objects.requireNonNull(parsedDocument, "parsedDocument");
+        var prepared = documentIngestor.prepareParsed(source, Objects.requireNonNull(options, "options"));
+        var chunks = prepared.chunks();
+        var chunkVectors = chunkVectors(chunks);
+        var graph = graphAssembler.assemble(chunks.stream()
+            .map(chunk -> new GraphAssembler.ChunkExtraction(chunk.id(), knowledgeExtractor.extract(chunk)))
+            .toList());
+        var entityVectors = entityVectors(graph.entities());
+        var relationVectors = relationVectors(graph.relations());
+        return new ComputedIngest(toDocument(source), prepared, chunkVectors, graph, entityVectors, relationVectors);
     }
 
     private static void cancelPending(Collection<? extends Future<?>> futures) {
@@ -314,8 +429,17 @@ public final class IndexingPipeline {
         if (chunks.isEmpty()) {
             return List.of();
         }
-        var embeddings = embeddingBatcher.embedAll(chunks.stream().map(io.github.lightragjava.types.Chunk::text).toList());
+        var embeddings = embeddingBatcher.embedAll(chunks.stream().map(IndexingPipeline::chunkEmbeddingText).toList());
         return toVectorRecords(chunks.stream().map(io.github.lightragjava.types.Chunk::id).toList(), embeddings);
+    }
+
+    private static String chunkEmbeddingText(io.github.lightragjava.types.Chunk chunk) {
+        var summary = chunk.metadata().getOrDefault(ParentChildChunkBuilder.METADATA_PARENT_SUMMARY, "").strip();
+        var level = chunk.metadata().getOrDefault(ParentChildChunkBuilder.METADATA_CHUNK_LEVEL, "");
+        if (!summary.isBlank() && ParentChildChunkBuilder.CHUNK_LEVEL_CHILD.equals(level)) {
+            return summary + "\n" + chunk.text();
+        }
+        return chunk.text();
     }
 
     List<VectorStore.VectorRecord> entityVectors(List<Entity> entities) {

@@ -2,6 +2,7 @@ package io.github.lightragjava.query;
 
 import io.github.lightragjava.api.QueryMode;
 import io.github.lightragjava.api.QueryRequest;
+import io.github.lightragjava.indexing.ParentChildChunkBuilder;
 import io.github.lightragjava.model.EmbeddingModel;
 import io.github.lightragjava.storage.ChunkStore;
 import io.github.lightragjava.storage.GraphStore;
@@ -110,6 +111,59 @@ class LocalQueryStrategyTest {
         assertThat(context.matchedEntities())
             .extracting(match -> match.entityId())
             .containsExactly("entity:alice");
+    }
+
+    @Test
+    void localReturnsParentContextForChildChunkEntityReferences() {
+        var storage = InMemoryStorageProvider.create();
+        storage.chunkStore().save(new ChunkStore.ChunkRecord(
+            "chunk-parent",
+            "doc-1",
+            "Parent context with full explanation",
+            5,
+            0,
+            Map.of(ParentChildChunkBuilder.METADATA_CHUNK_LEVEL, ParentChildChunkBuilder.CHUNK_LEVEL_PARENT)
+        ));
+        storage.chunkStore().save(new ChunkStore.ChunkRecord(
+            "chunk-parent#child:0",
+            "doc-1",
+            "full explanation",
+            2,
+            1,
+            Map.of(
+                ParentChildChunkBuilder.METADATA_CHUNK_LEVEL, ParentChildChunkBuilder.CHUNK_LEVEL_CHILD,
+                ParentChildChunkBuilder.METADATA_PARENT_CHUNK_ID, "chunk-parent"
+            )
+        ));
+        storage.graphStore().saveEntity(new GraphStore.EntityRecord(
+            "entity:alpha",
+            "Alpha",
+            "concept",
+            "Parent-child test",
+            List.of(),
+            List.of("chunk-parent#child:0")
+        ));
+        storage.vectorStore().saveAll("entities", List.of(
+            new VectorStore.VectorRecord("entity:alpha", List.of(1.0d, 0.0d))
+        ));
+
+        var strategy = new LocalQueryStrategy(
+            new FakeEmbeddingModel(Map.of("alpha question", List.of(1.0d, 0.0d))),
+            storage,
+            new ContextAssembler()
+        );
+
+        var context = strategy.retrieve(QueryRequest.builder()
+            .query("alpha question")
+            .mode(QueryMode.LOCAL)
+            .topK(1)
+            .chunkTopK(1)
+            .build());
+
+        assertThat(context.matchedChunks())
+            .extracting(match -> match.chunkId())
+            .containsExactly("chunk-parent");
+        assertThat(context.matchedChunks().get(0).chunk().text()).isEqualTo("Parent context with full explanation");
     }
 
     static void seedGraph(InMemoryStorageProvider storage) {

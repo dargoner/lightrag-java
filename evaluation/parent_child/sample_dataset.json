@@ -1,0 +1,16 @@
+{
+  "test_cases": [
+    {
+      "question": "研究章程 执行步骤",
+      "expected_document_id": "01-research-charter"
+    },
+    {
+      "question": "合规章程 执行步骤",
+      "expected_document_id": "02-compliance-charter"
+    },
+    {
+      "question": "数据治理章程 执行步骤",
+      "expected_document_id": "03-data-governance-charter"
+    }
+  ]
+}

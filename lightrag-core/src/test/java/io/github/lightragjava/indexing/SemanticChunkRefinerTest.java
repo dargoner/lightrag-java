@@ -115,6 +115,89 @@ class SemanticChunkRefinerTest {
     }
 
     @Test
+    void embeddingModeRejectsContentTypeBoundaryMerges() {
+        var refiner = new SemanticChunkRefiner();
+        var similarity = (SemanticSimilarity) (left, right) -> 0.95d;
+        var chunks = List.of(
+            chunk("doc-1:0", 0, "Alpha retrieval.", "paragraph:0", "Section A", "text"),
+            chunk("doc-1:1", 1, "Alpha retrieval detail.", "list:0", "Section A", "list")
+        );
+
+        var refined = refiner.refine(
+            "doc-1",
+            chunks,
+            200,
+            0.8d,
+            similarity,
+            MergeMode.PAIRWISE_SINGLE_PASS
+        );
+
+        assertThat(refined).extracting(Chunk::id).containsExactly("doc-1:0", "doc-1:1");
+    }
+
+    @Test
+    void embeddingModeRejectsFigureCaptionLikeTextMerges() {
+        var refiner = new SemanticChunkRefiner();
+        var similarity = (SemanticSimilarity) (left, right) -> 0.95d;
+        var chunks = List.of(
+            chunk("doc-1:0", 0, "图 3-2：智能化医疗终端", "paragraph:0", "Section A", "text"),
+            chunk("doc-1:1", 1, "智能化医疗终端通过网络连接监护仪、输液泵和移动查房设备，实现实时数据回传与联动响应。", "paragraph:1", "Section A", "text")
+        );
+
+        var refined = refiner.refine(
+            "doc-1",
+            chunks,
+            240,
+            0.8d,
+            similarity,
+            MergeMode.PAIRWISE_SINGLE_PASS
+        );
+
+        assertThat(refined).extracting(Chunk::id).containsExactly("doc-1:0", "doc-1:1");
+    }
+
+    @Test
+    void embeddingModeRejectsImagePrefixedFigureCaptionMerges() {
+        var refiner = new SemanticChunkRefiner();
+        var similarity = (SemanticSimilarity) (left, right) -> 0.95d;
+        var chunks = List.of(
+            chunk(
+                "doc-1:0",
+                0,
+                """
+                5G 智能医疗终端利用 5G 网络通信技术，与物联网传感技术、云计算技术相结合，提供一种新型的健康管理模式。
+                """,
+                "paragraph:0",
+                "Section A",
+                "text"
+            ),
+            chunk(
+                "doc-1:1",
+                1,
+                """
+                images/f2a11930e08134c8a17bd3a9ef1b6bbb34ba930e5bba4d634e777447abab6e60.jpg
+
+                图 3-2：智能化医疗终端
+                """,
+                "paragraph:1",
+                "Section A",
+                "text"
+            )
+        );
+
+        var refined = refiner.refine(
+            "doc-1",
+            chunks,
+            400,
+            0.8d,
+            similarity,
+            MergeMode.PAIRWISE_SINGLE_PASS
+        );
+
+        assertThat(refined).extracting(Chunk::id).containsExactly("doc-1:0", "doc-1:1");
+    }
+
+    @Test
     void embeddingModeFailsFastWhenRequiredSmartChunkMetadataIsMissing() {
         var refiner = new SemanticChunkRefiner();
         var similarity = (SemanticSimilarity) (left, right) -> 0.95d;

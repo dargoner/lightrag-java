@@ -10,8 +10,14 @@ import java.util.Locale;
 import java.util.Map;
 import java.util.Objects;
 import java.util.Set;
+import java.util.regex.Pattern;
 
 public final class SemanticChunkRefiner {
+    private static final Pattern FIGURE_OR_TABLE_LABEL_PATTERN = Pattern.compile(
+        "^(?:图|表|附图|附表|figure|fig\\.?|table)\\s*[0-9一二三四五六七八九十]+(?:[.．-]\\s*[0-9]+)*(?:\\s*[:：]?\\s*.*)?$",
+        Pattern.CASE_INSENSITIVE
+    );
+
     private final SemanticSimilarity semanticSimilarity;
 
     public SemanticChunkRefiner() {
@@ -139,6 +145,12 @@ public final class SemanticChunkRefiner {
     }
 
     private static boolean shouldMerge(MergedChunk current, Chunk next, int maxTokens, double threshold, SemanticSimilarity similarity) {
+        if (!sharesMergeBoundary(current.metadata(), next.metadata())) {
+            return false;
+        }
+        if (isCaptionLike(current.text()) || isCaptionLike(next.text())) {
+            return false;
+        }
         var combinedText = current.text() + "\n" + next.text();
         if (combinedText.codePointCount(0, combinedText.length()) > maxTokens) {
             return false;
@@ -147,17 +159,10 @@ public final class SemanticChunkRefiner {
     }
 
     private static boolean shouldMergeEmbedding(Chunk left, Chunk right, int maxTokens, double threshold, SemanticSimilarity similarity) {
-        var leftSection = requireMetadata(left.metadata(), SmartChunkMetadata.SECTION_PATH);
-        var rightSection = requireMetadata(right.metadata(), SmartChunkMetadata.SECTION_PATH);
-        if (!leftSection.equals(rightSection)) {
+        if (!sharesMergeBoundary(left.metadata(), right.metadata())) {
             return false;
         }
-        var leftType = requireMetadata(left.metadata(), SmartChunkMetadata.CONTENT_TYPE);
-        var rightType = requireMetadata(right.metadata(), SmartChunkMetadata.CONTENT_TYPE);
-        if (!leftType.equals(rightType)) {
-            return false;
-        }
-        if ("table".equalsIgnoreCase(leftType)) {
+        if (isCaptionLike(left.text()) || isCaptionLike(right.text())) {
             return false;
         }
         var combinedText = left.text() + "\n" + right.text();
@@ -165,6 +170,20 @@ public final class SemanticChunkRefiner {
             return false;
         }
         return similarity.score(left.text(), right.text()) >= threshold;
+    }
+
+    private static boolean sharesMergeBoundary(Map<String, String> leftMetadata, Map<String, String> rightMetadata) {
+        var leftSection = requireMetadata(leftMetadata, SmartChunkMetadata.SECTION_PATH);
+        var rightSection = requireMetadata(rightMetadata, SmartChunkMetadata.SECTION_PATH);
+        if (!leftSection.equals(rightSection)) {
+            return false;
+        }
+        var leftType = requireMetadata(leftMetadata, SmartChunkMetadata.CONTENT_TYPE);
+        var rightType = requireMetadata(rightMetadata, SmartChunkMetadata.CONTENT_TYPE);
+        if (!leftType.equals(rightType)) {
+            return false;
+        }
+        return !"table".equalsIgnoreCase(leftType);
     }
 
     private static void validateEmbeddingMetadata(List<Chunk> chunks) {
@@ -190,6 +209,24 @@ public final class SemanticChunkRefiner {
             }
         }
         return result;
+    }
+
+    private static boolean isCaptionLike(String text) {
+        if (text == null) {
+            return false;
+        }
+        var normalized = text.strip();
+        if (FIGURE_OR_TABLE_LABEL_PATTERN.matcher(normalized).matches()) {
+            return true;
+        }
+        for (var line : normalized.split("\\R")) {
+            var stripped = line.strip();
+            if (stripped.isEmpty() || stripped.startsWith("images/")) {
+                continue;
+            }
+            return FIGURE_OR_TABLE_LABEL_PATTERN.matcher(stripped).matches();
+        }
+        return false;
     }
 
     private record MergedChunk(String text, Map<String, String> metadata) {

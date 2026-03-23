@@ -252,13 +252,15 @@ class LightRagBuilderTest {
             .containsEntry(DocumentIngestOptions.METADATA_CHUNK_GRANULARITY, ChunkGranularity.COARSE.name());
 
         var chunkRecords = rag.config().storageProvider().chunkStore().listByDocument(source.sourceId());
-        assertThat(chunkRecords).hasSize(1);
-        var chunk = chunkRecords.get(0);
-        assertThat(chunk.text()).isEqualTo("# Title\nBody");
-        assertThat(chunk.metadata())
-            .containsEntry("source", "unit-test")
-            .containsEntry(DocumentIngestOptions.METADATA_DOCUMENT_TYPE_HINT, DocumentTypeHint.LAW.name())
-            .containsEntry(DocumentIngestOptions.METADATA_CHUNK_GRANULARITY, ChunkGranularity.COARSE.name());
+        assertThat(chunkRecords).isNotEmpty();
+        assertThat(chunkRecords)
+            .allSatisfy(chunk -> assertThat(chunk.metadata())
+                .containsEntry("source", "unit-test")
+                .containsEntry(DocumentIngestOptions.METADATA_DOCUMENT_TYPE_HINT, DocumentTypeHint.LAW.name())
+                .containsEntry(DocumentIngestOptions.METADATA_CHUNK_GRANULARITY, ChunkGranularity.COARSE.name()));
+        assertThat(chunkRecords)
+            .extracting(ChunkStore.ChunkRecord::text)
+            .allSatisfy(text -> assertThat(text).contains("Body"));
     }
 
     @Test
@@ -329,9 +331,10 @@ class LightRagBuilderTest {
     @Test
     void doesNotCommitOtherDocumentsAfterConcurrentFailure() throws Exception {
         var storageProvider = InMemoryStorageProvider.create();
-        var chunker = new InterruptIgnoringChunker("doc-slow");
+        var slowDocumentStarted = new CountDownLatch(1);
+        var chunker = new InterruptIgnoringChunker("doc-slow", slowDocumentStarted);
         var rag = LightRag.builder()
-            .chatModel(new SelectiveFailingIngestionChatModel("explode"))
+            .chatModel(new CoordinatedFailingIngestionChatModel("explode", slowDocumentStarted))
             .embeddingModel(new FakeEmbeddingModel())
             .storage(storageProvider)
             .chunker(chunker)
@@ -879,6 +882,37 @@ class LightRagBuilderTest {
         }
     }
 
+    private static final class CoordinatedFailingIngestionChatModel implements ChatModel {
+        private final String failingMarker;
+        private final CountDownLatch releaseFailure;
+
+        private CoordinatedFailingIngestionChatModel(String failingMarker, CountDownLatch releaseFailure) {
+            this.failingMarker = failingMarker;
+            this.releaseFailure = releaseFailure;
+        }
+
+        @Override
+        public String generate(ChatRequest request) {
+            if (request.userPrompt().contains(failingMarker)) {
+                try {
+                    if (!releaseFailure.await(5, TimeUnit.SECONDS)) {
+                        throw new AssertionError("timed out waiting for concurrent document to start");
+                    }
+                } catch (InterruptedException exception) {
+                    Thread.currentThread().interrupt();
+                    throw new IllegalStateException("interrupted while waiting to fail", exception);
+                }
+                throw new IllegalStateException("boom");
+            }
+            return """
+                {
+                  "entities": [],
+                  "relations": []
+                }
+                """;
+        }
+    }
+
     private static final class FakeEmbeddingModel implements EmbeddingModel {
         @Override
         public List<List<Double>> embedAll(List<String> texts) {
@@ -976,17 +1010,20 @@ class LightRagBuilderTest {
 
     private static final class InterruptIgnoringChunker implements Chunker {
         private final String blockedDocumentId;
+        private final CountDownLatch externalBlockedSignal;
         private final CountDownLatch blockedDocumentEntered = new CountDownLatch(1);
         private final CountDownLatch release = new CountDownLatch(1);
 
-        private InterruptIgnoringChunker(String blockedDocumentId) {
+        private InterruptIgnoringChunker(String blockedDocumentId, CountDownLatch externalBlockedSignal) {
             this.blockedDocumentId = blockedDocumentId;
+            this.externalBlockedSignal = externalBlockedSignal;
         }
 
         @Override
         public List<Chunk> chunk(Document document) {
             if (document.id().equals(blockedDocumentId)) {
                 blockedDocumentEntered.countDown();
+                externalBlockedSignal.countDown();
                 while (true) {
                     try {
                         if (release.await(50, TimeUnit.MILLISECONDS)) {
@@ -1001,7 +1038,7 @@ class LightRagBuilderTest {
         }
 
         boolean awaitBlockedDocument() throws InterruptedException {
-            return blockedDocumentEntered.await(2, TimeUnit.SECONDS);
+            return blockedDocumentEntered.await(5, TimeUnit.SECONDS);
         }
 
         void release() {

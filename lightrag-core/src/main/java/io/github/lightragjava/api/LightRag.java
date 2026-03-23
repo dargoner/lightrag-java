@@ -3,6 +3,7 @@ package io.github.lightragjava.api;
 import io.github.lightragjava.config.LightRagConfig;
 import io.github.lightragjava.indexing.Chunker;
 import io.github.lightragjava.indexing.DeletionPipeline;
+import io.github.lightragjava.indexing.DocumentParsingOrchestrator;
 import io.github.lightragjava.indexing.GraphManagementPipeline;
 import io.github.lightragjava.indexing.IndexingPipeline;
 import io.github.lightragjava.query.ContextAssembler;
@@ -30,13 +31,14 @@ public final class LightRag {
     private final int maxExtractInputTokens;
     private final boolean embeddingSemanticMergeEnabled;
     private final double embeddingSemanticMergeThreshold;
+    private final DocumentParsingOrchestrator documentParsingOrchestrator;
     private final IndexingPipeline indexingPipeline;
     private final DeletionPipeline deletionPipeline;
     private final GraphManagementPipeline graphManagementPipeline;
     private final QueryEngine queryEngine;
 
     LightRag(LightRagConfig config) {
-        this(config, null, true, 2, Integer.MAX_VALUE, 1,
+        this(config, null, null, true, 2, Integer.MAX_VALUE, 1,
             io.github.lightragjava.indexing.KnowledgeExtractor.DEFAULT_ENTITY_EXTRACT_MAX_GLEANING,
             io.github.lightragjava.indexing.KnowledgeExtractor.DEFAULT_MAX_EXTRACT_INPUT_TOKENS,
             LightRagBuilder.DEFAULT_EMBEDDING_SEMANTIC_MERGE_ENABLED,
@@ -44,7 +46,7 @@ public final class LightRag {
     }
 
     LightRag(LightRagConfig config, Chunker chunker) {
-        this(config, chunker, true, 2, Integer.MAX_VALUE, 1,
+        this(config, chunker, null, true, 2, Integer.MAX_VALUE, 1,
             io.github.lightragjava.indexing.KnowledgeExtractor.DEFAULT_ENTITY_EXTRACT_MAX_GLEANING,
             io.github.lightragjava.indexing.KnowledgeExtractor.DEFAULT_MAX_EXTRACT_INPUT_TOKENS,
             LightRagBuilder.DEFAULT_EMBEDDING_SEMANTIC_MERGE_ENABLED,
@@ -54,6 +56,7 @@ public final class LightRag {
     LightRag(
         LightRagConfig config,
         Chunker chunker,
+        DocumentParsingOrchestrator documentParsingOrchestrator,
         boolean automaticQueryKeywordExtraction,
         int rerankCandidateMultiplier,
         int embeddingBatchSize,
@@ -73,12 +76,14 @@ public final class LightRag {
         this.maxExtractInputTokens = maxExtractInputTokens;
         this.embeddingSemanticMergeEnabled = embeddingSemanticMergeEnabled;
         this.embeddingSemanticMergeThreshold = embeddingSemanticMergeThreshold;
+        this.documentParsingOrchestrator = documentParsingOrchestrator;
         this.indexingPipeline = new IndexingPipeline(
             config.chatModel(),
             config.embeddingModel(),
             config.storageProvider(),
             config.snapshotPath(),
             chunker,
+            documentParsingOrchestrator,
             embeddingBatchSize,
             maxParallelInsert,
             entityExtractMaxGleaning,

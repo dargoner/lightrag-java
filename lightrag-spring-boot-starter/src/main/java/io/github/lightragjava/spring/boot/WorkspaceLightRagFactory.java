@@ -2,6 +2,7 @@ package io.github.lightragjava.spring.boot;
 
 import io.github.lightragjava.api.LightRag;
 import io.github.lightragjava.indexing.Chunker;
+import io.github.lightragjava.indexing.DocumentParsingOrchestrator;
 import io.github.lightragjava.model.ChatModel;
 import io.github.lightragjava.model.EmbeddingModel;
 import io.github.lightragjava.model.RerankModel;
@@ -28,6 +29,7 @@ public class WorkspaceLightRagFactory {
     private final EmbeddingModel embeddingModel;
     private final ObjectProvider<StorageProvider> storageProvider;
     private final Chunker chunker;
+    private final DocumentParsingOrchestrator documentParsingOrchestrator;
     private final RerankModel rerankModel;
     private final SnapshotStore snapshotStore;
     private final LightRagProperties properties;
@@ -38,6 +40,7 @@ public class WorkspaceLightRagFactory {
         EmbeddingModel embeddingModel,
         ObjectProvider<StorageProvider> storageProvider,
         ObjectProvider<Chunker> chunker,
+        ObjectProvider<DocumentParsingOrchestrator> documentParsingOrchestrator,
         ObjectProvider<RerankModel> rerankModel,
         SnapshotStore snapshotStore,
         LightRagProperties properties
@@ -46,6 +49,7 @@ public class WorkspaceLightRagFactory {
         this.embeddingModel = Objects.requireNonNull(embeddingModel, "embeddingModel");
         this.storageProvider = Objects.requireNonNull(storageProvider, "storageProvider");
         this.chunker = chunker.getIfAvailable();
+        this.documentParsingOrchestrator = documentParsingOrchestrator.getIfAvailable();
         this.rerankModel = rerankModel.getIfAvailable();
         this.snapshotStore = Objects.requireNonNull(snapshotStore, "snapshotStore");
         this.properties = Objects.requireNonNull(properties, "properties");
@@ -91,6 +95,9 @@ public class WorkspaceLightRagFactory {
         builder.maxExtractInputTokens(properties.getIndexing().getMaxExtractInputTokens());
         if (chunker != null) {
             builder.chunker(chunker);
+        }
+        if (documentParsingOrchestrator != null) {
+            builder.documentParsingOrchestrator(documentParsingOrchestrator);
         }
         if (rerankModel != null) {
             builder.rerankModel(rerankModel);

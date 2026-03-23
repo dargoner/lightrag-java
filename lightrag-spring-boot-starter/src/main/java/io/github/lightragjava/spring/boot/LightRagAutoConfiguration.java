@@ -2,7 +2,15 @@ package io.github.lightragjava.spring.boot;
 
 import io.github.lightragjava.api.LightRag;
 import io.github.lightragjava.indexing.Chunker;
+import io.github.lightragjava.indexing.DocumentParsingOrchestrator;
 import io.github.lightragjava.indexing.FixedWindowChunker;
+import io.github.lightragjava.indexing.MineruApiClient;
+import io.github.lightragjava.indexing.MineruClient;
+import io.github.lightragjava.indexing.MineruDocumentAdapter;
+import io.github.lightragjava.indexing.MineruParsingProvider;
+import io.github.lightragjava.indexing.MineruSelfHostedClient;
+import io.github.lightragjava.indexing.PlainTextParsingProvider;
+import io.github.lightragjava.indexing.TikaFallbackParsingProvider;
 import io.github.lightragjava.model.ChatModel;
 import io.github.lightragjava.model.EmbeddingModel;
 import io.github.lightragjava.model.RerankModel;
@@ -19,9 +27,13 @@ import io.github.lightragjava.storage.postgres.PostgresStorageProvider;
 import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.boot.autoconfigure.AutoConfiguration;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnClass;
+import org.springframework.boot.autoconfigure.condition.ConditionalOnExpression;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnMissingBean;
+import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.boot.context.properties.EnableConfigurationProperties;
 import org.springframework.context.annotation.Bean;
+
+import java.util.Locale;
 
 @AutoConfiguration
 @ConditionalOnClass(LightRag.class)
@@ -65,6 +77,73 @@ public class LightRagAutoConfiguration {
     }
 
     @Bean
+    @ConditionalOnMissingBean
+    MineruDocumentAdapter mineruDocumentAdapter() {
+        return new MineruDocumentAdapter();
+    }
+
+    @Bean
+    @ConditionalOnMissingBean
+    @ConditionalOnExpression(
+        "'${lightrag.indexing.parsing.mineru.enabled:false}' == 'true' and "
+            + "'${lightrag.indexing.parsing.mineru.mode:DISABLED}'.toUpperCase() == 'API'"
+    )
+    MineruApiClient.Transport mineruApiTransport(LightRagProperties properties) {
+        var mineru = properties.getIndexing().getParsing().getMineru();
+        return new MineruApiClient.HttpTransport(
+            requireValue(mineru.getBaseUrl(), "lightrag.indexing.parsing.mineru.base-url"),
+            requireValue(mineru.getApiKey(), "lightrag.indexing.parsing.mineru.api-key")
+        );
+    }
+
+    @Bean
+    @ConditionalOnMissingBean(MineruClient.class)
+    @ConditionalOnProperty(prefix = "lightrag.indexing.parsing.mineru", name = "enabled", havingValue = "true")
+    MineruClient mineruClient(
+        LightRagProperties properties,
+        ObjectProvider<MineruApiClient.Transport> apiTransport,
+        ObjectProvider<MineruSelfHostedClient.Transport> selfHostedTransport
+    ) {
+        var mineru = properties.getIndexing().getParsing().getMineru();
+        return switch (normalizedMineruMode(mineru)) {
+            case "API" -> new MineruApiClient(requireValue(apiTransport.getIfAvailable(),
+                "lightrag.indexing.parsing.mineru.mode=API requires a MineruApiClient.Transport bean"));
+            case "SELF_HOSTED" -> new MineruSelfHostedClient(requireValue(selfHostedTransport.getIfAvailable(),
+                "lightrag.indexing.parsing.mineru.mode=SELF_HOSTED requires a MineruSelfHostedClient.Transport bean"));
+            default -> throw new IllegalStateException(
+                "unsupported lightrag.indexing.parsing.mineru.mode: " + mineru.getMode()
+            );
+        };
+    }
+
+    @Bean
+    @ConditionalOnMissingBean
+    MineruParsingProvider mineruParsingProvider(
+        ObjectProvider<MineruClient> mineruClient,
+        MineruDocumentAdapter mineruDocumentAdapter
+    ) {
+        var client = mineruClient.getIfAvailable();
+        if (client == null) {
+            return null;
+        }
+        return new MineruParsingProvider(client, mineruDocumentAdapter);
+    }
+
+    @Bean
+    @ConditionalOnMissingBean
+    DocumentParsingOrchestrator documentParsingOrchestrator(
+        LightRagProperties properties,
+        ObjectProvider<MineruParsingProvider> mineruParsingProvider
+    ) {
+        var parsing = properties.getIndexing().getParsing();
+        return new DocumentParsingOrchestrator(
+            new PlainTextParsingProvider(),
+            mineruParsingProvider.getIfAvailable(),
+            parsing.isTikaFallbackEnabled() ? new TikaFallbackParsingProvider() : null
+        );
+    }
+
+    @Bean
     @ConditionalOnMissingBean(StorageProvider.class)
     StorageProvider storageProvider(LightRagProperties properties, SnapshotStore snapshotStore) {
         return switch (properties.getStorage().getType()) {
@@ -85,6 +164,7 @@ public class LightRagAutoConfiguration {
         EmbeddingModel embeddingModel,
         ObjectProvider<StorageProvider> storageProvider,
         ObjectProvider<Chunker> chunker,
+        ObjectProvider<DocumentParsingOrchestrator> documentParsingOrchestrator,
         ObjectProvider<RerankModel> rerankModel,
         SnapshotStore snapshotStore,
         LightRagProperties properties
@@ -94,6 +174,7 @@ public class LightRagAutoConfiguration {
             embeddingModel,
             storageProvider,
             chunker,
+            documentParsingOrchestrator,
             rerankModel,
             snapshotStore,
             properties
@@ -136,5 +217,18 @@ public class LightRagAutoConfiguration {
             throw new IllegalStateException(key + " is required");
         }
         return value;
+    }
+
+    private static <T> T requireValue(T value, String message) {
+        if (value == null) {
+            throw new IllegalStateException(message);
+        }
+        return value;
+    }
+
+    private static String normalizedMineruMode(LightRagProperties.MineruProperties mineruProperties) {
+        return requireValue(mineruProperties.getMode(), "lightrag.indexing.parsing.mineru.mode")
+            .strip()
+            .toUpperCase(Locale.ROOT);
     }
 }

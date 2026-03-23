@@ -32,7 +32,7 @@ public final class MineruParsingProvider implements DocumentParsingProvider {
     }
 }
 
-class MineruUnavailableException extends RuntimeException {
+class MineruUnavailableException extends IllegalArgumentException {
     MineruUnavailableException(String message) {
         super(message);
     }
