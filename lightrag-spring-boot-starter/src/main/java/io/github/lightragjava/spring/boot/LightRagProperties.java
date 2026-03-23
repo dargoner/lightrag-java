@@ -4,6 +4,7 @@ import io.github.lightragjava.indexing.FixedWindowChunker;
 import org.springframework.boot.context.properties.ConfigurationProperties;
 
 import java.time.Duration;
+import java.util.Locale;
 
 @ConfigurationProperties(prefix = "lightrag")
 public class LightRagProperties {
@@ -115,6 +116,8 @@ public class LightRagProperties {
 
     public static class IndexingProperties {
         private final ChunkingProperties chunking = new ChunkingProperties();
+        private final IngestProperties ingest = new IngestProperties();
+        private final ParsingProperties parsing = new ParsingProperties();
         private int embeddingBatchSize;
         private int maxParallelInsert = 1;
         private int entityExtractMaxGleaning = io.github.lightragjava.indexing.KnowledgeExtractor.DEFAULT_ENTITY_EXTRACT_MAX_GLEANING;
@@ -122,6 +125,14 @@ public class LightRagProperties {
 
         public ChunkingProperties getChunking() {
             return chunking;
+        }
+
+        public IngestProperties getIngest() {
+            return ingest;
+        }
+
+        public ParsingProperties getParsing() {
+            return parsing;
         }
 
         public int getEmbeddingBatchSize() {
@@ -184,6 +195,156 @@ public class LightRagProperties {
 
         public void setOverlap(int overlap) {
             this.overlap = overlap;
+        }
+    }
+
+    public static class IngestProperties {
+        private IngestPreset preset = IngestPreset.GENERAL;
+        private String documentType;
+        private String chunkGranularity;
+        private Boolean parentChildEnabled;
+        private int parentChildWindowSize = 400;
+        private int parentChildOverlap = 40;
+
+        public IngestPreset getPreset() {
+            return preset;
+        }
+
+        public void setPreset(IngestPreset preset) {
+            this.preset = preset == null ? IngestPreset.GENERAL : preset;
+        }
+
+        @Deprecated
+        public String getDocumentType() {
+            return documentType == null ? preset.documentTypeHint().name() : documentType;
+        }
+
+        @Deprecated
+        public void setDocumentType(String documentType) {
+            this.documentType = normalizeLegacyEnum(documentType);
+        }
+
+        @Deprecated
+        public String getChunkGranularity() {
+            return chunkGranularity == null ? preset.chunkGranularity().name() : chunkGranularity;
+        }
+
+        @Deprecated
+        public void setChunkGranularity(String chunkGranularity) {
+            this.chunkGranularity = normalizeLegacyEnum(chunkGranularity);
+        }
+
+        @Deprecated
+        public boolean isParentChildEnabled() {
+            return parentChildEnabled == null ? preset.parentChildEnabled() : parentChildEnabled;
+        }
+
+        @Deprecated
+        public void setParentChildEnabled(boolean parentChildEnabled) {
+            this.parentChildEnabled = parentChildEnabled;
+        }
+
+        public int getParentChildWindowSize() {
+            return parentChildWindowSize;
+        }
+
+        public void setParentChildWindowSize(int parentChildWindowSize) {
+            this.parentChildWindowSize = parentChildWindowSize;
+        }
+
+        public int getParentChildOverlap() {
+            return parentChildOverlap;
+        }
+
+        public void setParentChildOverlap(int parentChildOverlap) {
+            this.parentChildOverlap = parentChildOverlap;
+        }
+
+        public io.github.lightragjava.api.DocumentIngestOptions toDocumentIngestOptions(IngestPreset requestPreset) {
+            var effectivePreset = requestPreset == null ? preset : requestPreset;
+            if (requestPreset != null) {
+                return effectivePreset.toDocumentIngestOptions(parentChildWindowSize, parentChildOverlap);
+            }
+            var resolvedDocumentType = documentType == null
+                ? effectivePreset.documentTypeHint()
+                : io.github.lightragjava.indexing.DocumentTypeHint.valueOf(documentType);
+            var resolvedChunkGranularity = chunkGranularity == null
+                ? effectivePreset.chunkGranularity()
+                : io.github.lightragjava.api.ChunkGranularity.valueOf(chunkGranularity);
+            var resolvedParentChildProfile = isParentChildEnabled()
+                ? io.github.lightragjava.indexing.ParentChildProfile.enabled(parentChildWindowSize, parentChildOverlap)
+                : io.github.lightragjava.indexing.ParentChildProfile.disabled();
+            return new io.github.lightragjava.api.DocumentIngestOptions(
+                resolvedDocumentType,
+                resolvedChunkGranularity,
+                io.github.lightragjava.indexing.ChunkingStrategyOverride.AUTO,
+                io.github.lightragjava.indexing.RegexChunkerConfig.empty(),
+                resolvedParentChildProfile
+            );
+        }
+
+        private static String normalizeLegacyEnum(String value) {
+            if (value == null) {
+                return null;
+            }
+            var normalized = value.strip();
+            return normalized.isEmpty() ? null : normalized.toUpperCase(Locale.ROOT);
+        }
+    }
+
+    public static class ParsingProperties {
+        private boolean tikaFallbackEnabled = true;
+        private final MineruProperties mineru = new MineruProperties();
+
+        public boolean isTikaFallbackEnabled() {
+            return tikaFallbackEnabled;
+        }
+
+        public void setTikaFallbackEnabled(boolean tikaFallbackEnabled) {
+            this.tikaFallbackEnabled = tikaFallbackEnabled;
+        }
+
+        public MineruProperties getMineru() {
+            return mineru;
+        }
+    }
+
+    public static class MineruProperties {
+        private boolean enabled;
+        private String mode = "DISABLED";
+        private String baseUrl;
+        private String apiKey;
+
+        public boolean isEnabled() {
+            return enabled;
+        }
+
+        public void setEnabled(boolean enabled) {
+            this.enabled = enabled;
+        }
+
+        public String getMode() {
+            return mode;
+        }
+
+        public void setMode(String mode) {
+            this.mode = mode;
+        }
+
+        public String getBaseUrl() {
+            return baseUrl;
+        }
+
+        public void setBaseUrl(String baseUrl) {
+            this.baseUrl = baseUrl;
+        }
+
+        public String getApiKey() {
+            return apiKey;
+        }
+
+        public void setApiKey(String apiKey) {
+            this.apiKey = apiKey;
         }
     }
 

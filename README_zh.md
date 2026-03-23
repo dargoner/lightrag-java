@@ -153,6 +153,105 @@ var rag = LightRag.builder()
     .build();
 ```
 
+如果你想直接使用结构感知分块，可以通过同一个 `.chunker(...)` 入口接入 `SmartChunker`：
+
+```java
+var rag = LightRag.builder()
+    .chatModel(chatModel)
+    .embeddingModel(embeddingModel)
+    .storage(storage)
+    .chunker(new SmartChunker(SmartChunkerConfig.builder()
+        .targetTokens(800)
+        .maxTokens(1200)
+        .overlapTokens(100)
+        .semanticMergeEnabled(true)
+        .semanticMergeThreshold(0.80d)
+        .build()))
+    .build();
+```
+
+`SmartChunker` 目前分三层能力：
+
+- V1：按句子边界切分，overlap 也尽量落在完整句子上
+- V2：识别 markdown 风格标题、列表、表格，并写入 `smart_chunker.section_path` 等字符串 metadata
+- V3：可选的相邻 chunk 语义合并，以及反射式 `LangChain4jChunkAdapter`
+
+从这版开始，`SmartChunker` 还会在内部默认开启 **adaptive paragraph chunking**：
+
+- 用户仍然只需要选择 `FINE / MEDIUM / COARSE`
+- 连续长正文会在该粒度范围内自动放粗
+- 同一 section 下相邻的短正文段，会先尝试 regroup，再进入按句切分
+- 标题切换后的首段会自动收细
+- 很短的页眉页脚、附件短句、非正文碎片会继续保持保守，不会被强行合并
+- `LIST / TABLE` 仍保持保守，不做激进自适应
+- `LAW / QA` 只允许很小范围的动态调整，优先保证模板边界稳定
+
+独立调用 `SmartChunker.chunk(...)` 仍然是 **model-free** 的。它的 V3 语义合并继续使用 `SmartChunkerConfig` 里的本地启发式相似度，不依赖 `EmbeddingModel`。
+
+如果你想启用 **embedding 驱动** 的语义合并，请在 `LightRag` 的 ingest 链路上打开，而不是指望 standalone chunker 自动切到 embedding 模式：
+
+```java
+var rag = LightRag.builder()
+    .chatModel(chatModel)
+    .embeddingModel(embeddingModel)
+    .storage(storage)
+    .chunker(new SmartChunker(SmartChunkerConfig.builder()
+        .targetTokens(800)
+        .maxTokens(1200)
+        .overlapTokens(100)
+        .build()))
+    .enableEmbeddingSemanticMerge(true)
+    .embeddingSemanticMergeThreshold(0.80d)
+    .build();
+```
+
+这条 ingest-only 路径会先取 `SmartChunker.chunkStructural(...)` 的结构分片，再用当前 `EmbeddingModel` 计算语义相似度，最后只在 `section_path` 和 `content_type` 允许的情况下做相邻 chunk 合并。query 阶段和 standalone `SmartChunker.chunk(...)` 的行为都不会因此改变。
+
+这些新增 metadata 仍然保持 `Map<String, String>` 形态，所以和当前 query、快照、PostgreSQL 持久化链路兼容。
+
+如果你要把 chunk 转成 LangChain4j 的 `TextSegment`，可以显式调用 adapter：
+
+```java
+var chunker = new SmartChunker(SmartChunkerConfig.defaults());
+var chunks = chunker.chunk(new Document("doc-1", "Guide", "# Policies\nCarry your passport.", Map.of()));
+var adapter = new LangChain4jChunkAdapter();
+var segments = adapter.toTextSegments(chunks);
+```
+
+如果你希望 SDK 直接接收文件，而不是自己先把所有内容转成 `Document`，可以使用 raw-source ingest 入口：
+
+```java
+var source = RawDocumentSource.bytes(
+    "contract.docx",
+    Files.readAllBytes(Path.of("contract.docx")),
+    "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+);
+
+rag.ingestSources(
+    List.of(source),
+    new DocumentIngestOptions(DocumentTypeHint.LAW, ChunkGranularity.MEDIUM)
+);
+```
+
+raw-source ingest 会把解析后端选择继续藏在 SDK 内部：
+
+- `.txt`、`.md`、`.markdown`：直接按 UTF-8 纯文本解析
+- `.pdf`、`.doc`、`.docx`、`.ppt`、`.pptx`、`.html`、`.htm`：优先走 `MinerU`，不可用时再按配置降级到 `Tika`
+- `.png`、`.jpg`、`.jpeg`、`.webp`、`.gif`、`.bmp`：只走 `MinerU`，不会在 SDK 内再伪造 OCR 回退
+- 文档里的图片/图表会先在 `MinerU` 解析阶段转成 OCR 文本、图注或版面文本块，再交给 `SmartChunker`；当前不会对纯视觉内容单独生成图片 embedding
+
+如果你用的是托管版 `mineru.net` API，还必须在 metadata 里提供一个公网可访问的文件 URL，例如 `sourceUrl`。
+托管版 API 不能直接接收本地文件字节，所以本地上传的 raw bytes 目前仍然需要二选一：
+
+- 使用 self-hosted MinerU
+- 或者先经过对象存储/临时中转，把上传文件变成可访问 URL，再交给托管版 MinerU
+
+切片策略同样保持业务语义：
+
+- 默认 `AUTO`：如果传了正则规则，就走手工/regex 分片；否则走 `SmartChunker`
+- 也可以通过 `DocumentIngestOptions` 强制指定 `SMART`、`REGEX` 或 `FIXED`
+- 需要父子分片检索时，可以打开 parent/child，让 child 命中后再向上扩回 parent 上下文
+
 如果使用 Spring Boot Starter，也可以直接在 `application.yml` 里调整固定窗口分块参数；如果应用自己声明了 `Chunker` Bean，starter 会自动让位。
 
 ```yaml
@@ -161,11 +260,32 @@ lightrag:
     chunking:
       window-size: 1200
       overlap: 150
+    ingest:
+      preset: GENERAL
+      parent-child-window-size: 400
+      parent-child-overlap: 40
+    parsing:
+      tika-fallback-enabled: true
+      mineru:
+        enabled: false
+        mode: DISABLED
+        base-url: http://127.0.0.1:8000
+        api-key: ${MINERU_API_KEY:}
     embedding-batch-size: 32
     max-parallel-insert: 4
     entity-extract-max-gleaning: 1
     max-extract-input-tokens: 20480
 ```
+
+`ingest.preset` 现在是默认推荐的产品化配置入口，支持 `GENERAL`、`LAW`、`BOOK`、`QA`、`FIGURE`。
+
+为了兼容旧项目，下面三项旧配置仍然保留可用：
+
+- `lightrag.indexing.ingest.document-type`
+- `lightrag.indexing.ingest.chunk-granularity`
+- `lightrag.indexing.ingest.parent-child-enabled`
+
+如果请求级别没有显式传 `preset`，这些旧配置仍会覆盖 `preset` 推导出来的默认值。
 
 `embedding-batch-size` 用来控制 ingest 阶段每次 embedding 请求最多发送多少段文本。保持未配置或设为 `0`，就会继续沿用当前的单批次行为。
 `max-parallel-insert` 用来控制 ingest 阶段最多同时处理多少个文档，默认值是 `1`，也就是不显式开启时仍按串行执行。
@@ -259,6 +379,48 @@ lightrag:
 - 基础 ingest / query 链路是否正常
 - 服务基础探活和运行配置是否正常暴露
 
+`POST /documents/ingest` 适合已经有结构化 `Document` JSON 的场景。
+`POST /documents/upload` 适合直接上传原始文件字节，让 SDK 自动选择 `plain -> MinerU -> Tika` 解析路径。
+
+upload 接口接收 `multipart/form-data`，支持一个或多个 `files`，并带可选 `async=true|false` 和 `preset=GENERAL|LAW|BOOK|QA|FIGURE` 参数。当前支持：
+
+- `.txt`
+- `.md`
+- `.markdown`
+- `.pdf`
+- `.doc`
+- `.docx`
+- `.ppt`
+- `.pptx`
+- `.html`
+- `.htm`
+- `.png`
+- `.jpg`
+- `.jpeg`
+- `.webp`
+- `.gif`
+- `.bmp`
+
+当前 demo upload 限制：
+
+- 单次请求最多 `20` 个文件
+- 单文件最大 `1 MiB`
+- 整个请求最大 `4 MiB`
+- `.txt` / `.md` / `.markdown` 必须是合法 UTF-8
+- office、pdf、html、image 会保留原始字节，延后到 ingest 阶段再解析
+
+upload 解析规则：
+
+- office、pdf、html 文件优先走 `MinerU`，不可用时按配置降级到 `Tika`
+- 图片文件必须依赖 `MinerU`；如果 `MinerU` 不可用或解析失败，job 会失败，不会伪造空 OCR 成功
+- 切片仍然跟随 `DocumentIngestOptions`，默认是智能分片，也可以在 SDK 集成里切到 regex 手工分片
+
+每个上传文件会先变成一个 `RawDocumentSource`，包含：
+
+- 自动生成的 URL-safe `sourceId`
+- 原始文件名与 media type
+- `source=upload`、`fileName`、`contentType` 等 metadata
+
 其中 actuator 端点提供最小运维信息：
 
 - `/actuator/health`：返回应用整体健康状态，以及 `lightrag` 组件的 storage type / async ingest 配置
@@ -285,6 +447,17 @@ Starter 还额外暴露了几项 pipeline 配置：
 
 - `lightrag.indexing.chunking.window-size`
 - `lightrag.indexing.chunking.overlap`
+- `lightrag.indexing.ingest.preset`
+- `lightrag.indexing.ingest.parent-child-window-size`
+- `lightrag.indexing.ingest.parent-child-overlap`
+- 兼容旧配置：`lightrag.indexing.ingest.document-type`
+- 兼容旧配置：`lightrag.indexing.ingest.chunk-granularity`
+- 兼容旧配置：`lightrag.indexing.ingest.parent-child-enabled`
+- `lightrag.indexing.parsing.tika-fallback-enabled`
+- `lightrag.indexing.parsing.mineru.enabled`
+- `lightrag.indexing.parsing.mineru.mode`
+- `lightrag.indexing.parsing.mineru.base-url`
+- `lightrag.indexing.parsing.mineru.api-key`
 - `lightrag.indexing.embedding-batch-size`
 - `lightrag.indexing.max-parallel-insert`
 - `lightrag.indexing.entity-extract-max-gleaning`

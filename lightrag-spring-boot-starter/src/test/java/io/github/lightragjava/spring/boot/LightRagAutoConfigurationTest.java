@@ -2,7 +2,11 @@ package io.github.lightragjava.spring.boot;
 
 import io.github.lightragjava.api.LightRag;
 import io.github.lightragjava.indexing.Chunker;
+import io.github.lightragjava.indexing.DocumentParsingOrchestrator;
 import io.github.lightragjava.indexing.FixedWindowChunker;
+import io.github.lightragjava.indexing.MineruApiClient;
+import io.github.lightragjava.indexing.MineruClient;
+import io.github.lightragjava.indexing.MineruParsingProvider;
 import io.github.lightragjava.model.ChatModel;
 import io.github.lightragjava.model.EmbeddingModel;
 import io.github.lightragjava.model.openai.OpenAiCompatibleChatModel;
@@ -13,6 +17,7 @@ import io.github.lightragjava.storage.SnapshotStore;
 import io.github.lightragjava.storage.StorageProvider;
 import io.github.lightragjava.types.Chunk;
 import io.github.lightragjava.types.Document;
+import io.github.lightragjava.types.RawDocumentSource;
 import org.junit.jupiter.api.Test;
 import org.springframework.boot.autoconfigure.AutoConfigurations;
 import org.springframework.boot.test.context.TestConfiguration;
@@ -22,6 +27,7 @@ import org.springframework.context.annotation.Configuration;
 
 import java.time.Duration;
 import java.lang.reflect.Field;
+import java.nio.charset.StandardCharsets;
 import java.util.List;
 import java.util.Map;
 
@@ -95,6 +101,98 @@ class LightRagAutoConfigurationTest {
     }
 
     @Test
+    void bindsMineruAndChunkingDefaultsFromSpringProperties() {
+        contextRunner
+            .withUserConfiguration(MineruApiTransportConfiguration.class)
+            .withPropertyValues(
+                "lightrag.indexing.ingest.preset=LAW",
+                "lightrag.indexing.ingest.parent-child-window-size=256",
+                "lightrag.indexing.ingest.parent-child-overlap=32",
+                "lightrag.indexing.parsing.tika-fallback-enabled=true",
+                "lightrag.indexing.parsing.mineru.enabled=true",
+                "lightrag.indexing.parsing.mineru.mode=API",
+                "lightrag.indexing.parsing.mineru.base-url=http://mineru.local",
+                "lightrag.indexing.parsing.mineru.api-key=test-key"
+            )
+            .run(context -> {
+                var properties = context.getBean(LightRagProperties.class);
+
+                assertThat(properties.getIndexing().getIngest().getPreset()).isEqualTo(IngestPreset.LAW);
+                assertThat(properties.getIndexing().getIngest().getParentChildWindowSize()).isEqualTo(256);
+                assertThat(properties.getIndexing().getIngest().getParentChildOverlap()).isEqualTo(32);
+                assertThat(properties.getIndexing().getParsing().isTikaFallbackEnabled()).isTrue();
+                assertThat(properties.getIndexing().getParsing().getMineru().isEnabled()).isTrue();
+                assertThat(properties.getIndexing().getParsing().getMineru().getMode()).isEqualTo("API");
+                assertThat(properties.getIndexing().getParsing().getMineru().getBaseUrl()).isEqualTo("http://mineru.local");
+                assertThat(properties.getIndexing().getParsing().getMineru().getApiKey()).isEqualTo("test-key");
+            });
+    }
+
+    @Test
+    void bindsLegacyIngestPropertiesForBackwardCompatibility() {
+        contextRunner
+            .withPropertyValues(
+                "lightrag.indexing.ingest.document-type=LAW",
+                "lightrag.indexing.ingest.chunk-granularity=COARSE",
+                "lightrag.indexing.ingest.parent-child-enabled=true"
+            )
+            .run(context -> {
+                var ingest = context.getBean(LightRagProperties.class).getIndexing().getIngest();
+
+                assertThat(ingest.getDocumentType()).isEqualTo("LAW");
+                assertThat(ingest.getChunkGranularity()).isEqualTo("COARSE");
+                assertThat(ingest.isParentChildEnabled()).isTrue();
+                assertThat(ingest.getPreset()).isEqualTo(IngestPreset.GENERAL);
+            });
+    }
+
+    @Test
+    void autoConfiguresMineruParserWhenApiTransportBeanIsPresent() {
+        contextRunner
+            .withUserConfiguration(MineruApiTransportConfiguration.class)
+            .withPropertyValues(
+                "lightrag.indexing.parsing.mineru.enabled=true",
+                "lightrag.indexing.parsing.mineru.mode=API",
+                "lightrag.indexing.parsing.mineru.base-url=http://mineru.local",
+                "lightrag.indexing.parsing.mineru.api-key=test-key"
+            )
+            .run(context -> {
+                assertThat(context).hasSingleBean(MineruClient.class);
+                assertThat(context).hasSingleBean(MineruParsingProvider.class);
+
+                var orchestrator = context.getBean(DocumentParsingOrchestrator.class);
+                var parsed = orchestrator.parse(RawDocumentSource.bytes(
+                    "scan.png",
+                    new byte[] {1, 2, 3},
+                    "image/png",
+                    Map.of("source", "test")
+                ));
+
+                assertThat(parsed.plainText()).isEqualTo("OCR text from MinerU");
+                assertThat(parsed.metadata())
+                    .containsEntry("parse_mode", "mineru")
+                    .containsEntry("parse_backend", "mineru_api")
+                    .containsEntry("source", "test");
+            });
+    }
+
+    @Test
+    void autoConfiguresDefaultMineruApiTransportFromProperties() {
+        contextRunner
+            .withPropertyValues(
+                "lightrag.indexing.parsing.mineru.enabled=true",
+                "lightrag.indexing.parsing.mineru.mode=API",
+                "lightrag.indexing.parsing.mineru.base-url=https://mineru.net/api/v4/extract/task",
+                "lightrag.indexing.parsing.mineru.api-key=test-key"
+            )
+            .run(context -> {
+                assertThat(context).hasSingleBean(MineruApiClient.Transport.class);
+                assertThat(context).hasSingleBean(MineruClient.class);
+                assertThat(context).hasSingleBean(MineruParsingProvider.class);
+            });
+    }
+
+    @Test
     void wiresPipelineSettingsIntoLightRag() {
         contextRunner.run(context -> {
             var lightRag = context.getBean(LightRag.class);
@@ -144,6 +242,7 @@ class LightRagAutoConfigurationTest {
                 assertThat(properties.getIndexing().getMaxParallelInsert()).isEqualTo(1);
                 assertThat(properties.getIndexing().getEntityExtractMaxGleaning()).isEqualTo(1);
                 assertThat(properties.getIndexing().getMaxExtractInputTokens()).isEqualTo(20_480);
+                assertThat(properties.getIndexing().getIngest().getPreset()).isEqualTo(IngestPreset.GENERAL);
                 assertThat(properties.getQuery().getDefaultMode()).isEqualTo("MIX");
                 assertThat(properties.getQuery().getDefaultTopK()).isEqualTo(10);
                 assertThat(properties.getQuery().getDefaultChunkTopK()).isEqualTo(10);
@@ -346,6 +445,27 @@ class LightRagAutoConfigurationTest {
             return texts -> texts.stream()
                 .map(text -> List.of((double) text.length()))
                 .toList();
+        }
+    }
+
+    @TestConfiguration
+    static class MineruApiTransportConfiguration {
+        @Bean
+        MineruApiClient.Transport mineruApiTransport() {
+            return source -> new MineruClient.ParseResult(
+                List.of(new MineruClient.Block(
+                    "block-1",
+                    "paragraph",
+                    "OCR text from MinerU",
+                    "Page 1",
+                    List.of("Page 1"),
+                    1,
+                    null,
+                    1,
+                    Map.of("origin", "api")
+                )),
+                new String(source.bytes(), StandardCharsets.UTF_8)
+            );
         }
     }
 
