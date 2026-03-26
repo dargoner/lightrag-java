@@ -29,6 +29,7 @@ import java.util.Objects;
 
 public final class RagasBatchEvaluationService {
     private static final ObjectMapper OBJECT_MAPPER = new ObjectMapper();
+    private static final String WORKSPACE = "default";
 
     public List<Result> evaluateBatch(BatchRequest request, ChatModel chatModel, EmbeddingModel embeddingModel) throws IOException {
         var batchRequest = Objects.requireNonNull(request, "request");
@@ -36,11 +37,11 @@ public final class RagasBatchEvaluationService {
         var documents = RagasEvaluationService.loadDocuments(batchRequest.documentsDir());
 
         try (var runtime = createRuntime(batchRequest.storageProfile(), chatModel, embeddingModel, batchRequest.retrievalOnly())) {
-            runtime.rag().ingest(documents);
+            runtime.rag().ingest(WORKSPACE, documents);
             var results = new ArrayList<Result>(testCases.size());
             for (int index = 0; index < testCases.size(); index++) {
                 var testCase = testCases.get(index);
-                var queryResult = runtime.rag().query(QueryRequest.builder()
+                var queryResult = runtime.rag().query(WORKSPACE, QueryRequest.builder()
                     .query(testCase.question())
                     .mode(batchRequest.mode())
                     .topK(batchRequest.topK())

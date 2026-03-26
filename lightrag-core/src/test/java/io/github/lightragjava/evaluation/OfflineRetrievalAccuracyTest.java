@@ -23,6 +23,7 @@ import java.util.regex.Pattern;
 import static org.assertj.core.api.Assertions.assertThat;
 
 class OfflineRetrievalAccuracyTest {
+    private static final String WORKSPACE = "default";
     private static final ObjectMapper OBJECT_MAPPER = new ObjectMapper();
     private static final Pattern TOKEN_SPLIT = Pattern.compile("[^a-z0-9]+");
     private static final int VECTOR_DIMENSIONS = 1024;
@@ -44,11 +45,11 @@ class OfflineRetrievalAccuracyTest {
             .embeddingModel(new HashingEmbeddingModel())
             .storage(InMemoryStorageProvider.create())
             .build();
-        rag.ingest(loadEvaluationDocuments(documentsDir));
+        rag.ingest(WORKSPACE, loadEvaluationDocuments(documentsDir));
 
         var reports = new ArrayList<CaseReport>();
         for (var testCase : testCases) {
-            var result = rag.query(QueryRequest.builder()
+            var result = rag.query(WORKSPACE, QueryRequest.builder()
                 .query(testCase.question())
                 .mode(QueryMode.NAIVE)
                 .chunkTopK(3)

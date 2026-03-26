@@ -7,15 +7,15 @@ import java.nio.file.Path;
 import java.util.Map;
 import java.util.Objects;
 
-final class StorageSnapshots {
-    static final String CHUNK_NAMESPACE = "chunks";
-    static final String ENTITY_NAMESPACE = "entities";
-    static final String RELATION_NAMESPACE = "relations";
+public final class StorageSnapshots {
+    public static final String CHUNK_NAMESPACE = "chunks";
+    public static final String ENTITY_NAMESPACE = "entities";
+    public static final String RELATION_NAMESPACE = "relations";
 
     private StorageSnapshots() {
     }
 
-    static SnapshotStore.Snapshot capture(AtomicStorageProvider storageProvider) {
+    public static SnapshotStore.Snapshot capture(AtomicStorageProvider storageProvider) {
         var provider = Objects.requireNonNull(storageProvider, "storageProvider");
         return new SnapshotStore.Snapshot(
             provider.documentStore().list(),
@@ -31,14 +31,14 @@ final class StorageSnapshots {
         );
     }
 
-    static void persistIfConfigured(AtomicStorageProvider storageProvider, Path snapshotPath) {
+    public static void persistIfConfigured(AtomicStorageProvider storageProvider, Path snapshotPath) {
         if (snapshotPath == null) {
             return;
         }
         storageProvider.snapshotStore().save(snapshotPath, capture(storageProvider));
     }
 
-    static SnapshotStore.Snapshot empty() {
+    public static SnapshotStore.Snapshot empty() {
         return new SnapshotStore.Snapshot(
             java.util.List.of(),
             java.util.List.of(),

@@ -18,6 +18,8 @@ import java.util.Locale;
 import java.util.Objects;
 
 public final class RagasEvaluationService {
+    private static final String WORKSPACE = "default";
+
     public EvaluationResult evaluate(Request request, ChatModel chatModel, EmbeddingModel embeddingModel) throws IOException {
         var evaluationRequest = Objects.requireNonNull(request, "request");
         var rag = LightRag.builder()
@@ -26,8 +28,8 @@ public final class RagasEvaluationService {
             .storage(InMemoryStorageProvider.create())
             .build();
 
-        rag.ingest(loadDocuments(evaluationRequest.documentsDir()));
-        var result = rag.query(QueryRequest.builder()
+        rag.ingest(WORKSPACE, loadDocuments(evaluationRequest.documentsDir()));
+        var result = rag.query(WORKSPACE, QueryRequest.builder()
             .query(evaluationRequest.question())
             .mode(evaluationRequest.mode())
             .topK(evaluationRequest.topK())

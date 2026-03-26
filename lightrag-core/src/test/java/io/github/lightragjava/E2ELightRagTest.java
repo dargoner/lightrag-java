@@ -43,6 +43,8 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 class E2ELightRagTest {
+    private static final String WORKSPACE = "default";
+
     @Test
     void ingestBuildsChunkEntityRelationAndVectorIndexes() {
         var storage = InMemoryStorageProvider.create();
@@ -52,7 +54,7 @@ class E2ELightRagTest {
             .storage(storage)
             .build();
 
-        rag.ingest(List.of(new Document("doc-1", "Title", "Alice works with Bob", Map.of("source", "test"))));
+        rag.ingest(WORKSPACE, List.of(new Document("doc-1", "Title", "Alice works with Bob", Map.of("source", "test"))));
 
         assertThat(storage.documentStore().load("doc-1")).isPresent();
         assertThat(storage.chunkStore().listByDocument("doc-1")).hasSize(1);
@@ -84,7 +86,7 @@ class E2ELightRagTest {
             .loadFromSnapshot(snapshotPath)
             .build();
 
-        rag.ingest(List.of(new Document("doc-1", "Title", "Alice works with Bob", Map.of())));
+        rag.ingest(WORKSPACE, List.of(new Document("doc-1", "Title", "Alice works with Bob", Map.of())));
 
         var snapshot = storage.snapshotStore().load(snapshotPath);
         assertThat(snapshot.documents()).hasSize(1);
@@ -188,7 +190,7 @@ class E2ELightRagTest {
         assertThat(storage.documentStore().load("doc-seed")).isPresent();
         assertThat(storage.chunkStore().load("doc-seed:0")).isPresent();
         assertThat(storage.graphStore().loadEntity("entity:seed")).isPresent();
-        assertThat(rag.listDocumentStatuses()).isEmpty();
+        assertThat(rag.listDocumentStatuses(WORKSPACE)).isEmpty();
     }
 
     @Test
@@ -201,7 +203,7 @@ class E2ELightRagTest {
             .storage(storage)
             .build();
 
-        rag.ingest(List.of(new Document("doc-1", "Title", "Alice works with Bob", Map.of())));
+        rag.ingest(WORKSPACE, List.of(new Document("doc-1", "Title", "Alice works with Bob", Map.of())));
 
         assertThat(Files.exists(snapshotPath)).isFalse();
     }
@@ -215,11 +217,11 @@ class E2ELightRagTest {
             .storage(storage)
             .build();
 
-        rag.ingest(List.of(new Document("doc-1", "Title", "Alice works with Bob", Map.of())));
+        rag.ingest(WORKSPACE, List.of(new Document("doc-1", "Title", "Alice works with Bob", Map.of())));
 
-        assertThat(rag.getDocumentStatus("doc-1"))
+        assertThat(rag.getDocumentStatus(WORKSPACE, "doc-1"))
             .isEqualTo(new DocumentProcessingStatus("doc-1", DocumentStatus.PROCESSED, "processed 1 chunks", null));
-        assertThat(rag.listDocumentStatuses())
+        assertThat(rag.listDocumentStatuses(WORKSPACE))
             .containsExactly(new DocumentProcessingStatus("doc-1", DocumentStatus.PROCESSED, "processed 1 chunks", null));
     }
 
@@ -237,9 +239,9 @@ class E2ELightRagTest {
             .storage(storage)
             .build();
 
-        seedRag.ingest(List.of(new Document("doc-0", "Title", "Alice works with Bob", Map.of())));
+        seedRag.ingest(WORKSPACE, List.of(new Document("doc-0", "Title", "Alice works with Bob", Map.of())));
 
-        assertThatThrownBy(() -> failingRag.ingest(List.of(
+        assertThatThrownBy(() -> failingRag.ingest(WORKSPACE, List.of(
             new Document("doc-1", "Title", "Alice works with Bob", Map.of()),
             new Document("doc-2", "Title", "Bob reports to Carol", Map.of())
         )))
@@ -248,9 +250,9 @@ class E2ELightRagTest {
 
         assertThat(storage.documentStore().load("doc-1")).isPresent();
         assertThat(storage.documentStore().load("doc-2")).isEmpty();
-        assertThat(failingRag.getDocumentStatus("doc-1"))
+        assertThat(failingRag.getDocumentStatus(WORKSPACE, "doc-1"))
             .isEqualTo(new DocumentProcessingStatus("doc-1", DocumentStatus.PROCESSED, "processed 1 chunks", null));
-        assertThat(failingRag.getDocumentStatus("doc-2"))
+        assertThat(failingRag.getDocumentStatus(WORKSPACE, "doc-2"))
             .isEqualTo(new DocumentProcessingStatus("doc-2", DocumentStatus.FAILED, "", "extract failed for doc-2"));
     }
 
@@ -263,13 +265,13 @@ class E2ELightRagTest {
             .storage(storage)
             .build();
 
-        rag.ingest(List.of(new Document("doc-1", "Title", "Alice works with Bob", Map.of())));
-        rag.deleteByDocumentId("doc-1");
+        rag.ingest(WORKSPACE, List.of(new Document("doc-1", "Title", "Alice works with Bob", Map.of())));
+        rag.deleteByDocumentId(WORKSPACE, "doc-1");
 
-        assertThatThrownBy(() -> rag.getDocumentStatus("doc-1"))
+        assertThatThrownBy(() -> rag.getDocumentStatus(WORKSPACE, "doc-1"))
             .isInstanceOf(java.util.NoSuchElementException.class)
             .hasMessageContaining("document status does not exist");
-        assertThat(rag.listDocumentStatuses()).isEmpty();
+        assertThat(rag.listDocumentStatuses(WORKSPACE)).isEmpty();
     }
 
     @Test
@@ -289,18 +291,18 @@ class E2ELightRagTest {
             .loadFromSnapshot(snapshotPath)
             .build();
 
-        seedRag.ingest(List.of(new Document("doc-1", "Title", "Alice works with Bob", Map.of())));
+        seedRag.ingest(WORKSPACE, List.of(new Document("doc-1", "Title", "Alice works with Bob", Map.of())));
 
-        assertThatThrownBy(() -> failingRag.ingest(List.of(
+        assertThatThrownBy(() -> failingRag.ingest(WORKSPACE, List.of(
             new Document("doc-2", "Title", "Bob reports to Carol", Map.of()),
             new Document("doc-3", "Title", "Carol mentors Dave", Map.of())
         )))
             .isInstanceOf(IllegalStateException.class)
             .hasMessage("extract failed for doc-3");
 
-        seedRag.deleteByDocumentId("doc-1");
+        seedRag.deleteByDocumentId(WORKSPACE, "doc-1");
 
-        assertThat(seedRag.listDocumentStatuses())
+        assertThat(seedRag.listDocumentStatuses(WORKSPACE))
             .containsExactly(
                 new DocumentProcessingStatus("doc-2", DocumentStatus.PROCESSED, "processed 1 chunks", null),
                 new DocumentProcessingStatus("doc-3", DocumentStatus.FAILED, "", "extract failed for doc-3")
@@ -338,7 +340,7 @@ class E2ELightRagTest {
             .loadFromSnapshot(snapshotPath)
             .build();
 
-        rag.ingest(List.of(new Document("doc-1", "Title", "Alice works with Bob", Map.of())));
+        rag.ingest(WORKSPACE, List.of(new Document("doc-1", "Title", "Alice works with Bob", Map.of())));
 
         var snapshot = storage.snapshotStore().load(snapshotPath);
         assertThat(snapshot.documentStatuses())
@@ -361,7 +363,7 @@ class E2ELightRagTest {
             .loadFromSnapshot(snapshotPath)
             .build();
 
-        assertThatThrownBy(() -> rag.ingest(List.of(
+        assertThatThrownBy(() -> rag.ingest(WORKSPACE, List.of(
             new Document("doc-1", "Title", "Alice works with Bob", Map.of()),
             new Document("doc-2", "Title", "Bob reports to Carol", Map.of())
         )))
@@ -416,9 +418,9 @@ class E2ELightRagTest {
                     .storage(storage)
                     .build();
 
-                rag.ingest(List.of(new Document("doc-1", "Title", "Alice works with Bob", Map.of())));
+                rag.ingest(WORKSPACE, List.of(new Document("doc-1", "Title", "Alice works with Bob", Map.of())));
 
-                assertThat(rag.getDocumentStatus("doc-1"))
+                assertThat(rag.getDocumentStatus(WORKSPACE, "doc-1"))
                     .isEqualTo(new DocumentProcessingStatus("doc-1", DocumentStatus.PROCESSED, "processed 1 chunks", null));
                 assertThat(storage.documentStatusStore().load("doc-1"))
                     .contains(new io.github.lightragjava.storage.DocumentStatusStore.StatusRecord(
@@ -458,16 +460,16 @@ class E2ELightRagTest {
                     .storage(storage)
                     .build();
 
-                assertThatThrownBy(() -> rag.ingest(List.of(
+                assertThatThrownBy(() -> rag.ingest(WORKSPACE, List.of(
                     new Document("doc-1", "Title", "Alice works with Bob", Map.of()),
                     new Document("doc-2", "Title", "Bob reports to Carol", Map.of())
                 )))
                     .isInstanceOf(IllegalStateException.class)
                     .hasMessage("extract failed for doc-2");
 
-                assertThat(rag.getDocumentStatus("doc-1"))
+                assertThat(rag.getDocumentStatus(WORKSPACE, "doc-1"))
                     .isEqualTo(new DocumentProcessingStatus("doc-1", DocumentStatus.PROCESSED, "processed 1 chunks", null));
-                assertThat(rag.getDocumentStatus("doc-2"))
+                assertThat(rag.getDocumentStatus(WORKSPACE, "doc-2"))
                     .isEqualTo(new DocumentProcessingStatus("doc-2", DocumentStatus.FAILED, "", "extract failed for doc-2"));
             }
         }
@@ -508,9 +510,9 @@ class E2ELightRagTest {
                     .storage(storage)
                     .build();
 
-                rag.ingest(List.of(new Document("doc-1", "Title", "Alice works with Bob", Map.of())));
+                rag.ingest(WORKSPACE, List.of(new Document("doc-1", "Title", "Alice works with Bob", Map.of())));
 
-                assertThat(rag.getDocumentStatus("doc-1"))
+                assertThat(rag.getDocumentStatus(WORKSPACE, "doc-1"))
                     .isEqualTo(new DocumentProcessingStatus("doc-1", DocumentStatus.PROCESSED, "processed 1 chunks", null));
                 assertThat(storage.documentStatusStore().load("doc-1"))
                     .contains(new io.github.lightragjava.storage.DocumentStatusStore.StatusRecord(
@@ -532,7 +534,7 @@ class E2ELightRagTest {
             .storage(storage)
             .build();
 
-        var entity = rag.createEntity(CreateEntityRequest.builder()
+        var entity = rag.createEntity(WORKSPACE, CreateEntityRequest.builder()
             .name("Alice")
             .type("person")
             .description("Researcher")
@@ -576,19 +578,19 @@ class E2ELightRagTest {
             .storage(storage)
             .build();
 
-        rag.createEntity(CreateEntityRequest.builder()
+        rag.createEntity(WORKSPACE, CreateEntityRequest.builder()
             .name("Alice")
             .type("person")
             .description("Researcher")
             .build());
-        rag.createEntity(CreateEntityRequest.builder()
+        rag.createEntity(WORKSPACE, CreateEntityRequest.builder()
             .name("Bob")
             .type("person")
             .description("Engineer")
             .aliases(List.of("Robert"))
             .build());
 
-        var relation = rag.createRelation(CreateRelationRequest.builder()
+        var relation = rag.createRelation(WORKSPACE, CreateRelationRequest.builder()
             .sourceEntityName("Alice")
             .targetEntityName("Robert")
             .relationType("works_with")
@@ -633,14 +635,14 @@ class E2ELightRagTest {
             .storage(storage)
             .build();
 
-        rag.createEntity(CreateEntityRequest.builder()
+        rag.createEntity(WORKSPACE, CreateEntityRequest.builder()
             .name("Bob")
             .type("person")
             .description("Engineer")
             .aliases(List.of("Robert"))
             .build());
 
-        assertThatThrownBy(() -> rag.createEntity(CreateEntityRequest.builder()
+        assertThatThrownBy(() -> rag.createEntity(WORKSPACE, CreateEntityRequest.builder()
             .name("Robert")
             .type("person")
             .description("Architect")
@@ -658,19 +660,19 @@ class E2ELightRagTest {
             .storage(storage)
             .build();
 
-        rag.createEntity(CreateEntityRequest.builder()
+        rag.createEntity(WORKSPACE, CreateEntityRequest.builder()
             .name("Alice")
             .type("person")
             .description("Researcher")
             .build());
 
-        rag.createEntity(CreateEntityRequest.builder()
+        rag.createEntity(WORKSPACE, CreateEntityRequest.builder()
             .name("Bob")
             .type("person")
             .description("Engineer")
             .build());
 
-        rag.createRelation(CreateRelationRequest.builder()
+        rag.createRelation(WORKSPACE, CreateRelationRequest.builder()
             .sourceEntityName("Alice")
             .targetEntityName("Bob")
             .relationType("works_with")
@@ -692,17 +694,17 @@ class E2ELightRagTest {
             .storage(storage)
             .build();
 
-        rag.createEntity(CreateEntityRequest.builder()
+        rag.createEntity(WORKSPACE, CreateEntityRequest.builder()
             .name("Alice")
             .type("person")
             .description("Researcher")
             .build());
-        rag.createEntity(CreateEntityRequest.builder()
+        rag.createEntity(WORKSPACE, CreateEntityRequest.builder()
             .name("Bob")
             .type("person")
             .description("Engineer")
             .build());
-        rag.createRelation(CreateRelationRequest.builder()
+        rag.createRelation(WORKSPACE, CreateRelationRequest.builder()
             .sourceEntityName("Alice")
             .targetEntityName("Bob")
             .relationType("works_with")
@@ -710,7 +712,7 @@ class E2ELightRagTest {
             .weight(0.8d)
             .build());
 
-        var entity = rag.editEntity(EditEntityRequest.builder()
+        var entity = rag.editEntity(WORKSPACE, EditEntityRequest.builder()
             .entityName("Bob")
             .newName("Robert")
             .description("Principal investigator")
@@ -762,17 +764,17 @@ class E2ELightRagTest {
             .storage(storage)
             .build();
 
-        rag.createEntity(CreateEntityRequest.builder()
+        rag.createEntity(WORKSPACE, CreateEntityRequest.builder()
             .name("Alice")
             .type("person")
             .description("Researcher")
             .build());
-        rag.createEntity(CreateEntityRequest.builder()
+        rag.createEntity(WORKSPACE, CreateEntityRequest.builder()
             .name("Bob")
             .type("person")
             .description("Engineer")
             .build());
-        rag.createRelation(CreateRelationRequest.builder()
+        rag.createRelation(WORKSPACE, CreateRelationRequest.builder()
             .sourceEntityName("Alice")
             .targetEntityName("Bob")
             .relationType("works_with")
@@ -780,7 +782,7 @@ class E2ELightRagTest {
             .weight(0.8d)
             .build());
 
-        var relation = rag.editRelation(EditRelationRequest.builder()
+        var relation = rag.editRelation(WORKSPACE, EditRelationRequest.builder()
             .sourceEntityName("Alice")
             .targetEntityName("Bob")
             .currentRelationType("works_with")
@@ -823,7 +825,7 @@ class E2ELightRagTest {
             .storage(storage)
             .build();
 
-        rag.createEntity(CreateEntityRequest.builder()
+        rag.createEntity(WORKSPACE, CreateEntityRequest.builder()
             .name("Alice")
             .type("person")
             .description("Researcher")
@@ -831,7 +833,7 @@ class E2ELightRagTest {
 
         var before = storage.vectorStore().list("entities");
 
-        var entity = rag.editEntity(EditEntityRequest.builder()
+        var entity = rag.editEntity(WORKSPACE, EditEntityRequest.builder()
             .entityName("Alice")
             .description("Principal investigator")
             .aliases(List.of("Lead Alice"))
@@ -869,17 +871,17 @@ class E2ELightRagTest {
             .storage(storage)
             .build();
 
-        rag.createEntity(CreateEntityRequest.builder()
+        rag.createEntity(WORKSPACE, CreateEntityRequest.builder()
             .name("Alice")
             .type("person")
             .description("Researcher")
             .build());
-        rag.createEntity(CreateEntityRequest.builder()
+        rag.createEntity(WORKSPACE, CreateEntityRequest.builder()
             .name("Bob")
             .type("person")
             .description("Engineer")
             .build());
-        rag.createRelation(CreateRelationRequest.builder()
+        rag.createRelation(WORKSPACE, CreateRelationRequest.builder()
             .sourceEntityName("Alice")
             .targetEntityName("Bob")
             .relationType("works_with")
@@ -887,14 +889,14 @@ class E2ELightRagTest {
             .weight(0.8d)
             .build());
 
-        assertThatThrownBy(() -> rag.createEntity(CreateEntityRequest.builder()
+        assertThatThrownBy(() -> rag.createEntity(WORKSPACE, CreateEntityRequest.builder()
             .name("Alice")
             .type("person")
             .description("Duplicate")
             .build()))
             .isInstanceOf(IllegalArgumentException.class)
             .hasMessageContaining("already exists");
-        assertThatThrownBy(() -> rag.createRelation(CreateRelationRequest.builder()
+        assertThatThrownBy(() -> rag.createRelation(WORKSPACE, CreateRelationRequest.builder()
             .sourceEntityName("Alice")
             .targetEntityName("Bob")
             .relationType("works_with")
@@ -903,13 +905,13 @@ class E2ELightRagTest {
             .build()))
             .isInstanceOf(IllegalArgumentException.class)
             .hasMessageContaining("already exists");
-        assertThatThrownBy(() -> rag.editEntity(EditEntityRequest.builder()
+        assertThatThrownBy(() -> rag.editEntity(WORKSPACE, EditEntityRequest.builder()
             .entityName("Missing")
             .description("Nope")
             .build()))
             .isInstanceOf(IllegalArgumentException.class)
             .hasMessageContaining("does not match");
-        assertThatThrownBy(() -> rag.editRelation(EditRelationRequest.builder()
+        assertThatThrownBy(() -> rag.editRelation(WORKSPACE, EditRelationRequest.builder()
             .sourceEntityName("Alice")
             .targetEntityName("Bob")
             .currentRelationType("reports_to")
@@ -990,7 +992,7 @@ class E2ELightRagTest {
             .storage(storage)
             .build();
 
-        assertThatThrownBy(() -> rag.createRelation(CreateRelationRequest.builder()
+        assertThatThrownBy(() -> rag.createRelation(WORKSPACE, CreateRelationRequest.builder()
             .sourceEntityName("Shared")
             .targetEntityName("Bob")
             .relationType("works_with")
@@ -1009,7 +1011,7 @@ class E2ELightRagTest {
             .storage(storage)
             .build();
 
-        var created = rag.createEntity(CreateEntityRequest.builder()
+        var created = rag.createEntity(WORKSPACE, CreateEntityRequest.builder()
             .name("Bob")
             .type("person")
             .description("Engineer")
@@ -1017,7 +1019,7 @@ class E2ELightRagTest {
             .build());
         assertThat(created.aliases()).containsExactly("Robert");
 
-        var renamed = rag.editEntity(EditEntityRequest.builder()
+        var renamed = rag.editEntity(WORKSPACE, EditEntityRequest.builder()
             .entityName("Bob")
             .newName("Robert")
             .build());
@@ -1043,13 +1045,13 @@ class E2ELightRagTest {
             .storage(storage)
             .build();
 
-        rag.createEntity(CreateEntityRequest.builder()
+        rag.createEntity(WORKSPACE, CreateEntityRequest.builder()
             .name("Bob")
             .type("person")
             .description("Engineer")
             .build());
 
-        var renamed = rag.editEntity(EditEntityRequest.builder()
+        var renamed = rag.editEntity(WORKSPACE, EditEntityRequest.builder()
             .entityName("Bob")
             .newName("BOB")
             .build());
@@ -1116,7 +1118,7 @@ class E2ELightRagTest {
             .storage(storage)
             .build();
 
-        assertThatThrownBy(() -> rag.editEntity(EditEntityRequest.builder()
+        assertThatThrownBy(() -> rag.editEntity(WORKSPACE, EditEntityRequest.builder()
             .entityName("Bob")
             .newName("Robert")
             .build()))
@@ -1133,31 +1135,31 @@ class E2ELightRagTest {
             .storage(storage)
             .build();
 
-        rag.createEntity(CreateEntityRequest.builder()
+        rag.createEntity(WORKSPACE, CreateEntityRequest.builder()
             .name("Alice")
             .type("person")
             .description("Researcher")
             .build());
-        rag.createEntity(CreateEntityRequest.builder()
+        rag.createEntity(WORKSPACE, CreateEntityRequest.builder()
             .name("Bob")
             .type("person")
             .description("Engineer")
             .aliases(List.of("Robert Jr"))
             .build());
-        rag.createEntity(CreateEntityRequest.builder()
+        rag.createEntity(WORKSPACE, CreateEntityRequest.builder()
             .name("Robert")
             .type("person")
             .description("Principal investigator")
             .aliases(List.of("Rob"))
             .build());
-        rag.createRelation(CreateRelationRequest.builder()
+        rag.createRelation(WORKSPACE, CreateRelationRequest.builder()
             .sourceEntityName("Alice")
             .targetEntityName("Bob")
             .relationType("works_with")
             .description("collaboration")
             .weight(0.8d)
             .build());
-        rag.createRelation(CreateRelationRequest.builder()
+        rag.createRelation(WORKSPACE, CreateRelationRequest.builder()
             .sourceEntityName("Bob")
             .targetEntityName("Alice")
             .relationType("reports_to")
@@ -1165,7 +1167,7 @@ class E2ELightRagTest {
             .weight(0.4d)
             .build());
 
-        var merged = rag.mergeEntities(MergeEntitiesRequest.builder()
+        var merged = rag.mergeEntities(WORKSPACE, MergeEntitiesRequest.builder()
             .sourceEntityNames(List.of("Bob"))
             .targetEntityName("Robert")
             .build());
@@ -1210,36 +1212,36 @@ class E2ELightRagTest {
             .storage(storage)
             .build();
 
-        rag.createEntity(CreateEntityRequest.builder()
+        rag.createEntity(WORKSPACE, CreateEntityRequest.builder()
             .name("Alice")
             .type("person")
             .description("Researcher")
             .build());
-        rag.createEntity(CreateEntityRequest.builder()
+        rag.createEntity(WORKSPACE, CreateEntityRequest.builder()
             .name("Bob")
             .type("person")
             .description("Engineer")
             .build());
-        rag.createEntity(CreateEntityRequest.builder()
+        rag.createEntity(WORKSPACE, CreateEntityRequest.builder()
             .name("Robert")
             .type("person")
             .description("Principal investigator")
             .build());
-        rag.createRelation(CreateRelationRequest.builder()
+        rag.createRelation(WORKSPACE, CreateRelationRequest.builder()
             .sourceEntityName("Alice")
             .targetEntityName("Bob")
             .relationType("works_with")
             .description("with Bob")
             .weight(0.5d)
             .build());
-        rag.createRelation(CreateRelationRequest.builder()
+        rag.createRelation(WORKSPACE, CreateRelationRequest.builder()
             .sourceEntityName("Alice")
             .targetEntityName("Robert")
             .relationType("works_with")
             .description("with Robert")
             .weight(0.9d)
             .build());
-        rag.createRelation(CreateRelationRequest.builder()
+        rag.createRelation(WORKSPACE, CreateRelationRequest.builder()
             .sourceEntityName("Bob")
             .targetEntityName("Robert")
             .relationType("reports_to")
@@ -1247,7 +1249,7 @@ class E2ELightRagTest {
             .weight(0.7d)
             .build());
 
-        var merged = rag.mergeEntities(MergeEntitiesRequest.builder()
+        var merged = rag.mergeEntities(WORKSPACE, MergeEntitiesRequest.builder()
             .sourceEntityNames(List.of("Bob"))
             .targetEntityName("Robert")
             .build());
@@ -1295,13 +1297,13 @@ class E2ELightRagTest {
             List.of("Shared"),
             List.of()
         ));
-        rag.createEntity(CreateEntityRequest.builder()
+        rag.createEntity(WORKSPACE, CreateEntityRequest.builder()
             .name("Bob")
             .type("person")
             .description("Analyst")
             .aliases(List.of("Robert Jr"))
             .build());
-        rag.createEntity(CreateEntityRequest.builder()
+        rag.createEntity(WORKSPACE, CreateEntityRequest.builder()
             .name("Robert")
             .type("person")
             .description("Principal investigator")
@@ -1314,38 +1316,38 @@ class E2ELightRagTest {
             .build())
             .isInstanceOf(IllegalArgumentException.class)
             .hasMessageContaining("sourceEntityNames must not be empty");
-        assertThatThrownBy(() -> rag.mergeEntities(MergeEntitiesRequest.builder()
+        assertThatThrownBy(() -> rag.mergeEntities(WORKSPACE, MergeEntitiesRequest.builder()
             .sourceEntityNames(List.of("Shared"))
             .targetEntityName("Robert")
             .build()))
             .isInstanceOf(IllegalArgumentException.class)
             .hasMessageContaining("resolves ambiguously via alias");
-        assertThatThrownBy(() -> rag.mergeEntities(MergeEntitiesRequest.builder()
+        assertThatThrownBy(() -> rag.mergeEntities(WORKSPACE, MergeEntitiesRequest.builder()
             .sourceEntityNames(List.of("Bob", "Robert Jr"))
             .targetEntityName("Robert")
             .build()))
             .isInstanceOf(IllegalArgumentException.class)
             .hasMessageContaining("duplicate entities");
-        assertThatThrownBy(() -> rag.mergeEntities(MergeEntitiesRequest.builder()
+        assertThatThrownBy(() -> rag.mergeEntities(WORKSPACE, MergeEntitiesRequest.builder()
             .sourceEntityNames(List.of("Robert"))
             .targetEntityName("Robert")
             .build()))
             .isInstanceOf(IllegalArgumentException.class)
             .hasMessageContaining("target entity must not be included");
-        assertThatThrownBy(() -> rag.mergeEntities(MergeEntitiesRequest.builder()
+        assertThatThrownBy(() -> rag.mergeEntities(WORKSPACE, MergeEntitiesRequest.builder()
             .sourceEntityNames(List.of("Missing"))
             .targetEntityName("Robert")
             .build()))
             .isInstanceOf(IllegalArgumentException.class)
             .hasMessageContaining("does not match an existing entity");
-        assertThatThrownBy(() -> rag.mergeEntities(MergeEntitiesRequest.builder()
+        assertThatThrownBy(() -> rag.mergeEntities(WORKSPACE, MergeEntitiesRequest.builder()
             .sourceEntityNames(List.of("Bob"))
             .targetEntityName("Missing")
             .build()))
             .isInstanceOf(IllegalArgumentException.class)
             .hasMessageContaining("does not match an existing entity");
 
-        var merged = rag.mergeEntities(MergeEntitiesRequest.builder()
+        var merged = rag.mergeEntities(WORKSPACE, MergeEntitiesRequest.builder()
             .sourceEntityNames(List.of("Bob"))
             .targetEntityName("Robert")
             .targetType("leader")
@@ -1374,22 +1376,22 @@ class E2ELightRagTest {
             .loadFromSnapshot(snapshotPath)
             .build();
 
-        rag.createEntity(CreateEntityRequest.builder()
+        rag.createEntity(WORKSPACE, CreateEntityRequest.builder()
             .name("Alice")
             .type("person")
             .description("Researcher")
             .build());
-        rag.createEntity(CreateEntityRequest.builder()
+        rag.createEntity(WORKSPACE, CreateEntityRequest.builder()
             .name("Bob")
             .type("person")
             .description("Engineer")
             .build());
-        rag.createEntity(CreateEntityRequest.builder()
+        rag.createEntity(WORKSPACE, CreateEntityRequest.builder()
             .name("Robert")
             .type("person")
             .description("Principal investigator")
             .build());
-        rag.createRelation(CreateRelationRequest.builder()
+        rag.createRelation(WORKSPACE, CreateRelationRequest.builder()
             .sourceEntityName("Alice")
             .targetEntityName("Bob")
             .relationType("works_with")
@@ -1397,7 +1399,7 @@ class E2ELightRagTest {
             .weight(0.8d)
             .build());
 
-        rag.mergeEntities(MergeEntitiesRequest.builder()
+        rag.mergeEntities(WORKSPACE, MergeEntitiesRequest.builder()
             .sourceEntityNames(List.of("Bob"))
             .targetEntityName("Robert")
             .build());
@@ -1441,22 +1443,22 @@ class E2ELightRagTest {
                     .storage(storage)
                     .build();
 
-                rag.createEntity(CreateEntityRequest.builder()
+                rag.createEntity(WORKSPACE, CreateEntityRequest.builder()
                     .name("Alice")
                     .type("person")
                     .description("Researcher")
                     .build());
-                rag.createEntity(CreateEntityRequest.builder()
+                rag.createEntity(WORKSPACE, CreateEntityRequest.builder()
                     .name("Bob")
                     .type("person")
                     .description("Engineer")
                     .build());
-                rag.createEntity(CreateEntityRequest.builder()
+                rag.createEntity(WORKSPACE, CreateEntityRequest.builder()
                     .name("Robert")
                     .type("person")
                     .description("Principal investigator")
                     .build());
-                rag.createRelation(CreateRelationRequest.builder()
+                rag.createRelation(WORKSPACE, CreateRelationRequest.builder()
                     .sourceEntityName("Alice")
                     .targetEntityName("Bob")
                     .relationType("works_with")
@@ -1464,7 +1466,7 @@ class E2ELightRagTest {
                     .weight(0.8d)
                     .build());
 
-                rag.mergeEntities(MergeEntitiesRequest.builder()
+                rag.mergeEntities(WORKSPACE, MergeEntitiesRequest.builder()
                     .sourceEntityNames(List.of("Bob"))
                     .targetEntityName("Robert")
                     .build());
@@ -1517,22 +1519,22 @@ class E2ELightRagTest {
                     .storage(storage)
                     .build();
 
-                rag.createEntity(CreateEntityRequest.builder()
+                rag.createEntity(WORKSPACE, CreateEntityRequest.builder()
                     .name("Alice")
                     .type("person")
                     .description("Researcher")
                     .build());
-                rag.createEntity(CreateEntityRequest.builder()
+                rag.createEntity(WORKSPACE, CreateEntityRequest.builder()
                     .name("Bob")
                     .type("person")
                     .description("Engineer")
                     .build());
-                rag.createEntity(CreateEntityRequest.builder()
+                rag.createEntity(WORKSPACE, CreateEntityRequest.builder()
                     .name("Robert")
                     .type("person")
                     .description("Principal investigator")
                     .build());
-                rag.createRelation(CreateRelationRequest.builder()
+                rag.createRelation(WORKSPACE, CreateRelationRequest.builder()
                     .sourceEntityName("Alice")
                     .targetEntityName("Bob")
                     .relationType("works_with")
@@ -1540,7 +1542,7 @@ class E2ELightRagTest {
                     .weight(0.8d)
                     .build());
 
-                rag.mergeEntities(MergeEntitiesRequest.builder()
+                rag.mergeEntities(WORKSPACE, MergeEntitiesRequest.builder()
                     .sourceEntityNames(List.of("Bob"))
                     .targetEntityName("Robert")
                     .build());
@@ -1569,17 +1571,17 @@ class E2ELightRagTest {
             .loadFromSnapshot(snapshotPath)
             .build();
 
-        rag.createEntity(CreateEntityRequest.builder()
+        rag.createEntity(WORKSPACE, CreateEntityRequest.builder()
             .name("Alice")
             .type("person")
             .description("Researcher")
             .build());
-        rag.createEntity(CreateEntityRequest.builder()
+        rag.createEntity(WORKSPACE, CreateEntityRequest.builder()
             .name("Bob")
             .type("person")
             .description("Engineer")
             .build());
-        rag.createRelation(CreateRelationRequest.builder()
+        rag.createRelation(WORKSPACE, CreateRelationRequest.builder()
             .sourceEntityName("Alice")
             .targetEntityName("Bob")
             .relationType("works_with")
@@ -1587,7 +1589,7 @@ class E2ELightRagTest {
             .weight(0.8d)
             .build());
 
-        rag.editRelation(EditRelationRequest.builder()
+        rag.editRelation(WORKSPACE, EditRelationRequest.builder()
             .sourceEntityName("Alice")
             .targetEntityName("Bob")
             .currentRelationType("works_with")
@@ -1635,17 +1637,17 @@ class E2ELightRagTest {
                     .storage(storage)
                     .build();
 
-                rag.createEntity(CreateEntityRequest.builder()
+                rag.createEntity(WORKSPACE, CreateEntityRequest.builder()
                     .name("Alice")
                     .type("person")
                     .description("Researcher")
                     .build());
-                rag.createEntity(CreateEntityRequest.builder()
+                rag.createEntity(WORKSPACE, CreateEntityRequest.builder()
                     .name("Bob")
                     .type("person")
                     .description("Engineer")
                     .build());
-                rag.createRelation(CreateRelationRequest.builder()
+                rag.createRelation(WORKSPACE, CreateRelationRequest.builder()
                     .sourceEntityName("Alice")
                     .targetEntityName("Bob")
                     .relationType("works_with")
@@ -1653,7 +1655,7 @@ class E2ELightRagTest {
                     .weight(0.8d)
                     .build());
 
-                rag.editRelation(EditRelationRequest.builder()
+                rag.editRelation(WORKSPACE, EditRelationRequest.builder()
                     .sourceEntityName("Alice")
                     .targetEntityName("Bob")
                     .currentRelationType("works_with")
@@ -1713,17 +1715,17 @@ class E2ELightRagTest {
                     .storage(storage)
                     .build();
 
-                rag.createEntity(CreateEntityRequest.builder()
+                rag.createEntity(WORKSPACE, CreateEntityRequest.builder()
                     .name("Alice")
                     .type("person")
                     .description("Researcher")
                     .build());
-                rag.createEntity(CreateEntityRequest.builder()
+                rag.createEntity(WORKSPACE, CreateEntityRequest.builder()
                     .name("Bob")
                     .type("person")
                     .description("Engineer")
                     .build());
-                rag.createRelation(CreateRelationRequest.builder()
+                rag.createRelation(WORKSPACE, CreateRelationRequest.builder()
                     .sourceEntityName("Alice")
                     .targetEntityName("Bob")
                     .relationType("works_with")
@@ -1731,7 +1733,7 @@ class E2ELightRagTest {
                     .weight(0.8d)
                     .build());
 
-                rag.editEntity(EditEntityRequest.builder()
+                rag.editEntity(WORKSPACE, EditEntityRequest.builder()
                     .entityName("Bob")
                     .newName("Robert")
                     .description("Principal investigator")
@@ -1766,9 +1768,9 @@ class E2ELightRagTest {
             .storage(storage)
             .build();
 
-        rag.ingest(List.of(new Document("doc-1", "Title", "Alice works with Bob", Map.of())));
+        rag.ingest(WORKSPACE, List.of(new Document("doc-1", "Title", "Alice works with Bob", Map.of())));
 
-        QueryResult result = rag.query(QueryRequest.builder()
+        QueryResult result = rag.query(WORKSPACE, QueryRequest.builder()
             .query("Who works with Bob?")
             .build());
 
@@ -1802,9 +1804,9 @@ class E2ELightRagTest {
             .storage(storage)
             .build();
 
-        rag.ingest(List.of(new Document("doc-1", "Title", "Alice works with Bob", Map.of())));
+        rag.ingest(WORKSPACE, List.of(new Document("doc-1", "Title", "Alice works with Bob", Map.of())));
 
-        var result = rag.query(QueryRequest.builder()
+        var result = rag.query(WORKSPACE, QueryRequest.builder()
             .query("Who works with Bob?")
             .responseType("Bullet Points")
             .userPrompt("Answer in bullet points.")
@@ -1849,12 +1851,12 @@ class E2ELightRagTest {
             .storage(storage)
             .build();
 
-        rag.ingest(List.of(
+        rag.ingest(WORKSPACE, List.of(
             new Document("doc-1", "Title", "Alice works with Bob", Map.of()),
             new Document("doc-2", "Title", "Bob reports to Carol", Map.of())
         ));
 
-        var result = rag.query(QueryRequest.builder()
+        var result = rag.query(WORKSPACE, QueryRequest.builder()
             .query("Who works with Bob?")
             .mode(QueryMode.LOCAL)
             .build());
@@ -1873,9 +1875,9 @@ class E2ELightRagTest {
             .storage(storage)
             .build();
 
-        rag.ingest(List.of(new Document("doc-1", "Title", "Alice works with Bob", Map.of())));
+        rag.ingest(WORKSPACE, List.of(new Document("doc-1", "Title", "Alice works with Bob", Map.of())));
 
-        var result = rag.query(QueryRequest.builder()
+        var result = rag.query(WORKSPACE, QueryRequest.builder()
             .query("Who works with Bob?")
             .onlyNeedContext(true)
             .build());
@@ -1902,11 +1904,11 @@ class E2ELightRagTest {
             .storage(storage)
             .build();
 
-        rag.ingest(List.of(
+        rag.ingest(WORKSPACE, List.of(
             new Document("doc-1", "Title", "Alice works with Bob", Map.of("source", "team-notes.md"))
         ));
 
-        var result = rag.query(QueryRequest.builder()
+        var result = rag.query(WORKSPACE, QueryRequest.builder()
             .query("Who works with Bob?")
             .includeReferences(true)
             .build());
@@ -1931,11 +1933,11 @@ class E2ELightRagTest {
             .storage(storage)
             .build();
 
-        rag.ingest(List.of(
+        rag.ingest(WORKSPACE, List.of(
             new Document("doc-1", "Title", "Alice works with Bob", Map.of("source", "team-notes.md"))
         ));
 
-        var result = rag.query(QueryRequest.builder()
+        var result = rag.query(WORKSPACE, QueryRequest.builder()
             .query("Who works with Bob?")
             .includeReferences(true)
             .stream(true)
@@ -1964,9 +1966,9 @@ class E2ELightRagTest {
             .storage(storage)
             .build();
 
-        rag.ingest(List.of(new Document("doc-1", "Title", "Alice works with Bob", Map.of())));
+        rag.ingest(WORKSPACE, List.of(new Document("doc-1", "Title", "Alice works with Bob", Map.of())));
 
-        var result = rag.query(QueryRequest.builder()
+        var result = rag.query(WORKSPACE, QueryRequest.builder()
             .query("Who works with Bob?")
             .modelFunc(overrideModel)
             .build());
@@ -1987,9 +1989,9 @@ class E2ELightRagTest {
             .storage(storage)
             .build();
 
-        rag.ingest(List.of(new Document("doc-1", "Title", "Alice works with Bob", Map.of())));
+        rag.ingest(WORKSPACE, List.of(new Document("doc-1", "Title", "Alice works with Bob", Map.of())));
 
-        var result = rag.query(QueryRequest.builder()
+        var result = rag.query(WORKSPACE, QueryRequest.builder()
             .query("Who works with Bob?")
             .stream(true)
             .modelFunc(overrideModel)
@@ -2010,9 +2012,9 @@ class E2ELightRagTest {
             .storage(storage)
             .build();
 
-        rag.ingest(List.of(new Document("doc-1", "Title", "Alice works with Bob", Map.of())));
+        rag.ingest(WORKSPACE, List.of(new Document("doc-1", "Title", "Alice works with Bob", Map.of())));
 
-        var result = rag.query(QueryRequest.builder()
+        var result = rag.query(WORKSPACE, QueryRequest.builder()
             .query("Who works with Bob?")
             .conversationHistory(List.of(
                 new ChatModel.ChatRequest.ConversationMessage("user", "Earlier question"),
@@ -2054,7 +2056,7 @@ class E2ELightRagTest {
             .storage(storage)
             .build();
 
-        var result = rag.query(QueryRequest.builder()
+        var result = rag.query(WORKSPACE, QueryRequest.builder()
             .query("Talk directly to the model")
             .mode(QueryMode.BYPASS)
             .conversationHistory(List.of(
@@ -2085,7 +2087,7 @@ class E2ELightRagTest {
             .storage(storage)
             .build();
 
-        var result = rag.query(QueryRequest.builder()
+        var result = rag.query(WORKSPACE, QueryRequest.builder()
             .query("Talk directly to the model")
             .mode(QueryMode.BYPASS)
             .stream(true)
@@ -2109,13 +2111,13 @@ class E2ELightRagTest {
             .storage(storage)
             .build();
 
-        rag.ingest(List.of(
+        rag.ingest(WORKSPACE, List.of(
             new Document("doc-1", "Title", "Alice works with Bob", Map.of()),
             new Document("doc-2", "Title", "Alice works with Bob near Carol", Map.of()),
             new Document("doc-3", "Title", "Alice works with Bob in Zurich", Map.of())
         ));
 
-        var result = rag.query(QueryRequest.builder()
+        var result = rag.query(WORKSPACE, QueryRequest.builder()
             .query("Who works with Bob?")
             .chunkTopK(3)
             .build());
@@ -2135,9 +2137,9 @@ class E2ELightRagTest {
             .storage(storage)
             .build();
 
-        rag.ingest(List.of(new Document("doc-1", "Title", "Alice works with Bob", Map.of())));
+        rag.ingest(WORKSPACE, List.of(new Document("doc-1", "Title", "Alice works with Bob", Map.of())));
 
-        var result = rag.query(QueryRequest.builder()
+        var result = rag.query(WORKSPACE, QueryRequest.builder()
             .query("Who works with Bob?")
             .mode(io.github.lightragjava.api.QueryMode.NAIVE)
             .build());
@@ -2167,17 +2169,17 @@ class E2ELightRagTest {
             .storage(storage)
             .build();
 
-        rag.ingest(List.of(
+        rag.ingest(WORKSPACE, List.of(
             new Document("doc-1", "Title", "Alice works with Bob", Map.of()),
             new Document("doc-2", "Title", "Bob reports to Carol", Map.of())
         ));
 
-        var local = rag.query(QueryRequest.builder()
+        var local = rag.query(WORKSPACE, QueryRequest.builder()
             .query("Who reports to Carol?")
             .mode(QueryMode.LOCAL)
             .llKeywords(List.of("Alice"))
             .build());
-        var global = rag.query(QueryRequest.builder()
+        var global = rag.query(WORKSPACE, QueryRequest.builder()
             .query("Who works with Bob?")
             .mode(QueryMode.GLOBAL)
             .hlKeywords(List.of("Carol"))
@@ -2201,13 +2203,13 @@ class E2ELightRagTest {
             .storage(storage)
             .build();
 
-        rag.ingest(List.of(
+        rag.ingest(WORKSPACE, List.of(
             new Document("doc-1", "Title", "Alice works with Bob", Map.of()),
             new Document("doc-2", "Title", "Alice works with Bob near Carol", Map.of()),
             new Document("doc-3", "Title", "Alice works with Bob in Zurich", Map.of())
         ));
 
-        var result = rag.query(QueryRequest.builder()
+        var result = rag.query(WORKSPACE, QueryRequest.builder()
             .query("Who works with Bob?")
             .chunkTopK(3)
             .enableRerank(false)
@@ -2228,13 +2230,13 @@ class E2ELightRagTest {
             .storage(storage)
             .build();
 
-        rag.ingest(List.of(
+        rag.ingest(WORKSPACE, List.of(
             new Document("doc-1", "Title", "Alice works with Bob", Map.of()),
             new Document("doc-2", "Title", "Alice works with Bob near Carol", Map.of()),
             new Document("doc-3", "Title", "Alice works with Bob in Zurich", Map.of())
         ));
 
-        var result = rag.query(QueryRequest.builder()
+        var result = rag.query(WORKSPACE, QueryRequest.builder()
             .query("Who works with Bob?")
             .mode(io.github.lightragjava.api.QueryMode.NAIVE)
             .chunkTopK(3)
@@ -2254,28 +2256,28 @@ class E2ELightRagTest {
             .storage(storage)
             .build();
 
-        rag.ingest(List.of(
+        rag.ingest(WORKSPACE, List.of(
             new Document("doc-1", "Title", "Alice works with Bob", Map.of()),
             new Document("doc-2", "Title", "Bob reports to Carol", Map.of())
         ));
 
-        var local = rag.query(QueryRequest.builder()
+        var local = rag.query(WORKSPACE, QueryRequest.builder()
             .query("Who works with Bob?")
             .mode(io.github.lightragjava.api.QueryMode.LOCAL)
             .build());
-        var global = rag.query(QueryRequest.builder()
+        var global = rag.query(WORKSPACE, QueryRequest.builder()
             .query("Who reports to Carol?")
             .mode(io.github.lightragjava.api.QueryMode.GLOBAL)
             .build());
-        var hybrid = rag.query(QueryRequest.builder()
+        var hybrid = rag.query(WORKSPACE, QueryRequest.builder()
             .query("Who works with Bob?")
             .mode(io.github.lightragjava.api.QueryMode.HYBRID)
             .build());
-        var mix = rag.query(QueryRequest.builder()
+        var mix = rag.query(WORKSPACE, QueryRequest.builder()
             .query("Who works with Bob?")
             .mode(io.github.lightragjava.api.QueryMode.MIX)
             .build());
-        var naive = rag.query(QueryRequest.builder()
+        var naive = rag.query(WORKSPACE, QueryRequest.builder()
             .query("Who works with Bob?")
             .mode(io.github.lightragjava.api.QueryMode.NAIVE)
             .build());
@@ -2305,9 +2307,9 @@ class E2ELightRagTest {
             .storage(storage)
             .build();
 
-        rag.ingest(List.of(new Document("doc-1", "Title", "Alice works with Bob", Map.of())));
+        rag.ingest(WORKSPACE, List.of(new Document("doc-1", "Title", "Alice works with Bob", Map.of())));
 
-        rag.deleteByEntity("Alice");
+        rag.deleteByEntity(WORKSPACE, "Alice");
 
         assertThat(storage.documentStore().load("doc-1")).isPresent();
         assertThat(storage.chunkStore().listByDocument("doc-1")).hasSize(1);
@@ -2332,9 +2334,9 @@ class E2ELightRagTest {
             .storage(storage)
             .build();
 
-        rag.ingest(List.of(new Document("doc-1", "Title", "Alice works with Bob", Map.of())));
+        rag.ingest(WORKSPACE, List.of(new Document("doc-1", "Title", "Alice works with Bob", Map.of())));
 
-        rag.deleteByRelation("Alice", "Bob");
+        rag.deleteByRelation(WORKSPACE, "Alice", "Bob");
 
         assertThat(storage.documentStore().load("doc-1")).isPresent();
         assertThat(storage.chunkStore().listByDocument("doc-1")).hasSize(1);
@@ -2359,12 +2361,12 @@ class E2ELightRagTest {
             .storage(storage)
             .build();
 
-        rag.ingest(List.of(
+        rag.ingest(WORKSPACE, List.of(
             new Document("doc-1", "Title", "Alice works with Bob", Map.of()),
             new Document("doc-2", "Title", "Bob reports to Carol", Map.of())
         ));
 
-        rag.deleteByDocumentId("doc-1");
+        rag.deleteByDocumentId(WORKSPACE, "doc-1");
 
         assertThat(storage.documentStore().load("doc-1")).isEmpty();
         assertThat(storage.documentStore().load("doc-2")).isPresent();
@@ -2388,7 +2390,7 @@ class E2ELightRagTest {
             .storage(storage)
             .build();
 
-        seedRag.ingest(List.of(
+        seedRag.ingest(WORKSPACE, List.of(
             new Document("doc-1", "Title", "Alice works with Bob", Map.of()),
             new Document("doc-2", "Title", "Bob reports to Carol", Map.of())
         ));
@@ -2399,7 +2401,7 @@ class E2ELightRagTest {
             .storage(storage)
             .build();
 
-        assertThatThrownBy(() -> rag.deleteByDocumentId("doc-1"))
+        assertThatThrownBy(() -> rag.deleteByDocumentId(WORKSPACE, "doc-1"))
             .isInstanceOf(IllegalStateException.class)
             .hasMessage("extract failed");
 
@@ -2426,10 +2428,10 @@ class E2ELightRagTest {
             .storage(storage)
             .build();
 
-        rag.ingest(List.of(new Document("doc-1", "Title", "Alice works with Bob", Map.of())));
+        rag.ingest(WORKSPACE, List.of(new Document("doc-1", "Title", "Alice works with Bob", Map.of())));
 
-        rag.deleteByEntity("Missing");
-        rag.deleteByRelation("Missing", "Bob");
+        rag.deleteByEntity(WORKSPACE, "Missing");
+        rag.deleteByRelation(WORKSPACE, "Missing", "Bob");
 
         assertThat(storage.documentStore().list())
             .extracting(DocumentStore.DocumentRecord::id)
@@ -2453,8 +2455,8 @@ class E2ELightRagTest {
             .loadFromSnapshot(snapshotPath)
             .build();
 
-        rag.ingest(List.of(new Document("doc-1", "Title", "Alice works with Bob", Map.of())));
-        rag.deleteByRelation("Alice", "Bob");
+        rag.ingest(WORKSPACE, List.of(new Document("doc-1", "Title", "Alice works with Bob", Map.of())));
+        rag.deleteByRelation(WORKSPACE, "Alice", "Bob");
 
         var snapshot = storage.snapshotStore().load(snapshotPath);
         assertThat(snapshot.documents())
@@ -2491,7 +2493,7 @@ class E2ELightRagTest {
                     .storage(storage)
                     .build();
 
-                rag.ingest(List.of(
+                rag.ingest(WORKSPACE, List.of(
                     new Document("doc-1", "Title", "Alice works with Bob", Map.of()),
                     new Document("doc-2", "Title", "Bob reports to Carol", Map.of())
                 ));
@@ -2502,23 +2504,23 @@ class E2ELightRagTest {
                 assertThat(storage.graphStore().allRelations()).isNotEmpty();
                 assertThat(storage.vectorStore().list("chunks")).isNotEmpty();
 
-                var local = rag.query(QueryRequest.builder()
+                var local = rag.query(WORKSPACE, QueryRequest.builder()
                     .query("Who works with Bob?")
                     .mode(io.github.lightragjava.api.QueryMode.LOCAL)
                     .build());
-                var global = rag.query(QueryRequest.builder()
+                var global = rag.query(WORKSPACE, QueryRequest.builder()
                     .query("Who reports to Carol?")
                     .mode(io.github.lightragjava.api.QueryMode.GLOBAL)
                     .build());
-                var hybrid = rag.query(QueryRequest.builder()
+                var hybrid = rag.query(WORKSPACE, QueryRequest.builder()
                     .query("Who works with Bob?")
                     .mode(io.github.lightragjava.api.QueryMode.HYBRID)
                     .build());
-                var mix = rag.query(QueryRequest.builder()
+                var mix = rag.query(WORKSPACE, QueryRequest.builder()
                     .query("Who works with Bob?")
                     .mode(io.github.lightragjava.api.QueryMode.MIX)
                     .build());
-                var naive = rag.query(QueryRequest.builder()
+                var naive = rag.query(WORKSPACE, QueryRequest.builder()
                     .query("Who works with Bob?")
                     .mode(io.github.lightragjava.api.QueryMode.NAIVE)
                     .build());
@@ -2609,7 +2611,7 @@ class E2ELightRagTest {
                     .storage(storage)
                     .build();
 
-                assertThatThrownBy(() -> rag.ingest(List.of(
+                assertThatThrownBy(() -> rag.ingest(WORKSPACE, List.of(
                     new Document("doc-1", "Title", "Alice works with Bob", Map.of("source", "test"))
                 )))
                     .isInstanceOf(IllegalStateException.class)
@@ -2661,7 +2663,7 @@ class E2ELightRagTest {
                     .storage(storage)
                     .build();
 
-                rag.ingest(List.of(
+                rag.ingest(WORKSPACE, List.of(
                     new Document("doc-1", "Title", "Alice works with Bob", Map.of()),
                     new Document("doc-2", "Title", "Bob reports to Carol", Map.of())
                 ));
@@ -2672,23 +2674,23 @@ class E2ELightRagTest {
                 assertThat(storage.graphStore().allRelations()).isNotEmpty();
                 assertThat(storage.vectorStore().list("chunks")).isNotEmpty();
 
-                var local = rag.query(QueryRequest.builder()
+                var local = rag.query(WORKSPACE, QueryRequest.builder()
                     .query("Who works with Bob?")
                     .mode(io.github.lightragjava.api.QueryMode.LOCAL)
                     .build());
-                var global = rag.query(QueryRequest.builder()
+                var global = rag.query(WORKSPACE, QueryRequest.builder()
                     .query("Who reports to Carol?")
                     .mode(io.github.lightragjava.api.QueryMode.GLOBAL)
                     .build());
-                var hybrid = rag.query(QueryRequest.builder()
+                var hybrid = rag.query(WORKSPACE, QueryRequest.builder()
                     .query("Who works with Bob?")
                     .mode(io.github.lightragjava.api.QueryMode.HYBRID)
                     .build());
-                var mix = rag.query(QueryRequest.builder()
+                var mix = rag.query(WORKSPACE, QueryRequest.builder()
                     .query("Who works with Bob?")
                     .mode(io.github.lightragjava.api.QueryMode.MIX)
                     .build());
-                var naive = rag.query(QueryRequest.builder()
+                var naive = rag.query(WORKSPACE, QueryRequest.builder()
                     .query("Who works with Bob?")
                     .mode(io.github.lightragjava.api.QueryMode.NAIVE)
                     .build());

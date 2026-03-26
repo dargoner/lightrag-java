@@ -31,6 +31,7 @@ import java.util.regex.Pattern;
 import static org.assertj.core.api.Assertions.assertThat;
 
 class ParentChildOfflineRetrievalEvaluationTest {
+    private static final String WORKSPACE = "default";
     private static final ObjectMapper OBJECT_MAPPER = new ObjectMapper();
     private static final Pattern TOKEN_SPLIT = Pattern.compile("[^\\p{IsHan}a-z0-9]+");
     private static final int VECTOR_DIMENSIONS = 1024;
@@ -151,7 +152,7 @@ class ParentChildOfflineRetrievalEvaluationTest {
             .automaticQueryKeywordExtraction(false)
             .build();
 
-        rag.ingestSources(loadDocumentSources(documentsDir), new DocumentIngestOptions(
+        rag.ingestSources(WORKSPACE, loadDocumentSources(documentsDir), new DocumentIngestOptions(
             DocumentTypeHint.AUTO,
             granularity,
             strategyOverride,
@@ -161,7 +162,7 @@ class ParentChildOfflineRetrievalEvaluationTest {
 
         var reports = new ArrayList<CaseReport>();
         for (var testCase : testCases) {
-            var result = rag.query(QueryRequest.builder()
+            var result = rag.query(WORKSPACE, QueryRequest.builder()
                 .query(testCase.question())
                 .mode(QueryMode.NAIVE)
                 .chunkTopK(1)

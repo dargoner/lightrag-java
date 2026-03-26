@@ -23,6 +23,8 @@ import java.util.List;
 import static org.assertj.core.api.Assertions.assertThat;
 
 class ParentChildChunkIntegrationTest {
+    private static final String WORKSPACE = "default";
+
     @Test
     void ingestSourcesUsesParentSummaryAugmentedEmbeddingTextForChildChunks() {
         var storage = InMemoryStorageProvider.create();
@@ -33,7 +35,7 @@ class ParentChildChunkIntegrationTest {
             .storage(storage)
             .build();
 
-        rag.ingestSources(
+        rag.ingestSources(WORKSPACE, 
             List.of(RawDocumentSource.bytes(
                 "charter.md",
                 """
@@ -77,7 +79,7 @@ class ParentChildChunkIntegrationTest {
             java.util.Map.of()
         );
 
-        rag.ingestSources(
+        rag.ingestSources(WORKSPACE, 
             List.of(source),
             new DocumentIngestOptions(
                 DocumentTypeHint.AUTO,
@@ -92,7 +94,7 @@ class ParentChildChunkIntegrationTest {
             .extracting(vector -> vector.id())
             .allSatisfy(id -> assertThat(id).contains("#child:"));
 
-        var result = rag.query(QueryRequest.builder()
+        var result = rag.query(WORKSPACE, QueryRequest.builder()
             .query("研究章程")
             .mode(QueryMode.NAIVE)
             .chunkTopK(1)
@@ -122,7 +124,7 @@ class ParentChildChunkIntegrationTest {
             java.util.Map.of()
         );
 
-        rag.ingestSources(
+        rag.ingestSources(WORKSPACE, 
             List.of(source),
             new DocumentIngestOptions(
                 DocumentTypeHint.AUTO,
@@ -137,7 +139,7 @@ class ParentChildChunkIntegrationTest {
             .extracting(vector -> vector.id())
             .containsExactly("doc-caption:0");
 
-        var result = rag.query(QueryRequest.builder()
+        var result = rag.query(WORKSPACE, QueryRequest.builder()
             .query("医疗信息化政策重点一览图")
             .mode(QueryMode.NAIVE)
             .chunkTopK(1)
@@ -153,12 +155,12 @@ class ParentChildChunkIntegrationTest {
         var disabled = ingestWithProfile(ParentChildProfile.disabled(), new SectionAwareEmbeddingModel());
         var enabled = ingestWithProfile(ParentChildProfile.enabled(18, 4), new SectionAwareEmbeddingModel());
 
-        var disabledResult = disabled.query(QueryRequest.builder()
+        var disabledResult = disabled.query(WORKSPACE, QueryRequest.builder()
             .query("研究章程 执行步骤")
             .mode(QueryMode.NAIVE)
             .chunkTopK(1)
             .build());
-        var enabledResult = enabled.query(QueryRequest.builder()
+        var enabledResult = enabled.query(WORKSPACE, QueryRequest.builder()
             .query("研究章程 执行步骤")
             .mode(QueryMode.NAIVE)
             .chunkTopK(1)
@@ -183,7 +185,7 @@ class ParentChildChunkIntegrationTest {
             .automaticQueryKeywordExtraction(false)
             .build();
 
-        rag.ingestSources(
+        rag.ingestSources(WORKSPACE, 
             List.of(RawDocumentSource.bytes(
                 "charter-comparison.md",
                 """
