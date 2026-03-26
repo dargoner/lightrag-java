@@ -20,8 +20,9 @@ import java.util.EnumMap;
 import java.util.List;
 import java.util.NoSuchElementException;
 import java.util.Objects;
+import java.util.concurrent.atomic.AtomicBoolean;
 
-public final class LightRag {
+public final class LightRag implements AutoCloseable {
     private final LightRagConfig config;
     private final Chunker chunker;
     private final boolean automaticQueryKeywordExtraction;
@@ -39,6 +40,7 @@ public final class LightRag {
     private final DeletionPipeline deletionPipeline;
     private final GraphManagementPipeline graphManagementPipeline;
     private final QueryEngine queryEngine;
+    private final AtomicBoolean closed = new AtomicBoolean();
 
     LightRag(LightRagConfig config) {
         this(config, null, null, true, 2, Integer.MAX_VALUE, 1,
@@ -138,6 +140,14 @@ public final class LightRag {
 
     public static LightRagBuilder builder() {
         return new LightRagBuilder();
+    }
+
+    @Override
+    public void close() {
+        if (!closed.compareAndSet(false, true)) {
+            return;
+        }
+        config.workspaceStorageProvider().close();
     }
 
     public void ingest(List<Document> documents) {

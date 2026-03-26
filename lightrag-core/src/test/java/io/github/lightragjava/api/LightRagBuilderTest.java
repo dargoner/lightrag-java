@@ -18,6 +18,7 @@ import io.github.lightragjava.storage.InMemoryStorageProvider;
 import io.github.lightragjava.storage.SnapshotStore;
 import io.github.lightragjava.storage.StorageProvider;
 import io.github.lightragjava.storage.VectorStore;
+import io.github.lightragjava.storage.WorkspaceStorageProvider;
 import io.github.lightragjava.storage.memory.InMemoryDocumentStatusStore;
 import io.github.lightragjava.types.Chunk;
 import io.github.lightragjava.types.Document;
@@ -59,6 +60,70 @@ class LightRagBuilderTest {
         assertThat(rag.config().chatModel()).isSameAs(chatModel);
         assertThat(rag.config().embeddingModel()).isSameAs(embeddingModel);
         assertThat(rag.config().storageProvider()).isSameAs(storageProvider);
+    }
+
+    @Test
+    void rejectsConfiguringStorageAndWorkspaceStorageTogether() {
+        var builder = LightRag.builder()
+            .chatModel(new FakeChatModel())
+            .embeddingModel(new FakeEmbeddingModel())
+            .storage(new FakeStorageProvider());
+
+        assertThatThrownBy(() -> builder.workspaceStorage(new TestWorkspaceStorageProvider(new FakeStorageProvider())))
+            .isInstanceOf(IllegalStateException.class);
+    }
+
+    @Test
+    void rejectsLoadFromSnapshotWhenWorkspaceStorageIsConfigured() {
+        var builder = LightRag.builder()
+            .chatModel(new FakeChatModel())
+            .embeddingModel(new FakeEmbeddingModel())
+            .workspaceStorage(new TestWorkspaceStorageProvider(new FakeStorageProvider()));
+
+        assertThatThrownBy(() -> builder.loadFromSnapshot(Path.of("snapshots", "repository.json")))
+            .isInstanceOf(IllegalStateException.class);
+    }
+
+    @Test
+    void buildsWithWorkspaceStorageProvider() {
+        var workspaceStorageProvider = new TestWorkspaceStorageProvider(new FakeStorageProvider());
+
+        var rag = LightRag.builder()
+            .chatModel(new FakeChatModel())
+            .embeddingModel(new FakeEmbeddingModel())
+            .workspaceStorage(workspaceStorageProvider)
+            .build();
+
+        assertThat(rag).isNotNull();
+        assertThat(rag.config().workspaceStorageProvider()).isSameAs(workspaceStorageProvider);
+    }
+
+    @Test
+    void closesWorkspaceStorageProviderWhenLightRagIsClosed() {
+        var workspaceStorageProvider = new TestWorkspaceStorageProvider(new FakeStorageProvider());
+
+        var rag = LightRag.builder()
+            .chatModel(new FakeChatModel())
+            .embeddingModel(new FakeEmbeddingModel())
+            .workspaceStorage(workspaceStorageProvider)
+            .build();
+
+        assertThat(workspaceStorageProvider.closeCount()).isZero();
+
+        rag.close();
+        rag.close();
+
+        assertThat(workspaceStorageProvider.closeCount()).isEqualTo(1);
+    }
+
+    @Test
+    void rejectsBlankWorkspaceScopeValues() {
+        assertThatThrownBy(() -> new WorkspaceScope(null))
+            .isInstanceOf(NullPointerException.class);
+        assertThatThrownBy(() -> new WorkspaceScope(""))
+            .isInstanceOf(IllegalArgumentException.class);
+        assertThatThrownBy(() -> new WorkspaceScope("   "))
+            .isInstanceOf(IllegalArgumentException.class);
     }
 
     @Test
@@ -1143,6 +1208,29 @@ class LightRagBuilderTest {
 
         @Override
         public void restore(SnapshotStore.Snapshot snapshot) {
+        }
+    }
+
+    private static final class TestWorkspaceStorageProvider implements WorkspaceStorageProvider {
+        private final AtomicStorageProvider delegate;
+        private final AtomicInteger closeCount = new AtomicInteger();
+
+        private TestWorkspaceStorageProvider(AtomicStorageProvider delegate) {
+            this.delegate = delegate;
+        }
+
+        @Override
+        public AtomicStorageProvider forWorkspace(WorkspaceScope scope) {
+            return delegate;
+        }
+
+        @Override
+        public void close() {
+            closeCount.incrementAndGet();
+        }
+
+        int closeCount() {
+            return closeCount.get();
         }
     }
 

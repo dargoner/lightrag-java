@@ -12,10 +12,12 @@ import io.github.lightragjava.storage.AtomicStorageProvider;
 import io.github.lightragjava.storage.ChunkStore;
 import io.github.lightragjava.storage.DocumentStatusStore;
 import io.github.lightragjava.storage.DocumentStore;
+import io.github.lightragjava.storage.FixedWorkspaceStorageProvider;
 import io.github.lightragjava.storage.GraphStore;
 import io.github.lightragjava.storage.SnapshotStore;
 import io.github.lightragjava.storage.StorageProvider;
 import io.github.lightragjava.storage.VectorStore;
+import io.github.lightragjava.storage.WorkspaceStorageProvider;
 
 import java.nio.file.Path;
 import java.util.List;
@@ -31,6 +33,7 @@ public final class LightRagBuilder {
     private ChatModel chatModel;
     private EmbeddingModel embeddingModel;
     private StorageProvider storageProvider;
+    private WorkspaceStorageProvider workspaceStorageProvider;
     private Path snapshotPath;
     private RerankModel rerankModel;
     private Chunker chunker = new FixedWindowChunker(DEFAULT_CHUNK_WINDOW, DEFAULT_CHUNK_OVERLAP);
@@ -57,7 +60,21 @@ public final class LightRagBuilder {
     }
 
     public LightRagBuilder storage(StorageProvider storageProvider) {
+        if (workspaceStorageProvider != null) {
+            throw new IllegalStateException("workspaceStorageProvider is already configured");
+        }
         this.storageProvider = Objects.requireNonNull(storageProvider, "storageProvider");
+        return this;
+    }
+
+    public LightRagBuilder workspaceStorage(WorkspaceStorageProvider workspaceStorageProvider) {
+        if (storageProvider != null) {
+            throw new IllegalStateException("storageProvider is already configured");
+        }
+        if (snapshotPath != null) {
+            throw new IllegalStateException("workspaceStorageProvider does not support snapshots");
+        }
+        this.workspaceStorageProvider = Objects.requireNonNull(workspaceStorageProvider, "workspaceStorageProvider");
         return this;
     }
 
@@ -165,6 +182,9 @@ public final class LightRagBuilder {
     }
 
     public LightRagBuilder loadFromSnapshot(Path path) {
+        if (workspaceStorageProvider != null) {
+            throw new IllegalStateException("workspaceStorageProvider does not support snapshots");
+        }
         this.snapshotPath = Objects.requireNonNull(path, "path");
         return this;
     }
@@ -176,20 +196,42 @@ public final class LightRagBuilder {
         if (embeddingModel == null) {
             throw new IllegalStateException("embeddingModel is required");
         }
-        if (storageProvider == null) {
+        if (storageProvider == null && workspaceStorageProvider == null) {
             throw new IllegalStateException("storageProvider is required");
         }
         if (embeddingSemanticMergeEnabled && !(chunker instanceof SmartChunker)) {
             throw new IllegalStateException("embedding semantic merge requires SmartChunker");
         }
-        requireStore("documentStore", storageProvider.documentStore(), DocumentStore.class);
-        requireStore("chunkStore", storageProvider.chunkStore(), ChunkStore.class);
-        requireStore("graphStore", storageProvider.graphStore(), GraphStore.class);
-        requireStore("vectorStore", storageProvider.vectorStore(), VectorStore.class);
-        requireStore("documentStatusStore", storageProvider.documentStatusStore(), DocumentStatusStore.class);
-        requireStore("snapshotStore", storageProvider.snapshotStore(), SnapshotStore.class);
-        if (!(storageProvider instanceof AtomicStorageProvider atomicStorageProvider)) {
-            throw new IllegalStateException("storageProvider must implement AtomicStorageProvider");
+
+        AtomicStorageProvider atomicStorageProvider;
+        DocumentStatusStore documentStatusStore;
+        WorkspaceStorageProvider resolvedWorkspaceStorageProvider;
+
+        if (storageProvider != null) {
+            requireStore("documentStore", storageProvider.documentStore(), DocumentStore.class);
+            requireStore("chunkStore", storageProvider.chunkStore(), ChunkStore.class);
+            requireStore("graphStore", storageProvider.graphStore(), GraphStore.class);
+            requireStore("vectorStore", storageProvider.vectorStore(), VectorStore.class);
+            requireStore("documentStatusStore", storageProvider.documentStatusStore(), DocumentStatusStore.class);
+            requireStore("snapshotStore", storageProvider.snapshotStore(), SnapshotStore.class);
+            if (!(storageProvider instanceof AtomicStorageProvider configuredAtomicStorageProvider)) {
+                throw new IllegalStateException("storageProvider must implement AtomicStorageProvider");
+            }
+            atomicStorageProvider = configuredAtomicStorageProvider;
+            documentStatusStore = configuredAtomicStorageProvider.documentStatusStore();
+            resolvedWorkspaceStorageProvider = new FixedWorkspaceStorageProvider(configuredAtomicStorageProvider);
+        } else {
+            atomicStorageProvider = Objects.requireNonNull(
+                workspaceStorageProvider.forWorkspace(new WorkspaceScope("default")),
+                "workspaceStorageProvider.forWorkspace"
+            );
+            requireStore("documentStore", atomicStorageProvider.documentStore(), DocumentStore.class);
+            requireStore("chunkStore", atomicStorageProvider.chunkStore(), ChunkStore.class);
+            requireStore("graphStore", atomicStorageProvider.graphStore(), GraphStore.class);
+            requireStore("vectorStore", atomicStorageProvider.vectorStore(), VectorStore.class);
+            documentStatusStore = requireStore("documentStatusStore", atomicStorageProvider.documentStatusStore(), DocumentStatusStore.class);
+            requireStore("snapshotStore", atomicStorageProvider.snapshotStore(), SnapshotStore.class);
+            resolvedWorkspaceStorageProvider = workspaceStorageProvider;
         }
         restoreSnapshotIfPresent(atomicStorageProvider, snapshotPath);
 
@@ -197,9 +239,10 @@ public final class LightRagBuilder {
             chatModel,
             embeddingModel,
             atomicStorageProvider,
-            storageProvider.documentStatusStore(),
+            documentStatusStore,
             snapshotPath,
-            rerankModel
+            rerankModel,
+            resolvedWorkspaceStorageProvider
         ), chunker, documentParsingOrchestrator, automaticQueryKeywordExtraction, rerankCandidateMultiplier, embeddingBatchSize, maxParallelInsert,
             entityExtractMaxGleaning, maxExtractInputTokens, entityExtractionLanguage, entityTypes,
             embeddingSemanticMergeEnabled, embeddingSemanticMergeThreshold);
