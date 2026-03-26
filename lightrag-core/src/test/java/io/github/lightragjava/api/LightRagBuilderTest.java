@@ -18,6 +18,7 @@ import io.github.lightragjava.storage.InMemoryStorageProvider;
 import io.github.lightragjava.storage.SnapshotStore;
 import io.github.lightragjava.storage.StorageProvider;
 import io.github.lightragjava.storage.VectorStore;
+import io.github.lightragjava.storage.FixedWorkspaceStorageProvider;
 import io.github.lightragjava.storage.WorkspaceStorageProvider;
 import io.github.lightragjava.storage.memory.InMemoryDocumentStatusStore;
 import io.github.lightragjava.types.Chunk;
@@ -60,6 +61,12 @@ class LightRagBuilderTest {
         assertThat(rag.config().chatModel()).isSameAs(chatModel);
         assertThat(rag.config().embeddingModel()).isSameAs(embeddingModel);
         assertThat(rag.config().storageProvider()).isSameAs(storageProvider);
+        assertThat(rag.config().workspaceStorageProvider()).isInstanceOf(FixedWorkspaceStorageProvider.class);
+    }
+
+    @Test
+    void normalizesWorkspaceScopeValues() {
+        assertThat(new WorkspaceScope("  foo  ").workspaceId()).isEqualTo("foo");
     }
 
     @Test
