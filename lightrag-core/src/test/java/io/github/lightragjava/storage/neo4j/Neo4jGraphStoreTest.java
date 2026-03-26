@@ -1,6 +1,10 @@
 package io.github.lightragjava.storage.neo4j;
 
+import io.github.lightragjava.api.WorkspaceScope;
 import io.github.lightragjava.storage.GraphStore;
+import org.neo4j.driver.AuthTokens;
+import org.neo4j.driver.GraphDatabase;
+import org.neo4j.driver.SessionConfig;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.testcontainers.junit.jupiter.Container;
@@ -19,8 +23,15 @@ class Neo4jGraphStoreTest {
 
     @BeforeEach
     void resetGraph() {
-        try (var store = newGraphStore()) {
-            store.restore(new Neo4jGraphSnapshot(List.of(), List.of()));
+        try (var driver = GraphDatabase.driver(
+            NEO4J.getBoltUrl(),
+            AuthTokens.basic("neo4j", NEO4J.getAdminPassword())
+        );
+             var session = driver.session(SessionConfig.forDatabase("neo4j"))) {
+            session.executeWrite(tx -> {
+                tx.run("MATCH (node) DETACH DELETE node");
+                return null;
+            });
         }
     }
 
@@ -168,12 +179,45 @@ class Neo4jGraphStoreTest {
         }
     }
 
+    @Test
+    void usesDefaultWorkspaceAndIsolatesFromOtherWorkspaces() {
+        try (var defaultWorkspaceStore = newGraphStore();
+             var alphaWorkspaceStore = new WorkspaceScopedNeo4jGraphStore(newNeo4jConfig(), new WorkspaceScope("alpha"))) {
+            var defaultEntity = new GraphStore.EntityRecord(
+                "entity-1",
+                "Alice",
+                "person",
+                "Researcher",
+                List.of(),
+                List.of("chunk-default")
+            );
+            var alphaEntity = new GraphStore.EntityRecord(
+                "entity-1",
+                "Bob",
+                "person",
+                "Engineer",
+                List.of(),
+                List.of("chunk-alpha")
+            );
+
+            defaultWorkspaceStore.saveEntity(defaultEntity);
+            alphaWorkspaceStore.saveEntity(alphaEntity);
+
+            assertThat(defaultWorkspaceStore.loadEntity("entity-1")).contains(defaultEntity);
+            assertThat(alphaWorkspaceStore.loadEntity("entity-1")).contains(alphaEntity);
+        }
+    }
+
     private static Neo4jGraphStore newGraphStore() {
-        return new Neo4jGraphStore(new Neo4jGraphConfig(
+        return new Neo4jGraphStore(newNeo4jConfig());
+    }
+
+    private static Neo4jGraphConfig newNeo4jConfig() {
+        return new Neo4jGraphConfig(
             NEO4J.getBoltUrl(),
             "neo4j",
             NEO4J.getAdminPassword(),
             "neo4j"
-        ));
+        );
     }
 }
