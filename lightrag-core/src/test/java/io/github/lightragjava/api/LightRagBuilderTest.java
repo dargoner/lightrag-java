@@ -45,6 +45,7 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 class LightRagBuilderTest {
     private static final ObjectMapper OBJECT_MAPPER = new ObjectMapper();
+    private static final String WORKSPACE = "default";
 
     @Test
     void buildsWithRequiredDependencies() {
@@ -260,7 +261,7 @@ class LightRagBuilderTest {
             .embeddingBatchSize(2)
             .build();
 
-        rag.ingest(List.of(semanticMergeDocument()));
+        rag.ingest(WORKSPACE, List.of(semanticMergeDocument()));
 
         assertThat(storageProvider.chunkStore().listByDocument("doc-1"))
             .extracting(ChunkStore.ChunkRecord::text)
@@ -289,7 +290,7 @@ class LightRagBuilderTest {
             .embeddingBatchSize(2)
             .build();
 
-        rag.ingest(List.of(semanticMergeDocument()));
+        rag.ingest(WORKSPACE, List.of(semanticMergeDocument()));
 
         assertThat(storageProvider.chunkStore().listByDocument("doc-1"))
             .extracting(ChunkStore.ChunkRecord::text)
@@ -313,7 +314,7 @@ class LightRagBuilderTest {
             ))
             .build();
 
-        rag.ingest(List.of(new Document("doc-1", "Title", "ignored source text", Map.of())));
+        rag.ingest(WORKSPACE, List.of(new Document("doc-1", "Title", "ignored source text", Map.of())));
 
         assertThat(storageProvider.chunkStore().listByDocument("doc-1"))
             .extracting(ChunkStore.ChunkRecord::id)
@@ -331,7 +332,7 @@ class LightRagBuilderTest {
         );
         var options = new DocumentIngestOptions(DocumentTypeHint.LAW, ChunkGranularity.COARSE);
 
-        rag.ingestSources(List.of(source), options);
+        rag.ingestSources(WORKSPACE, List.of(source), options);
 
         var documentRecord = rag.config().storageProvider().documentStore()
             .load(source.sourceId())
@@ -356,10 +357,10 @@ class LightRagBuilderTest {
     }
 
     @Test
-    void keepsLegacyDocumentIngestApiUnchanged() {
+    void supportsExplicitWorkspaceDocumentIngestApi() {
         var rag = testLightRag();
 
-        rag.ingest(List.of(new Document("doc-1", "Title", "body", Map.of())));
+        rag.ingest(WORKSPACE, List.of(new Document("doc-1", "Title", "body", Map.of())));
 
         assertThat(chunkTexts(rag)).isNotEmpty();
     }
@@ -382,7 +383,7 @@ class LightRagBuilderTest {
             .embeddingBatchSize(2)
             .build();
 
-        rag.ingest(List.of(new Document("doc-1", "Title", "ignored source text", Map.of())));
+        rag.ingest(WORKSPACE, List.of(new Document("doc-1", "Title", "ignored source text", Map.of())));
 
         assertThat(embeddingModel.batchSizes()).containsExactly(2, 2, 1);
     }
@@ -402,7 +403,7 @@ class LightRagBuilderTest {
         Future<?> future;
         var executor = Executors.newSingleThreadExecutor();
         try {
-            future = executor.submit(() -> rag.ingest(List.of(
+            future = executor.submit(() -> rag.ingest(WORKSPACE, List.of(
                 new Document("doc-1", "Doc 1", "alpha", Map.of()),
                 new Document("doc-2", "Doc 2", "beta", Map.of())
             )));
@@ -436,7 +437,7 @@ class LightRagBuilderTest {
         Future<?> future;
         var executor = Executors.newSingleThreadExecutor();
         try {
-            future = executor.submit(() -> rag.ingest(List.of(
+            future = executor.submit(() -> rag.ingest(WORKSPACE, List.of(
                 new Document("doc-fail", "Doc fail", "explode", Map.of()),
                 new Document("doc-slow", "Doc slow", "steady", Map.of())
             )));
@@ -451,7 +452,7 @@ class LightRagBuilderTest {
         }
 
         assertThat(storageProvider.documentStore().contains("doc-slow")).isFalse();
-        assertThat(rag.getDocumentStatus("doc-slow").status()).isEqualTo(DocumentStatus.FAILED);
+        assertThat(rag.getDocumentStatus(WORKSPACE, "doc-slow").status()).isEqualTo(DocumentStatus.FAILED);
     }
 
     @Test
