@@ -221,17 +221,26 @@ public final class LightRagBuilder {
             documentStatusStore = configuredAtomicStorageProvider.documentStatusStore();
             resolvedWorkspaceStorageProvider = new FixedWorkspaceStorageProvider(configuredAtomicStorageProvider);
         } else {
-            atomicStorageProvider = Objects.requireNonNull(
-                workspaceStorageProvider.forWorkspace(new WorkspaceScope("default")),
-                "workspaceStorageProvider.forWorkspace"
-            );
-            requireStore("documentStore", atomicStorageProvider.documentStore(), DocumentStore.class);
-            requireStore("chunkStore", atomicStorageProvider.chunkStore(), ChunkStore.class);
-            requireStore("graphStore", atomicStorageProvider.graphStore(), GraphStore.class);
-            requireStore("vectorStore", atomicStorageProvider.vectorStore(), VectorStore.class);
-            documentStatusStore = requireStore("documentStatusStore", atomicStorageProvider.documentStatusStore(), DocumentStatusStore.class);
-            requireStore("snapshotStore", atomicStorageProvider.snapshotStore(), SnapshotStore.class);
-            resolvedWorkspaceStorageProvider = workspaceStorageProvider;
+            try {
+                atomicStorageProvider = Objects.requireNonNull(
+                    workspaceStorageProvider.forWorkspace(new WorkspaceScope("default")),
+                    "workspaceStorageProvider.forWorkspace"
+                );
+                requireStore("documentStore", atomicStorageProvider.documentStore(), DocumentStore.class);
+                requireStore("chunkStore", atomicStorageProvider.chunkStore(), ChunkStore.class);
+                requireStore("graphStore", atomicStorageProvider.graphStore(), GraphStore.class);
+                requireStore("vectorStore", atomicStorageProvider.vectorStore(), VectorStore.class);
+                documentStatusStore = requireStore("documentStatusStore", atomicStorageProvider.documentStatusStore(), DocumentStatusStore.class);
+                requireStore("snapshotStore", atomicStorageProvider.snapshotStore(), SnapshotStore.class);
+                resolvedWorkspaceStorageProvider = workspaceStorageProvider;
+            } catch (RuntimeException exception) {
+                try {
+                    workspaceStorageProvider.close();
+                } catch (RuntimeException closeException) {
+                    exception.addSuppressed(closeException);
+                }
+                throw exception;
+            }
         }
         restoreSnapshotIfPresent(atomicStorageProvider, snapshotPath);
 

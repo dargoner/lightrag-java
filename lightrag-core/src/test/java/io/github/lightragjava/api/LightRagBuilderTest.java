@@ -124,6 +124,22 @@ class LightRagBuilderTest {
     }
 
     @Test
+    void closesWorkspaceStorageProviderWhenBuildFailsInWorkspaceMode() {
+        var workspaceStorageProvider = new TestWorkspaceStorageProvider(new BrokenStorageProvider());
+
+        var builder = LightRag.builder()
+            .chatModel(new FakeChatModel())
+            .embeddingModel(new FakeEmbeddingModel())
+            .workspaceStorage(workspaceStorageProvider);
+
+        assertThatThrownBy(builder::build)
+            .isInstanceOf(IllegalStateException.class)
+            .hasMessageContaining("documentStore");
+
+        assertThat(workspaceStorageProvider.closeCount()).isEqualTo(1);
+    }
+
+    @Test
     void rejectsBlankWorkspaceScopeValues() {
         assertThatThrownBy(() -> new WorkspaceScope(null))
             .isInstanceOf(NullPointerException.class);
@@ -1215,6 +1231,13 @@ class LightRagBuilderTest {
 
         @Override
         public void restore(SnapshotStore.Snapshot snapshot) {
+        }
+    }
+
+    private static final class BrokenStorageProvider extends FakeStorageProvider {
+        @Override
+        public DocumentStore documentStore() {
+            return null;
         }
     }
 
