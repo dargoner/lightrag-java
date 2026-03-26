@@ -22,8 +22,6 @@ public record LightRagConfig(
     public LightRagConfig {
         chatModel = Objects.requireNonNull(chatModel, "chatModel");
         embeddingModel = Objects.requireNonNull(embeddingModel, "embeddingModel");
-        storageProvider = Objects.requireNonNull(storageProvider, "storageProvider");
-        documentStatusStore = Objects.requireNonNull(documentStatusStore, "documentStatusStore");
         workspaceStorageProvider = Objects.requireNonNull(workspaceStorageProvider, "workspaceStorageProvider");
     }
 }

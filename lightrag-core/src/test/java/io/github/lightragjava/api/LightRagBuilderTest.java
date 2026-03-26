@@ -107,6 +107,18 @@ class LightRagBuilderTest {
     }
 
     @Test
+    void doesNotRetainDefaultWorkspaceProviderInWorkspaceStorageMode() {
+        var rag = LightRag.builder()
+            .chatModel(new FakeChatModel())
+            .embeddingModel(new FakeEmbeddingModel())
+            .workspaceStorage(new TestWorkspaceStorageProvider(new FakeStorageProvider()))
+            .build();
+
+        assertThat(rag.config().storageProvider()).isNull();
+        assertThat(rag.config().documentStatusStore()).isNull();
+    }
+
+    @Test
     void closesWorkspaceStorageProviderWhenLightRagIsClosed() {
         var workspaceStorageProvider = new TestWorkspaceStorageProvider(new FakeStorageProvider());
 

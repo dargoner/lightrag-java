@@ -203,8 +203,8 @@ public final class LightRagBuilder {
             throw new IllegalStateException("embedding semantic merge requires SmartChunker");
         }
 
-        AtomicStorageProvider atomicStorageProvider;
-        DocumentStatusStore documentStatusStore;
+        AtomicStorageProvider atomicStorageProvider = null;
+        DocumentStatusStore documentStatusStore = null;
         WorkspaceStorageProvider resolvedWorkspaceStorageProvider;
 
         if (storageProvider != null) {
@@ -220,18 +220,19 @@ public final class LightRagBuilder {
             atomicStorageProvider = configuredAtomicStorageProvider;
             documentStatusStore = configuredAtomicStorageProvider.documentStatusStore();
             resolvedWorkspaceStorageProvider = new FixedWorkspaceStorageProvider(configuredAtomicStorageProvider);
+            restoreSnapshotIfPresent(atomicStorageProvider, snapshotPath);
         } else {
             try {
-                atomicStorageProvider = Objects.requireNonNull(
+                var validatedStorageProvider = Objects.requireNonNull(
                     workspaceStorageProvider.forWorkspace(new WorkspaceScope("default")),
                     "workspaceStorageProvider.forWorkspace"
                 );
-                requireStore("documentStore", atomicStorageProvider.documentStore(), DocumentStore.class);
-                requireStore("chunkStore", atomicStorageProvider.chunkStore(), ChunkStore.class);
-                requireStore("graphStore", atomicStorageProvider.graphStore(), GraphStore.class);
-                requireStore("vectorStore", atomicStorageProvider.vectorStore(), VectorStore.class);
-                documentStatusStore = requireStore("documentStatusStore", atomicStorageProvider.documentStatusStore(), DocumentStatusStore.class);
-                requireStore("snapshotStore", atomicStorageProvider.snapshotStore(), SnapshotStore.class);
+                requireStore("documentStore", validatedStorageProvider.documentStore(), DocumentStore.class);
+                requireStore("chunkStore", validatedStorageProvider.chunkStore(), ChunkStore.class);
+                requireStore("graphStore", validatedStorageProvider.graphStore(), GraphStore.class);
+                requireStore("vectorStore", validatedStorageProvider.vectorStore(), VectorStore.class);
+                requireStore("documentStatusStore", validatedStorageProvider.documentStatusStore(), DocumentStatusStore.class);
+                requireStore("snapshotStore", validatedStorageProvider.snapshotStore(), SnapshotStore.class);
                 resolvedWorkspaceStorageProvider = workspaceStorageProvider;
             } catch (RuntimeException exception) {
                 try {
@@ -242,7 +243,6 @@ public final class LightRagBuilder {
                 throw exception;
             }
         }
-        restoreSnapshotIfPresent(atomicStorageProvider, snapshotPath);
 
         return new LightRag(new LightRagConfig(
             chatModel,
