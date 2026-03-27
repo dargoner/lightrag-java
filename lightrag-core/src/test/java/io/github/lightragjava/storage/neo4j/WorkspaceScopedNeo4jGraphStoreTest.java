@@ -120,6 +120,39 @@ class WorkspaceScopedNeo4jGraphStoreTest {
         }
     }
 
+    @Test
+    void bootstrappingWorkspaceStoreDropsLegacyGlobalIdConstraints() {
+        installLegacyGlobalIdConstraints();
+
+        try (var alpha = newStore("alpha");
+             var beta = newStore("beta")) {
+            var alphaEntity = entity("entity:住房公积金", "住房公积金-alpha");
+            var betaEntity = entity("entity:住房公积金", "住房公积金-beta");
+            var alphaRelation = relation(
+                "relation:住房公积金:覆盖城市",
+                "entity:住房公积金",
+                "entity:覆盖城市",
+                "alpha relation"
+            );
+            var betaRelation = relation(
+                "relation:住房公积金:覆盖城市",
+                "entity:住房公积金",
+                "entity:覆盖城市",
+                "beta relation"
+            );
+
+            alpha.saveEntity(alphaEntity);
+            beta.saveEntity(betaEntity);
+            alpha.saveRelation(alphaRelation);
+            beta.saveRelation(betaRelation);
+
+            assertThat(alpha.loadEntity("entity:住房公积金")).contains(alphaEntity);
+            assertThat(beta.loadEntity("entity:住房公积金")).contains(betaEntity);
+            assertThat(alpha.allRelations()).containsExactly(alphaRelation);
+            assertThat(beta.allRelations()).containsExactly(betaRelation);
+        }
+    }
+
     private static WorkspaceScopedNeo4jGraphStore newStore(String workspaceId) {
         return new WorkspaceScopedNeo4jGraphStore(newNeo4jConfig(), new WorkspaceScope(workspaceId));
     }
@@ -159,5 +192,29 @@ class WorkspaceScopedNeo4jGraphStoreTest {
             0.9d,
             List.of("chunk-" + relationId)
         );
+    }
+
+    private static void installLegacyGlobalIdConstraints() {
+        try (var driver = GraphDatabase.driver(
+            NEO4J.getBoltUrl(),
+            AuthTokens.basic("neo4j", NEO4J.getAdminPassword())
+        );
+             var session = driver.session(SessionConfig.forDatabase("neo4j"))) {
+            session.executeWrite(tx -> {
+                tx.run(
+                    """
+                    CREATE CONSTRAINT neo4j_entity_id IF NOT EXISTS
+                    FOR (entity:Entity) REQUIRE entity.id IS UNIQUE
+                    """
+                );
+                tx.run(
+                    """
+                    CREATE CONSTRAINT neo4j_relation_id IF NOT EXISTS
+                    FOR ()-[relation:RELATION]-() REQUIRE relation.id IS UNIQUE
+                    """
+                );
+                return null;
+            });
+        }
     }
 }

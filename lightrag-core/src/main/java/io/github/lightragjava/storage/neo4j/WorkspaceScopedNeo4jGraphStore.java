@@ -3,6 +3,8 @@ package io.github.lightragjava.storage.neo4j;
 import io.github.lightragjava.api.WorkspaceScope;
 import io.github.lightragjava.exception.StorageException;
 import io.github.lightragjava.storage.GraphStore;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.neo4j.driver.AuthTokens;
 import org.neo4j.driver.Driver;
 import org.neo4j.driver.GraphDatabase;
@@ -19,6 +21,7 @@ import java.util.Optional;
 public final class WorkspaceScopedNeo4jGraphStore implements GraphStore, AutoCloseable {
     private static final String ENTITY_LABEL = "Entity";
     private static final String RELATION_TYPE = "RELATION";
+    private static final Logger log = LoggerFactory.getLogger(WorkspaceScopedNeo4jGraphStore.class);
 
     private final Driver driver;
     private final SessionConfig sessionConfig;
@@ -177,6 +180,8 @@ public final class WorkspaceScopedNeo4jGraphStore implements GraphStore, AutoClo
 
     private void bootstrap() {
         write(tx -> {
+            tx.run("DROP CONSTRAINT neo4j_entity_id IF EXISTS");
+            tx.run("DROP CONSTRAINT neo4j_relation_id IF EXISTS");
             tx.run(
                 """
                 CREATE CONSTRAINT neo4j_entity_scoped_id IF NOT EXISTS
@@ -322,6 +327,7 @@ public final class WorkspaceScopedNeo4jGraphStore implements GraphStore, AutoClo
         try (var session = driver.session(sessionConfig)) {
             return session.executeWrite(work::apply);
         } catch (RuntimeException exception) {
+            log.error("Neo4j graph write failed: workspaceId={}", workspaceId, exception);
             throw new StorageException("Neo4j graph write failed", exception);
         }
     }
