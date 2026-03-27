@@ -20,10 +20,11 @@ class QueryEngineTest {
     @Test
     void rerankReordersFinalContextsAndPromptContext() {
         var chatModel = new RecordingChatModel();
+        var strategy = new RecordingQueryStrategy(baseContext());
         var engine = new QueryEngine(
             chatModel,
             new ContextAssembler(),
-            strategiesReturning(baseContext()),
+            strategiesReturning(strategy),
             new StubRerankModel(List.of(
                 new RerankModel.RerankResult("chunk-3", 0.99d),
                 new RerankModel.RerankResult("chunk-2", 0.88d),
@@ -36,6 +37,9 @@ class QueryEngineTest {
             .mode(QueryMode.LOCAL)
             .topK(3)
             .chunkTopK(3)
+            .maxHop(4)
+            .pathTopK(5)
+            .multiHopEnabled(false)
             .responseType("Bullet Points")
             .build());
 
@@ -59,6 +63,9 @@ class QueryEngineTest {
             .contains("- chunk-1 | 0.900 | Alpha chunk");
         assertThat(chatModel.lastRequest().userPrompt()).isEqualTo("which chunk?");
         assertThat(result.references()).isEmpty();
+        assertThat(strategy.lastRequest().maxHop()).isEqualTo(4);
+        assertThat(strategy.lastRequest().pathTopK()).isEqualTo(5);
+        assertThat(strategy.lastRequest().multiHopEnabled()).isFalse();
     }
 
     @Test
@@ -920,6 +927,111 @@ class QueryEngineTest {
         assertThat(result.contexts()).isEmpty();
         assertThat(strategy.callCount()).isZero();
         assertThat(chatModel.callCount()).isZero();
+    }
+
+    @Test
+    void routesMultiHopQuestionsToDedicatedStrategyAndPreservesReasoningContext() {
+        var chatModel = new RecordingChatModel();
+        var defaultStrategy = new RecordingQueryStrategy(baseContext());
+        var multiHopStrategy = new RecordingQueryStrategy(new QueryContext(
+            List.of(),
+            List.of(),
+            List.of(scoredChunk("chunk-2", "GraphStore 服务由知识图谱组维护。", 0.95d)),
+            "Reasoning Path 1\nHop 1\nHop 2"
+        ));
+        var engine = new QueryEngine(
+            chatModel,
+            new ContextAssembler(),
+            strategiesReturning(defaultStrategy),
+            null,
+            true,
+            2,
+            new RuleBasedQueryIntentClassifier(),
+            multiHopStrategy,
+            new io.github.lightragjava.synthesis.PathAwareAnswerSynthesizer()
+        );
+
+        var result = engine.query(QueryRequest.builder()
+            .query("Atlas 通过谁影响知识图谱组？")
+            .mode(QueryMode.LOCAL)
+            .build());
+
+        assertThat(defaultStrategy.lastRequest()).isNull();
+        assertThat(multiHopStrategy.lastRequest()).isNotNull();
+        assertThat(result.answer()).isEqualTo("answer");
+        assertThat(chatModel.lastRequest().systemPrompt())
+            .contains("Reasoning Path 1")
+            .contains("explain the answer hop by hop")
+            .contains("do not have enough information");
+    }
+
+    @Test
+    void countsReasoningContextTowardChunkBudgetForMultiHopQueries() {
+        var chatModel = new RecordingChatModel();
+        var defaultStrategy = new RecordingQueryStrategy(baseContext());
+        var reasoningContext = ("Reasoning Path 1 " + "hop ".repeat(80)).trim();
+        var multiHopStrategy = new RecordingQueryStrategy(new QueryContext(
+            List.of(),
+            List.of(),
+            List.of(new ScoredChunk("chunk-1", new Chunk("chunk-1", "doc-1", "Alpha chunk", 2, 0, Map.of()), 0.9d)),
+            reasoningContext
+        ));
+        var engine = new QueryEngine(
+            chatModel,
+            new ContextAssembler(),
+            strategiesReturning(defaultStrategy),
+            null,
+            true,
+            2,
+            new RuleBasedQueryIntentClassifier(),
+            multiHopStrategy,
+            new io.github.lightragjava.synthesis.PathAwareAnswerSynthesizer()
+        );
+
+        var promptResult = engine.query(QueryRequest.builder()
+            .query("Atlas 通过谁影响知识图谱组？")
+            .mode(QueryMode.LOCAL)
+            .maxTotalTokens(10_000)
+            .onlyNeedPrompt(true)
+            .build());
+        var promptTokenCost = QueryBudgeting.approximateTokenCount(promptResult.answer());
+
+        var result = engine.query(QueryRequest.builder()
+            .query("Atlas 通过谁影响知识图谱组？")
+            .mode(QueryMode.LOCAL)
+            .maxTotalTokens(promptTokenCost + 1)
+            .build());
+
+        assertThat(result.contexts()).isEmpty();
+        assertThat(chatModel.lastRequest().systemPrompt()).contains(reasoningContext);
+    }
+
+    @Test
+    void doesNotRouteNaiveModeThroughMultiHopStrategyEvenForIndirectQuestion() {
+        var chatModel = new RecordingChatModel();
+        var defaultStrategy = new RecordingQueryStrategy(baseContext());
+        var multiHopStrategy = new RecordingQueryStrategy(new QueryContext(List.of(), List.of(), List.of(), "Reasoning Path 1"));
+        var strategies = new EnumMap<QueryMode, QueryStrategy>(QueryMode.class);
+        strategies.put(QueryMode.NAIVE, defaultStrategy);
+        var engine = new QueryEngine(
+            chatModel,
+            new ContextAssembler(),
+            strategies,
+            null,
+            true,
+            2,
+            new RuleBasedQueryIntentClassifier(),
+            multiHopStrategy,
+            new io.github.lightragjava.synthesis.PathAwareAnswerSynthesizer()
+        );
+
+        engine.query(QueryRequest.builder()
+            .query("Atlas 通过谁影响知识图谱组？")
+            .mode(QueryMode.NAIVE)
+            .build());
+
+        assertThat(defaultStrategy.lastRequest()).isNotNull();
+        assertThat(multiHopStrategy.lastRequest()).isNull();
     }
 
     private static QueryRequest baseRequest() {

@@ -36,13 +36,21 @@ class QueryKeywordExtractorTest {
             """);
         var extractor = new QueryKeywordExtractor();
 
-        var resolved = extractor.resolve(QueryRequest.builder()
+        var request = QueryRequest.builder()
             .query("Who works with Bob?")
             .mode(QueryMode.HYBRID)
-            .build(), model);
+            .maxHop(3)
+            .pathTopK(4)
+            .multiHopEnabled(false)
+            .build();
+
+        var resolved = extractor.resolve(request, model);
 
         assertThat(resolved.hlKeywords()).containsExactly("organization");
         assertThat(resolved.llKeywords()).containsExactly("alice", "bob");
+        assertThat(resolved.maxHop()).isEqualTo(3);
+        assertThat(resolved.pathTopK()).isEqualTo(4);
+        assertThat(resolved.multiHopEnabled()).isFalse();
         assertThat(model.keywordExtractionCallCount()).isEqualTo(1);
     }
 
@@ -90,25 +98,40 @@ class QueryKeywordExtractorTest {
     void fallsBackByModeWhenExtractionReturnsNoKeywords() {
         var extractor = new QueryKeywordExtractor();
 
-        var local = extractor.resolve(QueryRequest.builder()
+        var localRequest = QueryRequest.builder()
             .query("Who works with Bob?")
             .mode(QueryMode.LOCAL)
-            .build(), new CountingKeywordChatModel("{}"));
-        var global = extractor.resolve(QueryRequest.builder()
+            .maxHop(2)
+            .pathTopK(6)
+            .multiHopEnabled(false)
+            .build();
+        var local = extractor.resolve(localRequest, new CountingKeywordChatModel("{}"));
+        var globalRequest = QueryRequest.builder()
             .query("Who works with Bob?")
             .mode(QueryMode.GLOBAL)
-            .build(), new CountingKeywordChatModel("{}"));
-        var hybrid = extractor.resolve(QueryRequest.builder()
+            .maxHop(4)
+            .pathTopK(7)
+            .build();
+        var global = extractor.resolve(globalRequest, new CountingKeywordChatModel("{}"));
+        var hybridRequest = QueryRequest.builder()
             .query("Who works with Bob?")
             .mode(QueryMode.HYBRID)
-            .build(), new CountingKeywordChatModel("{}"));
+            .pathTopK(8)
+            .build();
+        var hybrid = extractor.resolve(hybridRequest, new CountingKeywordChatModel("{}"));
 
         assertThat(local.llKeywords()).containsExactly("Who works with Bob?");
         assertThat(local.hlKeywords()).isEmpty();
+        assertThat(local.maxHop()).isEqualTo(2);
+        assertThat(local.pathTopK()).isEqualTo(6);
+        assertThat(local.multiHopEnabled()).isFalse();
         assertThat(global.hlKeywords()).containsExactly("Who works with Bob?");
         assertThat(global.llKeywords()).isEmpty();
+        assertThat(global.maxHop()).isEqualTo(4);
+        assertThat(global.pathTopK()).isEqualTo(7);
         assertThat(hybrid.llKeywords()).containsExactly("Who works with Bob?");
         assertThat(hybrid.hlKeywords()).isEmpty();
+        assertThat(hybrid.pathTopK()).isEqualTo(8);
     }
 
     private static final class CountingKeywordChatModel implements ChatModel {

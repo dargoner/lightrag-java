@@ -1895,6 +1895,86 @@ class E2ELightRagTest {
     }
 
     @Test
+    void queryBuildsMultiHopPromptThroughRealLightRagPipeline() {
+        var storage = InMemoryStorageProvider.create();
+        var chatModel = new MultiHopExtractionChatModel();
+        var rag = LightRag.builder()
+            .chatModel(chatModel)
+            .embeddingModel(new MultiHopEmbeddingModel())
+            .storage(storage)
+            .automaticQueryKeywordExtraction(false)
+            .build();
+
+        rag.ingest(WORKSPACE, List.of(
+            new Document("doc-1", "Atlas", "Atlas 组件依赖 GraphStore 服务。", Map.of()),
+            new Document("doc-2", "GraphStore", "GraphStore 服务由 KnowledgeGraphTeam 维护。", Map.of())
+        ));
+
+        var result = rag.query(WORKSPACE, QueryRequest.builder()
+            .query("Atlas 通过谁关联 KnowledgeGraphTeam？")
+            .mode(QueryMode.LOCAL)
+            .maxHop(2)
+            .pathTopK(2)
+            .chunkTopK(4)
+            .onlyNeedPrompt(true)
+            .build());
+
+        assertThat(result.answer())
+            .contains("Multi-Hop Reasoning Instructions")
+            .contains("Reasoning Path 1")
+            .contains("Hop 1: Atlas --depends_on--> GraphStore")
+            .contains("Hop 2: GraphStore --owned_by--> KnowledgeGraphTeam")
+            .contains("Relation detail: Atlas relies on GraphStore as its dependency service.")
+            .contains("Relation detail: GraphStore is maintained by the knowledge graph team.")
+            .contains("Evidence [doc-1:0]: Atlas 组件依赖 GraphStore 服务。")
+            .contains("Evidence [doc-2:0]: GraphStore 服务由 KnowledgeGraphTeam 维护。")
+            .contains("---User Query---")
+            .contains("Atlas 通过谁关联 KnowledgeGraphTeam？");
+        assertThat(result.contexts())
+            .extracting(QueryResult.Context::sourceId)
+            .contains("doc-1:0", "doc-2:0");
+        assertThat(chatModel.queryCallCount()).isZero();
+    }
+
+    @Test
+    void queryGeneratesFinalAnswerFromMultiHopPrompt() {
+        var storage = InMemoryStorageProvider.create();
+        var chatModel = new MultiHopExtractionChatModel();
+        var rag = LightRag.builder()
+            .chatModel(chatModel)
+            .embeddingModel(new MultiHopEmbeddingModel())
+            .storage(storage)
+            .automaticQueryKeywordExtraction(false)
+            .build();
+
+        rag.ingest(WORKSPACE, List.of(
+            new Document("doc-1", "Atlas", "Atlas 组件依赖 GraphStore 服务。", Map.of()),
+            new Document("doc-2", "GraphStore", "GraphStore 服务由 KnowledgeGraphTeam 维护。", Map.of())
+        ));
+
+        var result = rag.query(WORKSPACE, QueryRequest.builder()
+            .query("Atlas 通过谁关联 KnowledgeGraphTeam？")
+            .mode(QueryMode.LOCAL)
+            .maxHop(2)
+            .pathTopK(2)
+            .chunkTopK(4)
+            .build());
+
+        assertThat(result.answer()).isEqualTo("Atlas 通过 GraphStore 关联 KnowledgeGraphTeam。");
+        assertThat(chatModel.queryCallCount()).isEqualTo(1);
+        assertThat(chatModel.lastQueryRequest()).isNotNull();
+        assertThat(chatModel.lastQueryRequest().systemPrompt())
+            .contains("Multi-Hop Reasoning Instructions")
+            .contains("Reasoning Path 1")
+            .contains("Hop 1: Atlas --depends_on--> GraphStore")
+            .contains("Hop 2: GraphStore --owned_by--> KnowledgeGraphTeam")
+            .contains("Relation detail: Atlas relies on GraphStore as its dependency service.")
+            .contains("Evidence [doc-1:0]: Atlas 组件依赖 GraphStore 服务。")
+            .contains("Evidence [doc-2:0]: GraphStore 服务由 KnowledgeGraphTeam 维护。");
+        assertThat(chatModel.lastQueryRequest().userPrompt()).isEqualTo("Atlas 通过谁关联 KnowledgeGraphTeam？");
+    }
+
+    @Test
     void queryCanReturnStructuredReferencesFromDocumentSourceMetadata() {
         var storage = InMemoryStorageProvider.create();
         var chatModel = new FakeChatModel();
@@ -2705,6 +2785,83 @@ class E2ELightRagTest {
     }
 
     @Test
+    void postgresNeo4jProviderBuildsMultiHopContextThroughPersistedGraphStore() {
+        try (
+            var postgres = new PostgreSQLContainer<>(
+                DockerImageName.parse("pgvector/pgvector:pg16").asCompatibleSubstituteFor("postgres")
+            );
+            var neo4j = new Neo4jContainer<>("neo4j:5-community").withAdminPassword("password")
+        ) {
+            postgres.start();
+            neo4j.start();
+            var storage = new PostgresNeo4jStorageProvider(
+                new PostgresStorageConfig(
+                    postgres.getJdbcUrl(),
+                    postgres.getUsername(),
+                    postgres.getPassword(),
+                    "lightrag",
+                    2,
+                    "rag_"
+                ),
+                new Neo4jGraphConfig(
+                    neo4j.getBoltUrl(),
+                    "neo4j",
+                    neo4j.getAdminPassword(),
+                    "neo4j"
+                ),
+                new FileSnapshotStore()
+            );
+
+            try (storage) {
+                var chatModel = new MultiHopExtractionChatModel();
+                var rag = LightRag.builder()
+                    .chatModel(chatModel)
+                    .embeddingModel(new MultiHopEmbeddingModel())
+                    .storage(storage)
+                    .automaticQueryKeywordExtraction(false)
+                    .build();
+
+                rag.ingest(WORKSPACE, List.of(
+                    new Document("doc-1", "Atlas", "Atlas 组件依赖 GraphStore 服务。", Map.of()),
+                    new Document("doc-2", "GraphStore", "GraphStore 服务由 KnowledgeGraphTeam 维护。", Map.of())
+                ));
+
+                assertThat(storage.graphStore().allEntities())
+                    .extracting(GraphStore.EntityRecord::id)
+                    .contains("entity:atlas", "entity:graphstore", "entity:knowledgegraphteam");
+                assertThat(storage.graphStore().allRelations())
+                    .extracting(GraphStore.RelationRecord::id)
+                    .contains(
+                        "relation:entity:atlas|depends_on|entity:graphstore",
+                        "relation:entity:graphstore|owned_by|entity:knowledgegraphteam"
+                    );
+
+                var result = rag.query(WORKSPACE, QueryRequest.builder()
+                    .query("Atlas 通过谁关联 KnowledgeGraphTeam？")
+                    .mode(QueryMode.LOCAL)
+                    .maxHop(2)
+                    .pathTopK(2)
+                    .chunkTopK(4)
+                    .onlyNeedContext(true)
+                    .build());
+
+                assertThat(result.answer())
+                    .contains("Reasoning Path 1")
+                    .contains("Hop 1: Atlas --depends_on--> GraphStore")
+                    .contains("Hop 2: GraphStore --owned_by--> KnowledgeGraphTeam")
+                    .contains("Relation detail: Atlas relies on GraphStore as its dependency service.")
+                    .contains("Relation detail: GraphStore is maintained by the knowledge graph team.")
+                    .contains("Evidence [doc-1:0]: Atlas 组件依赖 GraphStore 服务。")
+                    .contains("Evidence [doc-2:0]: GraphStore 服务由 KnowledgeGraphTeam 维护。");
+                assertThat(result.contexts())
+                    .extracting(QueryResult.Context::sourceId)
+                    .contains("doc-1:0", "doc-2:0");
+                assertThat(chatModel.queryCallCount()).isZero();
+            }
+        }
+    }
+
+    @Test
     void postgresNeo4jProviderRestoresFromSnapshotBeforeBuild() {
         try (
             var postgres = new PostgreSQLContainer<>(
@@ -2990,6 +3147,127 @@ class E2ELightRagTest {
                 return List.of(0.6d, 0.4d);
             }
             return List.of(0.1d, 0.1d);
+        }
+    }
+
+    private static final class MultiHopExtractionChatModel implements ChatModel {
+        private ChatRequest lastQueryRequest;
+        private int queryCallCount;
+
+        @Override
+        public String generate(ChatRequest request) {
+            if (isRetrievalPrompt(request)) {
+                lastQueryRequest = request;
+                queryCallCount++;
+                return "Atlas 通过 GraphStore 关联 KnowledgeGraphTeam。";
+            }
+            if (request.userPrompt().contains("Atlas 组件依赖 GraphStore 服务")) {
+                return """
+                    {
+                      "entities": [
+                        {
+                          "name": "Atlas",
+                          "type": "component",
+                          "description": "Application component",
+                          "aliases": []
+                        },
+                        {
+                          "name": "GraphStore",
+                          "type": "service",
+                          "description": "Dependency service",
+                          "aliases": []
+                        }
+                      ],
+                      "relations": [
+                        {
+                          "sourceEntityName": "Atlas",
+                          "targetEntityName": "GraphStore",
+                          "type": "depends_on",
+                          "description": "Atlas relies on GraphStore as its dependency service.",
+                          "weight": 0.9
+                        }
+                      ]
+                    }
+                    """;
+            }
+            if (request.userPrompt().contains("GraphStore 服务由 KnowledgeGraphTeam 维护")) {
+                return """
+                    {
+                      "entities": [
+                        {
+                          "name": "GraphStore",
+                          "type": "service",
+                          "description": "Dependency service",
+                          "aliases": []
+                        },
+                        {
+                          "name": "KnowledgeGraphTeam",
+                          "type": "team",
+                          "description": "Knowledge graph team",
+                          "aliases": []
+                        }
+                      ],
+                      "relations": [
+                        {
+                          "sourceEntityName": "GraphStore",
+                          "targetEntityName": "KnowledgeGraphTeam",
+                          "type": "owned_by",
+                          "description": "GraphStore is maintained by the knowledge graph team.",
+                          "weight": 1.0
+                        }
+                      ]
+                    }
+                    """;
+            }
+            return """
+                {
+                  "entities": [],
+                  "relations": []
+                }
+                """;
+        }
+
+        int queryCallCount() {
+            return queryCallCount;
+        }
+
+        ChatRequest lastQueryRequest() {
+            return lastQueryRequest;
+        }
+    }
+
+    private static final class MultiHopEmbeddingModel implements EmbeddingModel {
+        @Override
+        public List<List<Double>> embedAll(List<String> texts) {
+            return texts.stream()
+                .map(MultiHopEmbeddingModel::vectorFor)
+                .toList();
+        }
+
+        private static List<Double> vectorFor(String text) {
+            double primary = containsAny(text, "Atlas", "atlas") ? 2.0d : 0.0d;
+            double secondary = 0.0d;
+            if (containsAny(text, "GraphStore", "graphstore", "depends_on")) {
+                primary += 1.0d;
+                secondary += 2.0d;
+            }
+            if (containsAny(text, "KnowledgeGraphTeam", "knowledge graph team", "owned_by")) {
+                secondary += 2.0d;
+            }
+            if (text.contains("通过")) {
+                primary += 1.0d;
+                secondary += 1.0d;
+            }
+            return List.of(primary, secondary);
+        }
+
+        private static boolean containsAny(String text, String... patterns) {
+            for (var pattern : patterns) {
+                if (text.contains(pattern)) {
+                    return true;
+                }
+            }
+            return false;
         }
     }
 

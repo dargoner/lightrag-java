@@ -13,6 +13,9 @@ public record QueryRequest(
     int maxEntityTokens,
     int maxRelationTokens,
     int maxTotalTokens,
+    int maxHop,
+    int pathTopK,
+    boolean multiHopEnabled,
     String responseType,
     boolean enableRerank,
     boolean onlyNeedContext,
@@ -31,6 +34,8 @@ public record QueryRequest(
     public static final int DEFAULT_MAX_ENTITY_TOKENS = 6_000;
     public static final int DEFAULT_MAX_RELATION_TOKENS = 8_000;
     public static final int DEFAULT_MAX_TOTAL_TOKENS = 30_000;
+    public static final int DEFAULT_MAX_HOP = 2;
+    public static final int DEFAULT_PATH_TOP_K = 3;
     public static final String DEFAULT_RESPONSE_TYPE = "Multiple Paragraphs";
 
     public QueryRequest {
@@ -56,6 +61,12 @@ public record QueryRequest(
         if (maxTotalTokens <= 0) {
             throw new IllegalArgumentException("maxTotalTokens must be positive");
         }
+        if (maxHop <= 0) {
+            throw new IllegalArgumentException("maxHop must be positive");
+        }
+        if (pathTopK <= 0) {
+            throw new IllegalArgumentException("pathTopK must be positive");
+        }
     }
 
     public QueryRequest(
@@ -74,6 +85,9 @@ public record QueryRequest(
             DEFAULT_MAX_ENTITY_TOKENS,
             DEFAULT_MAX_RELATION_TOKENS,
             DEFAULT_MAX_TOTAL_TOKENS,
+            DEFAULT_MAX_HOP,
+            DEFAULT_PATH_TOP_K,
+            true,
             responseType,
             enableRerank,
             false,
@@ -106,6 +120,9 @@ public record QueryRequest(
             DEFAULT_MAX_ENTITY_TOKENS,
             DEFAULT_MAX_RELATION_TOKENS,
             DEFAULT_MAX_TOTAL_TOKENS,
+            DEFAULT_MAX_HOP,
+            DEFAULT_PATH_TOP_K,
+            true,
             responseType,
             enableRerank,
             false,
@@ -132,6 +149,9 @@ public record QueryRequest(
         private int maxEntityTokens = DEFAULT_MAX_ENTITY_TOKENS;
         private int maxRelationTokens = DEFAULT_MAX_RELATION_TOKENS;
         private int maxTotalTokens = DEFAULT_MAX_TOTAL_TOKENS;
+        private int maxHop = DEFAULT_MAX_HOP;
+        private int pathTopK = DEFAULT_PATH_TOP_K;
+        private boolean multiHopEnabled = true;
         private String responseType = DEFAULT_RESPONSE_TYPE;
         private boolean enableRerank = true;
         private boolean onlyNeedContext;
@@ -176,6 +196,21 @@ public record QueryRequest(
 
         public Builder maxTotalTokens(int maxTotalTokens) {
             this.maxTotalTokens = maxTotalTokens;
+            return this;
+        }
+
+        public Builder maxHop(int maxHop) {
+            this.maxHop = maxHop;
+            return this;
+        }
+
+        public Builder pathTopK(int pathTopK) {
+            this.pathTopK = pathTopK;
+            return this;
+        }
+
+        public Builder multiHopEnabled(boolean multiHopEnabled) {
+            this.multiHopEnabled = multiHopEnabled;
             return this;
         }
 
@@ -243,6 +278,9 @@ public record QueryRequest(
                 maxEntityTokens,
                 maxRelationTokens,
                 maxTotalTokens,
+                maxHop,
+                pathTopK,
+                multiHopEnabled,
                 responseType,
                 enableRerank,
                 onlyNeedContext,

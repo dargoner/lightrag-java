@@ -414,6 +414,7 @@ The demo `/query` and `/query/stream` endpoints accept the core query controls u
 
 - `mode`, `topK`, `chunkTopK`
 - `maxEntityTokens`, `maxRelationTokens`, `maxTotalTokens`
+- `maxHop`, `pathTopK`, `multiHopEnabled`
 - `responseType`, `enableRerank`
 - `includeReferences`, `onlyNeedContext`, `onlyNeedPrompt`
 - `userPrompt`, `hlKeywords`, `llKeywords`, `conversationHistory`
@@ -442,6 +443,40 @@ The Java SDK currently supports six query modes:
 - `BYPASS`: skip retrieval and send the query directly to the configured chat model
 
 Use `NAIVE` when you want the simplest upstream-aligned chunk search path or when your data quality favors direct vector similarity over graph structure.
+
+## Multi-Hop Querying
+
+Graph-aware queries can now opt into a lightweight multi-hop reasoning path over the existing entity-relation graph.
+
+Use the per-request controls when you need the engine to search for short relation chains instead of answering from a single local fact:
+
+```java
+var result = rag.query("default", QueryRequest.builder()
+    .query("Atlas 通过谁关联 KnowledgeGraphTeam？")
+    .mode(QueryMode.LOCAL)
+    .maxHop(2)
+    .pathTopK(3)
+    .multiHopEnabled(true)
+    .build());
+```
+
+The current implementation is intentionally narrow:
+
+- multi-hop is only considered when `multiHopEnabled(true)` is set; it defaults to `true`
+- `NAIVE` and `BYPASS` never use multi-hop expansion
+- the intent classifier currently treats queries containing phrases such as `通过`, `经过`, `间接`, `多跳`, `先...再...`, `through`, `via`, `indirect`, or `first ... then ...` as multi-hop candidates
+- seed retrieval still starts from the normal graph-aware retrieval stack, then expands paths through `GraphStore.findRelations(...)`
+- `maxHop` defaults to `2`
+- `pathTopK` defaults to `3`
+
+When a multi-hop path is selected, the assembled context includes structured sections such as:
+
+- `Reasoning Path 1`
+- `Hop 1: A --relation--> B`
+- `Relation detail: ...`
+- `Evidence [chunk-id]: ...`
+
+That structure is preserved in `onlyNeedContext(true)` and `onlyNeedPrompt(true)` responses, and the standard answer path injects extra instructions so the chat model explains the answer hop by hop instead of collapsing unsupported intermediate steps.
 
 ## Rerank
 
@@ -494,6 +529,8 @@ The Java SDK supports the upstream query-time prompt controls `userPrompt` and `
 It supports graph-retrieval keywords through `hlKeywords` and `llKeywords`, with automatic extraction when both are omitted in graph-aware modes.
 
 It also supports upstream-style query token budgets through `maxEntityTokens`, `maxRelationTokens`, and `maxTotalTokens`.
+
+It also supports multi-hop path controls through `maxHop`, `pathTopK`, and `multiHopEnabled`.
 
 It also supports upstream-style `includeReferences` for structured reference output.
 
@@ -605,7 +642,11 @@ Notes:
 - source resolution priority is `file_path`, then `source`, then `documentId`
 - `maxEntityTokens` and `maxRelationTokens` cap formatted graph context rows in score order
 - `maxTotalTokens` caps final chunk context after final merge/rerank ordering in `QueryEngine`
+- `maxHop` limits the maximum reasoning-path depth when multi-hop is active
+- `pathTopK` limits how many reranked reasoning paths are retained in the assembled context
+- `multiHopEnabled(false)` forces graph-aware modes back to their normal single-hop retrieval behavior
 - defaults are `maxEntityTokens=6000`, `maxRelationTokens=8000`, and `maxTotalTokens=30000`
+- defaults are also `maxHop=2`, `pathTopK=3`, and `multiHopEnabled=true`
 - chunk budgeting uses stored `Chunk.tokenCount()`, while prompt/query/entity/relation budgeting uses a shared lightweight text-token approximation in this phase
 - recent query-request additions such as `stream` and `modelFunc` change the public `QueryRequest` record shape; builder-based callers remain source-compatible, but canonical-constructor or record-pattern consumers need updates
 - in `HYBRID` and `MIX`, when manual keyword overrides are provided, only the non-empty keyword side participates in graph retrieval; direct chunk retrieval in `MIX` still uses the raw query text

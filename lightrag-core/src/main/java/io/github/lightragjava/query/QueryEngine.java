@@ -5,6 +5,7 @@ import io.github.lightragjava.api.QueryRequest;
 import io.github.lightragjava.api.QueryResult;
 import io.github.lightragjava.model.ChatModel;
 import io.github.lightragjava.model.RerankModel;
+import io.github.lightragjava.synthesis.PathAwareAnswerSynthesizer;
 import io.github.lightragjava.types.QueryContext;
 import io.github.lightragjava.types.ScoredChunk;
 
@@ -103,6 +104,9 @@ public final class QueryEngine {
     private final RerankModel rerankModel;
     private final QueryKeywordExtractor keywordExtractor;
     private final int rerankCandidateMultiplier;
+    private final QueryIntentClassifier queryIntentClassifier;
+    private final QueryStrategy multiHopStrategy;
+    private final PathAwareAnswerSynthesizer pathAwareAnswerSynthesizer;
 
     public QueryEngine(
         ChatModel chatModel,
@@ -121,6 +125,30 @@ public final class QueryEngine {
         boolean automaticKeywordExtractionEnabled,
         int rerankCandidateMultiplier
     ) {
+        this(
+            chatModel,
+            contextAssembler,
+            strategies,
+            rerankModel,
+            automaticKeywordExtractionEnabled,
+            rerankCandidateMultiplier,
+            null,
+            null,
+            new PathAwareAnswerSynthesizer()
+        );
+    }
+
+    public QueryEngine(
+        ChatModel chatModel,
+        ContextAssembler contextAssembler,
+        Map<QueryMode, QueryStrategy> strategies,
+        RerankModel rerankModel,
+        boolean automaticKeywordExtractionEnabled,
+        int rerankCandidateMultiplier,
+        QueryIntentClassifier queryIntentClassifier,
+        QueryStrategy multiHopStrategy,
+        PathAwareAnswerSynthesizer pathAwareAnswerSynthesizer
+    ) {
         this.chatModel = Objects.requireNonNull(chatModel, "chatModel");
         this.contextAssembler = Objects.requireNonNull(contextAssembler, "contextAssembler");
         this.strategies = Map.copyOf(new EnumMap<>(Objects.requireNonNull(strategies, "strategies")));
@@ -130,6 +158,9 @@ public final class QueryEngine {
         }
         this.keywordExtractor = new QueryKeywordExtractor(automaticKeywordExtractionEnabled);
         this.rerankCandidateMultiplier = rerankCandidateMultiplier;
+        this.queryIntentClassifier = queryIntentClassifier;
+        this.multiHopStrategy = multiHopStrategy;
+        this.pathAwareAnswerSynthesizer = Objects.requireNonNull(pathAwareAnswerSynthesizer, "pathAwareAnswerSynthesizer");
     }
 
     public QueryResult query(QueryRequest request) {
@@ -139,19 +170,25 @@ public final class QueryEngine {
         }
         var responseModel = selectChatModel(query);
         var resolvedQuery = keywordExtractor.resolve(query, responseModel);
-        var strategy = strategies.get(resolvedQuery.mode());
+        var useMultiHop = shouldUseMultiHop(resolvedQuery);
+        var strategy = useMultiHop ? multiHopStrategy : strategies.get(resolvedQuery.mode());
         if (strategy == null) {
             throw new IllegalStateException("No query strategy configured for mode: " + resolvedQuery.mode());
         }
 
-        var retrievalRequest = rerankEnabled(resolvedQuery) ? expandChunkRequest(resolvedQuery, rerankCandidateMultiplier) : resolvedQuery;
+        var retrievalRequest = rerankEnabled(resolvedQuery) && !useMultiHop
+            ? expandChunkRequest(resolvedQuery, rerankCandidateMultiplier)
+            : resolvedQuery;
         var retrievedContext = strategy.retrieve(retrievalRequest);
-        var rerankedChunks = rerankEnabled(resolvedQuery)
+        var rerankedChunks = rerankEnabled(resolvedQuery) && !useMultiHop
             ? rerankChunks(resolvedQuery, retrievedContext.matchedChunks())
             : retrievedContext.matchedChunks();
+        var assembledContextForBudget = useMultiHop && !retrievedContext.assembledContext().isBlank()
+            ? retrievedContext.assembledContext()
+            : null;
         var finalChunks = QueryBudgeting.limitChunks(
             rerankedChunks,
-            remainingChunkBudget(resolvedQuery, retrievedContext)
+            remainingChunkBudget(resolvedQuery, retrievedContext, assembledContextForBudget)
         );
         var finalContext = new QueryContext(
             retrievedContext.matchedEntities(),
@@ -159,7 +196,9 @@ public final class QueryEngine {
             finalChunks,
             ""
         );
-        var assembledContext = contextAssembler.assemble(finalContext);
+        var assembledContext = useMultiHop && !retrievedContext.assembledContext().isBlank()
+            ? retrievedContext.assembledContext()
+            : contextAssembler.assemble(finalContext);
         var assembledQueryContext = new QueryContext(
             finalContext.matchedEntities(),
             finalContext.matchedRelations(),
@@ -199,6 +238,9 @@ public final class QueryEngine {
             request.maxEntityTokens(),
             request.maxRelationTokens(),
             Integer.MAX_VALUE,
+            request.maxHop(),
+            request.pathTopK(),
+            request.multiHopEnabled(),
             request.responseType(),
             request.enableRerank(),
             request.onlyNeedContext(),
@@ -211,6 +253,15 @@ public final class QueryEngine {
             request.llKeywords(),
             request.conversationHistory()
         );
+    }
+
+    private boolean shouldUseMultiHop(QueryRequest request) {
+        return request.multiHopEnabled()
+            && request.mode() != QueryMode.NAIVE
+            && request.mode() != QueryMode.BYPASS
+            && queryIntentClassifier != null
+            && multiHopStrategy != null
+            && queryIntentClassifier.classify(request) == QueryIntent.MULTI_HOP;
     }
 
     private QueryResult bypassQuery(QueryRequest query) {
@@ -236,12 +287,13 @@ public final class QueryEngine {
         return request.modelFunc() != null ? request.modelFunc() : chatModel;
     }
 
-    private static String buildSystemPrompt(QueryRequest query, String assembledContext) {
-        return systemPromptTemplate(query.mode()).formatted(
+    private String buildSystemPrompt(QueryRequest query, String assembledContext) {
+        var prompt = systemPromptTemplate(query.mode()).formatted(
             effectiveResponseType(query.responseType()),
             effectiveUserPrompt(query.userPrompt()),
             assembledContext
         );
+        return pathAwareAnswerSynthesizer.injectContext("%s", query, prompt);
     }
 
     private static String systemPromptTemplate(QueryMode mode) {
@@ -298,15 +350,18 @@ public final class QueryEngine {
         return userPrompt == null || userPrompt.isBlank() ? "n/a" : userPrompt;
     }
 
-    private int remainingChunkBudget(QueryRequest request, QueryContext context) {
-        var nonChunkContext = new QueryContext(
-            context.matchedEntities(),
-            context.matchedRelations(),
-            List.of(),
-            ""
-        );
-        var assembledNonChunkContext = contextAssembler.assemble(nonChunkContext);
-        var systemPromptTokens = QueryBudgeting.approximateTokenCount(buildSystemPrompt(request, assembledNonChunkContext));
+    private int remainingChunkBudget(QueryRequest request, QueryContext context, String assembledContextOverride) {
+        var assembledContext = assembledContextOverride;
+        if (assembledContext == null || assembledContext.isBlank()) {
+            var nonChunkContext = new QueryContext(
+                context.matchedEntities(),
+                context.matchedRelations(),
+                List.of(),
+                ""
+            );
+            assembledContext = contextAssembler.assemble(nonChunkContext);
+        }
+        var systemPromptTokens = QueryBudgeting.approximateTokenCount(buildSystemPrompt(request, assembledContext));
         var queryTokens = QueryBudgeting.approximateTokenCount(request.query());
         long remaining = (long) request.maxTotalTokens() - systemPromptTokens - queryTokens - CHUNK_BUDGET_BUFFER_TOKENS;
         return (int) Math.max(0L, remaining);

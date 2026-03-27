@@ -116,3 +116,39 @@ README 补充：
 - 默认行为不回归
 - 有一条固定的 evaluation/batch evaluation 回归路径
 - README 能指导下一轮质量优化工作直接落地
+
+## Verification Snapshot
+
+### 2026-03-27 multi-hop retrieval validation
+
+- `QueryRequest` 已补 `maxHop`、`pathTopK`、`multiHopEnabled`
+- `QueryEngine` 已接入基于意图分类的 multi-hop strategy 分流
+- `LightRag.newQueryEngine(...)` 已装配真实多跳路径检索、路径评分、上下文组装和 path-aware answer synthesis
+- README 已补多跳查询参数、默认值和 `Reasoning Path` 输出结构说明
+
+Fresh verification evidence collected on 2026-03-27:
+
+- `GRADLE_USER_HOME=/tmp/gradle-user-home ./gradlew :lightrag-core:test --tests "io.github.lightragjava.E2ELightRagTest.queryBuildsMultiHopPromptThroughRealLightRagPipeline"`
+  - Expected: PASS
+  - Observed: PASS
+- `GRADLE_USER_HOME=/tmp/gradle-user-home ./gradlew :lightrag-core:test --tests "io.github.lightragjava.E2ELightRagTest.postgresNeo4jProviderBuildsMultiHopContextThroughPersistedGraphStore"`
+  - Expected: PASS
+  - Observed: PASS
+- `GRADLE_USER_HOME=/tmp/gradle-user-home ./gradlew :lightrag-core:test --tests "io.github.lightragjava.E2ELightRagTest.queryGeneratesFinalAnswerFromMultiHopPrompt"`
+  - Expected: PASS
+  - Observed: PASS
+- `GRADLE_USER_HOME=/tmp/gradle-user-home ./gradlew :lightrag-core:test --tests "io.github.lightragjava.query.*" --tests "io.github.lightragjava.api.LightRagBuilderTest" --tests "io.github.lightragjava.api.LightRagWorkspaceTest" --tests "io.github.lightragjava.synthesis.PathAwareAnswerSynthesizerTest" --tests "io.github.lightragjava.E2ELightRagTest.queryBuildsMultiHopPromptThroughRealLightRagPipeline" --tests "io.github.lightragjava.E2ELightRagTest.queryGeneratesFinalAnswerFromMultiHopPrompt" --tests "io.github.lightragjava.E2ELightRagTest.postgresNeo4jProviderBuildsMultiHopContextThroughPersistedGraphStore"`
+  - Expected: PASS
+  - Observed: PASS
+
+Coverage achieved by these checks:
+
+- 内存存储下多跳 prompt/context 组装生效
+- `Postgres + Neo4j` 真实图存储下多跳 context 生效
+- 最终 answer 生成阶段确实收到了带 hop 结构的 prompt
+
+Follow-up fixes applied after review:
+
+- 优先保留 reasoning path 的 supporting chunks，避免 fallback chunks 抢占紧张的 chunk token 预算
+- multi-hop 分支计算 `maxTotalTokens` 时，已改为按真实 reasoning context 计入 prompt token 成本
+- 英文多跳意图词（如 `through`、`via`、`indirect`、`first ... then ...`）已纳入规则分类器

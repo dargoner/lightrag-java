@@ -8,12 +8,18 @@ import io.github.lightragjava.indexing.GraphManagementPipeline;
 import io.github.lightragjava.indexing.IndexingPipeline;
 import io.github.lightragjava.indexing.StorageSnapshots;
 import io.github.lightragjava.query.ContextAssembler;
+import io.github.lightragjava.query.DefaultPathRetriever;
+import io.github.lightragjava.query.DefaultPathScorer;
 import io.github.lightragjava.query.GlobalQueryStrategy;
 import io.github.lightragjava.query.HybridQueryStrategy;
 import io.github.lightragjava.query.LocalQueryStrategy;
 import io.github.lightragjava.query.MixQueryStrategy;
+import io.github.lightragjava.query.MultiHopQueryStrategy;
 import io.github.lightragjava.query.NaiveQueryStrategy;
 import io.github.lightragjava.query.QueryEngine;
+import io.github.lightragjava.query.ReasoningContextAssembler;
+import io.github.lightragjava.query.RuleBasedQueryIntentClassifier;
+import io.github.lightragjava.synthesis.PathAwareAnswerSynthesizer;
 import io.github.lightragjava.storage.AtomicStorageProvider;
 import io.github.lightragjava.types.Document;
 import io.github.lightragjava.types.RawDocumentSource;
@@ -292,6 +298,12 @@ public final class LightRag implements AutoCloseable {
         var global = new GlobalQueryStrategy(config.embeddingModel(), storageProvider, contextAssembler);
         var hybrid = new HybridQueryStrategy(local, global, contextAssembler);
         var mix = new MixQueryStrategy(config.embeddingModel(), storageProvider, hybrid, contextAssembler);
+        var multiHop = new MultiHopQueryStrategy(
+            mix::retrieve,
+            new DefaultPathRetriever(storageProvider.graphStore(), 5),
+            new DefaultPathScorer(),
+            new ReasoningContextAssembler(storageProvider.graphStore(), storageProvider.chunkStore())
+        );
         var strategies = new EnumMap<QueryMode, io.github.lightragjava.query.QueryStrategy>(QueryMode.class);
         strategies.put(QueryMode.NAIVE, naive);
         strategies.put(QueryMode.LOCAL, local);
@@ -304,7 +316,10 @@ public final class LightRag implements AutoCloseable {
             strategies,
             config.rerankModel(),
             automaticQueryKeywordExtraction,
-            rerankCandidateMultiplier
+            rerankCandidateMultiplier,
+            new RuleBasedQueryIntentClassifier(),
+            multiHop,
+            new PathAwareAnswerSynthesizer()
         );
     }
 

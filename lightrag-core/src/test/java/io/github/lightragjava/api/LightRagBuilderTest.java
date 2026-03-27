@@ -661,6 +661,9 @@ class LightRagBuilderTest {
         assertThat(request.maxEntityTokens()).isEqualTo(QueryRequest.DEFAULT_MAX_ENTITY_TOKENS);
         assertThat(request.maxRelationTokens()).isEqualTo(QueryRequest.DEFAULT_MAX_RELATION_TOKENS);
         assertThat(request.maxTotalTokens()).isEqualTo(QueryRequest.DEFAULT_MAX_TOTAL_TOKENS);
+        assertThat(request.maxHop()).isEqualTo(QueryRequest.DEFAULT_MAX_HOP);
+        assertThat(request.pathTopK()).isEqualTo(QueryRequest.DEFAULT_PATH_TOP_K);
+        assertThat(request.multiHopEnabled()).isTrue();
         assertThat(request.responseType()).isEqualTo("Multiple Paragraphs");
         assertThat(request.enableRerank()).isTrue();
         assertThat(request.onlyNeedContext()).isFalse();
@@ -692,6 +695,9 @@ class LightRagBuilderTest {
         assertThat(request.maxEntityTokens()).isEqualTo(QueryRequest.DEFAULT_MAX_ENTITY_TOKENS);
         assertThat(request.maxRelationTokens()).isEqualTo(QueryRequest.DEFAULT_MAX_RELATION_TOKENS);
         assertThat(request.maxTotalTokens()).isEqualTo(QueryRequest.DEFAULT_MAX_TOTAL_TOKENS);
+        assertThat(request.maxHop()).isEqualTo(QueryRequest.DEFAULT_MAX_HOP);
+        assertThat(request.pathTopK()).isEqualTo(QueryRequest.DEFAULT_PATH_TOP_K);
+        assertThat(request.multiHopEnabled()).isTrue();
         assertThat(request.responseType()).isEqualTo("text");
         assertThat(request.enableRerank()).isFalse();
         assertThat(request.onlyNeedContext()).isFalse();
@@ -727,10 +733,44 @@ class LightRagBuilderTest {
         assertThat(request.maxEntityTokens()).isEqualTo(QueryRequest.DEFAULT_MAX_ENTITY_TOKENS);
         assertThat(request.maxRelationTokens()).isEqualTo(QueryRequest.DEFAULT_MAX_RELATION_TOKENS);
         assertThat(request.maxTotalTokens()).isEqualTo(QueryRequest.DEFAULT_MAX_TOTAL_TOKENS);
+        assertThat(request.maxHop()).isEqualTo(QueryRequest.DEFAULT_MAX_HOP);
+        assertThat(request.pathTopK()).isEqualTo(QueryRequest.DEFAULT_PATH_TOP_K);
+        assertThat(request.multiHopEnabled()).isTrue();
         assertThat(request.hlKeywords()).isEmpty();
         assertThat(request.llKeywords()).isEmpty();
         assertThat(request.conversationHistory())
             .containsExactly(new ChatModel.ChatRequest.ConversationMessage("user", "Earlier question"));
+    }
+
+    @Test
+    void queryRequestAcceptsMultiHopOverrides() {
+        var request = QueryRequest.builder()
+            .query("Atlas 通过谁影响知识图谱组？")
+            .maxHop(3)
+            .pathTopK(5)
+            .multiHopEnabled(false)
+            .build();
+
+        assertThat(request.maxHop()).isEqualTo(3);
+        assertThat(request.pathTopK()).isEqualTo(5);
+        assertThat(request.multiHopEnabled()).isFalse();
+    }
+
+    @Test
+    void queryRequestRejectsNonPositiveMultiHopSettings() {
+        assertThatThrownBy(() -> QueryRequest.builder()
+            .query("Where is the evidence?")
+            .maxHop(0)
+            .build())
+            .isInstanceOf(IllegalArgumentException.class)
+            .hasMessage("maxHop must be positive");
+
+        assertThatThrownBy(() -> QueryRequest.builder()
+            .query("Where is the evidence?")
+            .pathTopK(0)
+            .build())
+            .isInstanceOf(IllegalArgumentException.class)
+            .hasMessage("pathTopK must be positive");
     }
 
     @Test
