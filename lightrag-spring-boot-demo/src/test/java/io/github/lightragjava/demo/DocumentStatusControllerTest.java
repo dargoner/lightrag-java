@@ -4,7 +4,6 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import io.github.lightragjava.api.DocumentProcessingStatus;
 import io.github.lightragjava.api.DocumentStatus;
 import io.github.lightragjava.api.LightRag;
-import io.github.lightragjava.spring.boot.WorkspaceLightRagFactory;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -16,7 +15,6 @@ import org.springframework.test.web.servlet.MockMvc;
 
 import java.util.List;
 import java.util.NoSuchElementException;
-import java.util.Optional;
 import java.util.concurrent.ConcurrentMap;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
@@ -27,10 +25,10 @@ import java.util.concurrent.atomic.AtomicLong;
 import static org.junit.jupiter.api.Assertions.fail;
 import static org.mockito.ArgumentMatchers.anyList;
 import static org.mockito.ArgumentMatchers.argThat;
+import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.doAnswer;
 import static org.mockito.Mockito.doNothing;
 import static org.mockito.Mockito.doThrow;
-import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.when;
 import static org.springframework.http.MediaType.APPLICATION_JSON;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.delete;
@@ -128,39 +126,24 @@ class DocumentStatusControllerTest {
     private IngestJobService ingestJobService;
 
     @MockBean
-    private WorkspaceLightRagFactory workspaceLightRagFactory;
-
-    @MockBean
     private LightRag lightRag;
-
-    private LightRag statusLightRag;
-    private LightRag isolatedLightRag;
 
     @BeforeEach
     void setUp() {
         ((ConcurrentMap<?, ?>) ReflectionTestUtils.getField(ingestJobService, "jobs")).clear();
         ((AtomicLong) ReflectionTestUtils.getField(ingestJobService, "sequence")).set(0L);
-
-        statusLightRag = mock(LightRag.class);
-        isolatedLightRag = mock(LightRag.class);
-
-        when(workspaceLightRagFactory.get(WORKSPACE_STATUS)).thenReturn(statusLightRag);
-        when(workspaceLightRagFactory.find(WORKSPACE_STATUS)).thenReturn(Optional.of(statusLightRag));
-        when(workspaceLightRagFactory.get(WORKSPACE_ISOLATED)).thenReturn(isolatedLightRag);
-        when(workspaceLightRagFactory.find(WORKSPACE_ISOLATED)).thenReturn(Optional.of(isolatedLightRag));
-        when(workspaceLightRagFactory.find(WORKSPACE_B)).thenReturn(Optional.empty());
     }
 
     @Test
     void jobLifecycleAndStatusEndpoints() throws Exception {
         var deleted = new AtomicBoolean(false);
-        doNothing().when(statusLightRag).ingest(argThat(documents ->
+        doNothing().when(lightRag).ingest(eq(WORKSPACE_STATUS), argThat(documents ->
             documents.size() == 1 && "doc-1".equals(documents.get(0).id())
         ));
-        when(statusLightRag.listDocumentStatuses()).thenReturn(List.of(
+        when(lightRag.listDocumentStatuses(WORKSPACE_STATUS)).thenReturn(List.of(
             new DocumentProcessingStatus("doc-1", DocumentStatus.PROCESSED, "processed 1 chunk", null)
         ));
-        when(statusLightRag.getDocumentStatus("doc-1")).thenAnswer(invocation -> {
+        when(lightRag.getDocumentStatus(WORKSPACE_STATUS, "doc-1")).thenAnswer(invocation -> {
             if (deleted.get()) {
                 throw new NoSuchElementException("missing doc-1");
             }
@@ -169,7 +152,7 @@ class DocumentStatusControllerTest {
         doAnswer(invocation -> {
             deleted.set(true);
             return null;
-        }).when(statusLightRag).deleteByDocumentId("doc-1");
+        }).when(lightRag).deleteByDocumentId(WORKSPACE_STATUS, "doc-1");
 
         var jobId = submitJob(WORKSPACE_STATUS, INGEST_PAYLOAD);
         awaitJobStatus(WORKSPACE_STATUS, jobId, "SUCCEEDED");
@@ -207,7 +190,7 @@ class DocumentStatusControllerTest {
 
     @Test
     void missingJobAndDocumentReturn404() throws Exception {
-        when(statusLightRag.getDocumentStatus("missing-doc"))
+        when(lightRag.getDocumentStatus(WORKSPACE_STATUS, "missing-doc"))
             .thenThrow(new NoSuchElementException("missing-doc"));
 
         mockMvc.perform(get("/documents/jobs/{jobId}", "missing-job")
@@ -221,7 +204,7 @@ class DocumentStatusControllerTest {
 
     @Test
     void jobsEndpointReturnsPaginatedNewestFirstWithTimelineFields() throws Exception {
-        doNothing().when(statusLightRag).ingest(argThat(documents -> documents.size() == 1));
+        doNothing().when(lightRag).ingest(eq(WORKSPACE_STATUS), argThat(documents -> documents.size() == 1));
 
         var firstJobId = submitJob(WORKSPACE_STATUS, INGEST_PAYLOAD);
         awaitJobStatus(WORKSPACE_STATUS, firstJobId, "SUCCEEDED");
@@ -251,7 +234,7 @@ class DocumentStatusControllerTest {
     @Test
     void failedJobExposesErrorMessageInDetailAndListResponses() throws Exception {
         doThrow(new IllegalStateException("simulated ingest failure"))
-            .when(statusLightRag).ingest(argThat(documents ->
+            .when(lightRag).ingest(eq(WORKSPACE_STATUS), argThat(documents ->
                 documents.size() == 1 && "doc-fail".equals(documents.get(0).id())
             ));
 
@@ -283,7 +266,7 @@ class DocumentStatusControllerTest {
         var firstJobStarted = new CountDownLatch(1);
         var releaseFirstJob = new CountDownLatch(1);
         doAnswer(invocation -> {
-            var documents = invocation.getArgument(0, List.class);
+            var documents = invocation.getArgument(1, List.class);
             var firstDocument = (io.github.lightragjava.types.Document) documents.get(0);
             if ("doc-block".equals(firstDocument.id())) {
                 firstJobStarted.countDown();
@@ -292,7 +275,7 @@ class DocumentStatusControllerTest {
                 }
             }
             return null;
-        }).when(statusLightRag).ingest(anyList());
+        }).when(lightRag).ingest(eq(WORKSPACE_STATUS), anyList());
 
         var blockingJobId = submitJob(WORKSPACE_STATUS, BLOCKING_INGEST_PAYLOAD);
         awaitJobStatus(WORKSPACE_STATUS, blockingJobId, "RUNNING");
@@ -335,13 +318,13 @@ class DocumentStatusControllerTest {
     void retryFailedJobCreatesNewAttemptAndRejectsSucceededTransitions() throws Exception {
         var attempts = new AtomicInteger();
         doAnswer(invocation -> {
-            var documents = invocation.getArgument(0, List.class);
+            var documents = invocation.getArgument(1, List.class);
             var firstDocument = (io.github.lightragjava.types.Document) documents.get(0);
             if ("doc-fail".equals(firstDocument.id()) && attempts.getAndIncrement() == 0) {
                 throw new IllegalStateException("simulated ingest failure");
             }
             return null;
-        }).when(statusLightRag).ingest(anyList());
+        }).when(lightRag).ingest(eq(WORKSPACE_STATUS), anyList());
 
         var failedJobId = submitJob(WORKSPACE_STATUS, FAILING_INGEST_PAYLOAD);
         awaitJobStatus(WORKSPACE_STATUS, failedJobId, "FAILED");
@@ -379,12 +362,13 @@ class DocumentStatusControllerTest {
 
     @Test
     void isolatesJobsStatusesAndControlsAcrossWorkspaces() throws Exception {
-        doNothing().when(isolatedLightRag).ingest(argThat(documents ->
+        doNothing().when(lightRag).ingest(eq(WORKSPACE_ISOLATED), argThat(documents ->
             documents.size() == 1 && "doc-ws-a".equals(documents.get(0).id())
         ));
-        when(isolatedLightRag.listDocumentStatuses()).thenReturn(List.of(
+        when(lightRag.listDocumentStatuses(WORKSPACE_ISOLATED)).thenReturn(List.of(
             new DocumentProcessingStatus("doc-ws-a", DocumentStatus.PROCESSED, "processed 1 chunk", null)
         ));
+        when(lightRag.listDocumentStatuses(WORKSPACE_B)).thenReturn(List.of());
 
         var jobId = submitJob(WORKSPACE_ISOLATED, """
             {

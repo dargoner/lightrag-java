@@ -262,7 +262,7 @@ public final class PostgresSchemaManager {
 
                 String actualType = resultSet.getString(1);
                 String expectedType = "vector(" + config.vectorDimensions() + ")";
-                if (!expectedType.equals(actualType)) {
+                if (!expectedType.equals(normalizeTypeName(actualType))) {
                     throw new IllegalStateException(
                         "Configured vector dimensions do not match existing schema: expected "
                             + expectedType
@@ -272,6 +272,18 @@ public final class PostgresSchemaManager {
                 }
             }
         }
+    }
+
+    private static String normalizeTypeName(String typeName) {
+        if (typeName == null) {
+            return null;
+        }
+        int parameterIndex = typeName.indexOf('(');
+        int schemaSeparatorIndex = typeName.lastIndexOf('.', parameterIndex >= 0 ? parameterIndex : typeName.length());
+        if (schemaSeparatorIndex < 0) {
+            return typeName;
+        }
+        return typeName.substring(schemaSeparatorIndex + 1);
     }
 
     private String dropConstraintSql(String tableBaseName, String constraintName) {

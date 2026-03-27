@@ -8,7 +8,6 @@ import io.github.lightragjava.api.GraphEntity;
 import io.github.lightragjava.api.GraphRelation;
 import io.github.lightragjava.api.LightRag;
 import io.github.lightragjava.api.MergeEntitiesRequest;
-import io.github.lightragjava.spring.boot.WorkspaceLightRagFactory;
 import jakarta.servlet.http.HttpServletRequest;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.DeleteMapping;
@@ -25,17 +24,18 @@ import java.util.List;
 @RestController
 @RequestMapping("/graph")
 class GraphController {
-    private final WorkspaceLightRagFactory workspaceLightRagFactory;
+    private final LightRag lightRag;
     private final WorkspaceResolver workspaceResolver;
 
-    GraphController(WorkspaceLightRagFactory workspaceLightRagFactory, WorkspaceResolver workspaceResolver) {
-        this.workspaceLightRagFactory = workspaceLightRagFactory;
+    GraphController(LightRag lightRag, WorkspaceResolver workspaceResolver) {
+        this.lightRag = lightRag;
         this.workspaceResolver = workspaceResolver;
     }
 
     @PostMapping("/entities")
     GraphEntity createEntity(@RequestBody EntityCreatePayload payload, HttpServletRequest request) {
-        return lightRag(request).createEntity(CreateEntityRequest.builder()
+        var workspaceId = workspaceResolver.resolve(request);
+        return lightRag.createEntity(workspaceId, CreateEntityRequest.builder()
             .name(payload.name())
             .type(payload.type())
             .description(payload.description())
@@ -45,7 +45,8 @@ class GraphController {
 
     @PutMapping("/entities")
     GraphEntity editEntity(@RequestBody EntityEditPayload payload, HttpServletRequest request) {
-        return lightRag(request).editEntity(EditEntityRequest.builder()
+        var workspaceId = workspaceResolver.resolve(request);
+        return lightRag.editEntity(workspaceId, EditEntityRequest.builder()
             .entityName(payload.entityName())
             .newName(payload.newName())
             .type(payload.type())
@@ -56,7 +57,8 @@ class GraphController {
 
     @PostMapping("/entities/merge")
     GraphEntity mergeEntities(@RequestBody EntityMergePayload payload, HttpServletRequest request) {
-        return lightRag(request).mergeEntities(MergeEntitiesRequest.builder()
+        var workspaceId = workspaceResolver.resolve(request);
+        return lightRag.mergeEntities(workspaceId, MergeEntitiesRequest.builder()
             .sourceEntityNames(payload.sourceEntityNames())
             .targetEntityName(payload.targetEntityName())
             .targetType(payload.targetType())
@@ -67,13 +69,15 @@ class GraphController {
 
     @DeleteMapping("/entities/{entityName}")
     ResponseEntity<Void> deleteEntity(@PathVariable String entityName, HttpServletRequest request) {
-        lightRag(request).deleteByEntity(entityName);
+        var workspaceId = workspaceResolver.resolve(request);
+        lightRag.deleteByEntity(workspaceId, entityName);
         return ResponseEntity.noContent().build();
     }
 
     @PostMapping("/relations")
     GraphRelation createRelation(@RequestBody RelationCreatePayload payload, HttpServletRequest request) {
-        return lightRag(request).createRelation(CreateRelationRequest.builder()
+        var workspaceId = workspaceResolver.resolve(request);
+        return lightRag.createRelation(workspaceId, CreateRelationRequest.builder()
             .sourceEntityName(payload.sourceEntityName())
             .targetEntityName(payload.targetEntityName())
             .relationType(payload.relationType())
@@ -84,7 +88,8 @@ class GraphController {
 
     @PutMapping("/relations")
     GraphRelation editRelation(@RequestBody RelationEditPayload payload, HttpServletRequest request) {
-        return lightRag(request).editRelation(EditRelationRequest.builder()
+        var workspaceId = workspaceResolver.resolve(request);
+        return lightRag.editRelation(workspaceId, EditRelationRequest.builder()
             .sourceEntityName(payload.sourceEntityName())
             .targetEntityName(payload.targetEntityName())
             .currentRelationType(payload.currentRelationType())
@@ -100,12 +105,9 @@ class GraphController {
         @RequestParam String targetEntityName,
         HttpServletRequest request
     ) {
-        lightRag(request).deleteByRelation(sourceEntityName, targetEntityName);
+        var workspaceId = workspaceResolver.resolve(request);
+        lightRag.deleteByRelation(workspaceId, sourceEntityName, targetEntityName);
         return ResponseEntity.noContent().build();
-    }
-
-    private LightRag lightRag(HttpServletRequest request) {
-        return workspaceLightRagFactory.get(workspaceResolver.resolve(request));
     }
 
     private static List<String> defaultList(List<String> values) {

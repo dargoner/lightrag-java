@@ -1,6 +1,7 @@
 package io.github.lightragjava.spring.boot;
 
 import io.github.lightragjava.api.LightRag;
+import io.github.lightragjava.api.WorkspaceScope;
 import io.github.lightragjava.indexing.Chunker;
 import io.github.lightragjava.indexing.DocumentParsingOrchestrator;
 import io.github.lightragjava.indexing.FixedWindowChunker;
@@ -15,6 +16,7 @@ import io.github.lightragjava.storage.AtomicStorageProvider;
 import io.github.lightragjava.storage.InMemoryStorageProvider;
 import io.github.lightragjava.storage.SnapshotStore;
 import io.github.lightragjava.storage.StorageProvider;
+import io.github.lightragjava.storage.WorkspaceStorageProvider;
 import io.github.lightragjava.types.Chunk;
 import io.github.lightragjava.types.Document;
 import io.github.lightragjava.types.RawDocumentSource;
@@ -25,9 +27,10 @@ import org.springframework.boot.test.context.runner.ApplicationContextRunner;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 
-import java.time.Duration;
 import java.lang.reflect.Field;
 import java.nio.charset.StandardCharsets;
+import java.nio.file.Files;
+import java.time.Duration;
 import java.util.List;
 import java.util.Map;
 
@@ -70,9 +73,9 @@ class LightRagAutoConfigurationTest {
             assertThat(context).hasSingleBean(LightRag.class);
             assertThat(context).hasSingleBean(ChatModel.class);
             assertThat(context).hasSingleBean(EmbeddingModel.class);
-            assertThat(context).hasSingleBean(StorageProvider.class);
+            assertThat(context).hasSingleBean(WorkspaceStorageProvider.class);
             assertThat(context).hasSingleBean(Chunker.class);
-            assertThat(context).hasSingleBean(WorkspaceLightRagFactory.class);
+            assertThat(context).doesNotHaveBean("workspaceLightRagFactory");
         });
     }
 
@@ -274,14 +277,15 @@ class LightRagAutoConfigurationTest {
             .run(context -> {
                 var chunker = context.getBean(Chunker.class);
                 var lightRag = context.getBean(LightRag.class);
-                var storageProvider = context.getBean(StorageProvider.class);
+                var workspaceStorageProvider = context.getBean(WorkspaceStorageProvider.class);
+                var storageProvider = workspaceStorageProvider.forWorkspace(new WorkspaceScope("default"));
 
                 assertThat(chunker).isInstanceOf(FixedWindowChunker.class);
                 assertThat(chunker.chunk(new Document("doc-1", "Title", "abcdefghi", Map.of())))
                     .extracting(Chunk::text)
                     .containsExactly("abcd", "defg", "ghi");
 
-                lightRag.ingest(List.of(new Document("doc-1", "Title", "abcdefghi", Map.of())));
+                lightRag.ingest("default", List.of(new Document("doc-1", "Title", "abcdefghi", Map.of())));
 
                 assertThat(storageProvider.chunkStore().listByDocument("doc-1"))
                     .extracting(record -> record.text())
@@ -295,12 +299,13 @@ class LightRagAutoConfigurationTest {
             .withUserConfiguration(TestModelConfiguration.class, CustomChunkerConfiguration.class)
             .run(context -> {
                 var lightRag = context.getBean(LightRag.class);
-                var storageProvider = context.getBean(StorageProvider.class);
+                var workspaceStorageProvider = context.getBean(WorkspaceStorageProvider.class);
+                var storageProvider = workspaceStorageProvider.forWorkspace(new WorkspaceScope("default"));
 
                 assertThat(context.getBean(Chunker.class)).isInstanceOf(StaticChunker.class);
                 assertThat(context.getBean(Chunker.class)).isNotInstanceOf(FixedWindowChunker.class);
 
-                lightRag.ingest(List.of(new Document("doc-1", "Title", "ignored", Map.of("source", "custom"))));
+                lightRag.ingest("default", List.of(new Document("doc-1", "Title", "ignored", Map.of("source", "custom"))));
 
                 assertThat(storageProvider.chunkStore().listByDocument("doc-1"))
                     .extracting(record -> record.id(), record -> record.text())
@@ -309,7 +314,7 @@ class LightRagAutoConfigurationTest {
     }
 
     @Test
-    void bindsWorkspaceOverridesAndCachesWorkspaceInstances() {
+    void bindsWorkspaceOverridesAndCachesWorkspaceProviders() {
         contextRunner
             .withPropertyValues(
                 "lightrag.workspace.header-name=X-Tenant-Id",
@@ -317,13 +322,17 @@ class LightRagAutoConfigurationTest {
             )
             .run(context -> {
                 var properties = context.getBean(LightRagProperties.class);
-                var factory = context.getBean(WorkspaceLightRagFactory.class);
+                var workspaceStorageProvider = context.getBean(WorkspaceStorageProvider.class);
+                var lightRag = context.getBean(LightRag.class);
+                var config = (io.github.lightragjava.config.LightRagConfig) extractField(lightRag, "config");
 
                 assertThat(properties.getWorkspace().getHeaderName()).isEqualTo("X-Tenant-Id");
                 assertThat(properties.getWorkspace().getDefaultId()).isEqualTo("main");
-                assertThat(factory.get("alpha")).isSameAs(factory.get("alpha"));
-                assertThat(factory.get("alpha")).isNotSameAs(factory.get("beta"));
-                assertThat(context.getBean(LightRag.class)).isSameAs(factory.get("main"));
+                assertThat(workspaceStorageProvider.forWorkspace(new WorkspaceScope("alpha")))
+                    .isSameAs(workspaceStorageProvider.forWorkspace(new WorkspaceScope("alpha")));
+                assertThat(workspaceStorageProvider.forWorkspace(new WorkspaceScope("alpha")))
+                    .isNotSameAs(workspaceStorageProvider.forWorkspace(new WorkspaceScope("beta")));
+                assertThat(config.workspaceStorageProvider()).isSameAs(workspaceStorageProvider);
             });
     }
 
@@ -335,13 +344,43 @@ class LightRagAutoConfigurationTest {
                 "lightrag.workspace.max-active-workspaces=2"
             )
             .run(context -> {
-                var factory = context.getBean(WorkspaceLightRagFactory.class);
+                var workspaceStorageProvider = context.getBean(WorkspaceStorageProvider.class);
 
-                assertThat(factory.get("alpha")).isSameAs(factory.get("alpha"));
-                assertThatThrownBy(() -> factory.get("beta"))
+                assertThat(workspaceStorageProvider.forWorkspace(new WorkspaceScope("alpha")))
+                    .isSameAs(workspaceStorageProvider.forWorkspace(new WorkspaceScope("alpha")));
+                assertThatThrownBy(() -> workspaceStorageProvider.forWorkspace(new WorkspaceScope("beta")))
                     .isInstanceOf(IllegalStateException.class)
                     .hasMessageContaining("workspace cache limit exceeded");
             });
+    }
+
+    @Test
+    void derivesDistinctSnapshotPathsPerWorkspaceFromSharedBasePath() throws Exception {
+        var basePath = Files.createTempDirectory("starter-workspace-snapshots").resolve("snapshot.json");
+        var properties = new LightRagProperties();
+        properties.getWorkspace().setDefaultId("main");
+        properties.setSnapshotPath(basePath.toString());
+        var baseSnapshotStore = new io.github.lightragjava.persistence.FileSnapshotStore();
+        var workspaceStorageProvider = new SpringWorkspaceStorageProvider(
+            properties,
+            null,
+            baseSnapshotStore,
+            (scope, lock, snapshotStore) -> InMemoryStorageProvider.create(snapshotStore)
+        );
+        var snapshot = new SnapshotStore.Snapshot(List.of(), List.of(), List.of(), List.of(), Map.of(), List.of());
+
+        try {
+            workspaceStorageProvider.forWorkspace(new WorkspaceScope("alpha")).snapshotStore().save(basePath, snapshot);
+            workspaceStorageProvider.forWorkspace(new WorkspaceScope("beta")).snapshotStore().save(basePath, snapshot);
+
+            assertThat(baseSnapshotStore.list())
+                .containsExactlyInAnyOrder(
+                    basePath.resolveSibling("snapshot-alpha-0589b15e.json").toAbsolutePath().normalize(),
+                    basePath.resolveSibling("snapshot-beta-002e15f0.json").toAbsolutePath().normalize()
+                );
+        } finally {
+            workspaceStorageProvider.close();
+        }
     }
 
     @Test
@@ -428,9 +467,9 @@ class LightRagAutoConfigurationTest {
                 "lightrag.storage.type=in-memory"
             )
             .run(context -> {
-                var factory = context.getBean(WorkspaceLightRagFactory.class);
+                var workspaceStorageProvider = context.getBean(WorkspaceStorageProvider.class);
 
-                assertThatThrownBy(() -> factory.get("alpha"))
+                assertThatThrownBy(() -> workspaceStorageProvider.forWorkspace(new WorkspaceScope("alpha")))
                     .isInstanceOf(IllegalStateException.class)
                     .hasMessageContaining("non-default workspaces require starter-managed storage providers");
             });

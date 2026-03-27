@@ -31,11 +31,11 @@ var rag = LightRag.builder()
     .storage(storage)
     .build();
 
-rag.ingest(List.of(
+rag.ingest("default", List.of(
     new Document("doc-1", "Title", "Alice works with Bob", Map.of("source", "demo"))
 ));
 
-var result = rag.query(QueryRequest.builder()
+var result = rag.query("default", QueryRequest.builder()
     .query("Who works with Bob?")
     .build());
 
@@ -43,6 +43,41 @@ System.out.println(result.answer());
 ```
 
 For tests, demos, and ephemeral runs, the in-memory provider is still the fastest option. For restart-safe ingestion and durable local state, use the PostgreSQL provider described below.
+
+All runtime data operations on `LightRag` now require an explicit `workspaceId`. The SDK no longer keeps ambiguous zero-argument runtime aliases for ingest, query, graph management, deletion, document status, or snapshot APIs.
+
+## Multi-Workspace Runtime
+
+When one `LightRag` instance needs to serve multiple workspaces, build it through `workspaceStorage(...)`:
+
+```java
+var rag = LightRag.builder()
+    .chatModel(chatModel)
+    .embeddingModel(embeddingModel)
+    .workspaceStorage(new WorkspaceStorageProvider() {
+        @Override
+        public AtomicStorageProvider forWorkspace(WorkspaceScope scope) {
+            return InMemoryStorageProvider.create();
+        }
+
+        @Override
+        public void close() {
+        }
+    })
+    .build();
+
+rag.ingest("workspace-a", documents);
+var result = rag.query("workspace-b", QueryRequest.builder()
+    .query("What changed?")
+    .build());
+```
+
+Rules in this model:
+
+- every ingest/query/graph/delete/status/snapshot call must pass `workspaceId`
+- the same `LightRag` instance can serve multiple workspaces
+- storage isolation stays behind `WorkspaceStorageProvider`; `workspaceId` is not added to the public store SPI
+- `loadFromSnapshot(...)` remains a legacy single-workspace builder feature and is blocked for `workspaceStorage(...)`
 
 ## Spring Boot
 
@@ -429,7 +464,7 @@ var rag = LightRag.builder()
 Rerank is enabled by default on each query request and reorders the final chunk contexts before answer generation:
 
 ```java
-var result = rag.query(QueryRequest.builder()
+var result = rag.query("default", QueryRequest.builder()
     .query("Who works with Bob?")
     .chunkTopK(8)
     .build());
@@ -438,7 +473,7 @@ var result = rag.query(QueryRequest.builder()
 Disable it per request when needed:
 
 ```java
-var result = rag.query(QueryRequest.builder()
+var result = rag.query("default", QueryRequest.builder()
     .query("Who works with Bob?")
     .chunkTopK(8)
     .enableRerank(false)
@@ -469,7 +504,7 @@ It also supports upstream-style query-time `modelFunc` overrides.
 Use `userPrompt` when you want to add answer-formatting or style instructions without changing retrieval:
 
 ```java
-var result = rag.query(QueryRequest.builder()
+var result = rag.query("default", QueryRequest.builder()
     .query("Who works with Bob?")
     .userPrompt("Answer in bullet points.")
     .build());
@@ -478,7 +513,7 @@ var result = rag.query(QueryRequest.builder()
 Use `conversationHistory` when your chat model should see prior turns as structured messages:
 
 ```java
-var result = rag.query(QueryRequest.builder()
+var result = rag.query("default", QueryRequest.builder()
     .query("Who works with Bob?")
     .userPrompt("Answer in bullet points.")
     .conversationHistory(List.of(
@@ -491,7 +526,7 @@ var result = rag.query(QueryRequest.builder()
 Use `modelFunc` when one specific query should use a different chat model than the `LightRagBuilder` default:
 
 ```java
-var result = rag.query(QueryRequest.builder()
+var result = rag.query("default", QueryRequest.builder()
     .query("Who works with Bob?")
     .modelFunc(new OpenAiCompatibleChatModel(
         "https://api.openai.com/v1/",
@@ -504,7 +539,7 @@ var result = rag.query(QueryRequest.builder()
 Use `llKeywords` to steer entity-oriented retrieval in `LOCAL`, `HYBRID`, and `MIX`, and `hlKeywords` to steer relation-oriented retrieval in `GLOBAL`, `HYBRID`, and `MIX`:
 
 ```java
-var result = rag.query(QueryRequest.builder()
+var result = rag.query("default", QueryRequest.builder()
     .query("Who works with Bob?")
     .mode(QueryMode.HYBRID)
     .llKeywords(List.of("Alice", "collaboration"))
@@ -517,7 +552,7 @@ If both keyword lists are omitted, Java now performs an upstream-style keyword-e
 Use token budgets when you need deterministic caps on how much graph and chunk context is retained:
 
 ```java
-var result = rag.query(QueryRequest.builder()
+var result = rag.query("default", QueryRequest.builder()
     .query("Summarize the project status")
     .mode(QueryMode.MIX)
     .maxEntityTokens(6_000)
@@ -529,7 +564,7 @@ var result = rag.query(QueryRequest.builder()
 Use `includeReferences` when you want structured references in `QueryResult` in addition to the generated answer:
 
 ```java
-var result = rag.query(QueryRequest.builder()
+var result = rag.query("default", QueryRequest.builder()
     .query("Who works with Bob?")
     .includeReferences(true)
     .build());
@@ -542,7 +577,7 @@ var firstContextSource = result.contexts().get(0).source();
 Use `stream` when you want to consume generated text incrementally while keeping retrieval metadata:
 
 ```java
-try (var result = rag.query(QueryRequest.builder()
+try (var result = rag.query("default", QueryRequest.builder()
         .query("Who works with Bob?")
         .includeReferences(true)
         .stream(true)
@@ -588,7 +623,7 @@ The Java SDK also supports upstream-style query shortcuts for inspecting or skip
 Use `onlyNeedContext` to return the assembled retrieval context without calling the chat model:
 
 ```java
-var result = rag.query(QueryRequest.builder()
+var result = rag.query("default", QueryRequest.builder()
     .query("Who works with Bob?")
     .onlyNeedContext(true)
     .build());
@@ -600,7 +635,7 @@ System.out.println(result.contexts()); // resolved chunk contexts
 Use `onlyNeedPrompt` to return the final prompt payload without calling the chat model:
 
 ```java
-var result = rag.query(QueryRequest.builder()
+var result = rag.query("default", QueryRequest.builder()
     .query("Who works with Bob?")
     .onlyNeedPrompt(true)
     .build());
@@ -611,7 +646,7 @@ System.out.println(result.answer());   // rendered system prompt plus raw user q
 Use `BYPASS` when you want a direct LLM call with optional chat history and prompt controls but no retrieval:
 
 ```java
-var result = rag.query(QueryRequest.builder()
+var result = rag.query("default", QueryRequest.builder()
     .query("Talk directly to the model")
     .mode(QueryMode.BYPASS)
     .conversationHistory(List.of(
@@ -639,12 +674,12 @@ Notes:
 The SDK exposes per-document processing status through typed APIs on `LightRag`:
 
 ```java
-rag.ingest(List.of(
+rag.ingest("default", List.of(
     new Document("doc-1", "Title", "Alice works with Bob", Map.of("source", "demo"))
 ));
 
-var status = rag.getDocumentStatus("doc-1");
-var allStatuses = rag.listDocumentStatuses();
+var status = rag.getDocumentStatus("default", "doc-1");
+var allStatuses = rag.listDocumentStatuses("default");
 ```
 
 For the current synchronous ingest flow:
@@ -652,7 +687,7 @@ For the current synchronous ingest flow:
 - a document becomes `PROCESSING` when its ingest attempt starts
 - it becomes `PROCESSED` on success, with a short summary such as processed chunk count
 - it becomes `FAILED` on ingest failure, with the top-level error message
-- `deleteByDocumentId(...)` removes the persisted status entry when deletion succeeds
+- `deleteByDocumentId(workspaceId, ...)` removes the persisted status entry when deletion succeeds
 
 There is no background queue in this phase, so status visibility is per synchronous document ingest attempt rather than async job orchestration.
 
@@ -660,26 +695,26 @@ There is no background queue in this phase, so status visibility is per synchron
 
 The Java SDK now supports manual graph mutations in addition to document ingest:
 
-- `createEntity(CreateEntityRequest request)`
-- `editEntity(EditEntityRequest request)`
-- `createRelation(CreateRelationRequest request)`
-- `editRelation(EditRelationRequest request)`
+- `createEntity(String workspaceId, CreateEntityRequest request)`
+- `editEntity(String workspaceId, EditEntityRequest request)`
+- `createRelation(String workspaceId, CreateRelationRequest request)`
+- `editRelation(String workspaceId, EditRelationRequest request)`
 
 ```java
-var alice = rag.createEntity(CreateEntityRequest.builder()
+var alice = rag.createEntity("default", CreateEntityRequest.builder()
     .name("Alice")
     .type("person")
     .description("Researcher")
     .aliases(List.of("Dr. Alice"))
     .build());
 
-var bob = rag.createEntity(CreateEntityRequest.builder()
+var bob = rag.createEntity("default", CreateEntityRequest.builder()
     .name("Bob")
     .type("person")
     .description("Engineer")
     .build());
 
-var worksWith = rag.createRelation(CreateRelationRequest.builder()
+var worksWith = rag.createRelation("default", CreateRelationRequest.builder()
     .sourceEntityName("Alice")
     .targetEntityName("Bob")
     .relationType("works_with")
@@ -687,13 +722,13 @@ var worksWith = rag.createRelation(CreateRelationRequest.builder()
     .weight(0.8d)
     .build());
 
-var robert = rag.editEntity(EditEntityRequest.builder()
+var robert = rag.editEntity("default", EditEntityRequest.builder()
     .entityName("Bob")
     .newName("Robert")
     .description("Principal investigator")
     .build());
 
-var reportsTo = rag.editRelation(EditRelationRequest.builder()
+var reportsTo = rag.editRelation("default", EditRelationRequest.builder()
     .sourceEntityName("Alice")
     .targetEntityName("Robert")
     .currentRelationType("works_with")
@@ -702,7 +737,7 @@ var reportsTo = rag.editRelation(EditRelationRequest.builder()
     .weight(0.9d)
     .build());
 
-var merged = rag.mergeEntities(MergeEntitiesRequest.builder()
+var merged = rag.mergeEntities("default", MergeEntitiesRequest.builder()
     .sourceEntityNames(List.of("Bob"))
     .targetEntityName("Robert")
     .targetDescription("Principal investigator leading the merged profile")
@@ -757,7 +792,7 @@ var rag = LightRag.builder()
     .storage(storage)
     .build();
 
-rag.ingest(List.of(
+rag.ingest("default", List.of(
     new Document("doc-1", "Title", "Alice works with Bob", Map.of("source", "postgres-demo"))
 ));
 ```
@@ -818,6 +853,12 @@ var rag = LightRag.builder()
 
 This mixed provider uses a compensation-based rollback model: PostgreSQL remains the source of truth, Neo4j serves graph reads, and failed graph projection updates are rolled back to the pre-write snapshot so the SDK still presents provider-level atomic outcomes.
 
+Isolation strategy in the mixed backend is intentionally asymmetric:
+
+- PostgreSQL remains physically isolated per workspace through derived table prefixes
+- Neo4j uses one shared database and isolates records logically by `workspaceId`
+- Neo4j snapshot capture, restore, and projection rollback are all scoped to the current workspace only
+
 ## Snapshot Usage
 
 ```java
@@ -831,12 +872,19 @@ var rag = LightRag.builder()
     .loadFromSnapshot(snapshotPath)
     .build();
 
-rag.ingest(documents);
+rag.ingest("default", documents);
+rag.saveSnapshot("default", snapshotPath);
+rag.restoreSnapshot("default", snapshotPath);
 ```
 
 `loadFromSnapshot(...)` does two things:
 - If the snapshot file already exists, it restores documents, chunks, graph data, vectors, and document statuses before `build()`.
 - It also sets the autosave target used after successful `ingest(...)` calls.
+
+Runtime snapshots are now workspace-explicit:
+
+- `saveSnapshot(workspaceId, path)` captures only that workspace
+- `restoreSnapshot(workspaceId, path)` restores only that workspace
 
 With the PostgreSQL and PostgreSQL+Neo4j backends, snapshots remain delegated to the configured `SnapshotStore`. PostgreSQL is the primary durable store for online data and document statuses, while snapshot files are still used only when you explicitly load or autosave snapshots through the existing API.
 

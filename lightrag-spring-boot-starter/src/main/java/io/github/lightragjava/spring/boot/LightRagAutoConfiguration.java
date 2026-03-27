@@ -20,6 +20,7 @@ import io.github.lightragjava.persistence.FileSnapshotStore;
 import io.github.lightragjava.storage.InMemoryStorageProvider;
 import io.github.lightragjava.storage.SnapshotStore;
 import io.github.lightragjava.storage.StorageProvider;
+import io.github.lightragjava.storage.WorkspaceStorageProvider;
 import io.github.lightragjava.storage.neo4j.Neo4jGraphConfig;
 import io.github.lightragjava.storage.neo4j.PostgresNeo4jStorageProvider;
 import io.github.lightragjava.storage.postgres.PostgresStorageConfig;
@@ -159,32 +160,53 @@ public class LightRagAutoConfiguration {
 
     @Bean
     @ConditionalOnMissingBean
-    WorkspaceLightRagFactory workspaceLightRagFactory(
-        ChatModel chatModel,
-        EmbeddingModel embeddingModel,
+    WorkspaceStorageProvider workspaceStorageProvider(
         ObjectProvider<StorageProvider> storageProvider,
-        ObjectProvider<Chunker> chunker,
-        ObjectProvider<DocumentParsingOrchestrator> documentParsingOrchestrator,
-        ObjectProvider<RerankModel> rerankModel,
         SnapshotStore snapshotStore,
         LightRagProperties properties
     ) {
-        return new WorkspaceLightRagFactory(
-            chatModel,
-            embeddingModel,
-            storageProvider,
-            chunker,
-            documentParsingOrchestrator,
-            rerankModel,
-            snapshotStore,
-            properties
-        );
+        return new SpringWorkspaceStorageProvider(storageProvider, snapshotStore, properties);
     }
 
     @Bean
     @ConditionalOnMissingBean
-    LightRag lightRag(WorkspaceLightRagFactory workspaceLightRagFactory, LightRagProperties properties) {
-        return workspaceLightRagFactory.get(properties.getWorkspace().getDefaultId());
+    LightRag lightRag(
+        ChatModel chatModel,
+        EmbeddingModel embeddingModel,
+        WorkspaceStorageProvider workspaceStorageProvider,
+        ObjectProvider<Chunker> chunker,
+        ObjectProvider<DocumentParsingOrchestrator> documentParsingOrchestrator,
+        ObjectProvider<RerankModel> rerankModel,
+        LightRagProperties properties
+    ) {
+        var query = properties.getQuery();
+        var builder = LightRag.builder()
+            .chatModel(chatModel)
+            .embeddingModel(embeddingModel)
+            .workspaceStorage(workspaceStorageProvider)
+            .automaticQueryKeywordExtraction(query.isAutomaticKeywordExtraction())
+            .rerankCandidateMultiplier(query.getRerankCandidateMultiplier());
+        if (properties.getIndexing().getEmbeddingBatchSize() > 0) {
+            builder.embeddingBatchSize(properties.getIndexing().getEmbeddingBatchSize());
+        }
+        builder.maxParallelInsert(properties.getIndexing().getMaxParallelInsert());
+        builder.entityExtractMaxGleaning(properties.getIndexing().getEntityExtractMaxGleaning());
+        builder.maxExtractInputTokens(properties.getIndexing().getMaxExtractInputTokens());
+        builder.entityExtractionLanguage(properties.getIndexing().getLanguage());
+        builder.entityTypes(properties.getIndexing().getEntityTypes());
+        var configuredChunker = chunker.getIfAvailable();
+        if (configuredChunker != null) {
+            builder.chunker(configuredChunker);
+        }
+        var configuredDocumentParsingOrchestrator = documentParsingOrchestrator.getIfAvailable();
+        if (configuredDocumentParsingOrchestrator != null) {
+            builder.documentParsingOrchestrator(configuredDocumentParsingOrchestrator);
+        }
+        var configuredRerankModel = rerankModel.getIfAvailable();
+        if (configuredRerankModel != null) {
+            builder.rerankModel(configuredRerankModel);
+        }
+        return builder.build();
     }
 
     private static PostgresStorageConfig postgresConfig(LightRagProperties properties) {

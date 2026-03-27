@@ -8,8 +8,6 @@ import io.github.lightragjava.api.QueryRequest;
 import io.github.lightragjava.api.QueryResult;
 import io.github.lightragjava.model.CloseableIterator;
 import io.github.lightragjava.spring.boot.LightRagProperties;
-import io.github.lightragjava.spring.boot.WorkspaceLightRagFactory;
-import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.mockito.ArgumentCaptor;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -30,8 +28,6 @@ import java.util.concurrent.atomic.AtomicBoolean;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
-import static org.mockito.ArgumentMatchers.anyString;
-import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
@@ -50,10 +46,7 @@ class StreamingQueryControllerTest {
     private ObjectMapper objectMapper;
 
     @MockBean
-    private WorkspaceLightRagFactory workspaceLightRagFactory;
-
-    private LightRag defaultLightRag;
-    private LightRag alphaLightRag;
+    private LightRag lightRag;
 
     @SpyBean
     private QueryRequestMapper queryRequestMapper;
@@ -76,17 +69,9 @@ class StreamingQueryControllerTest {
         }
     }
 
-    @BeforeEach
-    void setUp() {
-        defaultLightRag = mock(LightRag.class);
-        alphaLightRag = mock(LightRag.class);
-        when(workspaceLightRagFactory.get("default")).thenReturn(defaultLightRag);
-        when(workspaceLightRagFactory.get("alpha")).thenReturn(alphaLightRag);
-    }
-
     @Test
     void streamsMetaChunkAndCompleteEventsFromResolvedWorkspace() throws Exception {
-        when(alphaLightRag.query(any())).thenReturn(QueryResult.streaming(
+        when(lightRag.query(any(), any())).thenReturn(QueryResult.streaming(
             CloseableIterator.of(List.of("Alice ", "works with Bob.")),
             List.of(new QueryResult.Context("chunk-1", "Alice works with Bob", "1", "demo.txt")),
             List.of(new QueryResult.Reference("1", "demo.txt"))
@@ -109,8 +94,7 @@ class StreamingQueryControllerTest {
 
         var requestCaptor = ArgumentCaptor.forClass(QueryRequest.class);
         verify(queryRequestMapper).toStreamingRequest(any());
-        verify(workspaceLightRagFactory).get("alpha");
-        verify(alphaLightRag).query(requestCaptor.capture());
+        verify(lightRag).query(org.mockito.ArgumentMatchers.eq("alpha"), requestCaptor.capture());
 
         assertThat(requestCaptor.getValue().mode()).isEqualTo(QueryMode.MIX);
         assertThat(requestCaptor.getValue().stream()).isTrue();
@@ -124,7 +108,7 @@ class StreamingQueryControllerTest {
 
     @Test
     void fallsBackToDefaultWorkspaceWhenHeaderMissing() throws Exception {
-        when(defaultLightRag.query(any())).thenReturn(QueryResult.streaming(
+        when(lightRag.query(any(), any())).thenReturn(QueryResult.streaming(
             CloseableIterator.of(List.of("Default ", "workspace")),
             List.of(),
             List.of()
@@ -143,13 +127,13 @@ class StreamingQueryControllerTest {
 
         var events = dispatch(mvcResult);
 
-        verify(workspaceLightRagFactory).get("default");
+        verify(lightRag).query(org.mockito.ArgumentMatchers.eq("default"), any());
         assertThat(chunkTexts(events)).containsExactly("Default ", "workspace");
     }
 
     @Test
     void streamsBufferedFallbackAsAnswerEvent() throws Exception {
-        when(alphaLightRag.query(any())).thenReturn(new QueryResult(
+        when(lightRag.query(any(), any())).thenReturn(new QueryResult(
             "assembled prompt",
             List.of(new QueryResult.Context("chunk-1", "Alice works with Bob", "1", "demo.txt")),
             List.of(new QueryResult.Reference("1", "demo.txt"))
@@ -171,7 +155,7 @@ class StreamingQueryControllerTest {
         var events = dispatch(mvcResult);
 
         var requestCaptor = ArgumentCaptor.forClass(QueryRequest.class);
-        verify(alphaLightRag).query(requestCaptor.capture());
+        verify(lightRag).query(org.mockito.ArgumentMatchers.eq("alpha"), requestCaptor.capture());
 
         assertThat(requestCaptor.getValue().stream()).isTrue();
         assertThat(requestCaptor.getValue().onlyNeedPrompt()).isTrue();
@@ -184,7 +168,7 @@ class StreamingQueryControllerTest {
 
     @Test
     void streamsContextFallbackAsAnswerEvent() throws Exception {
-        when(alphaLightRag.query(any())).thenReturn(new QueryResult(
+        when(lightRag.query(any(), any())).thenReturn(new QueryResult(
             "assembled context",
             List.of(new QueryResult.Context("chunk-1", "Alice works with Bob", "1", "demo.txt")),
             List.of(new QueryResult.Reference("1", "demo.txt"))
@@ -206,7 +190,7 @@ class StreamingQueryControllerTest {
         var events = dispatch(mvcResult);
 
         var requestCaptor = ArgumentCaptor.forClass(QueryRequest.class);
-        verify(alphaLightRag).query(requestCaptor.capture());
+        verify(lightRag).query(org.mockito.ArgumentMatchers.eq("alpha"), requestCaptor.capture());
 
         assertThat(requestCaptor.getValue().stream()).isTrue();
         assertThat(requestCaptor.getValue().onlyNeedContext()).isTrue();
@@ -219,7 +203,7 @@ class StreamingQueryControllerTest {
 
     @Test
     void streamsBypassModeAsChunksWithEmptyRetrievalMetadata() throws Exception {
-        when(alphaLightRag.query(any())).thenReturn(QueryResult.streaming(
+        when(lightRag.query(any(), any())).thenReturn(QueryResult.streaming(
             CloseableIterator.of(List.of("Bypass ", "answer")),
             List.of(),
             List.of()
@@ -242,7 +226,7 @@ class StreamingQueryControllerTest {
         var events = dispatch(mvcResult);
 
         var requestCaptor = ArgumentCaptor.forClass(QueryRequest.class);
-        verify(alphaLightRag).query(requestCaptor.capture());
+        verify(lightRag).query(org.mockito.ArgumentMatchers.eq("alpha"), requestCaptor.capture());
 
         assertThat(requestCaptor.getValue().mode()).isEqualTo(QueryMode.BYPASS);
         assertThat(requestCaptor.getValue().stream()).isTrue();
@@ -268,14 +252,13 @@ class StreamingQueryControllerTest {
                     """))
             .andExpect(status().isBadRequest());
 
-        verify(workspaceLightRagFactory, never()).get(anyString());
-        verify(alphaLightRag, never()).query(any());
+        verify(lightRag, never()).query(any(), any());
     }
 
     @Test
     void emitsErrorEventWhenStreamingIteratorFails() throws Exception {
         var closed = new AtomicBoolean();
-        when(alphaLightRag.query(any())).thenReturn(QueryResult.streaming(
+        when(lightRag.query(any(), any())).thenReturn(QueryResult.streaming(
             new CloseableIterator<>() {
                 private int index;
 

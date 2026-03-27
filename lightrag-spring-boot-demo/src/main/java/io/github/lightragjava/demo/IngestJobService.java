@@ -2,7 +2,7 @@ package io.github.lightragjava.demo;
 
 import io.github.lightragjava.api.DocumentIngestOptions;
 import io.github.lightragjava.api.DocumentStatus;
-import io.github.lightragjava.spring.boot.WorkspaceLightRagFactory;
+import io.github.lightragjava.api.LightRag;
 import io.github.lightragjava.types.Document;
 import io.github.lightragjava.types.RawDocumentSource;
 import jakarta.annotation.PreDestroy;
@@ -26,13 +26,13 @@ import java.util.concurrent.atomic.AtomicLong;
 class IngestJobService {
     private static final String JOB_CANCELLED_MESSAGE = "job cancelled";
 
-    private final WorkspaceLightRagFactory workspaceLightRagFactory;
+    private final LightRag lightRag;
     private final ExecutorService executor;
     private final ConcurrentMap<String, JobState> jobs = new ConcurrentHashMap<>();
     private final AtomicLong sequence = new AtomicLong();
 
-    IngestJobService(WorkspaceLightRagFactory workspaceLightRagFactory) {
-        this.workspaceLightRagFactory = workspaceLightRagFactory;
+    IngestJobService(LightRag lightRag) {
+        this.lightRag = lightRag;
         this.executor = Executors.newSingleThreadExecutor(new ThreadFactory() {
             @Override
             public Thread newThread(Runnable runnable) {
@@ -210,7 +210,7 @@ class IngestJobService {
 
     private boolean shouldRetryDocument(String workspaceId, String documentId) {
         try {
-            var status = workspaceLightRagFactory.get(workspaceId).getDocumentStatus(documentId);
+            var status = lightRag.getDocumentStatus(workspaceId, documentId);
             return status == null || status.status() != DocumentStatus.PROCESSED;
         } catch (NoSuchElementException ignored) {
             return true;
@@ -222,11 +222,10 @@ class IngestJobService {
             return;
         }
         try {
-            var rag = workspaceLightRagFactory.get(jobState.workspaceId());
             if (jobState.hasRawSources()) {
-                rag.ingestSources(jobState.rawSources(), jobState.ingestOptions());
+                lightRag.ingestSources(jobState.workspaceId(), jobState.rawSources(), jobState.ingestOptions());
             } else {
-                rag.ingest(jobState.documents());
+                lightRag.ingest(jobState.workspaceId(), jobState.documents());
             }
             jobState.markSucceeded();
         } catch (Throwable throwable) {

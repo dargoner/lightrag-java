@@ -1,6 +1,7 @@
 package io.github.lightragjava.storage.neo4j;
 
 import io.github.lightragjava.persistence.FileSnapshotStore;
+import io.github.lightragjava.api.WorkspaceScope;
 import io.github.lightragjava.storage.ChunkStore;
 import io.github.lightragjava.storage.DocumentStore;
 import io.github.lightragjava.storage.GraphStore;
@@ -16,11 +17,16 @@ import org.testcontainers.containers.Neo4jContainer;
 import org.testcontainers.containers.PostgreSQLContainer;
 import org.testcontainers.utility.DockerImageName;
 
+import java.time.Duration;
 import java.util.List;
 import java.util.Map;
 import java.util.UUID;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicReference;
+import java.util.concurrent.locks.ReentrantReadWriteLock;
 
+import static org.assertj.core.api.Assertions.assertThatCode;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
@@ -37,8 +43,15 @@ class PostgresNeo4jStorageProviderTest {
 
     @BeforeEach
     void resetSharedNeo4j() {
-        try (var graphStore = newGraphStore()) {
-            graphStore.restore(new Neo4jGraphSnapshot(List.of(), List.of()));
+        try (var driver = org.neo4j.driver.GraphDatabase.driver(
+            NEO4J.getBoltUrl(),
+            org.neo4j.driver.AuthTokens.basic("neo4j", NEO4J.getAdminPassword())
+        );
+             var session = driver.session(org.neo4j.driver.SessionConfig.forDatabase("neo4j"))) {
+            session.executeWrite(tx -> {
+                tx.run("MATCH (node) DETACH DELETE node");
+                return null;
+            });
         }
     }
 
@@ -183,6 +196,171 @@ class PostgresNeo4jStorageProviderTest {
     }
 
     @Test
+    void isolatesGraphReadsAndWritesAcrossWorkspaceScopedProviders() {
+        try (var alpha = newProvider(new FileSnapshotStore(), nextPrefix(), "alpha");
+             var beta = newProvider(new FileSnapshotStore(), nextPrefix(), "beta")) {
+            var alphaEntity = new GraphStore.EntityRecord(
+                "entity-1",
+                "Alice",
+                "person",
+                "Alpha entity",
+                List.of("A"),
+                List.of("alpha-chunk")
+            );
+            var betaEntity = new GraphStore.EntityRecord(
+                "entity-1",
+                "Bob",
+                "person",
+                "Beta entity",
+                List.of("B"),
+                List.of("beta-chunk")
+            );
+
+            alpha.graphStore().saveEntity(alphaEntity);
+            beta.graphStore().saveEntity(betaEntity);
+
+            assertThat(alpha.graphStore().loadEntity("entity-1")).contains(alphaEntity);
+            assertThat(beta.graphStore().loadEntity("entity-1")).contains(betaEntity);
+            assertThat(alpha.graphStore().allEntities()).containsExactly(alphaEntity);
+            assertThat(beta.graphStore().allEntities()).containsExactly(betaEntity);
+        }
+    }
+
+    @Test
+    void isolatesPostgresStoresAcrossWorkspaceScopedProvidersSharingBasePrefix() {
+        var sharedPrefix = nextPrefix();
+        try (var alpha = newProvider(new FileSnapshotStore(), sharedPrefix, "alpha");
+             var beta = newProvider(new FileSnapshotStore(), sharedPrefix, "beta")) {
+            alpha.documentStore().save(new DocumentStore.DocumentRecord("doc-alpha-1", "Alpha", "Body", Map.of("source", "alpha")));
+            alpha.chunkStore().save(new ChunkStore.ChunkRecord("doc-alpha-1:0", "doc-alpha-1", "Body", 4, 0, Map.of("source", "alpha")));
+            alpha.vectorStore().saveAll("chunks", List.of(new VectorStore.VectorRecord("doc-alpha-1:0", List.of(1.0d, 0.0d, 0.0d))));
+
+            beta.documentStore().save(new DocumentStore.DocumentRecord("doc-beta-1", "Beta", "Body", Map.of("source", "beta")));
+            beta.chunkStore().save(new ChunkStore.ChunkRecord("doc-beta-1:0", "doc-beta-1", "Body", 4, 0, Map.of("source", "beta")));
+            beta.vectorStore().saveAll("chunks", List.of(new VectorStore.VectorRecord("doc-beta-1:0", List.of(0.0d, 1.0d, 0.0d))));
+
+            assertThat(alpha.documentStore().list())
+                .containsExactly(new DocumentStore.DocumentRecord("doc-alpha-1", "Alpha", "Body", Map.of("source", "alpha")));
+            assertThat(alpha.chunkStore().list())
+                .containsExactly(new ChunkStore.ChunkRecord("doc-alpha-1:0", "doc-alpha-1", "Body", 4, 0, Map.of("source", "alpha")));
+            assertThat(alpha.vectorStore().list("chunks"))
+                .containsExactly(new VectorStore.VectorRecord("doc-alpha-1:0", List.of(1.0d, 0.0d, 0.0d)));
+
+            assertThat(beta.documentStore().list())
+                .containsExactly(new DocumentStore.DocumentRecord("doc-beta-1", "Beta", "Body", Map.of("source", "beta")));
+            assertThat(beta.chunkStore().list())
+                .containsExactly(new ChunkStore.ChunkRecord("doc-beta-1:0", "doc-beta-1", "Body", 4, 0, Map.of("source", "beta")));
+            assertThat(beta.vectorStore().list("chunks"))
+                .containsExactly(new VectorStore.VectorRecord("doc-beta-1:0", List.of(0.0d, 1.0d, 0.0d)));
+        }
+    }
+
+    @Test
+    void restoreOnlyReplacesCurrentWorkspaceState() {
+        var betaReplacement = new SnapshotStore.Snapshot(
+            List.of(new DocumentStore.DocumentRecord("doc-beta-2", "Beta Snapshot", "Body", Map.of("source", "beta"))),
+            List.of(new ChunkStore.ChunkRecord("doc-beta-2:0", "doc-beta-2", "Body", 4, 0, Map.of("source", "beta"))),
+            List.of(new GraphStore.EntityRecord(
+                "entity-beta-2",
+                "Bert",
+                "person",
+                "Beta replacement",
+                List.of("B2"),
+                List.of("doc-beta-2:0")
+            )),
+            List.of(new GraphStore.RelationRecord(
+                "relation-beta-2",
+                "entity-beta-2",
+                "entity-beta-3",
+                "knows",
+                "Bert knows Bella",
+                0.8d,
+                List.of("doc-beta-2:0")
+            )),
+            Map.of("chunks", List.of(new VectorStore.VectorRecord("doc-beta-2:0", List.of(0.0d, 1.0d, 0.0d))))
+        );
+
+        try (var alpha = newProvider(new FileSnapshotStore(), nextPrefix(), "alpha");
+             var beta = newProvider(new FileSnapshotStore(), nextPrefix(), "beta")) {
+            alpha.documentStore().save(new DocumentStore.DocumentRecord("doc-alpha-1", "Alpha", "Body", Map.of("source", "alpha")));
+            alpha.chunkStore().save(new ChunkStore.ChunkRecord("doc-alpha-1:0", "doc-alpha-1", "Body", 4, 0, Map.of("source", "alpha")));
+            alpha.graphStore().saveEntity(new GraphStore.EntityRecord(
+                "entity-shared",
+                "Alice",
+                "person",
+                "Alpha entity",
+                List.of("A"),
+                List.of("doc-alpha-1:0")
+            ));
+            alpha.graphStore().saveRelation(new GraphStore.RelationRecord(
+                "relation-alpha-1",
+                "entity-shared",
+                "entity-alpha-2",
+                "knows",
+                "Alice knows Aaron",
+                0.9d,
+                List.of("doc-alpha-1:0")
+            ));
+            alpha.vectorStore().saveAll("chunks", List.of(new VectorStore.VectorRecord("doc-alpha-1:0", List.of(1.0d, 0.0d, 0.0d))));
+
+            beta.documentStore().save(new DocumentStore.DocumentRecord("doc-beta-1", "Beta", "Body", Map.of("source", "beta")));
+            beta.chunkStore().save(new ChunkStore.ChunkRecord("doc-beta-1:0", "doc-beta-1", "Body", 4, 0, Map.of("source", "beta")));
+            beta.graphStore().saveEntity(new GraphStore.EntityRecord(
+                "entity-shared",
+                "Bob",
+                "person",
+                "Beta entity",
+                List.of("B"),
+                List.of("doc-beta-1:0")
+            ));
+            beta.graphStore().saveRelation(new GraphStore.RelationRecord(
+                "relation-beta-1",
+                "entity-shared",
+                "entity-beta-2",
+                "knows",
+                "Bob knows Ben",
+                0.7d,
+                List.of("doc-beta-1:0")
+            ));
+            beta.vectorStore().saveAll("chunks", List.of(new VectorStore.VectorRecord("doc-beta-1:0", List.of(0.0d, 1.0d, 0.0d))));
+
+            beta.restore(betaReplacement);
+
+            assertThat(alpha.documentStore().list())
+                .containsExactly(new DocumentStore.DocumentRecord("doc-alpha-1", "Alpha", "Body", Map.of("source", "alpha")));
+            assertThat(alpha.chunkStore().list())
+                .containsExactly(new ChunkStore.ChunkRecord("doc-alpha-1:0", "doc-alpha-1", "Body", 4, 0, Map.of("source", "alpha")));
+            assertThat(alpha.graphStore().allEntities())
+                .containsExactly(new GraphStore.EntityRecord(
+                    "entity-shared",
+                    "Alice",
+                    "person",
+                    "Alpha entity",
+                    List.of("A"),
+                    List.of("doc-alpha-1:0")
+                ));
+            assertThat(alpha.graphStore().allRelations())
+                .containsExactly(new GraphStore.RelationRecord(
+                    "relation-alpha-1",
+                    "entity-shared",
+                    "entity-alpha-2",
+                    "knows",
+                    "Alice knows Aaron",
+                    0.9d,
+                    List.of("doc-alpha-1:0")
+                ));
+            assertThat(alpha.vectorStore().list("chunks"))
+                .containsExactly(new VectorStore.VectorRecord("doc-alpha-1:0", List.of(1.0d, 0.0d, 0.0d)));
+
+            assertThat(beta.documentStore().list()).containsExactlyElementsOf(betaReplacement.documents());
+            assertThat(beta.chunkStore().list()).containsExactlyElementsOf(betaReplacement.chunks());
+            assertThat(beta.graphStore().allEntities()).containsExactlyElementsOf(betaReplacement.entities());
+            assertThat(beta.graphStore().allRelations()).containsExactlyElementsOf(betaReplacement.relations());
+            assertThat(beta.vectorStore().list("chunks")).containsExactlyElementsOf(betaReplacement.vectors().get("chunks"));
+        }
+    }
+
+    @Test
     void rollsBackAllStoresWhenProjectionFailsAfterPostgresCommit() {
         var tablePrefix = nextPrefix();
         var originalDocument = new DocumentStore.DocumentRecord("doc-0", "Existing", "seed", Map.of("seed", "true"));
@@ -249,8 +427,154 @@ class PostgresNeo4jStorageProviderTest {
         }
     }
 
+    @Test
+    void rollbackOnlyRestoresFailedWorkspaceWhenProvidersShareNeo4jDatabase() {
+        var alphaLock = new ReentrantReadWriteLock(true);
+        var betaLock = new ReentrantReadWriteLock(true);
+        var alphaPrefix = nextPrefix();
+        var betaPrefix = nextPrefix();
+        var alphaEntity = new GraphStore.EntityRecord(
+            "entity-1",
+            "Alpha",
+            "person",
+            "Alpha entity",
+            List.of(),
+            List.of("alpha-doc:0")
+        );
+        var alphaRelation = new GraphStore.RelationRecord(
+            "relation-1",
+            "entity-1",
+            "entity-2",
+            "knows",
+            "Alpha knows peer",
+            0.9d,
+            List.of("alpha-doc:0")
+        );
+
+        try (var alpha = newWorkspaceProvider(new FileSnapshotStore(), alphaPrefix, "alpha", alphaLock);
+             var beta = newFailingWorkspaceProvider(new FileSnapshotStore(), betaPrefix, "beta", betaLock)) {
+            alpha.documentStore().save(new DocumentStore.DocumentRecord("alpha-doc", "Alpha", "Body", Map.of()));
+            alpha.chunkStore().save(new ChunkStore.ChunkRecord("alpha-doc:0", "alpha-doc", "Body", 4, 0, Map.of()));
+            alpha.graphStore().saveEntity(alphaEntity);
+            alpha.graphStore().saveRelation(alphaRelation);
+            alpha.vectorStore().saveAll("chunks", List.of(new VectorStore.VectorRecord("alpha-doc:0", List.of(1.0d, 0.0d, 0.0d))));
+
+            assertThatThrownBy(() -> beta.writeAtomically(storage -> {
+                storage.documentStore().save(new DocumentStore.DocumentRecord("beta-doc", "Beta", "Body", Map.of()));
+                storage.chunkStore().save(new ChunkStore.ChunkRecord("beta-doc:0", "beta-doc", "Body", 4, 0, Map.of()));
+                storage.graphStore().saveEntity(new GraphStore.EntityRecord(
+                    "entity-1",
+                    "Beta",
+                    "person",
+                    "Beta entity",
+                    List.of(),
+                    List.of("beta-doc:0")
+                ));
+                storage.graphStore().saveRelation(new GraphStore.RelationRecord(
+                    "relation-1",
+                    "entity-1",
+                    "entity-3",
+                    "knows",
+                    "Beta knows peer",
+                    0.7d,
+                    List.of("beta-doc:0")
+                ));
+                storage.vectorStore().saveAll("chunks", List.of(new VectorStore.VectorRecord("beta-doc:0", List.of(0.0d, 1.0d, 0.0d))));
+                return null;
+            }))
+                .isInstanceOf(IllegalStateException.class)
+                .hasMessage("projection failed");
+
+            assertThat(alpha.documentStore().list())
+                .containsExactly(new DocumentStore.DocumentRecord("alpha-doc", "Alpha", "Body", Map.of()));
+            assertThat(alpha.chunkStore().list())
+                .containsExactly(new ChunkStore.ChunkRecord("alpha-doc:0", "alpha-doc", "Body", 4, 0, Map.of()));
+            assertThat(alpha.graphStore().allEntities()).containsExactly(alphaEntity);
+            assertThat(alpha.graphStore().allRelations()).containsExactly(alphaRelation);
+            assertThat(alpha.vectorStore().list("chunks"))
+                .containsExactly(new VectorStore.VectorRecord("alpha-doc:0", List.of(1.0d, 0.0d, 0.0d)));
+
+            assertThat(beta.documentStore().list()).isEmpty();
+            assertThat(beta.chunkStore().list()).isEmpty();
+            assertThat(beta.graphStore().allEntities()).isEmpty();
+            assertThat(beta.graphStore().allRelations()).isEmpty();
+            assertThat(beta.vectorStore().list("chunks")).isEmpty();
+        }
+    }
+
+    @Test
+    void writeLockIsScopedPerWorkspaceInsteadOfBlockingOtherWorkspaces() throws Exception {
+        var alphaLock = new ReentrantReadWriteLock(true);
+        var betaLock = new ReentrantReadWriteLock(true);
+        var projectionStarted = new CountDownLatch(1);
+        var releaseAlphaProjection = new CountDownLatch(1);
+        try (var alphaProjectionGraphStore = newWorkspaceGraphStore("alpha");
+             var alpha = newWorkspaceProvider(
+                 new FileSnapshotStore(),
+                 nextPrefix(),
+                 "alpha",
+                 alphaLock,
+                 (entities, relations) -> {
+                     projectionStarted.countDown();
+                     try {
+                         if (!releaseAlphaProjection.await(10, TimeUnit.SECONDS)) {
+                             throw new IllegalStateException("timed out waiting to release alpha projection");
+                         }
+                     } catch (InterruptedException exception) {
+                         Thread.currentThread().interrupt();
+                         throw new IllegalStateException("interrupted while waiting to release alpha projection", exception);
+                     }
+                     for (var entity : entities) {
+                         alphaProjectionGraphStore.saveEntity(entity);
+                     }
+                     for (var relation : relations) {
+                         alphaProjectionGraphStore.saveRelation(relation);
+                     }
+                 }
+             );
+             var beta = newWorkspaceProvider(new FileSnapshotStore(), nextPrefix(), "beta", betaLock)) {
+
+            var alphaThread = new Thread(() -> alpha.writeAtomically(storage -> {
+                storage.graphStore().saveEntity(new GraphStore.EntityRecord(
+                    "entity-1",
+                    "Alpha",
+                    "person",
+                    "Alpha entity",
+                    List.of(),
+                    List.of("alpha-doc:0")
+                ));
+                return null;
+            }));
+            alphaThread.start();
+
+            assertThat(projectionStarted.await(10, TimeUnit.SECONDS)).isTrue();
+
+            assertThatCode(() -> beta.writeAtomically(storage -> {
+                storage.graphStore().saveEntity(new GraphStore.EntityRecord(
+                    "entity-1",
+                    "Beta",
+                    "person",
+                    "Beta entity",
+                    List.of(),
+                    List.of("beta-doc:0")
+                ));
+                return null;
+            })).doesNotThrowAnyException();
+
+            assertThat(beta.graphStore().loadEntity("entity-1")).isPresent();
+
+            releaseAlphaProjection.countDown();
+            alphaThread.join(Duration.ofSeconds(10).toMillis());
+            assertThat(alphaThread.isAlive()).isFalse();
+        }
+    }
+
     private static Neo4jGraphStore newGraphStore() {
         return new Neo4jGraphStore(newNeo4jConfig());
+    }
+
+    private static WorkspaceScopedNeo4jGraphStore newWorkspaceGraphStore(String workspaceId) {
+        return new WorkspaceScopedNeo4jGraphStore(newNeo4jConfig(), new io.github.lightragjava.api.WorkspaceScope(workspaceId));
     }
 
     private static PostgresNeo4jStorageProvider newProvider(SnapshotStore snapshotStore) {
@@ -258,10 +582,19 @@ class PostgresNeo4jStorageProviderTest {
     }
 
     private static PostgresNeo4jStorageProvider newProvider(SnapshotStore snapshotStore, String tablePrefix) {
+        return newProvider(snapshotStore, tablePrefix, "default");
+    }
+
+    private static PostgresNeo4jStorageProvider newProvider(
+        SnapshotStore snapshotStore,
+        String tablePrefix,
+        String workspaceId
+    ) {
         return new PostgresNeo4jStorageProvider(
             newPostgresConfig(tablePrefix),
             newNeo4jConfig(),
-            snapshotStore
+            snapshotStore,
+            new WorkspaceScope(workspaceId)
         );
     }
 
@@ -275,7 +608,58 @@ class PostgresNeo4jStorageProviderTest {
                 newPostgresConfig(tablePrefix),
                 snapshotStore
             ),
-            newGraphStore(),
+            newWorkspaceGraphStore("default"),
+            new ReentrantReadWriteLock(true),
+            (entities, relations) -> {
+                throw new IllegalStateException("projection failed");
+            }
+        );
+    }
+
+    private static PostgresNeo4jStorageProvider newWorkspaceProvider(
+        SnapshotStore snapshotStore,
+        String tablePrefix,
+        String workspaceId,
+        ReentrantReadWriteLock lock
+    ) {
+        return newWorkspaceProvider(
+            snapshotStore,
+            tablePrefix,
+            workspaceId,
+            lock,
+            null
+        );
+    }
+
+    private static PostgresNeo4jStorageProvider newWorkspaceProvider(
+        SnapshotStore snapshotStore,
+        String tablePrefix,
+        String workspaceId,
+        ReentrantReadWriteLock lock,
+        PostgresNeo4jStorageProvider.ProjectionApplier projectionApplier
+    ) {
+        return new PostgresNeo4jStorageProvider(
+            new PostgresStorageProvider(
+                newPostgresConfig(tablePrefix),
+                snapshotStore
+            ),
+            newWorkspaceGraphStore(workspaceId),
+            lock,
+            projectionApplier
+        );
+    }
+
+    private static PostgresNeo4jStorageProvider newFailingWorkspaceProvider(
+        SnapshotStore snapshotStore,
+        String tablePrefix,
+        String workspaceId,
+        ReentrantReadWriteLock lock
+    ) {
+        return newWorkspaceProvider(
+            snapshotStore,
+            tablePrefix,
+            workspaceId,
+            lock,
             (entities, relations) -> {
                 throw new IllegalStateException("projection failed");
             }

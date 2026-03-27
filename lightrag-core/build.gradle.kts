@@ -1,3 +1,12 @@
+plugins {
+    `maven-publish`
+}
+
+java {
+    withJavadocJar()
+    withSourcesJar()
+}
+
 dependencies {
     testImplementation("org.junit.jupiter:junit-jupiter:5.12.1")
     testRuntimeOnly("org.junit.platform:junit-platform-launcher:1.12.1")
@@ -32,4 +41,13 @@ tasks.register<JavaExec>("runRagasBatchEval") {
     description = "Runs the full LightRAG evaluation dataset and returns answers plus contexts."
     classpath = sourceSets.main.get().runtimeClasspath
     mainClass.set("io.github.lightragjava.evaluation.RagasBatchEvaluationCli")
+}
+
+publishing {
+    publications {
+        create<MavenPublication>("mavenJava") {
+            from(components["java"])
+            artifactId = "lightrag-core"
+        }
+    }
 }

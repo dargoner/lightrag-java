@@ -77,6 +77,41 @@ class PostgresStorageProviderTest {
     }
 
     @Test
+    @DisplayName("accepts pgvector type validation when search_path excludes public")
+    void acceptsSchemaQualifiedVectorTypeWhenSearchPathExcludesPublic() {
+        PostgreSQLContainer<?> container = newPostgresContainer();
+        container.start();
+
+        PostgresStorageConfig bootstrapConfig = new PostgresStorageConfig(
+            container.getJdbcUrl(),
+            container.getUsername(),
+            container.getPassword(),
+            "lightrag",
+            3,
+            "rag_"
+        );
+
+        PostgresStorageConfig validationConfig = new PostgresStorageConfig(
+            withCurrentSchema(container.getJdbcUrl(), "lightrag"),
+            container.getUsername(),
+            container.getPassword(),
+            "lightrag",
+            3,
+            "rag_"
+        );
+
+        try (container) {
+            try (PostgresStorageProvider ignored = new PostgresStorageProvider(bootstrapConfig, new InMemorySnapshotStore())) {
+                assertThat(ignored).isNotNull();
+            }
+
+            try (PostgresStorageProvider provider = new PostgresStorageProvider(validationConfig, new InMemorySnapshotStore())) {
+                assertThat(provider).isNotNull();
+            }
+        }
+    }
+
+    @Test
     void baselinesExistingLegacySchema() throws SQLException {
         PostgreSQLContainer<?> container = newPostgresContainer();
         container.start();
@@ -1124,5 +1159,10 @@ class PostgresStorageProviderTest {
             Thread.currentThread().interrupt();
             throw new AssertionError("Interrupted while waiting on latch", exception);
         }
+    }
+
+    private static String withCurrentSchema(String jdbcUrl, String schema) {
+        String separator = jdbcUrl.contains("?") ? "&" : "?";
+        return jdbcUrl + separator + "currentSchema=" + schema;
     }
 }

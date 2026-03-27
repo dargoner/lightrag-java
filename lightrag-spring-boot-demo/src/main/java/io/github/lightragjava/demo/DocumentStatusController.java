@@ -3,7 +3,6 @@ package io.github.lightragjava.demo;
 import io.github.lightragjava.api.DocumentProcessingStatus;
 import io.github.lightragjava.api.LightRag;
 import io.github.lightragjava.spring.boot.LightRagProperties;
-import io.github.lightragjava.spring.boot.WorkspaceLightRagFactory;
 import jakarta.servlet.http.HttpServletRequest;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
@@ -19,23 +18,22 @@ import org.springframework.web.server.ResponseStatusException;
 import java.time.Instant;
 import java.util.List;
 import java.util.NoSuchElementException;
-import java.util.Optional;
 
 @RestController
 @RequestMapping("/documents")
 class DocumentStatusController {
-    private final WorkspaceLightRagFactory workspaceLightRagFactory;
+    private final LightRag lightRag;
     private final WorkspaceResolver workspaceResolver;
     private final IngestJobService ingestJobService;
     private final LightRagProperties properties;
 
     DocumentStatusController(
-        WorkspaceLightRagFactory workspaceLightRagFactory,
+        LightRag lightRag,
         WorkspaceResolver workspaceResolver,
         IngestJobService ingestJobService,
         LightRagProperties properties
     ) {
-        this.workspaceLightRagFactory = workspaceLightRagFactory;
+        this.lightRag = lightRag;
         this.workspaceResolver = workspaceResolver;
         this.ingestJobService = ingestJobService;
         this.properties = properties;
@@ -80,17 +78,15 @@ class DocumentStatusController {
 
     @GetMapping("/status")
     List<DocumentProcessingStatus> listDocumentStatus(HttpServletRequest request) {
-        return existingLightRag(request)
-            .map(LightRag::listDocumentStatuses)
-            .orElseGet(List::of);
+        var workspaceId = workspaceResolver.resolve(request);
+        return lightRag.listDocumentStatuses(workspaceId);
     }
 
     @GetMapping("/status/{documentId}")
     DocumentProcessingStatus getDocumentStatus(@PathVariable String documentId, HttpServletRequest request) {
+        var workspaceId = workspaceResolver.resolve(request);
         try {
-            return existingLightRag(request)
-                .map(lightRag -> lightRag.getDocumentStatus(documentId))
-                .orElseThrow(() -> new NoSuchElementException("document not found: " + documentId));
+            return lightRag.getDocumentStatus(workspaceId, documentId);
         } catch (NoSuchElementException exception) {
             throw new ResponseStatusException(HttpStatus.NOT_FOUND, exception.getMessage(), exception);
         }
@@ -98,12 +94,13 @@ class DocumentStatusController {
 
     @DeleteMapping("/{documentId}")
     ResponseEntity<Void> deleteDocument(@PathVariable String documentId, HttpServletRequest request) {
-        existingLightRag(request).ifPresent(lightRag -> lightRag.deleteByDocumentId(documentId));
+        var workspaceId = workspaceResolver.resolve(request);
+        try {
+            lightRag.deleteByDocumentId(workspaceId, documentId);
+        } catch (NoSuchElementException ignored) {
+            // Delete remains idempotent for unknown documents.
+        }
         return ResponseEntity.noContent().build();
-    }
-
-    private Optional<LightRag> existingLightRag(HttpServletRequest request) {
-        return workspaceLightRagFactory.find(workspaceResolver.resolve(request));
     }
 
     private static IngestJobStatusResponse toResponse(IngestJobService.JobSnapshot snapshot) {

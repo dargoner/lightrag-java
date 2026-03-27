@@ -5,8 +5,6 @@ import io.github.lightragjava.api.QueryMode;
 import io.github.lightragjava.api.QueryRequest;
 import io.github.lightragjava.api.QueryResult;
 import io.github.lightragjava.spring.boot.LightRagProperties;
-import io.github.lightragjava.spring.boot.WorkspaceLightRagFactory;
-import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.mockito.ArgumentCaptor;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -23,8 +21,6 @@ import java.util.List;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
-import static org.mockito.ArgumentMatchers.anyString;
-import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
@@ -39,10 +35,7 @@ class QueryControllerTest {
     private MockMvc mockMvc;
 
     @MockBean
-    private WorkspaceLightRagFactory workspaceLightRagFactory;
-
-    private LightRag defaultLightRag;
-    private LightRag alphaLightRag;
+    private LightRag lightRag;
 
     @SpyBean
     private QueryRequestMapper queryRequestMapper;
@@ -60,17 +53,9 @@ class QueryControllerTest {
         }
     }
 
-    @BeforeEach
-    void setUp() {
-        defaultLightRag = mock(LightRag.class);
-        alphaLightRag = mock(LightRag.class);
-        when(workspaceLightRagFactory.get("default")).thenReturn(defaultLightRag);
-        when(workspaceLightRagFactory.get("alpha")).thenReturn(alphaLightRag);
-    }
-
     @Test
     void mapsExtendedQueryFieldsToCoreRequestAndResolvedWorkspace() throws Exception {
-        when(alphaLightRag.query(any())).thenReturn(new QueryResult(
+        when(lightRag.query(any(), any())).thenReturn(new QueryResult(
             "Alice works with Bob.",
             List.of(new QueryResult.Context("chunk-1", "Alice works with Bob", "1", "demo.txt")),
             List.of(new QueryResult.Reference("1", "demo.txt"))
@@ -108,12 +93,13 @@ class QueryControllerTest {
             .andExpect(jsonPath("$.references[0].referenceId").value("1"));
 
         var payloadCaptor = ArgumentCaptor.forClass(QueryRequestMapper.QueryPayload.class);
+        var workspaceCaptor = ArgumentCaptor.forClass(String.class);
         var requestCaptor = ArgumentCaptor.forClass(QueryRequest.class);
         verify(queryRequestMapper).toBufferedRequest(payloadCaptor.capture());
-        verify(workspaceLightRagFactory).get("alpha");
-        verify(alphaLightRag).query(requestCaptor.capture());
+        verify(lightRag).query(workspaceCaptor.capture(), requestCaptor.capture());
 
         var payload = payloadCaptor.getValue();
+        assertThat(workspaceCaptor.getValue()).isEqualTo("alpha");
         assertThat(payload.query()).isEqualTo("  Who works with Bob?  ");
         assertThat(payload.userPrompt()).isEqualTo("  Answer briefly.  ");
         assertThat(payload.includeReferences()).isTrue();
@@ -147,7 +133,7 @@ class QueryControllerTest {
 
     @Test
     void fallsBackToDefaultWorkspaceAndAppliesConfiguredDefaultsWhenHeaderMissing() throws Exception {
-        when(defaultLightRag.query(any())).thenReturn(new QueryResult(
+        when(lightRag.query(any(), any())).thenReturn(new QueryResult(
             "Alice works with Bob.",
             List.of(),
             List.of()
@@ -163,10 +149,11 @@ class QueryControllerTest {
             .andExpect(status().isOk())
             .andExpect(jsonPath("$.answer").value("Alice works with Bob."));
 
+        var workspaceCaptor = ArgumentCaptor.forClass(String.class);
         var requestCaptor = ArgumentCaptor.forClass(QueryRequest.class);
-        verify(workspaceLightRagFactory).get("default");
-        verify(defaultLightRag).query(requestCaptor.capture());
+        verify(lightRag).query(workspaceCaptor.capture(), requestCaptor.capture());
 
+        assertThat(workspaceCaptor.getValue()).isEqualTo("default");
         var request = requestCaptor.getValue();
         assertThat(request.query()).isEqualTo("Who works with Bob?");
         assertThat(request.mode()).isEqualTo(QueryMode.MIX);
@@ -201,8 +188,7 @@ class QueryControllerTest {
             .andExpect(status().isBadRequest())
             .andExpect(jsonPath("$.message").value("stream=true is not supported on /query; use buffered requests only"));
 
-        verify(workspaceLightRagFactory, never()).get(anyString());
-        verify(alphaLightRag, never()).query(any());
+        verify(lightRag, never()).query(any(), any());
     }
 
     @Test
@@ -219,8 +205,7 @@ class QueryControllerTest {
             .andExpect(status().isBadRequest())
             .andExpect(jsonPath("$.message").value("topK must be positive"));
 
-        verify(workspaceLightRagFactory, never()).get(anyString());
-        verify(alphaLightRag, never()).query(any());
+        verify(lightRag, never()).query(any(), any());
     }
 
     @Test
@@ -239,7 +224,6 @@ class QueryControllerTest {
             .andExpect(status().isBadRequest())
             .andExpect(jsonPath("$.message").value("conversationHistory.role must not be blank"));
 
-        verify(workspaceLightRagFactory, never()).get(anyString());
-        verify(alphaLightRag, never()).query(any());
+        verify(lightRag, never()).query(any(), any());
     }
 }

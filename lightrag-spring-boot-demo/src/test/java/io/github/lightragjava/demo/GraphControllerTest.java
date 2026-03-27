@@ -7,8 +7,6 @@ import io.github.lightragjava.api.GraphRelation;
 import io.github.lightragjava.api.LightRag;
 import io.github.lightragjava.api.MergeEntitiesRequest;
 import io.github.lightragjava.spring.boot.LightRagProperties;
-import io.github.lightragjava.spring.boot.WorkspaceLightRagFactory;
-import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.autoconfigure.web.servlet.WebMvcTest;
@@ -22,8 +20,8 @@ import java.util.List;
 import java.util.NoSuchElementException;
 
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.doThrow;
-import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 import static org.springframework.http.MediaType.APPLICATION_JSON;
@@ -39,9 +37,7 @@ class GraphControllerTest {
     private MockMvc mockMvc;
 
     @MockBean
-    private WorkspaceLightRagFactory workspaceLightRagFactory;
-
-    private LightRag alphaLightRag;
+    private LightRag lightRag;
 
     @TestConfiguration
     static class TestConfig {
@@ -51,16 +47,10 @@ class GraphControllerTest {
         }
     }
 
-    @BeforeEach
-    void setUp() {
-        alphaLightRag = mock(LightRag.class);
-        when(workspaceLightRagFactory.get("alpha")).thenReturn(alphaLightRag);
-    }
-
     @Test
     void createEntityReturnsGraphEntity() throws Exception {
         var expected = new GraphEntity("entity-id", "Alice", "person", "Researcher", List.of("Al"), List.of("chunk-1"));
-        when(alphaLightRag.createEntity(any(CreateEntityRequest.class))).thenReturn(expected);
+        when(lightRag.createEntity(eq("alpha"), any(CreateEntityRequest.class))).thenReturn(expected);
 
         mockMvc.perform(post("/graph/entities")
                 .header("X-Workspace-Id", "alpha")
@@ -77,13 +67,13 @@ class GraphControllerTest {
             .andExpect(jsonPath("$.id").value("entity-id"))
             .andExpect(jsonPath("$.name").value("Alice"));
 
-        verify(workspaceLightRagFactory).get("alpha");
+        verify(lightRag).createEntity(eq("alpha"), any(CreateEntityRequest.class));
     }
 
     @Test
     void mergeEntitiesReturnsGraphEntity() throws Exception {
         var merged = new GraphEntity("merged-id", "Group", "group", "Merged", List.of(), List.of());
-        when(alphaLightRag.mergeEntities(any(MergeEntitiesRequest.class))).thenReturn(merged);
+        when(lightRag.mergeEntities(eq("alpha"), any(MergeEntitiesRequest.class))).thenReturn(merged);
 
         mockMvc.perform(post("/graph/entities/merge")
                 .header("X-Workspace-Id", "alpha")
@@ -102,7 +92,7 @@ class GraphControllerTest {
     @Test
     void createRelationReturnsGraphRelation() throws Exception {
         var relation = new GraphRelation("rel-1", "Alice", "Bob", "connects", "Details", 0.5d, List.of());
-        when(alphaLightRag.createRelation(any(CreateRelationRequest.class))).thenReturn(relation);
+        when(lightRag.createRelation(eq("alpha"), any(CreateRelationRequest.class))).thenReturn(relation);
 
         mockMvc.perform(post("/graph/relations")
                 .header("X-Workspace-Id", "alpha")
@@ -124,7 +114,7 @@ class GraphControllerTest {
     @Test
     void deleteEntityMissingReturnsNotFound() throws Exception {
         doThrow(new NoSuchElementException("missing"))
-            .when(alphaLightRag).deleteByEntity("missing");
+            .when(lightRag).deleteByEntity("alpha", "missing");
 
         mockMvc.perform(delete("/graph/entities/{entityName}", "missing")
                 .header("X-Workspace-Id", "alpha"))
@@ -135,7 +125,7 @@ class GraphControllerTest {
     @Test
     void deleteRelationBadRequestWhenLightRagThrows() throws Exception {
         doThrow(new IllegalArgumentException("bad relation"))
-            .when(alphaLightRag).deleteByRelation("Alice", "Bob");
+            .when(lightRag).deleteByRelation("alpha", "Alice", "Bob");
 
         mockMvc.perform(delete("/graph/relations")
                 .header("X-Workspace-Id", "alpha")
