@@ -20,6 +20,9 @@ class RagasCliOutputTest {
             "--mode", "mix",
             "--top-k", "10",
             "--chunk-top-k", "12",
+            "--max-hop", "4",
+            "--path-top-k", "5",
+            "--multi-hop-enabled", "false",
             "--storage-profile", "in-memory",
             "--retrieval-only", "true",
             "--run-label", "candidate-rerank-4"
@@ -31,6 +34,9 @@ class RagasCliOutputTest {
                 config.batchRequest().mode(),
                 config.batchRequest().topK(),
                 config.batchRequest().chunkTopK(),
+                config.batchRequest().maxHop(),
+                config.batchRequest().pathTopK(),
+                config.batchRequest().multiHopEnabled(),
                 config.batchRequest().storageProfile(),
                 config.batchRequest().retrievalOnly(),
                 config.runLabel()
@@ -50,6 +56,9 @@ class RagasCliOutputTest {
         var json = OBJECT_MAPPER.readTree(OBJECT_MAPPER.writeValueAsString(output));
 
         assertThat(json.path("request").path("mode").asText()).isEqualTo("MIX");
+        assertThat(json.path("request").path("maxHop").asInt()).isEqualTo(4);
+        assertThat(json.path("request").path("pathTopK").asInt()).isEqualTo(5);
+        assertThat(json.path("request").path("multiHopEnabled").asBoolean()).isFalse();
         assertThat(json.path("request").path("retrievalOnly").asBoolean()).isTrue();
         assertThat(json.path("request").path("runLabel").asText()).isEqualTo("candidate-rerank-4");
         assertThat(json.path("summary").path("totalCases").asInt()).isEqualTo(1);
@@ -91,6 +100,9 @@ class RagasCliOutputTest {
         assertThat(config.batchRequest().mode()).isEqualTo(QueryMode.MIX);
         assertThat(config.batchRequest().topK()).isEqualTo(10);
         assertThat(config.batchRequest().chunkTopK()).isEqualTo(10);
+        assertThat(config.batchRequest().maxHop()).isEqualTo(2);
+        assertThat(config.batchRequest().pathTopK()).isEqualTo(3);
+        assertThat(config.batchRequest().multiHopEnabled()).isTrue();
         assertThat(config.batchRequest().storageProfile()).isEqualTo(RagasStorageProfile.IN_MEMORY);
         assertThat(config.batchRequest().retrievalOnly()).isFalse();
         assertThat(config.runLabel()).isEqualTo("baseline");
@@ -104,6 +116,9 @@ class RagasCliOutputTest {
             QueryMode.MIX,
             10,
             10,
+            2,
+            3,
+            true,
             RagasStorageProfile.IN_MEMORY,
             true
         ));

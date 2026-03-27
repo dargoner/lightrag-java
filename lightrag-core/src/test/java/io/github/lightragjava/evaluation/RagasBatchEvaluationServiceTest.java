@@ -1,6 +1,7 @@
 package io.github.lightragjava.evaluation;
 
 import io.github.lightragjava.api.QueryMode;
+import io.github.lightragjava.api.QueryRequest;
 import io.github.lightragjava.indexing.KnowledgeExtractor;
 import io.github.lightragjava.model.ChatModel;
 import io.github.lightragjava.model.EmbeddingModel;
@@ -41,6 +42,9 @@ class RagasBatchEvaluationServiceTest {
                 QueryMode.NAIVE,
                 10,
                 10,
+                2,
+                3,
+                true,
                 RagasStorageProfile.IN_MEMORY,
                 false
             ),
@@ -82,6 +86,9 @@ class RagasBatchEvaluationServiceTest {
                 QueryMode.NAIVE,
                 10,
                 10,
+                2,
+                3,
+                true,
                 RagasStorageProfile.POSTGRES_NEO4J_TESTCONTAINERS,
                 false
             ),
@@ -118,6 +125,9 @@ class RagasBatchEvaluationServiceTest {
                 QueryMode.MIX,
                 10,
                 10,
+                2,
+                3,
+                true,
                 RagasStorageProfile.IN_MEMORY,
                 true
             ),
@@ -130,6 +140,39 @@ class RagasBatchEvaluationServiceTest {
         assertThat(chatModel.keywordExtractionCalls).isZero();
         assertThat(chatModel.answerCalls).isZero();
         assertThat(results).allSatisfy(result -> assertThat(result.contexts()).isNotEmpty());
+    }
+
+    @Test
+    void buildsQueryRequestIncludingMultiHopParameters() {
+        var batchRequest = new RagasBatchEvaluationService.BatchRequest(
+            tempDir,
+            tempDir.resolve("dataset.json"),
+            QueryMode.MIX,
+            8,
+            12,
+            4,
+            6,
+            false,
+            RagasStorageProfile.IN_MEMORY,
+            true
+        );
+
+        QueryRequest request = RagasBatchEvaluationService.toQueryRequest(
+            new RagasBatchEvaluationService.TestCase(
+                "Who connects Atlas to the team?",
+                "GraphStore connects Atlas to the team.",
+                java.util.Map.of("suite", "multihop")
+            ),
+            batchRequest
+        );
+
+        assertThat(request.mode()).isEqualTo(QueryMode.MIX);
+        assertThat(request.topK()).isEqualTo(8);
+        assertThat(request.chunkTopK()).isEqualTo(12);
+        assertThat(request.maxHop()).isEqualTo(4);
+        assertThat(request.pathTopK()).isEqualTo(6);
+        assertThat(request.multiHopEnabled()).isFalse();
+        assertThat(request.onlyNeedContext()).isTrue();
     }
 
     private static final class FakeChatModel implements ChatModel {

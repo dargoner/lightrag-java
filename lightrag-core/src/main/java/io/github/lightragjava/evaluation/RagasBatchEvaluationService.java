@@ -41,13 +41,7 @@ public final class RagasBatchEvaluationService {
             var results = new ArrayList<Result>(testCases.size());
             for (int index = 0; index < testCases.size(); index++) {
                 var testCase = testCases.get(index);
-                var queryResult = runtime.rag().query(WORKSPACE, QueryRequest.builder()
-                    .query(testCase.question())
-                    .mode(batchRequest.mode())
-                    .topK(batchRequest.topK())
-                    .chunkTopK(batchRequest.chunkTopK())
-                    .onlyNeedContext(batchRequest.retrievalOnly())
-                    .build());
+                var queryResult = runtime.rag().query(WORKSPACE, toQueryRequest(testCase, batchRequest));
                 results.add(new Result(
                     index,
                     testCase.question(),
@@ -60,6 +54,19 @@ public final class RagasBatchEvaluationService {
             }
             return List.copyOf(results);
         }
+    }
+
+    static QueryRequest toQueryRequest(TestCase testCase, BatchRequest batchRequest) {
+        return QueryRequest.builder()
+            .query(testCase.question())
+            .mode(batchRequest.mode())
+            .topK(batchRequest.topK())
+            .chunkTopK(batchRequest.chunkTopK())
+            .maxHop(batchRequest.maxHop())
+            .pathTopK(batchRequest.pathTopK())
+            .multiHopEnabled(batchRequest.multiHopEnabled())
+            .onlyNeedContext(batchRequest.retrievalOnly())
+            .build();
     }
 
     private static EvaluationRuntime createRuntime(
@@ -165,6 +172,9 @@ public final class RagasBatchEvaluationService {
         QueryMode mode,
         int topK,
         int chunkTopK,
+        int maxHop,
+        int pathTopK,
+        boolean multiHopEnabled,
         RagasStorageProfile storageProfile,
         boolean retrievalOnly
     ) {
@@ -195,7 +205,7 @@ public final class RagasBatchEvaluationService {
         }
     }
 
-    private record TestCase(String question, String groundTruth, Map<String, Object> metadata) {
+    record TestCase(String question, String groundTruth, Map<String, Object> metadata) {
     }
 
     @FunctionalInterface

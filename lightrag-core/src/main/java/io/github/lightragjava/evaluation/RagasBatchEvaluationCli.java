@@ -43,6 +43,9 @@ public final class RagasBatchEvaluationCli {
                 batchRequest.mode(),
                 batchRequest.topK(),
                 batchRequest.chunkTopK(),
+                batchRequest.maxHop(),
+                batchRequest.pathTopK(),
+                batchRequest.multiHopEnabled(),
                 batchRequest.storageProfile(),
                 batchRequest.retrievalOnly(),
                 config.runLabel()
@@ -60,6 +63,9 @@ public final class RagasBatchEvaluationCli {
                 QueryMode.valueOf(arguments.getOrDefault("--mode", QueryMode.MIX.name()).toUpperCase(java.util.Locale.ROOT)),
                 Integer.parseInt(arguments.getOrDefault("--top-k", "10")),
                 Integer.parseInt(arguments.getOrDefault("--chunk-top-k", "10")),
+                Integer.parseInt(arguments.getOrDefault("--max-hop", "2")),
+                Integer.parseInt(arguments.getOrDefault("--path-top-k", "3")),
+                Boolean.parseBoolean(arguments.getOrDefault("--multi-hop-enabled", "true")),
                 RagasStorageProfile.fromValue(arguments.getOrDefault("--storage-profile", "in-memory")),
                 Boolean.parseBoolean(arguments.getOrDefault("--retrieval-only", "false"))
             ),
@@ -79,6 +85,9 @@ public final class RagasBatchEvaluationCli {
         QueryMode mode,
         int topK,
         int chunkTopK,
+        int maxHop,
+        int pathTopK,
+        boolean multiHopEnabled,
         RagasStorageProfile storageProfile,
         boolean retrievalOnly,
         String runLabel

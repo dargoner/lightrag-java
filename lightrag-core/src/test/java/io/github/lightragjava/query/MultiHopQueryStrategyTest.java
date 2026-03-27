@@ -129,6 +129,108 @@ class MultiHopQueryStrategyTest {
             .containsExactly("chunk-2", "chunk-fallback");
     }
 
+    @Test
+    void reservesAtLeastOneEvidenceChunkPerHopBeforeExtraPathChunks() {
+        var atlas = new Entity("entity:atlas", "Atlas", "Component", "", List.of(), List.of("chunk-1", "chunk-2"));
+        var graphStore = new Entity("entity:graphstore", "GraphStore", "Service", "", List.of(), List.of("chunk-1", "chunk-2", "chunk-3"));
+        var team = new Entity("entity:team", "KnowledgeGraphTeam", "Team", "", List.of(), List.of("chunk-3"));
+        var dependsOn = new Relation("relation:1", atlas.id(), graphStore.id(), "depends_on", "", 0.9d, List.of("chunk-1", "chunk-2"));
+        var ownedBy = new Relation("relation:2", graphStore.id(), team.id(), "owned_by", "", 1.0d, List.of("chunk-3"));
+        var seedContext = new QueryContext(
+            List.of(new ScoredEntity(atlas.id(), atlas, 0.95d)),
+            List.of(),
+            List.of(scoredChunk("chunk-fallback", "Fallback chunk.")),
+            ""
+        );
+        var strategy = new MultiHopQueryStrategy(
+            new StaticSeedContextRetriever(seedContext),
+            new StaticPathRetriever(new PathRetrievalResult(
+                seedContext.matchedEntities(),
+                List.of(
+                    new ScoredRelation(dependsOn.id(), dependsOn, 0.88d),
+                    new ScoredRelation(ownedBy.id(), ownedBy, 0.84d)
+                ),
+                List.of(new ReasoningPath(
+                    List.of(atlas.id(), graphStore.id(), team.id()),
+                    List.of(dependsOn.id(), ownedBy.id()),
+                    List.of("chunk-1", "chunk-2", "chunk-3"),
+                    2,
+                    0.0d
+                ))
+            )),
+            new DefaultPathScorer(),
+            new ReasoningContextAssembler(
+                new FakeGraphStore(List.of(atlas, graphStore, team), List.of(dependsOn, ownedBy)),
+                new FakeChunkStore(Map.of(
+                    "chunk-1", chunkRecord("chunk-1", "Hop one primary evidence."),
+                    "chunk-2", chunkRecord("chunk-2", "Hop one extra evidence."),
+                    "chunk-3", chunkRecord("chunk-3", "Hop two primary evidence."),
+                    "chunk-fallback", chunkRecord("chunk-fallback", "Fallback chunk.")
+                ))
+            )
+        );
+
+        var context = strategy.retrieve(QueryRequest.builder()
+            .query("Atlas 通过谁影响知识图谱组？")
+            .pathTopK(1)
+            .build());
+
+        assertThat(context.matchedChunks())
+            .extracting(ScoredChunk::chunkId)
+            .containsExactly("chunk-1", "chunk-3", "chunk-2", "chunk-fallback");
+    }
+
+    @Test
+    void fallsBackToSeedContextWhenRerankedPathsAreTooWeak() {
+        var atlas = new Entity("entity:atlas", "Atlas", "Component", "", List.of(), List.of("chunk-seed"));
+        var graphStore = new Entity("entity:graphstore", "GraphStore", "Service", "", List.of(), List.of("chunk-hop"));
+        var dependsOn = new Relation("relation:1", atlas.id(), graphStore.id(), "depends_on", "", 0.3d, List.of("chunk-hop"));
+        var seedContext = new QueryContext(
+            List.of(new ScoredEntity(atlas.id(), atlas, 0.95d)),
+            List.of(),
+            List.of(scoredChunk("chunk-seed", "Seed fallback chunk.")),
+            ""
+        );
+        var strategy = new MultiHopQueryStrategy(
+            new StaticSeedContextRetriever(seedContext),
+            new StaticPathRetriever(new PathRetrievalResult(
+                seedContext.matchedEntities(),
+                List.of(new ScoredRelation(dependsOn.id(), dependsOn, 0.20d)),
+                List.of(new ReasoningPath(
+                    List.of(atlas.id(), graphStore.id()),
+                    List.of(dependsOn.id()),
+                    List.of(),
+                    1,
+                    0.0d
+                ))
+            )),
+            (request, retrievalResult) -> List.of(new ReasoningPath(
+                List.of(atlas.id(), graphStore.id()),
+                List.of(dependsOn.id()),
+                List.of(),
+                1,
+                0.20d
+            )),
+            new ReasoningContextAssembler(
+                new FakeGraphStore(List.of(atlas, graphStore), List.of(dependsOn)),
+                new FakeChunkStore(Map.of(
+                    "chunk-seed", chunkRecord("chunk-seed", "Seed fallback chunk."),
+                    "chunk-hop", chunkRecord("chunk-hop", "Weak hop evidence.")
+                ))
+            )
+        );
+
+        var context = strategy.retrieve(QueryRequest.builder()
+            .query("Atlas 通过谁影响 GraphStore？")
+            .pathTopK(1)
+            .build());
+
+        assertThat(context.matchedChunks())
+            .extracting(ScoredChunk::chunkId)
+            .containsExactly("chunk-seed");
+        assertThat(context.assembledContext()).isBlank();
+    }
+
     private static ScoredChunk scoredChunk(String chunkId, String text) {
         return new ScoredChunk(chunkId, new Chunk(chunkId, "doc-1", text, 4, 0, Map.of()), 0.9d);
     }

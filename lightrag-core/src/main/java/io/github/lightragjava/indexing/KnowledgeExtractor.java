@@ -15,6 +15,7 @@ import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
+import java.util.Locale;
 import java.util.Objects;
 
 public final class KnowledgeExtractor {
@@ -245,7 +246,7 @@ public final class KnowledgeExtractor {
                     targetEntityName,
                     type,
                     normalizedText(relationNode.get("description")),
-                    parseWeight(relationNode.get("weight"))
+                    parseWeightOrConfidence(relationNode)
                 ));
             } catch (IllegalArgumentException ignored) {
                 // Skip malformed relation rows while preserving valid rows.
@@ -254,15 +255,24 @@ public final class KnowledgeExtractor {
         return List.copyOf(relations);
     }
 
-    private static Double parseWeight(JsonNode weightNode) {
-        if (weightNode == null || weightNode.isNull()) {
+    private static Double parseWeightOrConfidence(JsonNode relationNode) {
+        var weight = parseNumericValue(relationNode.get("weight"));
+        if (weight != null) {
+            return clampProbability(weight);
+        }
+        var confidence = parseNumericValue(relationNode.get("confidence"));
+        return confidence == null ? null : clampProbability(confidence);
+    }
+
+    private static Double parseNumericValue(JsonNode node) {
+        if (node == null || node.isNull()) {
             return null;
         }
-        if (weightNode.isNumber()) {
-            return weightNode.doubleValue();
+        if (node.isNumber()) {
+            return node.doubleValue();
         }
 
-        var weight = weightNode.asText("").strip();
+        var weight = node.asText("").strip();
         if (weight.isEmpty()) {
             return null;
         }
@@ -271,6 +281,10 @@ public final class KnowledgeExtractor {
         } catch (NumberFormatException exception) {
             return null;
         }
+    }
+
+    private static double clampProbability(double value) {
+        return Math.max(0.0d, Math.min(1.0d, value));
     }
 
     private static String normalizedText(JsonNode node) {
@@ -354,7 +368,23 @@ public final class KnowledgeExtractor {
     }
 
     private static String relationKey(ExtractedRelation relation) {
-        return relation.sourceEntityName() + "\u0000" + relation.targetEntityName() + "\u0000" + relation.type();
+        return normalizeRelationEndpoint(relation.sourceEntityName())
+            + "\u0000"
+            + normalizeRelationEndpoint(relation.targetEntityName())
+            + "\u0000"
+            + canonicalRelationType(relation.type());
+    }
+
+    private static String normalizeRelationEndpoint(String value) {
+        return Objects.requireNonNull(value, "value").strip().toLowerCase(Locale.ROOT);
+    }
+
+    private static String canonicalRelationType(String value) {
+        var normalized = Objects.requireNonNull(value, "value").strip().toLowerCase(Locale.ROOT);
+        if (normalized.isEmpty()) {
+            return normalized;
+        }
+        return normalized.replaceAll("[\\s_-]+", "_");
     }
 
     private static String preferredText(String left, String right) {

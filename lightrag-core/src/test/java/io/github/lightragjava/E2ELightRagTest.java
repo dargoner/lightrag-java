@@ -1961,10 +1961,11 @@ class E2ELightRagTest {
             .build());
 
         assertThat(result.answer()).isEqualTo("Atlas 通过 GraphStore 关联 KnowledgeGraphTeam。");
-        assertThat(chatModel.queryCallCount()).isEqualTo(1);
+        assertThat(chatModel.queryCallCount()).isEqualTo(2);
         assertThat(chatModel.lastQueryRequest()).isNotNull();
         assertThat(chatModel.lastQueryRequest().systemPrompt())
             .contains("Multi-Hop Reasoning Instructions")
+            .contains("Validated Reasoning Draft")
             .contains("Reasoning Path 1")
             .contains("Hop 1: Atlas --depends_on--> GraphStore")
             .contains("Hop 2: GraphStore --owned_by--> KnowledgeGraphTeam")

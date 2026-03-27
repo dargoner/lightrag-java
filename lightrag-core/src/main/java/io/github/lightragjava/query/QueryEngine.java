@@ -220,8 +220,23 @@ public final class QueryEngine {
         if (resolvedQuery.stream()) {
             return QueryResult.streaming(responseModel.stream(chatRequest), references.contexts(), references.references());
         }
-        var answer = responseModel.generate(chatRequest);
+        var answer = pathAwareAnswerSynthesizer.shouldUseTwoStage(resolvedQuery, chatRequest.systemPrompt())
+            ? generateTwoStageAnswer(responseModel, chatRequest)
+            : responseModel.generate(chatRequest);
         return new QueryResult(answer, references.contexts(), references.references());
+    }
+
+    private String generateTwoStageAnswer(ChatModel responseModel, ChatModel.ChatRequest baseRequest) {
+        var reasoningDraft = responseModel.generate(new ChatModel.ChatRequest(
+            pathAwareAnswerSynthesizer.buildReasoningStagePrompt(baseRequest.systemPrompt()),
+            baseRequest.userPrompt(),
+            baseRequest.conversationHistory()
+        ));
+        return responseModel.generate(new ChatModel.ChatRequest(
+            pathAwareAnswerSynthesizer.buildFinalStagePrompt(baseRequest.systemPrompt(), reasoningDraft),
+            baseRequest.userPrompt(),
+            baseRequest.conversationHistory()
+        ));
     }
 
     private boolean rerankEnabled(QueryRequest request) {

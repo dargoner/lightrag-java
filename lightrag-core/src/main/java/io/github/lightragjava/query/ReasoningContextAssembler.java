@@ -59,23 +59,50 @@ public final class ReasoningContextAssembler {
     public List<ScoredChunk> supportingChunks(List<ReasoningPath> paths, List<ScoredChunk> fallbackChunks) {
         var merged = new LinkedHashMap<String, ScoredChunk>();
         for (var path : Objects.requireNonNull(paths, "paths")) {
+            for (var relationId : path.relationIds()) {
+                var relation = graphStore.loadRelation(relationId)
+                    .orElseThrow(() -> new IllegalStateException("missing relation: " + relationId));
+                for (var chunkId : relation.sourceChunkIds()) {
+                    if (addChunkIfPresent(merged, chunkId)) {
+                        break;
+                    }
+                }
+            }
+        }
+        for (var path : paths) {
+            for (var relationId : path.relationIds()) {
+                var relation = graphStore.loadRelation(relationId)
+                    .orElseThrow(() -> new IllegalStateException("missing relation: " + relationId));
+                for (var chunkId : relation.sourceChunkIds()) {
+                    addChunkIfPresent(merged, chunkId);
+                }
+            }
             for (var chunkId : new LinkedHashSet<>(path.supportingChunkIds())) {
-                chunkStore.load(chunkId).ifPresent(chunk -> merged.put(
-                    chunkId,
-                    new ScoredChunk(chunkId, new io.github.lightragjava.types.Chunk(
-                        chunk.id(),
-                        chunk.documentId(),
-                        chunk.text(),
-                        chunk.tokenCount(),
-                        chunk.order(),
-                        chunk.metadata()
-                    ), 1.0d)
-                ));
+                addChunkIfPresent(merged, chunkId);
             }
         }
         for (var chunk : Objects.requireNonNull(fallbackChunks, "fallbackChunks")) {
             merged.putIfAbsent(chunk.chunkId(), chunk);
         }
         return List.copyOf(merged.values());
+    }
+
+    private boolean addChunkIfPresent(LinkedHashMap<String, ScoredChunk> merged, String chunkId) {
+        var chunk = chunkStore.load(chunkId).orElse(null);
+        if (chunk == null) {
+            return false;
+        }
+        merged.putIfAbsent(
+            chunkId,
+            new ScoredChunk(chunkId, new io.github.lightragjava.types.Chunk(
+                chunk.id(),
+                chunk.documentId(),
+                chunk.text(),
+                chunk.tokenCount(),
+                chunk.order(),
+                chunk.metadata()
+            ), 1.0d)
+        );
+        return true;
     }
 }

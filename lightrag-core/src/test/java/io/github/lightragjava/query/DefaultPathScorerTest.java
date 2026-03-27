@@ -84,4 +84,38 @@ class DefaultPathScorerTest {
 
         assertThat(reranked.get(0).relationIds()).containsExactly("relation:strong");
     }
+
+    @Test
+    void prefersPathWhoseTerminalEntityMatchesQueryTarget() {
+        var scorer = new DefaultPathScorer();
+        var atlas = new Entity("entity:atlas", "Atlas", "Component", "", List.of(), List.of("chunk-1"));
+        var graphStore = new Entity("entity:graphstore", "GraphStore", "Service", "", List.of(), List.of("chunk-1"));
+        var team = new Entity("entity:team", "KnowledgeGraphTeam", "Team", "", List.of(), List.of("chunk-2"));
+        var platform = new Entity("entity:platform", "PlatformOps", "Team", "", List.of(), List.of("chunk-3"));
+        var dependsOn = new Relation("relation:dependsOn", atlas.id(), graphStore.id(), "depends_on", "", 0.9d, List.of("chunk-1"));
+        var ownedBy = new Relation("relation:ownedBy", graphStore.id(), team.id(), "owned_by", "", 0.8d, List.of("chunk-2"));
+        var operatedBy = new Relation("relation:operatedBy", graphStore.id(), platform.id(), "operated_by", "", 1.0d, List.of("chunk-3"));
+
+        var reranked = scorer.rerank(QueryRequest.builder()
+            .query("Atlas 通过谁关联 KnowledgeGraphTeam？")
+            .build(), new PathRetrievalResult(
+            List.of(
+                new ScoredEntity(atlas.id(), atlas, 0.95d),
+                new ScoredEntity(graphStore.id(), graphStore, 0.92d),
+                new ScoredEntity(team.id(), team, 0.40d),
+                new ScoredEntity(platform.id(), platform, 0.40d)
+            ),
+            List.of(
+                new ScoredRelation(dependsOn.id(), dependsOn, 0.90d),
+                new ScoredRelation(ownedBy.id(), ownedBy, 0.85d),
+                new ScoredRelation(operatedBy.id(), operatedBy, 0.95d)
+            ),
+            List.of(
+                new ReasoningPath(List.of(atlas.id(), graphStore.id(), team.id()), List.of(dependsOn.id(), ownedBy.id()), List.of("chunk-1", "chunk-2"), 2, 0.0d),
+                new ReasoningPath(List.of(atlas.id(), graphStore.id(), platform.id()), List.of(dependsOn.id(), operatedBy.id()), List.of("chunk-1", "chunk-3"), 2, 0.0d)
+            )
+        ));
+
+        assertThat(reranked.get(0).entityIds()).endsWith(team.id());
+    }
 }

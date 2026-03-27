@@ -118,6 +118,10 @@ class JavaRagasEvaluator:
                 f"--mode {shlex.quote(os.getenv('LIGHTRAG_JAVA_EVAL_QUERY_MODE', 'mix'))}",
                 f"--top-k {shlex.quote(os.getenv('EVAL_QUERY_TOP_K', '10'))}",
                 f"--chunk-top-k {shlex.quote(os.getenv('LIGHTRAG_JAVA_EVAL_CHUNK_TOP_K', '10'))}",
+                f"--max-hop {shlex.quote(os.getenv('LIGHTRAG_JAVA_EVAL_MAX_HOP', '2'))}",
+                f"--path-top-k {shlex.quote(os.getenv('LIGHTRAG_JAVA_EVAL_PATH_TOP_K', '3'))}",
+                f"--multi-hop-enabled {shlex.quote(os.getenv('LIGHTRAG_JAVA_EVAL_MULTI_HOP_ENABLED', 'true'))}",
+                f"--retrieval-only {shlex.quote(os.getenv('LIGHTRAG_JAVA_EVAL_RETRIEVAL_ONLY', 'false'))}",
                 f"--run-label {shlex.quote(run_label)}",
             ]
         )
@@ -313,6 +317,10 @@ def _build_run_metadata(
         "query_mode": os.getenv("LIGHTRAG_JAVA_EVAL_QUERY_MODE", "mix").upper(),
         "top_k": int(os.getenv("EVAL_QUERY_TOP_K", "10")),
         "chunk_top_k": int(os.getenv("LIGHTRAG_JAVA_EVAL_CHUNK_TOP_K", "10")),
+        "max_hop": int(os.getenv("LIGHTRAG_JAVA_EVAL_MAX_HOP", "2")),
+        "path_top_k": int(os.getenv("LIGHTRAG_JAVA_EVAL_PATH_TOP_K", "3")),
+        "multi_hop_enabled": os.getenv("LIGHTRAG_JAVA_EVAL_MULTI_HOP_ENABLED", "true").lower() == "true",
+        "retrieval_only": os.getenv("LIGHTRAG_JAVA_EVAL_RETRIEVAL_ONLY", "false").lower() == "true",
         "chat_model": os.getenv("LIGHTRAG_JAVA_EVAL_CHAT_MODEL", "gpt-4o-mini"),
         "embedding_model": os.getenv("LIGHTRAG_JAVA_EVAL_EMBEDDING_MODEL", "text-embedding-3-small"),
     }

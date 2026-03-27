@@ -37,6 +37,13 @@ Optional custom OpenAI-compatible endpoints:
 - `EVAL_LLM_BINDING_HOST`
 - `EVAL_EMBEDDING_BINDING_HOST`
 
+Optional multi-hop query controls:
+
+- `LIGHTRAG_JAVA_EVAL_MAX_HOP`
+- `LIGHTRAG_JAVA_EVAL_PATH_TOP_K`
+- `LIGHTRAG_JAVA_EVAL_MULTI_HOP_ENABLED`
+- `LIGHTRAG_JAVA_EVAL_RETRIEVAL_ONLY`
+
 ## Python dependencies
 
 Install:
@@ -159,8 +166,13 @@ Notes:
   answer generation and automatic keyword extraction are skipped
 - the Java retrieval-only CLI also skips live chat-based graph extraction, which keeps
   public benchmark runs cheap and stable for regression use
+- for formal multi-hop benchmarks, set `LIGHTRAG_JAVA_EVAL_RETRIEVAL_ONLY=false`;
+  otherwise the Java runner uses empty graph extraction output and the graph hop chain
+  will not be built
 - `sample_dataset.json` is useful as a smoke run, but it does not contain
   `relevant_doc_ids`; use BEIR-derived datasets for meaningful retrieval metrics
+- `evaluation/ragas/datasets/multihop/fusion-aide/` is a bundled multi-hop smoke
+  dataset with `hop_doc_ids`, used to report `all_hops_hit_rate`
 
 Run a public benchmark candidate:
 
@@ -172,6 +184,21 @@ python3 evaluation/ragas/eval_retrieval_quality_java.py \
   --baseline-name beir-scifact-retrieval
 ```
 
+Run the bundled multi-hop smoke benchmark:
+
+```bash
+LIGHTRAG_JAVA_EVAL_QUERY_MODE=mix \
+LIGHTRAG_JAVA_EVAL_MAX_HOP=3 \
+LIGHTRAG_JAVA_EVAL_PATH_TOP_K=5 \
+LIGHTRAG_JAVA_EVAL_MULTI_HOP_ENABLED=true \
+LIGHTRAG_JAVA_EVAL_RETRIEVAL_ONLY=false \
+python3 evaluation/ragas/eval_retrieval_quality_java.py \
+  --dataset evaluation/ragas/datasets/multihop/fusion-aide/dataset.json \
+  --documents-dir evaluation/ragas/datasets/multihop/fusion-aide/documents \
+  --run-label fusion-aide-multihop \
+  --baseline-name fusion-aide-multihop
+```
+
 Outputs follow the same pattern:
 
 - `evaluation/ragas/results/latest_<run-label>.json|csv`
@@ -181,5 +208,6 @@ Summary fields include:
 
 - `top1_hit_rate`
 - `top3_hit_rate`
+- `all_hops_hit_rate`
 - `average_recall`
 - optional delta fields when a baseline already exists

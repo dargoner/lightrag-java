@@ -16,6 +16,11 @@ import java.util.Objects;
 import java.util.Set;
 
 public final class GraphAssembler {
+    private static final Set<String> SYMMETRIC_RELATION_TYPES = Set.of(
+        "related_to",
+        "works_with"
+    );
+
     public Graph assemble(List<ChunkExtraction> extractions) {
         var batch = List.copyOf(Objects.requireNonNull(extractions, "extractions"));
         var entitiesById = new LinkedHashMap<String, MutableEntity>();
@@ -29,10 +34,18 @@ public final class GraphAssembler {
         }
 
         var relationsById = new LinkedHashMap<String, MutableRelation>();
+        var relationIdByMergeKey = new LinkedHashMap<String, String>();
         for (var extraction : batch) {
             var chunkExtraction = Objects.requireNonNull(extraction, "extraction");
             for (var relation : chunkExtraction.extraction().relations()) {
-                mergeRelation(chunkExtraction.chunkId(), relation, entitiesById, entityIdByMergeKey, relationsById);
+                mergeRelation(
+                    chunkExtraction.chunkId(),
+                    relation,
+                    entitiesById,
+                    entityIdByMergeKey,
+                    relationsById,
+                    relationIdByMergeKey
+                );
             }
         }
 
@@ -85,18 +98,32 @@ public final class GraphAssembler {
         ExtractedRelation extractedRelation,
         Map<String, MutableEntity> entitiesById,
         Map<String, String> entityIdByMergeKey,
-        Map<String, MutableRelation> relationsById
+        Map<String, MutableRelation> relationsById,
+        Map<String, String> relationIdByMergeKey
     ) {
         var sourceEntity = ensureEntity(chunkId, extractedRelation.sourceEntityName(), entitiesById, entityIdByMergeKey);
         var targetEntity = ensureEntity(chunkId, extractedRelation.targetEntityName(), entitiesById, entityIdByMergeKey);
         var normalizedType = normalizeKey(extractedRelation.type());
-        var relationId = "relation:" + sourceEntity.id + "|" + normalizedType + "|" + targetEntity.id;
+        var canonicalType = canonicalRelationType(extractedRelation.type());
+        var mergeKey = relationMergeKey(sourceEntity.id, targetEntity.id, canonicalType);
+        var relationId = relationIdByMergeKey.get(mergeKey);
+        if (relationId == null && isSymmetricRelationType(canonicalType)) {
+            relationId = relationIdByMergeKey.get(relationMergeKey(targetEntity.id, sourceEntity.id, canonicalType));
+        }
+        if (relationId == null) {
+            relationId = "relation:" + sourceEntity.id + "|" + normalizedType + "|" + targetEntity.id;
+        }
+        var finalRelationId = relationId;
         var relation = relationsById.computeIfAbsent(
-            relationId,
-            ignored -> MutableRelation.create(relationId, sourceEntity.id, targetEntity.id, extractedRelation)
+            finalRelationId,
+            ignored -> MutableRelation.create(finalRelationId, sourceEntity.id, targetEntity.id, extractedRelation)
         );
         relation.mergeFrom(extractedRelation);
         relation.addSourceChunkId(chunkId);
+        relationIdByMergeKey.put(mergeKey, finalRelationId);
+        if (isSymmetricRelationType(canonicalType)) {
+            relationIdByMergeKey.putIfAbsent(relationMergeKey(targetEntity.id, sourceEntity.id, canonicalType), finalRelationId);
+        }
     }
 
     private static MutableEntity ensureEntity(
@@ -148,6 +175,19 @@ public final class GraphAssembler {
             return null;
         }
         return normalized.toLowerCase(Locale.ROOT);
+    }
+
+    private static String canonicalRelationType(String value) {
+        var normalized = normalizeKey(value);
+        return normalized.replaceAll("[\\s_-]+", "_");
+    }
+
+    private static String relationMergeKey(String sourceEntityId, String targetEntityId, String canonicalType) {
+        return sourceEntityId + "\u0000" + canonicalType + "\u0000" + targetEntityId;
+    }
+
+    private static boolean isSymmetricRelationType(String canonicalType) {
+        return SYMMETRIC_RELATION_TYPES.contains(canonicalType);
     }
 
     public record ChunkExtraction(String chunkId, ExtractionResult extraction) {

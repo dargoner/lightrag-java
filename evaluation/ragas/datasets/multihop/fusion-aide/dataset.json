@@ -1,0 +1,46 @@
+{
+  "test_cases": [
+    {
+      "question": "Through which service does Atlas reach the Knowledge Graph Team?",
+      "ground_truth": "Atlas reaches the Knowledge Graph Team through GraphStore, because Atlas depends on GraphStore and GraphStore is maintained by the Knowledge Graph Team.",
+      "query_id": "fusion-aide-1",
+      "relevant_doc_ids": [
+        "01-atlas-graphstore",
+        "02-graphstore-team"
+      ],
+      "hop_doc_ids": [
+        [
+          "01-atlas-graphstore"
+        ],
+        [
+          "02-graphstore-team"
+        ]
+      ],
+      "source_dataset": "multihop/fusion-aide",
+      "split": "test"
+    },
+    {
+      "question": "First Atlas depends on which service, then which product is supported by the owning team?",
+      "ground_truth": "Atlas first depends on GraphStore. The owning Knowledge Graph Team supports Fusion AIDE knowledge services.",
+      "query_id": "fusion-aide-2",
+      "relevant_doc_ids": [
+        "01-atlas-graphstore",
+        "02-graphstore-team",
+        "03-team-product"
+      ],
+      "hop_doc_ids": [
+        [
+          "01-atlas-graphstore"
+        ],
+        [
+          "02-graphstore-team"
+        ],
+        [
+          "03-team-product"
+        ]
+      ],
+      "source_dataset": "multihop/fusion-aide",
+      "split": "test"
+    }
+  ]
+}

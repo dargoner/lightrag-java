@@ -216,6 +216,86 @@ class KnowledgeExtractorTest {
         );
     }
 
+    @Test
+    void clampsRelationWeightAndFallsBackToConfidence() {
+        var extractor = new KnowledgeExtractor(new StubChatModel("""
+            {
+              "entities": [
+                {"name": "Alice", "type": "person", "description": "Researcher", "aliases": []},
+                {"name": "Bob", "type": "person", "description": "Engineer", "aliases": []},
+                {"name": "Charlie", "type": "person", "description": "Reviewer", "aliases": []}
+              ],
+              "relations": [
+                {
+                  "sourceEntityName": "Alice",
+                  "targetEntityName": "Bob",
+                  "type": "works_with",
+                  "description": "collaboration",
+                  "weight": 1.7
+                },
+                {
+                  "sourceEntityName": "Alice",
+                  "targetEntityName": "Charlie",
+                  "type": "reviews",
+                  "description": "review chain",
+                  "confidence": 0.4
+                }
+              ]
+            }
+            """));
+
+        var result = extractor.extract(chunk("Alice works with Bob and Charlie"));
+
+        assertThat(result.relations()).containsExactly(
+            new ExtractedRelation("Alice", "Bob", "works_with", "collaboration", 1.0d),
+            new ExtractedRelation("Alice", "Charlie", "reviews", "review chain", 0.4d)
+        );
+    }
+
+    @Test
+    void mergesRelationTypeVariantsAcrossGleaning() {
+        var chatModel = new RecordingChatModel(
+            """
+            {
+              "entities": [
+                {"name": "Alice", "type": "person", "description": "Researcher", "aliases": []},
+                {"name": "Bob", "type": "person", "description": "Engineer", "aliases": []}
+              ],
+              "relations": [
+                {
+                  "sourceEntityName": "Alice",
+                  "targetEntityName": "Bob",
+                  "type": "works_with",
+                  "description": "short",
+                  "weight": 0.7
+                }
+              ]
+            }
+            """,
+            """
+            {
+              "entities": [],
+              "relations": [
+                {
+                  "sourceEntityName": "Alice",
+                  "targetEntityName": "Bob",
+                  "type": "works-with",
+                  "description": "longer collaboration description",
+                  "weight": 0.9
+                }
+              ]
+            }
+            """
+        );
+        var extractor = new KnowledgeExtractor(chatModel, 1, 10_000);
+
+        var result = extractor.extract(chunk("Alice works with Bob"));
+
+        assertThat(result.relations()).containsExactly(
+            new ExtractedRelation("Alice", "Bob", "works_with", "longer collaboration description", 0.9d)
+        );
+    }
+
     private static Chunk chunk(String text) {
         return new Chunk("doc-1:0", "doc-1", text, text.length(), 0, Map.of());
     }

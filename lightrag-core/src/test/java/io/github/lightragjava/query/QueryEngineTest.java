@@ -944,7 +944,7 @@ class QueryEngineTest {
             new ContextAssembler(),
             strategiesReturning(defaultStrategy),
             null,
-            true,
+            false,
             2,
             new RuleBasedQueryIntentClassifier(),
             multiHopStrategy,
@@ -981,7 +981,7 @@ class QueryEngineTest {
             new ContextAssembler(),
             strategiesReturning(defaultStrategy),
             null,
-            true,
+            false,
             2,
             new RuleBasedQueryIntentClassifier(),
             multiHopStrategy,
@@ -1032,6 +1032,48 @@ class QueryEngineTest {
 
         assertThat(defaultStrategy.lastRequest()).isNotNull();
         assertThat(multiHopStrategy.lastRequest()).isNull();
+    }
+
+    @Test
+    void usesTwoStageSynthesisForNonStreamingMultiHopAnswers() {
+        var chatModel = new SequencedChatModel(
+            "Step 1: Atlas depends on GraphStore.\nStep 2: GraphStore is owned by KnowledgeGraphTeam.",
+            "Atlas 通过 GraphStore 影响知识图谱组。"
+        );
+        var defaultStrategy = new RecordingQueryStrategy(baseContext());
+        var multiHopStrategy = new RecordingQueryStrategy(new QueryContext(
+            List.of(),
+            List.of(),
+            List.of(scoredChunk("chunk-2", "GraphStore 服务由知识图谱组维护。", 0.95d)),
+            "Reasoning Path 1\nHop 1: Atlas --depends_on--> GraphStore\nHop 2: GraphStore --owned_by--> KnowledgeGraphTeam"
+        ));
+        var engine = new QueryEngine(
+            chatModel,
+            new ContextAssembler(),
+            strategiesReturning(defaultStrategy),
+            null,
+            false,
+            2,
+            new RuleBasedQueryIntentClassifier(),
+            multiHopStrategy,
+            new io.github.lightragjava.synthesis.PathAwareAnswerSynthesizer()
+        );
+
+        var result = engine.query(QueryRequest.builder()
+            .query("Atlas 通过谁影响知识图谱组？")
+            .mode(QueryMode.LOCAL)
+            .build());
+
+        assertThat(result.answer()).isEqualTo("Atlas 通过 GraphStore 影响知识图谱组。");
+        assertThat(chatModel.callCount()).isEqualTo(2);
+        assertThat(chatModel.requests()).hasSize(2);
+        assertThat(chatModel.requests().get(0).systemPrompt())
+            .contains("Reasoning Draft Instructions")
+            .contains("Do not write the final answer");
+        assertThat(chatModel.requests().get(1).systemPrompt())
+            .contains("Validated Reasoning Draft")
+            .contains("Step 1: Atlas depends on GraphStore.")
+            .contains("Step 2: GraphStore is owned by KnowledgeGraphTeam.");
     }
 
     private static QueryRequest baseRequest() {
@@ -1220,6 +1262,32 @@ class QueryEngineTest {
 
         int keywordExtractionCallCount() {
             return keywordExtractionCallCount;
+        }
+    }
+
+    private static final class SequencedChatModel implements ChatModel {
+        private final List<String> responses;
+        private final java.util.ArrayList<ChatRequest> requests = new java.util.ArrayList<>();
+        private int index;
+
+        private SequencedChatModel(String... responses) {
+            this.responses = List.of(responses);
+        }
+
+        @Override
+        public String generate(ChatRequest request) {
+            requests.add(request);
+            var responseIndex = Math.min(index, responses.size() - 1);
+            index++;
+            return responses.get(responseIndex);
+        }
+
+        int callCount() {
+            return requests.size();
+        }
+
+        List<ChatRequest> requests() {
+            return List.copyOf(requests);
         }
     }
 

@@ -100,6 +100,7 @@ async def _run_java_batch(
     documents_dir: Path,
     run_label: str,
 ) -> List[Dict[str, Any]]:
+    retrieval_only = os.getenv("LIGHTRAG_JAVA_EVAL_RETRIEVAL_ONLY", "true").lower() == "true"
     app_args = " ".join(
         [
             f"--documents-dir {shlex.quote(str(documents_dir))}",
@@ -108,7 +109,10 @@ async def _run_java_batch(
             f"--mode {shlex.quote(os.getenv('LIGHTRAG_JAVA_EVAL_QUERY_MODE', 'mix'))}",
             f"--top-k {shlex.quote(os.getenv('EVAL_QUERY_TOP_K', '10'))}",
             f"--chunk-top-k {shlex.quote(os.getenv('LIGHTRAG_JAVA_EVAL_CHUNK_TOP_K', '10'))}",
-            "--retrieval-only true",
+            f"--max-hop {shlex.quote(os.getenv('LIGHTRAG_JAVA_EVAL_MAX_HOP', '2'))}",
+            f"--path-top-k {shlex.quote(os.getenv('LIGHTRAG_JAVA_EVAL_PATH_TOP_K', '3'))}",
+            f"--multi-hop-enabled {shlex.quote(os.getenv('LIGHTRAG_JAVA_EVAL_MULTI_HOP_ENABLED', 'true'))}",
+            f"--retrieval-only {str(retrieval_only).lower()}",
             f"--run-label {shlex.quote(run_label)}",
         ]
     )
@@ -140,6 +144,15 @@ def _evaluate_retrieval(test_cases: List[Dict[str, Any]], batch_results: List[Di
         expected_set = set(expected_doc_ids)
         matched_set = set(matched_doc_ids)
         overlap = expected_set & matched_set
+        raw_hop_doc_ids = test_case.get("hop_doc_ids", [])
+        if isinstance(raw_hop_doc_ids, list) and raw_hop_doc_ids:
+            all_hops_hit = all(
+                isinstance(hop_group, list)
+                and any(str(doc_id) in matched_set for doc_id in hop_group)
+                for hop_group in raw_hop_doc_ids
+            )
+        else:
+            all_hops_hit = bool(expected_set) and expected_set.issubset(matched_set)
         evaluated.append(
             {
                 "question": test_case["question"],
@@ -147,6 +160,7 @@ def _evaluate_retrieval(test_cases: List[Dict[str, Any]], batch_results: List[Di
                 "matched_doc_ids": matched_doc_ids,
                 "top1_hit": bool(matched_doc_ids) and matched_doc_ids[0] in expected_set,
                 "top3_hit": any(doc_id in expected_set for doc_id in matched_doc_ids[:3]),
+                "all_hops_hit": all_hops_hit,
                 "recall": round(len(overlap) / len(expected_set), 4) if expected_set else 0.0,
             }
         )
@@ -157,6 +171,7 @@ def _evaluate_retrieval(test_cases: List[Dict[str, Any]], batch_results: List[Di
             "total_cases": len(evaluated),
             "top1_hit_rate": round(sum(1 for item in evaluated if item["top1_hit"]) / len(evaluated), 4) if evaluated else 0.0,
             "top3_hit_rate": round(sum(1 for item in evaluated if item["top3_hit"]) / len(evaluated), 4) if evaluated else 0.0,
+            "all_hops_hit_rate": round(sum(1 for item in evaluated if item["all_hops_hit"]) / len(evaluated), 4) if evaluated else 0.0,
             "average_recall": round(sum(item["recall"] for item in evaluated) / len(evaluated), 4) if evaluated else 0.0,
         },
     }
@@ -173,6 +188,7 @@ def _compare_with_baseline(current_payload: Dict[str, Any], baseline_payload: Op
             "shared_case_count": 0,
             "top1_hit_rate_delta": None,
             "top3_hit_rate_delta": None,
+            "all_hops_hit_rate_delta": None,
             "average_recall_delta": None,
         }
     current_subset = [current_by_question[question] for question in shared_questions]
@@ -181,6 +197,7 @@ def _compare_with_baseline(current_payload: Dict[str, Any], baseline_payload: Op
         "shared_case_count": len(shared_questions),
         "top1_hit_rate_delta": round(_hit_rate(current_subset, "top1_hit") - _hit_rate(baseline_subset, "top1_hit"), 4),
         "top3_hit_rate_delta": round(_hit_rate(current_subset, "top3_hit") - _hit_rate(baseline_subset, "top3_hit"), 4),
+        "all_hops_hit_rate_delta": round(_hit_rate(current_subset, "all_hops_hit") - _hit_rate(baseline_subset, "all_hops_hit"), 4),
         "average_recall_delta": round(_average_recall(current_subset) - _average_recall(baseline_subset), 4),
     }
 
@@ -216,7 +233,7 @@ def _write_csv(path: Path, results: List[Dict[str, Any]]) -> None:
     with path.open("w", newline="") as handle:
         writer = csv.DictWriter(
             handle,
-            fieldnames=["question", "expected_doc_ids", "matched_doc_ids", "top1_hit", "top3_hit", "recall"],
+            fieldnames=["question", "expected_doc_ids", "matched_doc_ids", "top1_hit", "top3_hit", "all_hops_hit", "recall"],
         )
         writer.writeheader()
         for result in results:
@@ -227,6 +244,7 @@ def _write_csv(path: Path, results: List[Dict[str, Any]]) -> None:
                     "matched_doc_ids": "|".join(result["matched_doc_ids"]),
                     "top1_hit": str(result["top1_hit"]).lower(),
                     "top3_hit": str(result["top3_hit"]).lower(),
+                    "all_hops_hit": str(result["all_hops_hit"]).lower(),
                     "recall": f"{result['recall']:.4f}",
                 }
             )
@@ -270,12 +288,17 @@ def _build_payload(
             "query_mode": os.getenv("LIGHTRAG_JAVA_EVAL_QUERY_MODE", "mix").upper(),
             "top_k": int(os.getenv("EVAL_QUERY_TOP_K", "10")),
             "chunk_top_k": int(os.getenv("LIGHTRAG_JAVA_EVAL_CHUNK_TOP_K", "10")),
+            "max_hop": int(os.getenv("LIGHTRAG_JAVA_EVAL_MAX_HOP", "2")),
+            "path_top_k": int(os.getenv("LIGHTRAG_JAVA_EVAL_PATH_TOP_K", "3")),
+            "multi_hop_enabled": os.getenv("LIGHTRAG_JAVA_EVAL_MULTI_HOP_ENABLED", "true").lower() == "true",
+            "retrieval_only": os.getenv("LIGHTRAG_JAVA_EVAL_RETRIEVAL_ONLY", "true").lower() == "true",
         },
         "summary": {
             **retrieval_results["summary"],
             "shared_case_count": comparison["shared_case_count"] if comparison else 0,
             "top1_hit_rate_delta": comparison["top1_hit_rate_delta"] if comparison else None,
             "top3_hit_rate_delta": comparison["top3_hit_rate_delta"] if comparison else None,
+            "all_hops_hit_rate_delta": comparison["all_hops_hit_rate_delta"] if comparison else None,
             "average_recall_delta": comparison["average_recall_delta"] if comparison else None,
             "baseline_updated": False,
         },

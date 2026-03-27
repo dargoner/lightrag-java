@@ -81,6 +81,114 @@ class GraphAssemblerTest {
         );
     }
 
+    @Test
+    void mergesRelationTypeVariantsWithoutChangingFirstRelationId() {
+        var assembler = new GraphAssembler();
+
+        var graph = assembler.assemble(List.of(
+            extraction(
+                "chunk-1",
+                List.of(
+                    new ExtractedEntity("Alice", "person", "Researcher", List.of()),
+                    new ExtractedEntity("Bob", "person", "Engineer", List.of())
+                ),
+                List.of(new ExtractedRelation("Alice", "Bob", "works_with", "first", 0.7d))
+            ),
+            extraction(
+                "chunk-2",
+                List.of(),
+                List.of(new ExtractedRelation("Alice", "Bob", "works-with", "second", 0.9d))
+            )
+        ));
+
+        assertThat(graph.relations()).containsExactly(
+            new Relation(
+                "relation:entity:alice|works_with|entity:bob",
+                "entity:alice",
+                "entity:bob",
+                "works_with",
+                "first",
+                0.9d,
+                List.of("chunk-1", "chunk-2")
+            )
+        );
+    }
+
+    @Test
+    void foldsSymmetricRelationsIntoFirstSeenDirection() {
+        var assembler = new GraphAssembler();
+
+        var graph = assembler.assemble(List.of(
+            extraction(
+                "chunk-1",
+                List.of(
+                    new ExtractedEntity("Alice", "person", "Researcher", List.of()),
+                    new ExtractedEntity("Bob", "person", "Engineer", List.of())
+                ),
+                List.of(new ExtractedRelation("Alice", "Bob", "related_to", "forward", 0.6d))
+            ),
+            extraction(
+                "chunk-2",
+                List.of(),
+                List.of(new ExtractedRelation("Bob", "Alice", "related-to", "reverse", 0.8d))
+            )
+        ));
+
+        assertThat(graph.relations()).containsExactly(
+            new Relation(
+                "relation:entity:alice|related_to|entity:bob",
+                "entity:alice",
+                "entity:bob",
+                "related_to",
+                "forward",
+                0.8d,
+                List.of("chunk-1", "chunk-2")
+            )
+        );
+    }
+
+    @Test
+    void keepsAsymmetricRelationsDirectional() {
+        var assembler = new GraphAssembler();
+
+        var graph = assembler.assemble(List.of(
+            extraction(
+                "chunk-1",
+                List.of(
+                    new ExtractedEntity("Alice", "person", "Manager", List.of()),
+                    new ExtractedEntity("Bob", "person", "Engineer", List.of())
+                ),
+                List.of(new ExtractedRelation("Alice", "Bob", "reports_to", "forward", 0.6d))
+            ),
+            extraction(
+                "chunk-2",
+                List.of(),
+                List.of(new ExtractedRelation("Bob", "Alice", "reports_to", "reverse", 0.8d))
+            )
+        ));
+
+        assertThat(graph.relations()).containsExactly(
+            new Relation(
+                "relation:entity:alice|reports_to|entity:bob",
+                "entity:alice",
+                "entity:bob",
+                "reports_to",
+                "forward",
+                0.6d,
+                List.of("chunk-1")
+            ),
+            new Relation(
+                "relation:entity:bob|reports_to|entity:alice",
+                "entity:bob",
+                "entity:alice",
+                "reports_to",
+                "reverse",
+                0.8d,
+                List.of("chunk-2")
+            )
+        );
+    }
+
     private static GraphAssembler.ChunkExtraction extraction(
         String chunkId,
         List<ExtractedEntity> entities,
