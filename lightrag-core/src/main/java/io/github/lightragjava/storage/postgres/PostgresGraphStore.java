@@ -18,12 +18,17 @@ public final class PostgresGraphStore implements GraphStore {
     private final String entityChunksTable;
     private final String relationsTable;
     private final String relationChunksTable;
+    private final String workspaceId;
 
     public PostgresGraphStore(DataSource dataSource, PostgresStorageConfig config) {
-        this(JdbcConnectionAccess.forDataSource(dataSource), config);
+        this(dataSource, config, "default");
     }
 
-    PostgresGraphStore(JdbcConnectionAccess connectionAccess, PostgresStorageConfig config) {
+    public PostgresGraphStore(DataSource dataSource, PostgresStorageConfig config, String workspaceId) {
+        this(JdbcConnectionAccess.forDataSource(dataSource), config, workspaceId);
+    }
+
+    PostgresGraphStore(JdbcConnectionAccess connectionAccess, PostgresStorageConfig config, String workspaceId) {
         this.connectionAccess = Objects.requireNonNull(connectionAccess, "connectionAccess");
         var storageConfig = Objects.requireNonNull(config, "config");
         this.entitiesTable = storageConfig.qualifiedTableName("entities");
@@ -31,6 +36,7 @@ public final class PostgresGraphStore implements GraphStore {
         this.entityChunksTable = storageConfig.qualifiedTableName("entity_chunks");
         this.relationsTable = storageConfig.qualifiedTableName("relations");
         this.relationChunksTable = storageConfig.qualifiedTableName("relation_chunks");
+        this.workspaceId = Objects.requireNonNull(workspaceId, "workspaceId");
     }
 
     @Override
@@ -77,14 +83,18 @@ public final class PostgresGraphStore implements GraphStore {
                 """
                 SELECT id, name, type, description
                 FROM %s
+                WHERE workspace_id = ?
                 ORDER BY id
                 """.formatted(entitiesTable)
-            ); var resultSet = statement.executeQuery()) {
-                var entities = new java.util.ArrayList<EntityRecord>();
-                while (resultSet.next()) {
-                    entities.add(readEntity(connection, resultSet));
+            )) {
+                statement.setString(1, workspaceId);
+                try (var resultSet = statement.executeQuery()) {
+                    var entities = new java.util.ArrayList<EntityRecord>();
+                    while (resultSet.next()) {
+                        entities.add(readEntity(connection, resultSet));
+                    }
+                    return List.copyOf(entities);
                 }
-                return List.copyOf(entities);
             }
         });
     }
@@ -96,14 +106,18 @@ public final class PostgresGraphStore implements GraphStore {
                 """
                 SELECT id, source_entity_id, target_entity_id, type, description, weight
                 FROM %s
+                WHERE workspace_id = ?
                 ORDER BY id
                 """.formatted(relationsTable)
-            ); var resultSet = statement.executeQuery()) {
-                var relations = new java.util.ArrayList<RelationRecord>();
-                while (resultSet.next()) {
-                    relations.add(readRelation(connection, resultSet));
+            )) {
+                statement.setString(1, workspaceId);
+                try (var resultSet = statement.executeQuery()) {
+                    var relations = new java.util.ArrayList<RelationRecord>();
+                    while (resultSet.next()) {
+                        relations.add(readRelation(connection, resultSet));
+                    }
+                    return List.copyOf(relations);
                 }
-                return List.copyOf(relations);
             }
         });
     }
@@ -116,12 +130,14 @@ public final class PostgresGraphStore implements GraphStore {
                 """
                 SELECT id, source_entity_id, target_entity_id, type, description, weight
                 FROM %s
-                WHERE source_entity_id = ? OR target_entity_id = ?
+                WHERE workspace_id = ?
+                  AND (source_entity_id = ? OR target_entity_id = ?)
                 ORDER BY id
                 """.formatted(relationsTable)
             )) {
-                statement.setString(1, id);
+                statement.setString(1, workspaceId);
                 statement.setString(2, id);
+                statement.setString(3, id);
                 try (var resultSet = statement.executeQuery()) {
                     var relations = new java.util.ArrayList<RelationRecord>();
                     while (resultSet.next()) {
@@ -138,10 +154,12 @@ public final class PostgresGraphStore implements GraphStore {
             """
             SELECT id, name, type, description
             FROM %s
-            WHERE id = ?
+            WHERE workspace_id = ?
+              AND id = ?
             """.formatted(entitiesTable)
         )) {
-            statement.setString(1, entityId);
+            statement.setString(1, workspaceId);
+            statement.setString(2, entityId);
             try (var resultSet = statement.executeQuery()) {
                 if (!resultSet.next()) {
                     return Optional.empty();
@@ -156,10 +174,12 @@ public final class PostgresGraphStore implements GraphStore {
             """
             SELECT id, source_entity_id, target_entity_id, type, description, weight
             FROM %s
-            WHERE id = ?
+            WHERE workspace_id = ?
+              AND id = ?
             """.formatted(relationsTable)
         )) {
-            statement.setString(1, relationId);
+            statement.setString(1, workspaceId);
+            statement.setString(2, relationId);
             try (var resultSet = statement.executeQuery()) {
                 if (!resultSet.next()) {
                     return Optional.empty();
@@ -205,11 +225,13 @@ public final class PostgresGraphStore implements GraphStore {
             """
             SELECT %s
             FROM %s
-            WHERE %s = ?
+            WHERE workspace_id = ?
+              AND %s = ?
             ORDER BY %s
             """.formatted(valueColumn, tableName, idColumn, valueColumn)
         )) {
-            statement.setString(1, idValue);
+            statement.setString(1, workspaceId);
+            statement.setString(2, idValue);
             try (var resultSet = statement.executeQuery()) {
                 var values = new java.util.ArrayList<String>();
                 while (resultSet.next()) {
@@ -223,18 +245,19 @@ public final class PostgresGraphStore implements GraphStore {
     private void upsertEntity(Connection connection, EntityRecord entity) throws SQLException {
         try (var statement = connection.prepareStatement(
             """
-            INSERT INTO %s (id, name, type, description)
-            VALUES (?, ?, ?, ?)
-            ON CONFLICT (id) DO UPDATE
+            INSERT INTO %s (workspace_id, id, name, type, description)
+            VALUES (?, ?, ?, ?, ?)
+            ON CONFLICT (workspace_id, id) DO UPDATE
             SET name = EXCLUDED.name,
                 type = EXCLUDED.type,
                 description = EXCLUDED.description
             """.formatted(entitiesTable)
         )) {
-            statement.setString(1, entity.id());
-            statement.setString(2, entity.name());
-            statement.setString(3, entity.type());
-            statement.setString(4, entity.description());
+            statement.setString(1, workspaceId);
+            statement.setString(2, entity.id());
+            statement.setString(3, entity.name());
+            statement.setString(4, entity.type());
+            statement.setString(5, entity.description());
             statement.executeUpdate();
         }
     }
@@ -252,9 +275,9 @@ public final class PostgresGraphStore implements GraphStore {
     private void upsertRelation(Connection connection, RelationRecord relation) throws SQLException {
         try (var statement = connection.prepareStatement(
             """
-            INSERT INTO %s (id, source_entity_id, target_entity_id, type, description, weight)
-            VALUES (?, ?, ?, ?, ?, ?)
-            ON CONFLICT (id) DO UPDATE
+            INSERT INTO %s (workspace_id, id, source_entity_id, target_entity_id, type, description, weight)
+            VALUES (?, ?, ?, ?, ?, ?, ?)
+            ON CONFLICT (workspace_id, id) DO UPDATE
             SET source_entity_id = EXCLUDED.source_entity_id,
                 target_entity_id = EXCLUDED.target_entity_id,
                 type = EXCLUDED.type,
@@ -262,12 +285,13 @@ public final class PostgresGraphStore implements GraphStore {
                 weight = EXCLUDED.weight
             """.formatted(relationsTable)
         )) {
-            statement.setString(1, relation.id());
-            statement.setString(2, relation.sourceEntityId());
-            statement.setString(3, relation.targetEntityId());
-            statement.setString(4, relation.type());
-            statement.setString(5, relation.description());
-            statement.setDouble(6, relation.weight());
+            statement.setString(1, workspaceId);
+            statement.setString(2, relation.id());
+            statement.setString(3, relation.sourceEntityId());
+            statement.setString(4, relation.targetEntityId());
+            statement.setString(5, relation.type());
+            statement.setString(6, relation.description());
+            statement.setDouble(7, relation.weight());
             statement.executeUpdate();
         }
     }
@@ -279,9 +303,10 @@ public final class PostgresGraphStore implements GraphStore {
 
     private void deleteById(Connection connection, String tableName, String idColumn, String idValue) throws SQLException {
         try (var statement = connection.prepareStatement(
-            "DELETE FROM " + tableName + " WHERE " + idColumn + " = ?"
+            "DELETE FROM " + tableName + " WHERE workspace_id = ? AND " + idColumn + " = ?"
         )) {
-            statement.setString(1, idValue);
+            statement.setString(1, workspaceId);
+            statement.setString(2, idValue);
             statement.executeUpdate();
         }
     }
@@ -298,11 +323,12 @@ public final class PostgresGraphStore implements GraphStore {
             return;
         }
         try (var statement = connection.prepareStatement(
-            "INSERT INTO " + tableName + " (" + idColumn + ", " + valueColumn + ") VALUES (?, ?)"
+            "INSERT INTO " + tableName + " (workspace_id, " + idColumn + ", " + valueColumn + ") VALUES (?, ?, ?)"
         )) {
             for (var value : values) {
-                statement.setString(1, idValue);
-                statement.setString(2, value);
+                statement.setString(1, workspaceId);
+                statement.setString(2, idValue);
+                statement.setString(3, value);
                 statement.addBatch();
             }
             statement.executeBatch();

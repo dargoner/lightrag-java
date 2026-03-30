@@ -12,14 +12,20 @@ import java.util.Optional;
 public final class PostgresDocumentStore implements DocumentStore {
     private final JdbcConnectionAccess connectionAccess;
     private final String tableName;
+    private final String workspaceId;
 
     public PostgresDocumentStore(DataSource dataSource, PostgresStorageConfig config) {
-        this(JdbcConnectionAccess.forDataSource(dataSource), config);
+        this(dataSource, config, "default");
     }
 
-    PostgresDocumentStore(JdbcConnectionAccess connectionAccess, PostgresStorageConfig config) {
+    public PostgresDocumentStore(DataSource dataSource, PostgresStorageConfig config, String workspaceId) {
+        this(JdbcConnectionAccess.forDataSource(dataSource), config, workspaceId);
+    }
+
+    PostgresDocumentStore(JdbcConnectionAccess connectionAccess, PostgresStorageConfig config, String workspaceId) {
         this.connectionAccess = Objects.requireNonNull(connectionAccess, "connectionAccess");
         this.tableName = Objects.requireNonNull(config, "config").qualifiedTableName("documents");
+        this.workspaceId = Objects.requireNonNull(workspaceId, "workspaceId");
     }
 
     @Override
@@ -28,18 +34,19 @@ public final class PostgresDocumentStore implements DocumentStore {
         connectionAccess.withConnection(connection -> {
             try (var statement = connection.prepareStatement(
                 """
-                INSERT INTO %s (id, title, content, metadata)
-                VALUES (?, ?, ?, CAST(? AS JSONB))
-                ON CONFLICT (id) DO UPDATE
+                INSERT INTO %s (workspace_id, id, title, content, metadata)
+                VALUES (?, ?, ?, ?, CAST(? AS JSONB))
+                ON CONFLICT (workspace_id, id) DO UPDATE
                 SET title = EXCLUDED.title,
                     content = EXCLUDED.content,
                     metadata = EXCLUDED.metadata
                 """.formatted(tableName)
             )) {
-                statement.setString(1, record.id());
-                statement.setString(2, record.title());
-                statement.setString(3, record.content());
-                statement.setString(4, JdbcJsonCodec.writeStringMap(record.metadata()));
+                statement.setString(1, workspaceId);
+                statement.setString(2, record.id());
+                statement.setString(3, record.title());
+                statement.setString(4, record.content());
+                statement.setString(5, JdbcJsonCodec.writeStringMap(record.metadata()));
                 statement.executeUpdate();
                 return null;
             }
@@ -54,10 +61,12 @@ public final class PostgresDocumentStore implements DocumentStore {
                 """
                 SELECT id, title, content, metadata
                 FROM %s
-                WHERE id = ?
+                WHERE workspace_id = ?
+                  AND id = ?
                 """.formatted(tableName)
             )) {
-                statement.setString(1, id);
+                statement.setString(1, workspaceId);
+                statement.setString(2, id);
                 try (var resultSet = statement.executeQuery()) {
                     if (!resultSet.next()) {
                         return Optional.empty();
@@ -75,14 +84,18 @@ public final class PostgresDocumentStore implements DocumentStore {
                 """
                 SELECT id, title, content, metadata
                 FROM %s
+                WHERE workspace_id = ?
                 ORDER BY id
                 """.formatted(tableName)
-            ); var resultSet = statement.executeQuery()) {
-                var documents = new java.util.ArrayList<DocumentRecord>();
-                while (resultSet.next()) {
-                    documents.add(readDocument(resultSet));
+            )) {
+                statement.setString(1, workspaceId);
+                try (var resultSet = statement.executeQuery()) {
+                    var documents = new java.util.ArrayList<DocumentRecord>();
+                    while (resultSet.next()) {
+                        documents.add(readDocument(resultSet));
+                    }
+                    return List.copyOf(documents);
                 }
-                return List.copyOf(documents);
             }
         });
     }
@@ -95,10 +108,12 @@ public final class PostgresDocumentStore implements DocumentStore {
                 """
                 SELECT 1
                 FROM %s
-                WHERE id = ?
+                WHERE workspace_id = ?
+                  AND id = ?
                 """.formatted(tableName)
             )) {
-                statement.setString(1, id);
+                statement.setString(1, workspaceId);
+                statement.setString(2, id);
                 try (var resultSet = statement.executeQuery()) {
                     return resultSet.next();
                 }

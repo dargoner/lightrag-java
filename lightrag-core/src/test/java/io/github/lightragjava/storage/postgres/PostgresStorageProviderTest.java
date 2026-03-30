@@ -71,7 +71,21 @@ class PostgresStorageProviderTest {
                     "rag_schema_version",
                     "rag_vectors"
                 );
-                assertThat(schemaVersion(connection, config)).contains(2);
+                assertThat(columnNames(connection, config, "documents")).contains("workspace_id");
+                assertThat(columnNames(connection, config, "chunks")).contains("workspace_id", "document_id");
+                assertThat(columnNames(connection, config, "entities")).contains("workspace_id");
+                assertThat(columnNames(connection, config, "relations")).contains("workspace_id");
+                assertThat(columnNames(connection, config, "vectors")).contains("workspace_id");
+                assertThat(columnNames(connection, config, "document_status")).contains("workspace_id");
+                assertThat(primaryKeyColumns(connection, config, "documents")).containsExactly("workspace_id", "id");
+                assertThat(primaryKeyColumns(connection, config, "chunks")).containsExactly("workspace_id", "id");
+                assertThat(primaryKeyColumns(connection, config, "entities")).containsExactly("workspace_id", "id");
+                assertThat(primaryKeyColumns(connection, config, "relations")).containsExactly("workspace_id", "id");
+                assertThat(primaryKeyColumns(connection, config, "vectors"))
+                    .containsExactly("workspace_id", "namespace", "vector_id");
+                assertThat(primaryKeyColumns(connection, config, "document_status"))
+                    .containsExactly("workspace_id", "document_id");
+                assertThat(schemaVersion(connection, config)).contains(3);
             }
         }
     }
@@ -112,7 +126,7 @@ class PostgresStorageProviderTest {
     }
 
     @Test
-    void baselinesExistingLegacySchema() throws SQLException {
+    void rejectsLegacySchemaWithoutWorkspaceColumns() throws SQLException {
         PostgreSQLContainer<?> container = newPostgresContainer();
         container.start();
 
@@ -137,10 +151,10 @@ class PostgresStorageProviderTest {
         ) {
             createLegacySchema(connection, config);
 
-            try (PostgresStorageProvider ignored = new PostgresStorageProvider(config, snapshotStore)) {
-                assertThat(schemaVersion(connection, config)).contains(2);
-                assertThat(existingTables(connection, config.schema())).contains("rag_document_status");
-            }
+            assertThatThrownBy(() -> new PostgresStorageProvider(config, snapshotStore))
+                .isInstanceOf(IllegalStateException.class)
+                .hasMessageContaining("legacy")
+                .hasMessageContaining("workspace");
         }
     }
 
@@ -189,7 +203,7 @@ class PostgresStorageProviderTest {
                 .isInstanceOf(IllegalStateException.class)
                 .hasMessageContaining("schema version")
                 .hasMessageContaining("999")
-                .hasMessageContaining("2");
+                .hasMessageContaining("3");
         }
     }
 
@@ -218,7 +232,7 @@ class PostgresStorageProviderTest {
                 )) {
                     connection.createStatement().execute("DROP TABLE " + config.qualifiedTableName("documents"));
                     assertThat(existingTables(connection, config.schema())).doesNotContain("rag_documents");
-                    assertThat(schemaVersion(connection, config)).contains(2);
+                    assertThat(schemaVersion(connection, config)).contains(3);
                 }
             }
 
@@ -232,8 +246,193 @@ class PostgresStorageProviderTest {
             ) {
                 assertThat(existingTables(connection, config.schema())).contains("rag_documents");
                 assertThat(existingTables(connection, config.schema())).contains("rag_document_status");
-                assertThat(schemaVersion(connection, config)).contains(2);
+                assertThat(schemaVersion(connection, config)).contains(3);
             }
+        }
+    }
+
+    @Test
+    void isolatesAllStoresByWorkspaceIdInsideSharedTables() {
+        PostgreSQLContainer<?> container = newPostgresContainer();
+        container.start();
+
+        var config = new PostgresStorageConfig(
+            container.getJdbcUrl(),
+            container.getUsername(),
+            container.getPassword(),
+            "lightrag",
+            3,
+            "rag_"
+        );
+
+        try (
+            container;
+            PostgresStorageProvider alpha = new PostgresStorageProvider(config, new InMemorySnapshotStore(), "alpha");
+            PostgresStorageProvider beta = new PostgresStorageProvider(config, new InMemorySnapshotStore(), "beta")
+        ) {
+            alpha.documentStore().save(new DocumentStore.DocumentRecord("doc-1", "Alpha", "alpha", Map.of("workspace", "alpha")));
+            alpha.chunkStore().save(new ChunkStore.ChunkRecord("doc-1:0", "doc-1", "alpha", 5, 0, Map.of("workspace", "alpha")));
+            alpha.graphStore().saveEntity(new GraphStore.EntityRecord("entity-1", "Alice", "person", "Alpha entity", List.of("A"), List.of("doc-1:0")));
+            alpha.graphStore().saveRelation(new GraphStore.RelationRecord("relation-1", "entity-1", "entity-2", "knows", "Alpha relation", 0.8d, List.of("doc-1:0")));
+            alpha.vectorStore().saveAll("chunks", List.of(new VectorStore.VectorRecord("doc-1:0", List.of(1.0d, 0.0d, 0.0d))));
+            alpha.documentStatusStore().save(new DocumentStatusStore.StatusRecord("doc-1", DocumentStatus.PROCESSED, "alpha done", null));
+
+            beta.documentStore().save(new DocumentStore.DocumentRecord("doc-1", "Beta", "beta", Map.of("workspace", "beta")));
+            beta.chunkStore().save(new ChunkStore.ChunkRecord("doc-1:0", "doc-1", "beta", 4, 0, Map.of("workspace", "beta")));
+            beta.graphStore().saveEntity(new GraphStore.EntityRecord("entity-1", "Bob", "person", "Beta entity", List.of("B"), List.of("doc-1:0")));
+            beta.graphStore().saveRelation(new GraphStore.RelationRecord("relation-1", "entity-1", "entity-3", "works_with", "Beta relation", 0.4d, List.of("doc-1:0")));
+            beta.vectorStore().saveAll("chunks", List.of(new VectorStore.VectorRecord("doc-1:0", List.of(0.0d, 1.0d, 0.0d))));
+            beta.documentStatusStore().save(new DocumentStatusStore.StatusRecord("doc-1", DocumentStatus.FAILED, "beta failed", "boom"));
+
+            assertThat(alpha.documentStore().load("doc-1"))
+                .contains(new DocumentStore.DocumentRecord("doc-1", "Alpha", "alpha", Map.of("workspace", "alpha")));
+            assertThat(beta.documentStore().load("doc-1"))
+                .contains(new DocumentStore.DocumentRecord("doc-1", "Beta", "beta", Map.of("workspace", "beta")));
+            assertThat(alpha.chunkStore().list()).containsExactly(
+                new ChunkStore.ChunkRecord("doc-1:0", "doc-1", "alpha", 5, 0, Map.of("workspace", "alpha"))
+            );
+            assertThat(beta.chunkStore().list()).containsExactly(
+                new ChunkStore.ChunkRecord("doc-1:0", "doc-1", "beta", 4, 0, Map.of("workspace", "beta"))
+            );
+            assertThat(alpha.graphStore().loadEntity("entity-1")).contains(
+                new GraphStore.EntityRecord("entity-1", "Alice", "person", "Alpha entity", List.of("A"), List.of("doc-1:0"))
+            );
+            assertThat(beta.graphStore().loadEntity("entity-1")).contains(
+                new GraphStore.EntityRecord("entity-1", "Bob", "person", "Beta entity", List.of("B"), List.of("doc-1:0"))
+            );
+            assertThat(alpha.graphStore().loadRelation("relation-1")).contains(
+                new GraphStore.RelationRecord("relation-1", "entity-1", "entity-2", "knows", "Alpha relation", 0.8d, List.of("doc-1:0"))
+            );
+            assertThat(beta.graphStore().loadRelation("relation-1")).contains(
+                new GraphStore.RelationRecord("relation-1", "entity-1", "entity-3", "works_with", "Beta relation", 0.4d, List.of("doc-1:0"))
+            );
+            assertThat(alpha.vectorStore().list("chunks")).containsExactly(
+                new VectorStore.VectorRecord("doc-1:0", List.of(1.0d, 0.0d, 0.0d))
+            );
+            assertThat(beta.vectorStore().list("chunks")).containsExactly(
+                new VectorStore.VectorRecord("doc-1:0", List.of(0.0d, 1.0d, 0.0d))
+            );
+            assertThat(alpha.documentStatusStore().load("doc-1")).contains(
+                new DocumentStatusStore.StatusRecord("doc-1", DocumentStatus.PROCESSED, "alpha done", null)
+            );
+            assertThat(beta.documentStatusStore().load("doc-1")).contains(
+                new DocumentStatusStore.StatusRecord("doc-1", DocumentStatus.FAILED, "beta failed", "boom")
+            );
+        }
+    }
+
+    @Test
+    void restoreOnlyReplacesCurrentWorkspaceRows() {
+        PostgreSQLContainer<?> container = newPostgresContainer();
+        container.start();
+
+        var config = new PostgresStorageConfig(
+            container.getJdbcUrl(),
+            container.getUsername(),
+            container.getPassword(),
+            "lightrag",
+            3,
+            "rag_"
+        );
+
+        var alphaSnapshot = new SnapshotStore.Snapshot(
+            List.of(new DocumentStore.DocumentRecord("doc-1", "Alpha Snapshot", "alpha-body", Map.of("workspace", "alpha"))),
+            List.of(new ChunkStore.ChunkRecord("doc-1:0", "doc-1", "alpha-body", 10, 0, Map.of("workspace", "alpha"))),
+            List.of(new GraphStore.EntityRecord("entity-1", "Alice", "person", "Alpha entity", List.of("A"), List.of("doc-1:0"))),
+            List.of(new GraphStore.RelationRecord("relation-1", "entity-1", "entity-2", "knows", "Alpha relation", 1.0d, List.of("doc-1:0"))),
+            Map.of("chunks", List.of(new VectorStore.VectorRecord("doc-1:0", List.of(1.0d, 0.0d, 0.0d)))),
+            List.of(new DocumentStatusStore.StatusRecord("doc-1", DocumentStatus.PROCESSED, "alpha", null))
+        );
+
+        try (
+            container;
+            PostgresStorageProvider alpha = new PostgresStorageProvider(config, new InMemorySnapshotStore(), "alpha");
+            PostgresStorageProvider beta = new PostgresStorageProvider(config, new InMemorySnapshotStore(), "beta")
+        ) {
+            alpha.documentStore().save(new DocumentStore.DocumentRecord("doc-old", "Old Alpha", "old", Map.of("workspace", "alpha")));
+            beta.documentStore().save(new DocumentStore.DocumentRecord("doc-old", "Old Beta", "old", Map.of("workspace", "beta")));
+
+            alpha.restore(alphaSnapshot);
+
+            assertThat(alpha.documentStore().list()).containsExactlyElementsOf(alphaSnapshot.documents());
+            assertThat(alpha.chunkStore().list()).containsExactlyElementsOf(alphaSnapshot.chunks());
+            assertThat(alpha.graphStore().allEntities()).containsExactlyElementsOf(alphaSnapshot.entities());
+            assertThat(alpha.graphStore().allRelations()).containsExactlyElementsOf(alphaSnapshot.relations());
+            assertThat(alpha.vectorStore().list("chunks")).containsExactlyElementsOf(alphaSnapshot.vectors().get("chunks"));
+            assertThat(alpha.documentStatusStore().list()).containsExactlyElementsOf(alphaSnapshot.documentStatuses());
+            assertThat(beta.documentStore().list()).containsExactly(
+                new DocumentStore.DocumentRecord("doc-old", "Old Beta", "old", Map.of("workspace", "beta"))
+            );
+        }
+    }
+
+    @Test
+    void supportsExternalDataSourceWithoutCreatingOwnedPools() throws Exception {
+        PostgreSQLContainer<?> container = newPostgresContainer();
+        container.start();
+
+        var config = new PostgresStorageConfig(
+            container.getJdbcUrl(),
+            container.getUsername(),
+            container.getPassword(),
+            "lightrag",
+            3,
+            "rag_"
+        );
+
+        try (
+            container;
+            HikariDataSource externalDataSource = newDataSource(config);
+            PostgresStorageProvider provider = new PostgresStorageProvider(
+                externalDataSource,
+                config,
+                new InMemorySnapshotStore(),
+                "alpha"
+            )
+        ) {
+            provider.documentStore().save(new DocumentStore.DocumentRecord("doc-1", "Title", "Body", Map.of("source", "external")));
+
+            assertThat(provider.documentStore().load("doc-1"))
+                .contains(new DocumentStore.DocumentRecord("doc-1", "Title", "Body", Map.of("source", "external")));
+            assertThat(readField(provider, "jdbcDataSource")).isSameAs(externalDataSource);
+            assertThat(readField(provider, "jdbcLockDataSource")).isSameAs(externalDataSource);
+        }
+    }
+
+    @Test
+    void doesNotCloseExternalDataSourceOnProviderClose() throws Exception {
+        PostgreSQLContainer<?> container = newPostgresContainer();
+        container.start();
+
+        var config = new PostgresStorageConfig(
+            container.getJdbcUrl(),
+            container.getUsername(),
+            container.getPassword(),
+            "lightrag",
+            3,
+            "rag_"
+        );
+
+        try (
+            container;
+            HikariDataSource externalDataSource = newDataSource(config)
+        ) {
+            var provider = new PostgresStorageProvider(
+                externalDataSource,
+                config,
+                new InMemorySnapshotStore(),
+                "alpha"
+            );
+
+            provider.close();
+
+            try (var connection = externalDataSource.getConnection();
+                 var statement = connection.prepareStatement("SELECT 1");
+                 var resultSet = statement.executeQuery()) {
+                assertThat(resultSet.next()).isTrue();
+                assertThat(resultSet.getInt(1)).isEqualTo(1);
+            }
+
         }
     }
 
@@ -986,6 +1185,58 @@ class PostgresStorageProviderTest {
         }
     }
 
+    private static List<String> columnNames(java.sql.Connection connection, PostgresStorageConfig config, String baseTableName)
+        throws SQLException {
+        try (var statement = connection.prepareStatement(
+            """
+                SELECT column_name
+                FROM information_schema.columns
+                WHERE table_schema = ?
+                  AND table_name = ?
+                ORDER BY ordinal_position
+                """
+        )) {
+            statement.setString(1, config.schema());
+            statement.setString(2, config.tableName(baseTableName));
+            try (var resultSet = statement.executeQuery()) {
+                List<String> columns = new ArrayList<>();
+                while (resultSet.next()) {
+                    columns.add(resultSet.getString("column_name"));
+                }
+                return columns;
+            }
+        }
+    }
+
+    private static List<String> primaryKeyColumns(java.sql.Connection connection, PostgresStorageConfig config, String baseTableName)
+        throws SQLException {
+        try (var statement = connection.prepareStatement(
+            """
+                SELECT attribute.attname AS column_name
+                FROM pg_index index_def
+                JOIN pg_class klass ON klass.oid = index_def.indrelid
+                JOIN pg_namespace namespace ON namespace.oid = klass.relnamespace
+                JOIN pg_attribute attribute
+                  ON attribute.attrelid = klass.oid
+                 AND attribute.attnum = ANY(index_def.indkey)
+                WHERE namespace.nspname = ?
+                  AND klass.relname = ?
+                  AND index_def.indisprimary
+                ORDER BY array_position(index_def.indkey, attribute.attnum)
+                """
+        )) {
+            statement.setString(1, config.schema());
+            statement.setString(2, config.tableName(baseTableName));
+            try (var resultSet = statement.executeQuery()) {
+                List<String> columns = new ArrayList<>();
+                while (resultSet.next()) {
+                    columns.add(resultSet.getString("column_name"));
+                }
+                return columns;
+            }
+        }
+    }
+
     private static java.util.Optional<Integer> schemaVersion(java.sql.Connection connection, PostgresStorageConfig config) throws SQLException {
         try (var statement = connection.prepareStatement(
             """
@@ -1143,7 +1394,7 @@ class PostgresStorageProviderTest {
     private static long deriveLockKey(PostgresStorageConfig config) {
         try {
             byte[] digest = java.security.MessageDigest.getInstance("SHA-256")
-                .digest((config.schema() + ":" + config.tablePrefix()).getBytes(java.nio.charset.StandardCharsets.UTF_8));
+                .digest((config.schema() + ":" + config.tablePrefix() + ":default").getBytes(java.nio.charset.StandardCharsets.UTF_8));
             return java.nio.ByteBuffer.wrap(Arrays.copyOf(digest, Long.BYTES)).getLong();
         } catch (java.security.NoSuchAlgorithmException exception) {
             throw new IllegalStateException("SHA-256 digest is unavailable", exception);
@@ -1164,5 +1415,11 @@ class PostgresStorageProviderTest {
     private static String withCurrentSchema(String jdbcUrl, String schema) {
         String separator = jdbcUrl.contains("?") ? "&" : "?";
         return jdbcUrl + separator + "currentSchema=" + schema;
+    }
+
+    private static Object readField(Object target, String fieldName) throws Exception {
+        var field = target.getClass().getDeclaredField(fieldName);
+        field.setAccessible(true);
+        return field.get(target);
     }
 }

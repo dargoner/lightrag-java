@@ -2,6 +2,7 @@ package io.github.lightragjava.storage.postgres;
 
 import com.zaxxer.hikari.HikariConfig;
 import com.zaxxer.hikari.HikariDataSource;
+import io.github.lightragjava.api.WorkspaceScope;
 import io.github.lightragjava.exception.StorageException;
 import io.github.lightragjava.storage.AtomicStorageProvider;
 import io.github.lightragjava.storage.ChunkStore;
@@ -11,9 +12,10 @@ import io.github.lightragjava.storage.GraphStore;
 import io.github.lightragjava.storage.SnapshotStore;
 import io.github.lightragjava.storage.VectorStore;
 
+import javax.sql.DataSource;
 import java.sql.Connection;
+import java.sql.PreparedStatement;
 import java.sql.SQLException;
-import java.sql.Statement;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
@@ -22,10 +24,13 @@ import java.util.concurrent.locks.ReentrantReadWriteLock;
 
 public final class PostgresStorageProvider implements AtomicStorageProvider, AutoCloseable {
     private static final int DEFAULT_POOL_SIZE = 4;
+    private static final WorkspaceScope DEFAULT_WORKSPACE = new WorkspaceScope("default");
 
     private final ReentrantReadWriteLock lock;
     private final HikariDataSource dataSource;
     private final HikariDataSource lockDataSource;
+    private final DataSource jdbcDataSource;
+    private final DataSource jdbcLockDataSource;
     private final PostgresAdvisoryLockManager advisoryLockManager;
     private final ThreadLocal<Boolean> exclusiveAdvisoryLockHeld;
     private final SnapshotStore snapshotStore;
@@ -40,30 +45,77 @@ public final class PostgresStorageProvider implements AtomicStorageProvider, Aut
     private final GraphStore lockedGraphStore;
     private final VectorStore lockedVectorStore;
     private final PostgresStorageConfig config;
+    private final String workspaceId;
+    private final boolean ownsDataSource;
+    private final boolean ownsLockDataSource;
 
     public PostgresStorageProvider(PostgresStorageConfig config, SnapshotStore snapshotStore) {
+        this(config, snapshotStore, DEFAULT_WORKSPACE.workspaceId());
+    }
+
+    public PostgresStorageProvider(PostgresStorageConfig config, SnapshotStore snapshotStore, String workspaceId) {
+        this(
+            createDataSource(Objects.requireNonNull(config, "config"), "lightrag-postgres"),
+            createDataSource(config, "lightrag-postgres-locks"),
+            true,
+            true,
+            config,
+            snapshotStore,
+            workspaceId
+        );
+    }
+
+    public PostgresStorageProvider(DataSource dataSource, PostgresStorageConfig config, SnapshotStore snapshotStore) {
+        this(dataSource, config, snapshotStore, DEFAULT_WORKSPACE.workspaceId());
+    }
+
+    public PostgresStorageProvider(DataSource dataSource, PostgresStorageConfig config, SnapshotStore snapshotStore, String workspaceId) {
+        this(
+            Objects.requireNonNull(dataSource, "dataSource"),
+            dataSource,
+            false,
+            false,
+            config,
+            snapshotStore,
+            workspaceId
+        );
+    }
+
+    private PostgresStorageProvider(
+        DataSource dataSource,
+        DataSource lockDataSource,
+        boolean ownsDataSource,
+        boolean ownsLockDataSource,
+        PostgresStorageConfig config,
+        SnapshotStore snapshotStore,
+        String workspaceId
+    ) {
         this.config = Objects.requireNonNull(config, "config");
         this.snapshotStore = Objects.requireNonNull(snapshotStore, "snapshotStore");
+        this.workspaceId = new WorkspaceScope(workspaceId).workspaceId();
+        this.jdbcDataSource = Objects.requireNonNull(dataSource, "dataSource");
+        this.jdbcLockDataSource = Objects.requireNonNull(lockDataSource, "lockDataSource");
+        this.ownsDataSource = ownsDataSource;
+        this.ownsLockDataSource = ownsLockDataSource;
         this.lock = new ReentrantReadWriteLock(true);
-        this.dataSource = createDataSource(config, "lightrag-postgres");
-        this.lockDataSource = createDataSource(config, "lightrag-postgres-locks");
-        this.advisoryLockManager = new PostgresAdvisoryLockManager(lockDataSource, config);
+        this.dataSource = dataSource instanceof HikariDataSource hikari ? hikari : null;
+        this.lockDataSource = lockDataSource instanceof HikariDataSource hikari ? hikari : null;
+        this.advisoryLockManager = new PostgresAdvisoryLockManager(jdbcLockDataSource, config, this.workspaceId);
         this.exclusiveAdvisoryLockHeld = ThreadLocal.withInitial(() -> Boolean.FALSE);
         try {
-            new PostgresSchemaManager(dataSource, config).bootstrap();
-            this.documentStore = new PostgresDocumentStore(dataSource, config);
-            this.chunkStore = new PostgresChunkStore(dataSource, config);
-            this.graphStore = new PostgresGraphStore(dataSource, config);
-            this.vectorStore = new PostgresVectorStore(dataSource, config);
-            this.documentStatusStore = new PostgresDocumentStatusStore(dataSource, config);
+            new PostgresSchemaManager(jdbcDataSource, config).bootstrap();
+            this.documentStore = new PostgresDocumentStore(jdbcDataSource, config, this.workspaceId);
+            this.chunkStore = new PostgresChunkStore(jdbcDataSource, config, this.workspaceId);
+            this.graphStore = new PostgresGraphStore(jdbcDataSource, config, this.workspaceId);
+            this.vectorStore = new PostgresVectorStore(jdbcDataSource, config, this.workspaceId);
+            this.documentStatusStore = new PostgresDocumentStatusStore(jdbcDataSource, config, this.workspaceId);
             this.lockedDocumentStatusStore = new LockedDocumentStatusStore(documentStatusStore);
             this.lockedDocumentStore = new LockedDocumentStore(documentStore);
             this.lockedChunkStore = new LockedChunkStore(chunkStore);
             this.lockedGraphStore = new LockedGraphStore(graphStore);
             this.lockedVectorStore = new LockedVectorStore(vectorStore);
         } catch (RuntimeException exception) {
-            lockDataSource.close();
-            dataSource.close();
+            closeOwnedDataSources();
             throw exception;
         }
     }
@@ -103,7 +155,7 @@ public final class PostgresStorageProvider implements AtomicStorageProvider, Aut
         Objects.requireNonNull(operation, "operation");
         return withExclusiveProviderLock(() -> {
             return advisoryLockManager.withExclusiveLock(() -> withExclusiveAdvisoryScope(() -> {
-                try (var connection = dataSource.getConnection()) {
+                try (var connection = jdbcDataSource.getConnection()) {
                     return withTransaction(connection, () -> operation.execute(newAtomicView(connection)));
                 } catch (SQLException exception) {
                     throw new StorageException("Failed to open PostgreSQL transaction", exception);
@@ -117,7 +169,7 @@ public final class PostgresStorageProvider implements AtomicStorageProvider, Aut
         var source = Objects.requireNonNull(snapshot, "snapshot");
         withExclusiveProviderLock(() -> {
             advisoryLockManager.withExclusiveLock(() -> withExclusiveAdvisoryScope(() -> {
-                try (var connection = dataSource.getConnection()) {
+                try (var connection = jdbcDataSource.getConnection()) {
                     withTransaction(connection, () -> {
                         truncateAll(connection);
                         var stores = newAtomicView(connection);
@@ -153,18 +205,17 @@ public final class PostgresStorageProvider implements AtomicStorageProvider, Aut
 
     @Override
     public void close() {
-        dataSource.close();
-        lockDataSource.close();
+        closeOwnedDataSources();
     }
 
     private AtomicStorageView newAtomicView(Connection connection) {
         var connectionAccess = JdbcConnectionAccess.forConnection(connection);
         return new AtomicView(
-            new PostgresDocumentStore(connectionAccess, config),
-            new PostgresChunkStore(connectionAccess, config),
-            new PostgresGraphStore(connectionAccess, config),
-            new PostgresVectorStore(connectionAccess, config),
-            new PostgresDocumentStatusStore(connectionAccess, config)
+            new PostgresDocumentStore(connectionAccess, config, workspaceId),
+            new PostgresChunkStore(connectionAccess, config, workspaceId),
+            new PostgresGraphStore(connectionAccess, config, workspaceId),
+            new PostgresVectorStore(connectionAccess, config, workspaceId),
+            new PostgresDocumentStatusStore(connectionAccess, config, workspaceId)
         );
     }
 
@@ -202,16 +253,23 @@ public final class PostgresStorageProvider implements AtomicStorageProvider, Aut
     }
 
     private void truncateAll(Connection connection) throws SQLException {
-        try (Statement statement = connection.createStatement()) {
-            statement.execute("TRUNCATE TABLE " + config.qualifiedTableName("documents"));
-            statement.execute("TRUNCATE TABLE " + config.qualifiedTableName("chunks"));
-            statement.execute("TRUNCATE TABLE " + config.qualifiedTableName("entities"));
-            statement.execute("TRUNCATE TABLE " + config.qualifiedTableName("entity_aliases"));
-            statement.execute("TRUNCATE TABLE " + config.qualifiedTableName("entity_chunks"));
-            statement.execute("TRUNCATE TABLE " + config.qualifiedTableName("relations"));
-            statement.execute("TRUNCATE TABLE " + config.qualifiedTableName("relation_chunks"));
-            statement.execute("TRUNCATE TABLE " + config.qualifiedTableName("vectors"));
-            statement.execute("TRUNCATE TABLE " + config.qualifiedTableName("document_status"));
+        deleteWorkspaceRows(connection, "relation_chunks");
+        deleteWorkspaceRows(connection, "entity_chunks");
+        deleteWorkspaceRows(connection, "entity_aliases");
+        deleteWorkspaceRows(connection, "relations");
+        deleteWorkspaceRows(connection, "entities");
+        deleteWorkspaceRows(connection, "vectors");
+        deleteWorkspaceRows(connection, "chunks");
+        deleteWorkspaceRows(connection, "document_status");
+        deleteWorkspaceRows(connection, "documents");
+    }
+
+    private void deleteWorkspaceRows(Connection connection, String baseTableName) throws SQLException {
+        try (PreparedStatement statement = connection.prepareStatement(
+            "DELETE FROM " + config.qualifiedTableName(baseTableName) + " WHERE workspace_id = ?"
+        )) {
+            statement.setString(1, workspaceId);
+            statement.executeUpdate();
         }
     }
 
@@ -238,6 +296,15 @@ public final class PostgresStorageProvider implements AtomicStorageProvider, Aut
         hikariConfig.setMinimumIdle(0);
         hikariConfig.setPoolName(poolName);
         return new HikariDataSource(hikariConfig);
+    }
+
+    private void closeOwnedDataSources() {
+        if (ownsDataSource && dataSource != null) {
+            dataSource.close();
+        }
+        if (ownsLockDataSource && lockDataSource != null && lockDataSource != dataSource) {
+            lockDataSource.close();
+        }
     }
 
     private record AtomicView(

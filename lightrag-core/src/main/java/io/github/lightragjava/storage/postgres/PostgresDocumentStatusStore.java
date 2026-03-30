@@ -13,14 +13,20 @@ import java.util.Optional;
 public final class PostgresDocumentStatusStore implements DocumentStatusStore {
     private final JdbcConnectionAccess connectionAccess;
     private final String tableName;
+    private final String workspaceId;
 
     public PostgresDocumentStatusStore(DataSource dataSource, PostgresStorageConfig config) {
-        this(JdbcConnectionAccess.forDataSource(dataSource), config);
+        this(dataSource, config, "default");
     }
 
-    PostgresDocumentStatusStore(JdbcConnectionAccess connectionAccess, PostgresStorageConfig config) {
+    public PostgresDocumentStatusStore(DataSource dataSource, PostgresStorageConfig config, String workspaceId) {
+        this(JdbcConnectionAccess.forDataSource(dataSource), config, workspaceId);
+    }
+
+    PostgresDocumentStatusStore(JdbcConnectionAccess connectionAccess, PostgresStorageConfig config, String workspaceId) {
         this.connectionAccess = Objects.requireNonNull(connectionAccess, "connectionAccess");
         this.tableName = Objects.requireNonNull(config, "config").qualifiedTableName("document_status");
+        this.workspaceId = Objects.requireNonNull(workspaceId, "workspaceId");
     }
 
     @Override
@@ -29,18 +35,19 @@ public final class PostgresDocumentStatusStore implements DocumentStatusStore {
         connectionAccess.withConnection(connection -> {
             try (var statement = connection.prepareStatement(
                 """
-                INSERT INTO %s (document_id, status, summary, error_message)
-                VALUES (?, ?, ?, ?)
-                ON CONFLICT (document_id) DO UPDATE
+                INSERT INTO %s (workspace_id, document_id, status, summary, error_message)
+                VALUES (?, ?, ?, ?, ?)
+                ON CONFLICT (workspace_id, document_id) DO UPDATE
                 SET status = EXCLUDED.status,
                     summary = EXCLUDED.summary,
                     error_message = EXCLUDED.error_message
                 """.formatted(tableName)
             )) {
-                statement.setString(1, record.documentId());
-                statement.setString(2, record.status().name());
-                statement.setString(3, record.summary());
-                statement.setString(4, record.errorMessage());
+                statement.setString(1, workspaceId);
+                statement.setString(2, record.documentId());
+                statement.setString(3, record.status().name());
+                statement.setString(4, record.summary());
+                statement.setString(5, record.errorMessage());
                 statement.executeUpdate();
                 return null;
             }
@@ -55,10 +62,12 @@ public final class PostgresDocumentStatusStore implements DocumentStatusStore {
                 """
                 SELECT document_id, status, summary, error_message
                 FROM %s
-                WHERE document_id = ?
+                WHERE workspace_id = ?
+                  AND document_id = ?
                 """.formatted(tableName)
             )) {
-                statement.setString(1, id);
+                statement.setString(1, workspaceId);
+                statement.setString(2, id);
                 try (var resultSet = statement.executeQuery()) {
                     if (!resultSet.next()) {
                         return Optional.empty();
@@ -76,14 +85,18 @@ public final class PostgresDocumentStatusStore implements DocumentStatusStore {
                 """
                 SELECT document_id, status, summary, error_message
                 FROM %s
+                WHERE workspace_id = ?
                 ORDER BY document_id
                 """.formatted(tableName)
-            ); var resultSet = statement.executeQuery()) {
-                var statuses = new java.util.ArrayList<StatusRecord>();
-                while (resultSet.next()) {
-                    statuses.add(readStatus(resultSet));
+            )) {
+                statement.setString(1, workspaceId);
+                try (var resultSet = statement.executeQuery()) {
+                    var statuses = new java.util.ArrayList<StatusRecord>();
+                    while (resultSet.next()) {
+                        statuses.add(readStatus(resultSet));
+                    }
+                    return List.copyOf(statuses);
                 }
-                return List.copyOf(statuses);
             }
         });
     }
@@ -95,10 +108,12 @@ public final class PostgresDocumentStatusStore implements DocumentStatusStore {
             try (var statement = connection.prepareStatement(
                 """
                 DELETE FROM %s
-                WHERE document_id = ?
+                WHERE workspace_id = ?
+                  AND document_id = ?
                 """.formatted(tableName)
             )) {
-                statement.setString(1, id);
+                statement.setString(1, workspaceId);
+                statement.setString(2, id);
                 statement.executeUpdate();
                 return null;
             }

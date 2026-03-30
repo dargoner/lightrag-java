@@ -12,6 +12,7 @@ import io.github.lightragjava.storage.postgres.PostgresStorageConfig;
 import io.github.lightragjava.storage.postgres.PostgresStorageProvider;
 import org.springframework.beans.factory.ObjectProvider;
 
+import javax.sql.DataSource;
 import java.nio.file.Path;
 import java.util.List;
 import java.util.Locale;
@@ -27,6 +28,7 @@ public final class SpringWorkspaceStorageProvider implements WorkspaceStoragePro
 
     private final LightRagProperties properties;
     private final StorageProvider existingStorageProvider;
+    private final DataSource applicationDataSource;
     private final SnapshotStore baseSnapshotStore;
     private final WorkspaceProviderFactory managedProviderFactory;
     private final ConcurrentMap<String, AtomicStorageProvider> providerCache = new ConcurrentHashMap<>();
@@ -34,12 +36,14 @@ public final class SpringWorkspaceStorageProvider implements WorkspaceStoragePro
 
     public SpringWorkspaceStorageProvider(
         ObjectProvider<StorageProvider> storageProvider,
+        ObjectProvider<DataSource> dataSource,
         SnapshotStore snapshotStore,
         LightRagProperties properties
     ) {
         this(
             properties,
             storageProvider.getIfAvailable(),
+            dataSource.getIfAvailable(),
             snapshotStore,
             null
         );
@@ -48,11 +52,13 @@ public final class SpringWorkspaceStorageProvider implements WorkspaceStoragePro
     SpringWorkspaceStorageProvider(
         LightRagProperties properties,
         StorageProvider existingStorageProvider,
+        DataSource applicationDataSource,
         SnapshotStore snapshotStore,
         WorkspaceProviderFactory managedProviderFactory
     ) {
         this.properties = Objects.requireNonNull(properties, "properties");
         this.existingStorageProvider = existingStorageProvider;
+        this.applicationDataSource = applicationDataSource;
         this.baseSnapshotStore = Objects.requireNonNull(snapshotStore, "snapshotStore");
         this.managedProviderFactory = managedProviderFactory == null ? this::createManagedProvider : managedProviderFactory;
     }
@@ -124,19 +130,23 @@ public final class SpringWorkspaceStorageProvider implements WorkspaceStoragePro
                 deriveSnapshotPath(path, workspaceId)
             ))
             .orElse(baseSnapshotStore);
-        return managedProviderFactory.create(scope, lock, snapshotStore);
+        return managedProviderFactory.create(scope, applicationDataSource, lock, snapshotStore);
     }
 
     private AtomicStorageProvider createManagedProvider(
         WorkspaceScope scope,
+        DataSource dataSource,
         ReentrantReadWriteLock lock,
         SnapshotStore snapshotStore
     ) {
         return switch (properties.getStorage().getType()) {
             case IN_MEMORY -> InMemoryStorageProvider.create(snapshotStore);
-            case POSTGRES -> new PostgresStorageProvider(postgresConfig(scope.workspaceId()), snapshotStore);
+            case POSTGRES -> dataSource != null
+                ? new PostgresStorageProvider(dataSource, postgresConfig(), snapshotStore, scope.workspaceId())
+                : new PostgresStorageProvider(postgresConfig(), snapshotStore, scope.workspaceId());
             case POSTGRES_NEO4J -> new PostgresNeo4jStorageProvider(
-                postgresConfig(defaultWorkspaceId()),
+                dataSource,
+                postgresConfig(),
                 neo4jConfig(),
                 snapshotStore,
                 scope
@@ -144,7 +154,7 @@ public final class SpringWorkspaceStorageProvider implements WorkspaceStoragePro
         };
     }
 
-    private PostgresStorageConfig postgresConfig(String workspaceId) {
+    private PostgresStorageConfig postgresConfig() {
         var postgres = properties.getStorage().getPostgres();
         if (postgres.getVectorDimensions() == null) {
             throw new IllegalStateException("lightrag.storage.postgres.vector-dimensions is required");
@@ -155,7 +165,7 @@ public final class SpringWorkspaceStorageProvider implements WorkspaceStoragePro
             requireValue(postgres.getPassword(), "lightrag.storage.postgres.password"),
             requireValue(postgres.getSchema(), "lightrag.storage.postgres.schema"),
             postgres.getVectorDimensions(),
-            resolveTablePrefix(workspaceId)
+            requireValue(postgres.getTablePrefix(), "lightrag.storage.postgres.table-prefix")
         );
     }
 
@@ -175,17 +185,6 @@ public final class SpringWorkspaceStorageProvider implements WorkspaceStoragePro
             return Optional.empty();
         }
         return Optional.of(Path.of(configuredSnapshotPath.strip()).toAbsolutePath().normalize());
-    }
-
-    private String resolveTablePrefix(String workspaceId) {
-        var basePrefix = requireValue(
-            properties.getStorage().getPostgres().getTablePrefix(),
-            "lightrag.storage.postgres.table-prefix"
-        );
-        if (isDefaultWorkspace(workspaceId)) {
-            return basePrefix;
-        }
-        return basePrefix + "ws_" + slug(workspaceId) + "_" + shortHash(workspaceId) + "_";
     }
 
     private Path deriveSnapshotPath(Path basePath, String workspaceId) {
@@ -266,6 +265,7 @@ public final class SpringWorkspaceStorageProvider implements WorkspaceStoragePro
     interface WorkspaceProviderFactory {
         AtomicStorageProvider create(
             WorkspaceScope scope,
+            DataSource applicationDataSource,
             ReentrantReadWriteLock lock,
             SnapshotStore snapshotStore
         );

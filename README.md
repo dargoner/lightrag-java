@@ -400,7 +400,7 @@ curl -X POST http://127.0.0.1:8080/documents/ingest \
 Workspace isolation support in this phase:
 
 - `in-memory`: each workspace gets an isolated in-process `LightRag` instance
-- `postgres`: each workspace gets an isolated table prefix and snapshot path
+- `postgres`: all workspaces share one table set per configured prefix and isolate rows by `workspace_id`; snapshot paths are still derived per workspace
 - `postgres-neo4j`: current behavior is preserved for the default workspace only; non-default workspaces are not supported yet
 - custom `StorageProvider` beans remain default-workspace only unless you provide your own workspace-aware routing layer
 
@@ -896,7 +896,7 @@ This mixed provider uses a compensation-based rollback model: PostgreSQL remains
 
 Isolation strategy in the mixed backend is intentionally asymmetric:
 
-- PostgreSQL remains physically isolated per workspace through derived table prefixes
+- PostgreSQL uses one shared table set and isolates rows by `workspace_id`
 - Neo4j uses one shared database and isolates records logically by `workspaceId`
 - Neo4j snapshot capture, restore, and projection rollback are all scoped to the current workspace only
 

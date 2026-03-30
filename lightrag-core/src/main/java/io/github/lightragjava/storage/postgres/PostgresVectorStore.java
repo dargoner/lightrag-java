@@ -13,16 +13,22 @@ public final class PostgresVectorStore implements VectorStore {
     private final JdbcConnectionAccess connectionAccess;
     private final String tableName;
     private final int vectorDimensions;
+    private final String workspaceId;
 
     public PostgresVectorStore(DataSource dataSource, PostgresStorageConfig config) {
-        this(JdbcConnectionAccess.forDataSource(dataSource), config);
+        this(dataSource, config, "default");
     }
 
-    PostgresVectorStore(JdbcConnectionAccess connectionAccess, PostgresStorageConfig config) {
+    public PostgresVectorStore(DataSource dataSource, PostgresStorageConfig config, String workspaceId) {
+        this(JdbcConnectionAccess.forDataSource(dataSource), config, workspaceId);
+    }
+
+    PostgresVectorStore(JdbcConnectionAccess connectionAccess, PostgresStorageConfig config, String workspaceId) {
         this.connectionAccess = Objects.requireNonNull(connectionAccess, "connectionAccess");
         var storageConfig = Objects.requireNonNull(config, "config");
         this.tableName = storageConfig.qualifiedTableName("vectors");
         this.vectorDimensions = storageConfig.vectorDimensions();
+        this.workspaceId = Objects.requireNonNull(workspaceId, "workspaceId");
     }
 
     @Override
@@ -37,17 +43,18 @@ public final class PostgresVectorStore implements VectorStore {
             PGvector.registerTypes(connection);
             try (var statement = connection.prepareStatement(
                 """
-                INSERT INTO %s (namespace, vector_id, embedding)
-                VALUES (?, ?, ?)
-                ON CONFLICT (namespace, vector_id) DO UPDATE
+                INSERT INTO %s (workspace_id, namespace, vector_id, embedding)
+                VALUES (?, ?, ?, ?)
+                ON CONFLICT (workspace_id, namespace, vector_id) DO UPDATE
                 SET embedding = EXCLUDED.embedding
                 """.formatted(tableName)
             )) {
                 for (var vector : vectors) {
                     var record = Objects.requireNonNull(vector, "vector");
-                    statement.setString(1, targetNamespace);
-                    statement.setString(2, record.id());
-                    statement.setObject(3, toPgVector(record.vector()));
+                    statement.setString(1, workspaceId);
+                    statement.setString(2, targetNamespace);
+                    statement.setString(3, record.id());
+                    statement.setObject(4, toPgVector(record.vector()));
                     statement.addBatch();
                 }
                 statement.executeBatch();
@@ -74,15 +81,17 @@ public final class PostgresVectorStore implements VectorStore {
                 """
                 SELECT vector_id, -(embedding <#> ?) AS score
                 FROM %s
-                WHERE namespace = ?
+                WHERE workspace_id = ?
+                  AND namespace = ?
                 ORDER BY embedding <#> ?, vector_id
                 LIMIT ?
                 """.formatted(tableName)
             )) {
                 statement.setObject(1, query);
-                statement.setString(2, targetNamespace);
-                statement.setObject(3, query);
-                statement.setInt(4, topK);
+                statement.setString(2, workspaceId);
+                statement.setString(3, targetNamespace);
+                statement.setObject(4, query);
+                statement.setInt(5, topK);
 
                 try (var resultSet = statement.executeQuery()) {
                     var matches = new java.util.ArrayList<VectorMatch>();
@@ -107,11 +116,13 @@ public final class PostgresVectorStore implements VectorStore {
                 """
                 SELECT vector_id, embedding
                 FROM %s
-                WHERE namespace = ?
+                WHERE workspace_id = ?
+                  AND namespace = ?
                 ORDER BY vector_id
                 """.formatted(tableName)
             )) {
-                statement.setString(1, targetNamespace);
+                statement.setString(1, workspaceId);
+                statement.setString(2, targetNamespace);
                 try (var resultSet = statement.executeQuery()) {
                     var vectors = new java.util.ArrayList<VectorRecord>();
                     while (resultSet.next()) {
@@ -136,11 +147,13 @@ public final class PostgresVectorStore implements VectorStore {
             """
             SELECT 1
             FROM %s
-            WHERE namespace = ?
+            WHERE workspace_id = ?
+              AND namespace = ?
             LIMIT 1
             """.formatted(tableName)
         )) {
-            statement.setString(1, namespace);
+            statement.setString(1, workspaceId);
+            statement.setString(2, namespace);
             try (var resultSet = statement.executeQuery()) {
                 return resultSet.next();
             }

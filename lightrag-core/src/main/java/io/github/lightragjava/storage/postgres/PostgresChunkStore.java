@@ -12,14 +12,20 @@ import java.util.Optional;
 public final class PostgresChunkStore implements ChunkStore {
     private final JdbcConnectionAccess connectionAccess;
     private final String tableName;
+    private final String workspaceId;
 
     public PostgresChunkStore(DataSource dataSource, PostgresStorageConfig config) {
-        this(JdbcConnectionAccess.forDataSource(dataSource), config);
+        this(dataSource, config, "default");
     }
 
-    PostgresChunkStore(JdbcConnectionAccess connectionAccess, PostgresStorageConfig config) {
+    public PostgresChunkStore(DataSource dataSource, PostgresStorageConfig config, String workspaceId) {
+        this(JdbcConnectionAccess.forDataSource(dataSource), config, workspaceId);
+    }
+
+    PostgresChunkStore(JdbcConnectionAccess connectionAccess, PostgresStorageConfig config, String workspaceId) {
         this.connectionAccess = Objects.requireNonNull(connectionAccess, "connectionAccess");
         this.tableName = Objects.requireNonNull(config, "config").qualifiedTableName("chunks");
+        this.workspaceId = Objects.requireNonNull(workspaceId, "workspaceId");
     }
 
     @Override
@@ -28,9 +34,9 @@ public final class PostgresChunkStore implements ChunkStore {
         connectionAccess.withConnection(connection -> {
             try (var statement = connection.prepareStatement(
                 """
-                INSERT INTO %s (id, document_id, text, token_count, chunk_order, metadata)
-                VALUES (?, ?, ?, ?, ?, CAST(? AS JSONB))
-                ON CONFLICT (id) DO UPDATE
+                INSERT INTO %s (workspace_id, id, document_id, text, token_count, chunk_order, metadata)
+                VALUES (?, ?, ?, ?, ?, ?, CAST(? AS JSONB))
+                ON CONFLICT (workspace_id, id) DO UPDATE
                 SET document_id = EXCLUDED.document_id,
                     text = EXCLUDED.text,
                     token_count = EXCLUDED.token_count,
@@ -38,12 +44,13 @@ public final class PostgresChunkStore implements ChunkStore {
                     metadata = EXCLUDED.metadata
                 """.formatted(tableName)
             )) {
-                statement.setString(1, record.id());
-                statement.setString(2, record.documentId());
-                statement.setString(3, record.text());
-                statement.setInt(4, record.tokenCount());
-                statement.setInt(5, record.order());
-                statement.setString(6, JdbcJsonCodec.writeStringMap(record.metadata()));
+                statement.setString(1, workspaceId);
+                statement.setString(2, record.id());
+                statement.setString(3, record.documentId());
+                statement.setString(4, record.text());
+                statement.setInt(5, record.tokenCount());
+                statement.setInt(6, record.order());
+                statement.setString(7, JdbcJsonCodec.writeStringMap(record.metadata()));
                 statement.executeUpdate();
                 return null;
             }
@@ -58,10 +65,12 @@ public final class PostgresChunkStore implements ChunkStore {
                 """
                 SELECT id, document_id, text, token_count, chunk_order, metadata
                 FROM %s
-                WHERE id = ?
+                WHERE workspace_id = ?
+                  AND id = ?
                 """.formatted(tableName)
             )) {
-                statement.setString(1, id);
+                statement.setString(1, workspaceId);
+                statement.setString(2, id);
                 try (var resultSet = statement.executeQuery()) {
                     if (!resultSet.next()) {
                         return Optional.empty();
@@ -79,14 +88,18 @@ public final class PostgresChunkStore implements ChunkStore {
                 """
                 SELECT id, document_id, text, token_count, chunk_order, metadata
                 FROM %s
+                WHERE workspace_id = ?
                 ORDER BY id
                 """.formatted(tableName)
-            ); var resultSet = statement.executeQuery()) {
-                var chunks = new java.util.ArrayList<ChunkRecord>();
-                while (resultSet.next()) {
-                    chunks.add(readChunk(resultSet));
+            )) {
+                statement.setString(1, workspaceId);
+                try (var resultSet = statement.executeQuery()) {
+                    var chunks = new java.util.ArrayList<ChunkRecord>();
+                    while (resultSet.next()) {
+                        chunks.add(readChunk(resultSet));
+                    }
+                    return List.copyOf(chunks);
                 }
-                return List.copyOf(chunks);
             }
         });
     }
@@ -99,11 +112,13 @@ public final class PostgresChunkStore implements ChunkStore {
                 """
                 SELECT id, document_id, text, token_count, chunk_order, metadata
                 FROM %s
-                WHERE document_id = ?
+                WHERE workspace_id = ?
+                  AND document_id = ?
                 ORDER BY chunk_order, id
                 """.formatted(tableName)
             )) {
-                statement.setString(1, id);
+                statement.setString(1, workspaceId);
+                statement.setString(2, id);
                 try (var resultSet = statement.executeQuery()) {
                     var chunks = new java.util.ArrayList<ChunkRecord>();
                     while (resultSet.next()) {

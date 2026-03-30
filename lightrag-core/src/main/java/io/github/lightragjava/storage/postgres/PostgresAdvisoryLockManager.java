@@ -23,9 +23,13 @@ final class PostgresAdvisoryLockManager {
     private final long lockKey;
 
     PostgresAdvisoryLockManager(DataSource dataSource, PostgresStorageConfig config) {
+        this(dataSource, config, "default");
+    }
+
+    PostgresAdvisoryLockManager(DataSource dataSource, PostgresStorageConfig config, String workspaceId) {
         this.dataSource = Objects.requireNonNull(dataSource, "dataSource");
         Objects.requireNonNull(config, "config");
-        this.lockKey = deriveLockKey(config.schema() + ":" + config.tablePrefix());
+        this.lockKey = deriveLockKey(config.schema() + ":" + config.tablePrefix() + ":" + Objects.requireNonNull(workspaceId, "workspaceId"));
     }
 
     <T> T withSharedLock(RuntimeSupplier<T> supplier) {

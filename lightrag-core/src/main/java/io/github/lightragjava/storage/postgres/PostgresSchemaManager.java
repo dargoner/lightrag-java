@@ -37,6 +37,7 @@ public final class PostgresSchemaManager {
 
                     Optional<Integer> currentVersion = loadCurrentVersion(connection);
                     if (currentVersion.isEmpty()) {
+                        rejectLegacySchemaIfPresent(connection);
                         applyMissingMigrations(statement, 0);
                     } else if (currentVersion.get() > latestSchemaVersion()) {
                         throw new IllegalStateException(
@@ -45,10 +46,16 @@ public final class PostgresSchemaManager {
                                 + " but this SDK supports up to "
                                 + latestSchemaVersion()
                         );
+                    } else if (currentVersion.get() < latestSchemaVersion()) {
+                        throw new IllegalStateException(
+                            "Detected legacy PostgreSQL schema version "
+                                + currentVersion.get()
+                                + "; automatic migration to workspace column isolation is not supported"
+                        );
                     } else {
                         replayAppliedMigrations(statement, currentVersion.get());
-                        applyMissingMigrations(statement, currentVersion.get());
                     }
+                    validateWorkspaceColumns(connection);
                     validateVectorDimensions(connection);
                     connection.commit();
                 } catch (RuntimeException exception) {
@@ -91,8 +98,7 @@ public final class PostgresSchemaManager {
 
     private List<Migration> migrations() {
         return List.of(
-            new Migration(1, versionOneStatements()),
-            new Migration(2, versionTwoStatements())
+            new Migration(3, versionThreeStatements())
         );
     }
 
@@ -100,7 +106,7 @@ public final class PostgresSchemaManager {
         return migrations().get(migrations().size() - 1).version();
     }
 
-    private List<String> versionOneStatements() {
+    private List<String> versionThreeStatements() {
         if (bootstrapStatements != null) {
             return bootstrapStatements;
         }
@@ -108,59 +114,70 @@ public final class PostgresSchemaManager {
             "CREATE EXTENSION IF NOT EXISTS vector",
             """
                 CREATE TABLE IF NOT EXISTS %s (
-                    id TEXT PRIMARY KEY,
+                    workspace_id TEXT NOT NULL,
+                    id TEXT NOT NULL,
                     title TEXT NOT NULL,
                     content TEXT NOT NULL,
-                    metadata JSONB NOT NULL DEFAULT '{}'::jsonb
+                    metadata JSONB NOT NULL DEFAULT '{}'::jsonb,
+                    PRIMARY KEY (workspace_id, id)
                 )
                 """.formatted(config.qualifiedTableName("documents")),
             """
                 CREATE TABLE IF NOT EXISTS %s (
-                    id TEXT PRIMARY KEY,
+                    workspace_id TEXT NOT NULL,
+                    id TEXT NOT NULL,
                     document_id TEXT NOT NULL,
                     text TEXT NOT NULL,
                     token_count INTEGER NOT NULL,
                     chunk_order INTEGER NOT NULL,
-                    metadata JSONB NOT NULL DEFAULT '{}'::jsonb
+                    metadata JSONB NOT NULL DEFAULT '{}'::jsonb,
+                    PRIMARY KEY (workspace_id, id)
                 )
                 """.formatted(config.qualifiedTableName("chunks")),
             """
                 CREATE TABLE IF NOT EXISTS %s (
-                    id TEXT PRIMARY KEY,
+                    workspace_id TEXT NOT NULL,
+                    id TEXT NOT NULL,
                     name TEXT NOT NULL,
                     type TEXT NOT NULL,
-                    description TEXT NOT NULL
+                    description TEXT NOT NULL,
+                    PRIMARY KEY (workspace_id, id)
                 )
                 """.formatted(config.qualifiedTableName("entities")),
             """
                 CREATE TABLE IF NOT EXISTS %s (
+                    workspace_id TEXT NOT NULL,
                     entity_id TEXT NOT NULL,
                     alias TEXT NOT NULL,
-                    PRIMARY KEY (entity_id, alias)
+                    PRIMARY KEY (workspace_id, entity_id, alias)
                 )
                 """.formatted(config.qualifiedTableName("entity_aliases")),
             """
                 CREATE TABLE IF NOT EXISTS %s (
+                    workspace_id TEXT NOT NULL,
                     entity_id TEXT NOT NULL,
                     chunk_id TEXT NOT NULL,
-                    PRIMARY KEY (entity_id, chunk_id)
+                    PRIMARY KEY (workspace_id, entity_id, chunk_id)
                 )
                 """.formatted(config.qualifiedTableName("entity_chunks")),
             """
                 CREATE TABLE IF NOT EXISTS %s (
-                    id TEXT PRIMARY KEY,
+                    workspace_id TEXT NOT NULL,
+                    id TEXT NOT NULL,
                     source_entity_id TEXT NOT NULL,
                     target_entity_id TEXT NOT NULL,
                     type TEXT NOT NULL,
                     description TEXT NOT NULL,
-                    weight DOUBLE PRECISION NOT NULL
+                    weight DOUBLE PRECISION NOT NULL,
+                    PRIMARY KEY (workspace_id, id)
                 )
                 """.formatted(config.qualifiedTableName("relations")),
             """
                 CREATE TABLE IF NOT EXISTS %s (
+                    workspace_id TEXT NOT NULL,
                     relation_id TEXT NOT NULL,
                     chunk_id TEXT NOT NULL,
-                    PRIMARY KEY (relation_id, chunk_id)
+                    PRIMARY KEY (workspace_id, relation_id, chunk_id)
                 )
                 """.formatted(config.qualifiedTableName("relation_chunks")),
             dropConstraintSql("chunks", config.tableName("chunks") + "_document_id_fkey"),
@@ -173,23 +190,21 @@ public final class PostgresSchemaManager {
             dropConstraintSql("relation_chunks", config.tableName("relation_chunks") + "_chunk_id_fkey"),
             """
                 CREATE TABLE IF NOT EXISTS %s (
+                    workspace_id TEXT NOT NULL,
                     namespace TEXT NOT NULL,
                     vector_id TEXT NOT NULL,
                     embedding vector(%d) NOT NULL,
-                    PRIMARY KEY (namespace, vector_id)
+                    PRIMARY KEY (workspace_id, namespace, vector_id)
                 )
-                """.formatted(config.qualifiedTableName("vectors"), config.vectorDimensions())
-        );
-    }
-
-    private List<String> versionTwoStatements() {
-        return List.of(
+                """.formatted(config.qualifiedTableName("vectors"), config.vectorDimensions()),
             """
                 CREATE TABLE IF NOT EXISTS %s (
-                    document_id TEXT PRIMARY KEY,
+                    workspace_id TEXT NOT NULL,
+                    document_id TEXT NOT NULL,
                     status TEXT NOT NULL,
                     summary TEXT NOT NULL DEFAULT '',
-                    error_message TEXT
+                    error_message TEXT,
+                    PRIMARY KEY (workspace_id, document_id)
                 )
                 """.formatted(config.qualifiedTableName("document_status"))
         );
@@ -240,6 +255,38 @@ public final class PostgresSchemaManager {
         }
     }
 
+    private void rejectLegacySchemaIfPresent(Connection connection) throws SQLException {
+        if (!storageTableExists(connection, "documents")) {
+            return;
+        }
+        if (!columnExists(connection, "documents", "workspace_id")) {
+            throw new IllegalStateException(
+                "Detected legacy PostgreSQL schema without workspace column isolation; automatic migration is not supported"
+            );
+        }
+    }
+
+    private void validateWorkspaceColumns(Connection connection) throws SQLException {
+        if (bootstrapStatements != null) {
+            return;
+        }
+        for (String tableName : List.of(
+            "documents",
+            "chunks",
+            "entities",
+            "entity_aliases",
+            "entity_chunks",
+            "relations",
+            "relation_chunks",
+            "vectors",
+            "document_status"
+        )) {
+            if (!columnExists(connection, tableName, "workspace_id")) {
+                throw new IllegalStateException("PostgreSQL shared workspace table is missing workspace_id: " + tableName);
+            }
+        }
+    }
+
     private void validateVectorDimensions(Connection connection) throws SQLException {
         try (PreparedStatement statement = connection.prepareStatement(
             """
@@ -284,6 +331,42 @@ public final class PostgresSchemaManager {
             return typeName;
         }
         return typeName.substring(schemaSeparatorIndex + 1);
+    }
+
+    private boolean storageTableExists(Connection connection, String baseTableName) throws SQLException {
+        try (PreparedStatement statement = connection.prepareStatement(
+            """
+                SELECT 1
+                FROM information_schema.tables
+                WHERE table_schema = ?
+                  AND table_name = ?
+                """
+        )) {
+            statement.setString(1, config.schema());
+            statement.setString(2, config.tableName(baseTableName));
+            try (var resultSet = statement.executeQuery()) {
+                return resultSet.next();
+            }
+        }
+    }
+
+    private boolean columnExists(Connection connection, String baseTableName, String columnName) throws SQLException {
+        try (PreparedStatement statement = connection.prepareStatement(
+            """
+                SELECT 1
+                FROM information_schema.columns
+                WHERE table_schema = ?
+                  AND table_name = ?
+                  AND column_name = ?
+                """
+        )) {
+            statement.setString(1, config.schema());
+            statement.setString(2, config.tableName(baseTableName));
+            statement.setString(3, columnName);
+            try (var resultSet = statement.executeQuery()) {
+                return resultSet.next();
+            }
+        }
     }
 
     private String dropConstraintSql(String tableBaseName, String constraintName) {

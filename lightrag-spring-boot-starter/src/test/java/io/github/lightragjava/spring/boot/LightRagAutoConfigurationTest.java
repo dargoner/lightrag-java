@@ -27,12 +27,15 @@ import org.springframework.boot.test.context.runner.ApplicationContextRunner;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 
+import javax.sql.DataSource;
+
 import java.lang.reflect.Field;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.time.Duration;
 import java.util.List;
 import java.util.Map;
+import java.util.concurrent.atomic.AtomicReference;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
@@ -364,8 +367,9 @@ class LightRagAutoConfigurationTest {
         var workspaceStorageProvider = new SpringWorkspaceStorageProvider(
             properties,
             null,
+            null,
             baseSnapshotStore,
-            (scope, lock, snapshotStore) -> InMemoryStorageProvider.create(snapshotStore)
+            (scope, applicationDataSource, lock, snapshotStore) -> InMemoryStorageProvider.create(snapshotStore)
         );
         var snapshot = new SnapshotStore.Snapshot(List.of(), List.of(), List.of(), List.of(), Map.of(), List.of());
 
@@ -381,6 +385,63 @@ class LightRagAutoConfigurationTest {
         } finally {
             workspaceStorageProvider.close();
         }
+    }
+
+    @Test
+    void reusesApplicationDataSourceForPostgresStorageWhenAvailable() {
+        var properties = new LightRagProperties();
+        properties.getStorage().setType(LightRagProperties.Type.POSTGRES);
+        properties.getStorage().getPostgres().setJdbcUrl("jdbc:postgresql://unused");
+        properties.getStorage().getPostgres().setUsername("unused");
+        properties.getStorage().getPostgres().setPassword("unused");
+        properties.getStorage().getPostgres().setSchema("lightrag");
+        properties.getStorage().getPostgres().setVectorDimensions(3);
+        properties.getStorage().getPostgres().setTablePrefix("rag_");
+        var dataSource = new StubDataSource();
+        var seenDataSource = new AtomicReference<DataSource>();
+
+        new SpringWorkspaceStorageProvider(
+            properties,
+            null,
+            dataSource,
+            new NoopSnapshotStore(),
+            (scope, applicationDataSource, lock, snapshotStore) -> {
+                seenDataSource.set(applicationDataSource);
+                return InMemoryStorageProvider.create(snapshotStore);
+            }
+        ).forWorkspace(new WorkspaceScope("alpha"));
+
+        assertThat(seenDataSource.get()).isSameAs(dataSource);
+    }
+
+    @Test
+    void reusesApplicationDataSourceForWorkspaceScopedPostgresProviders() {
+        var properties = new LightRagProperties();
+        properties.getStorage().setType(LightRagProperties.Type.POSTGRES);
+        properties.getStorage().getPostgres().setJdbcUrl("jdbc:postgresql://unused");
+        properties.getStorage().getPostgres().setUsername("unused");
+        properties.getStorage().getPostgres().setPassword("unused");
+        properties.getStorage().getPostgres().setSchema("lightrag");
+        properties.getStorage().getPostgres().setVectorDimensions(3);
+        properties.getStorage().getPostgres().setTablePrefix("rag_");
+        var dataSource = new StubDataSource();
+        var seenDataSources = new java.util.ArrayList<DataSource>();
+
+        var provider = new SpringWorkspaceStorageProvider(
+            properties,
+            null,
+            dataSource,
+            new NoopSnapshotStore(),
+            (scope, applicationDataSource, lock, snapshotStore) -> {
+                seenDataSources.add(applicationDataSource);
+                return InMemoryStorageProvider.create(snapshotStore);
+            }
+        );
+
+        provider.forWorkspace(new WorkspaceScope("alpha"));
+        provider.forWorkspace(new WorkspaceScope("beta"));
+
+        assertThat(seenDataSources).containsExactly(dataSource, dataSource);
     }
 
     @Test
@@ -588,11 +649,78 @@ class LightRagAutoConfigurationTest {
         return field.get(lightRag);
     }
 
+    private static Object readField(Object target, String fieldName) throws Exception {
+        Field field = target.getClass().getDeclaredField(fieldName);
+        field.setAccessible(true);
+        return field.get(target);
+    }
+
     private static Duration extractTimeout(Object model) throws Exception {
         Field httpClientField = model.getClass().getDeclaredField("httpClient");
         httpClientField.setAccessible(true);
         Object httpClient = httpClientField.get(model);
         int callTimeoutMillis = (int) httpClient.getClass().getMethod("callTimeoutMillis").invoke(httpClient);
         return Duration.ofMillis(callTimeoutMillis);
+    }
+
+    private static final class StubDataSource implements DataSource {
+        @Override
+        public java.sql.Connection getConnection() {
+            throw new UnsupportedOperationException("Not used in this test");
+        }
+
+        @Override
+        public java.sql.Connection getConnection(String username, String password) {
+            throw new UnsupportedOperationException("Not used in this test");
+        }
+
+        @Override
+        public <T> T unwrap(Class<T> iface) {
+            throw new UnsupportedOperationException("Not used in this test");
+        }
+
+        @Override
+        public boolean isWrapperFor(Class<?> iface) {
+            return false;
+        }
+
+        @Override
+        public java.io.PrintWriter getLogWriter() {
+            return null;
+        }
+
+        @Override
+        public void setLogWriter(java.io.PrintWriter out) {
+        }
+
+        @Override
+        public void setLoginTimeout(int seconds) {
+        }
+
+        @Override
+        public int getLoginTimeout() {
+            return 0;
+        }
+
+        @Override
+        public java.util.logging.Logger getParentLogger() {
+            return java.util.logging.Logger.getGlobal();
+        }
+    }
+
+    private static final class NoopSnapshotStore implements SnapshotStore {
+        @Override
+        public void save(java.nio.file.Path path, Snapshot snapshot) {
+        }
+
+        @Override
+        public Snapshot load(java.nio.file.Path path) {
+            throw new UnsupportedOperationException("Not used in this test");
+        }
+
+        @Override
+        public List<java.nio.file.Path> list() {
+            return List.of();
+        }
     }
 }

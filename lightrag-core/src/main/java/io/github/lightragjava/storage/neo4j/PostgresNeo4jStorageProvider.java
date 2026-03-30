@@ -11,9 +11,9 @@ import io.github.lightragjava.storage.VectorStore;
 import io.github.lightragjava.storage.postgres.PostgresStorageConfig;
 import io.github.lightragjava.storage.postgres.PostgresStorageProvider;
 
+import javax.sql.DataSource;
 import java.util.LinkedHashMap;
 import java.util.List;
-import java.util.Locale;
 import java.util.Map;
 import java.util.Objects;
 import java.util.concurrent.locks.ReentrantReadWriteLock;
@@ -21,10 +21,6 @@ import java.util.concurrent.locks.ReentrantReadWriteLock;
 public final class PostgresNeo4jStorageProvider implements AtomicStorageProvider, AutoCloseable {
     private static final List<String> VECTOR_NAMESPACES = List.of("chunks", "entities", "relations");
     private static final WorkspaceScope DEFAULT_WORKSPACE = new WorkspaceScope("default");
-    private static final int WORKSPACE_HASH_LENGTH = 8;
-    private static final int MAX_POSTGRES_IDENTIFIER_LENGTH = 63;
-    private static final int MAX_TABLE_SUFFIX_LENGTH = "document_status".length();
-    private static final int MAX_WORKSPACE_SLUG_LENGTH = 16;
 
     private final ReentrantReadWriteLock lock;
     private final PostgresStorageProvider postgresProvider;
@@ -41,6 +37,15 @@ public final class PostgresNeo4jStorageProvider implements AtomicStorageProvider
     }
 
     public PostgresNeo4jStorageProvider(
+        DataSource dataSource,
+        PostgresStorageConfig postgresConfig,
+        Neo4jGraphConfig neo4jConfig,
+        SnapshotStore snapshotStore
+    ) {
+        this(dataSource, postgresConfig, neo4jConfig, snapshotStore, DEFAULT_WORKSPACE);
+    }
+
+    public PostgresNeo4jStorageProvider(
         PostgresStorageConfig postgresConfig,
         Neo4jGraphConfig neo4jConfig,
         SnapshotStore snapshotStore,
@@ -48,11 +53,9 @@ public final class PostgresNeo4jStorageProvider implements AtomicStorageProvider
     ) {
         this(
             new PostgresStorageProvider(
-                scopePostgresConfig(
-                    Objects.requireNonNull(postgresConfig, "postgresConfig"),
-                    Objects.requireNonNull(workspaceScope, "workspaceScope")
-                ),
-                Objects.requireNonNull(snapshotStore, "snapshotStore")
+                Objects.requireNonNull(postgresConfig, "postgresConfig"),
+                Objects.requireNonNull(snapshotStore, "snapshotStore"),
+                Objects.requireNonNull(workspaceScope, "workspaceScope").workspaceId()
             ),
             new WorkspaceScopedNeo4jGraphStore(
                 Objects.requireNonNull(neo4jConfig, "neo4jConfig"),
@@ -63,58 +66,27 @@ public final class PostgresNeo4jStorageProvider implements AtomicStorageProvider
         );
     }
 
-    private static PostgresStorageConfig scopePostgresConfig(
+    public PostgresNeo4jStorageProvider(
+        DataSource dataSource,
         PostgresStorageConfig postgresConfig,
+        Neo4jGraphConfig neo4jConfig,
+        SnapshotStore snapshotStore,
         WorkspaceScope workspaceScope
     ) {
-        if (DEFAULT_WORKSPACE.equals(workspaceScope)) {
-            return postgresConfig;
-        }
-        var workspaceQualifier = "ws_" + slug(workspaceScope.workspaceId()) + "_" + shortHash(workspaceScope.workspaceId()) + "_";
-        return new PostgresStorageConfig(
-            postgresConfig.jdbcUrl(),
-            postgresConfig.username(),
-            postgresConfig.password(),
-            postgresConfig.schema(),
-            postgresConfig.vectorDimensions(),
-            abbreviateBasePrefix(postgresConfig.tablePrefix(), workspaceQualifier.length()) + workspaceQualifier
+        this(
+            new PostgresStorageProvider(
+                Objects.requireNonNull(dataSource, "dataSource"),
+                Objects.requireNonNull(postgresConfig, "postgresConfig"),
+                Objects.requireNonNull(snapshotStore, "snapshotStore"),
+                Objects.requireNonNull(workspaceScope, "workspaceScope").workspaceId()
+            ),
+            new WorkspaceScopedNeo4jGraphStore(
+                Objects.requireNonNull(neo4jConfig, "neo4jConfig"),
+                workspaceScope
+            ),
+            new ReentrantReadWriteLock(true),
+            null
         );
-    }
-
-    private static String abbreviateBasePrefix(String basePrefix, int workspaceQualifierLength) {
-        int maxBasePrefixLength = MAX_POSTGRES_IDENTIFIER_LENGTH - MAX_TABLE_SUFFIX_LENGTH - workspaceQualifierLength;
-        if (maxBasePrefixLength <= 0 || basePrefix.length() <= maxBasePrefixLength) {
-            return basePrefix;
-        }
-        if (maxBasePrefixLength <= WORKSPACE_HASH_LENGTH) {
-            return shortHash(basePrefix).substring(0, maxBasePrefixLength);
-        }
-        int headLength = maxBasePrefixLength - WORKSPACE_HASH_LENGTH;
-        return basePrefix.substring(0, headLength) + shortHash(basePrefix);
-    }
-
-    private static String slug(String workspaceId) {
-        var normalized = Objects.requireNonNull(workspaceId, "workspaceId")
-            .strip()
-            .toLowerCase(Locale.ROOT)
-            .replaceAll("[^a-z0-9]+", "_")
-            .replaceAll("_+", "_")
-            .replaceAll("^_+", "")
-            .replaceAll("_+$", "");
-        if (normalized.isEmpty()) {
-            return "workspace";
-        }
-        return normalized.length() <= MAX_WORKSPACE_SLUG_LENGTH
-            ? normalized
-            : normalized.substring(0, MAX_WORKSPACE_SLUG_LENGTH);
-    }
-
-    private static String shortHash(String workspaceId) {
-        var hex = Integer.toUnsignedString(Objects.requireNonNull(workspaceId, "workspaceId").hashCode(), 16);
-        if (hex.length() >= WORKSPACE_HASH_LENGTH) {
-            return hex.substring(0, WORKSPACE_HASH_LENGTH);
-        }
-        return "0".repeat(WORKSPACE_HASH_LENGTH - hex.length()) + hex;
     }
 
     PostgresNeo4jStorageProvider(

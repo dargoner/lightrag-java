@@ -34,6 +34,7 @@ import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.boot.context.properties.EnableConfigurationProperties;
 import org.springframework.context.annotation.Bean;
 
+import javax.sql.DataSource;
 import java.util.Locale;
 
 @AutoConfiguration
@@ -146,15 +147,29 @@ public class LightRagAutoConfiguration {
 
     @Bean
     @ConditionalOnMissingBean(StorageProvider.class)
-    StorageProvider storageProvider(LightRagProperties properties, SnapshotStore snapshotStore) {
+    StorageProvider storageProvider(
+        LightRagProperties properties,
+        SnapshotStore snapshotStore,
+        ObjectProvider<DataSource> dataSourceProvider
+    ) {
+        var dataSource = dataSourceProvider.getIfAvailable();
         return switch (properties.getStorage().getType()) {
             case IN_MEMORY -> InMemoryStorageProvider.create(snapshotStore);
-            case POSTGRES -> new PostgresStorageProvider(postgresConfig(properties), snapshotStore);
-            case POSTGRES_NEO4J -> new PostgresNeo4jStorageProvider(
-                postgresConfig(properties),
-                neo4jConfig(properties),
-                snapshotStore
-            );
+            case POSTGRES -> dataSource != null
+                ? new PostgresStorageProvider(dataSource, postgresConfig(properties), snapshotStore)
+                : new PostgresStorageProvider(postgresConfig(properties), snapshotStore);
+            case POSTGRES_NEO4J -> dataSource != null
+                ? new PostgresNeo4jStorageProvider(
+                    dataSource,
+                    postgresConfig(properties),
+                    neo4jConfig(properties),
+                    snapshotStore
+                )
+                : new PostgresNeo4jStorageProvider(
+                    postgresConfig(properties),
+                    neo4jConfig(properties),
+                    snapshotStore
+                );
         };
     }
 
@@ -162,10 +177,11 @@ public class LightRagAutoConfiguration {
     @ConditionalOnMissingBean
     WorkspaceStorageProvider workspaceStorageProvider(
         ObjectProvider<StorageProvider> storageProvider,
+        ObjectProvider<DataSource> dataSource,
         SnapshotStore snapshotStore,
         LightRagProperties properties
     ) {
-        return new SpringWorkspaceStorageProvider(storageProvider, snapshotStore, properties);
+        return new SpringWorkspaceStorageProvider(storageProvider, dataSource, snapshotStore, properties);
     }
 
     @Bean
