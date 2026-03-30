@@ -11,6 +11,7 @@ import java.sql.DriverManager;
 import java.util.Map;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 class PostgresChunkStoreTest {
     @Test
@@ -71,7 +72,7 @@ class PostgresChunkStoreTest {
     }
 
     @Test
-    void bootstrapRemovesLegacyChunkForeignKeyConstraint() throws Exception {
+    void bootstrapRejectsLegacyChunkForeignKeyConstraintSchema() throws Exception {
         try (var container = newPostgresContainer()) {
             container.start();
             var config = new PostgresStorageConfig(
@@ -115,12 +116,12 @@ class PostgresChunkStoreTest {
                 );
             }
 
-            try (var resources = newStoreResources(container)) {
-                var orphanChunk = new ChunkStore.ChunkRecord("chunk-legacy", "missing-doc", "Legacy", 5, 0, Map.of());
-
-                resources.store().save(orphanChunk);
-
-                assertThat(resources.store().load("chunk-legacy")).contains(orphanChunk);
+            var dataSource = newDataSource(config);
+            try (dataSource) {
+                assertThatThrownBy(() -> new PostgresSchemaManager(dataSource, config).bootstrap())
+                    .isInstanceOf(IllegalStateException.class)
+                    .hasMessageContaining("legacy")
+                    .hasMessageContaining("workspace");
             }
         }
     }
