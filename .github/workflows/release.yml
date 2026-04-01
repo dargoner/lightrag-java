@@ -135,7 +135,7 @@ jobs:
           if not replaced:
               updated.insert(0, f"projectVersion={next_version}")
 
-          path.write_text("\\n".join(updated) + "\\n")
+          path.write_text("\n".join(updated) + "\n")
           PY
 
       - name: Commit next snapshot version
