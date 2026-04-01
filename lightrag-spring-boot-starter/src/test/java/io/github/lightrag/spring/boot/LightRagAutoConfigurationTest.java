@@ -17,6 +17,7 @@ import io.github.lightrag.storage.InMemoryStorageProvider;
 import io.github.lightrag.storage.SnapshotStore;
 import io.github.lightrag.storage.StorageProvider;
 import io.github.lightrag.storage.WorkspaceStorageProvider;
+import io.github.lightrag.storage.milvus.MilvusVectorConfig;
 import io.github.lightrag.types.Chunk;
 import io.github.lightrag.types.Document;
 import io.github.lightrag.types.RawDocumentSource;
@@ -108,6 +109,55 @@ class LightRagAutoConfigurationTest {
             assertThat(properties.getWorkspace().getDefaultId()).isEqualTo("default");
             assertThat(properties.getWorkspace().getMaxActiveWorkspaces()).isEqualTo(32);
         });
+    }
+
+    @Test
+    void bindsMySqlMilvusNeo4jStorageProperties() {
+        contextRunner
+            .withUserConfiguration(CustomStorageProviderConfig.class)
+            .withPropertyValues(
+                "lightrag.storage.type=mysql_milvus_neo4j",
+                "lightrag.storage.mysql.jdbc-url=jdbc:mysql://localhost:3306/lightrag",
+                "lightrag.storage.mysql.username=root",
+                "lightrag.storage.mysql.password=secret",
+                "lightrag.storage.mysql.table-prefix=cfg_",
+                "lightrag.storage.milvus.uri=http://localhost:19530",
+                "lightrag.storage.milvus.token=root:Milvus",
+                "lightrag.storage.milvus.database=rag",
+                "lightrag.storage.milvus.collection-prefix=vec_",
+                "lightrag.storage.milvus.vector-dimensions=768",
+                "lightrag.storage.milvus.analyzer-type=english",
+                "lightrag.storage.milvus.hybrid-ranker=weighted",
+                "lightrag.storage.milvus.hybrid-rrf-k=99",
+                "lightrag.storage.milvus.schema-drift-strategy=ignore",
+                "lightrag.storage.neo4j.uri=bolt://localhost:7687",
+                "lightrag.storage.neo4j.username=neo4j",
+                "lightrag.storage.neo4j.password=password",
+                "lightrag.storage.neo4j.database=neo4j"
+            )
+            .run(context -> {
+                var properties = context.getBean(LightRagProperties.class);
+
+                assertThat(properties.getStorage().getType()).isEqualTo(LightRagProperties.Type.MYSQL_MILVUS_NEO4J);
+                assertThat(properties.getStorage().getMysql().getJdbcUrl()).isEqualTo("jdbc:mysql://localhost:3306/lightrag");
+                assertThat(properties.getStorage().getMysql().getUsername()).isEqualTo("root");
+                assertThat(properties.getStorage().getMysql().getPassword()).isEqualTo("secret");
+                assertThat(properties.getStorage().getMysql().getTablePrefix()).isEqualTo("cfg_");
+                assertThat(properties.getStorage().getMilvus().getUri()).isEqualTo("http://localhost:19530");
+                assertThat(properties.getStorage().getMilvus().getToken()).isEqualTo("root:Milvus");
+                assertThat(properties.getStorage().getMilvus().getDatabase()).isEqualTo("rag");
+                assertThat(properties.getStorage().getMilvus().getCollectionPrefix()).isEqualTo("vec_");
+                assertThat(properties.getStorage().getMilvus().getVectorDimensions()).isEqualTo(768);
+                assertThat(properties.getStorage().getMilvus().getAnalyzerType()).isEqualTo("english");
+                assertThat(properties.getStorage().getMilvus().getHybridRanker()).isEqualTo("weighted");
+                assertThat(properties.getStorage().getMilvus().getHybridRrfK()).isEqualTo(99);
+                assertThat(properties.getStorage().getMilvus().getSchemaDriftStrategy())
+                    .isEqualTo(MilvusVectorConfig.SchemaDriftStrategy.IGNORE);
+                assertThat(properties.getStorage().getNeo4j().getUri()).isEqualTo("bolt://localhost:7687");
+                assertThat(properties.getStorage().getNeo4j().getUsername()).isEqualTo("neo4j");
+                assertThat(properties.getStorage().getNeo4j().getPassword()).isEqualTo("password");
+                assertThat(properties.getStorage().getNeo4j().getDatabase()).isEqualTo("neo4j");
+            });
     }
 
     @Test
@@ -270,6 +320,11 @@ class LightRagAutoConfigurationTest {
                 assertThat(properties.getWorkspace().getHeaderName()).isEqualTo("X-Workspace-Id");
                 assertThat(properties.getWorkspace().getDefaultId()).isEqualTo("default");
                 assertThat(properties.getWorkspace().getMaxActiveWorkspaces()).isEqualTo(32);
+                assertThat(properties.getStorage().getMilvus().getAnalyzerType()).isEqualTo("chinese");
+                assertThat(properties.getStorage().getMilvus().getHybridRanker()).isEqualTo("rrf");
+                assertThat(properties.getStorage().getMilvus().getHybridRrfK()).isEqualTo(60);
+                assertThat(properties.getStorage().getMilvus().getSchemaDriftStrategy())
+                    .isEqualTo(MilvusVectorConfig.SchemaDriftStrategy.STRICT_FAIL);
             });
     }
 
@@ -424,6 +479,43 @@ class LightRagAutoConfigurationTest {
         properties.getStorage().getPostgres().setSchema("lightrag");
         properties.getStorage().getPostgres().setVectorDimensions(3);
         properties.getStorage().getPostgres().setTablePrefix("rag_");
+        var dataSource = new StubDataSource();
+        var seenDataSources = new java.util.ArrayList<DataSource>();
+
+        var provider = new SpringWorkspaceStorageProvider(
+            properties,
+            null,
+            dataSource,
+            new NoopSnapshotStore(),
+            (scope, applicationDataSource, lock, snapshotStore) -> {
+                seenDataSources.add(applicationDataSource);
+                return InMemoryStorageProvider.create(snapshotStore);
+            }
+        );
+
+        provider.forWorkspace(new WorkspaceScope("alpha"));
+        provider.forWorkspace(new WorkspaceScope("beta"));
+
+        assertThat(seenDataSources).containsExactly(dataSource, dataSource);
+    }
+
+    @Test
+    void reusesApplicationDataSourceForWorkspaceScopedMySqlMilvusNeo4jProviders() {
+        var properties = new LightRagProperties();
+        properties.getStorage().setType(LightRagProperties.Type.MYSQL_MILVUS_NEO4J);
+        properties.getStorage().getMysql().setJdbcUrl("jdbc:mysql://unused");
+        properties.getStorage().getMysql().setUsername("unused");
+        properties.getStorage().getMysql().setPassword("unused");
+        properties.getStorage().getMysql().setTablePrefix("rag_");
+        properties.getStorage().getMilvus().setUri("http://localhost:19530");
+        properties.getStorage().getMilvus().setToken("root:Milvus");
+        properties.getStorage().getMilvus().setDatabase("default");
+        properties.getStorage().getMilvus().setCollectionPrefix("rag_");
+        properties.getStorage().getMilvus().setVectorDimensions(3);
+        properties.getStorage().getNeo4j().setUri("bolt://localhost:7687");
+        properties.getStorage().getNeo4j().setUsername("neo4j");
+        properties.getStorage().getNeo4j().setPassword("password");
+        properties.getStorage().getNeo4j().setDatabase("neo4j");
         var dataSource = new StubDataSource();
         var seenDataSources = new java.util.ArrayList<DataSource>();
 

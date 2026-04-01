@@ -45,7 +45,14 @@ public final class LocalQueryStrategy implements QueryStrategy {
         var entityScores = new LinkedHashMap<String, Double>();
         var relationScores = new LinkedHashMap<String, Double>();
 
-        for (var match : storageProvider.vectorStore().search(ENTITY_NAMESPACE, queryVector, query.topK())) {
+        for (var match : VectorSearches.search(
+            storageProvider.vectorStore(),
+            ENTITY_NAMESPACE,
+            queryVector,
+            query.query(),
+            query.llKeywords(),
+            query.topK()
+        )) {
             entityScores.merge(match.id(), match.score(), Math::max);
         }
 

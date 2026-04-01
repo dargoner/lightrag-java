@@ -41,7 +41,14 @@ public final class MixQueryStrategy implements QueryStrategy {
         for (var chunk : hybrid.matchedChunks()) {
             mergedChunks.put(chunk.chunkId(), chunk);
         }
-        for (var match : storageProvider.vectorStore().search(CHUNK_NAMESPACE, queryVector, request.chunkTopK())) {
+        for (var match : VectorSearches.search(
+            storageProvider.vectorStore(),
+            CHUNK_NAMESPACE,
+            queryVector,
+            request.query(),
+            VectorSearches.mergeKeywords(request.llKeywords(), request.hlKeywords()),
+            request.chunkTopK()
+        )) {
             storageProvider.chunkStore().load(match.id()).ifPresent(chunk -> mergedChunks.merge(
                 match.id(),
                 new ScoredChunk(match.id(), toChunk(chunk), match.score()),

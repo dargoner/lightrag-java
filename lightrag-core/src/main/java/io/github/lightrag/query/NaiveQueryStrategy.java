@@ -35,7 +35,14 @@ public final class NaiveQueryStrategy implements QueryStrategy {
     public QueryContext retrieve(QueryRequest request) {
         var query = Objects.requireNonNull(request, "request");
         var queryVector = embeddingModel.embedAll(List.of(query.query())).get(0);
-        var matchedChunks = storageProvider.vectorStore().search(CHUNK_NAMESPACE, queryVector, query.chunkTopK()).stream()
+        var matchedChunks = VectorSearches.search(
+                storageProvider.vectorStore(),
+                CHUNK_NAMESPACE,
+                queryVector,
+                query.query(),
+                List.of(),
+                query.chunkTopK()
+            ).stream()
             .map(match -> storageProvider.chunkStore().load(match.id())
                 .map(chunk -> new ScoredChunk(match.id(), toChunk(chunk), match.score()))
                 .orElse(null))

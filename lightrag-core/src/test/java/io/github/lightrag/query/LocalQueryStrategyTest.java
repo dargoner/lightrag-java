@@ -6,7 +6,9 @@ import io.github.lightrag.indexing.ParentChildChunkBuilder;
 import io.github.lightrag.model.EmbeddingModel;
 import io.github.lightrag.storage.ChunkStore;
 import io.github.lightrag.storage.GraphStore;
+import io.github.lightrag.storage.HybridVectorStore;
 import io.github.lightrag.storage.InMemoryStorageProvider;
+import io.github.lightrag.storage.StorageProvider;
 import io.github.lightrag.storage.VectorStore;
 import org.junit.jupiter.api.Test;
 
@@ -166,6 +168,38 @@ class LocalQueryStrategyTest {
         assertThat(context.matchedChunks().get(0).chunk().text()).isEqualTo("Parent context with full explanation");
     }
 
+    @Test
+    void localUsesHybridVectorSearchRequestWhenStoreSupportsIt() {
+        var delegate = InMemoryStorageProvider.create();
+        seedGraph(delegate);
+        var vectorStore = new RecordingHybridVectorStore(List.of(
+            new VectorStore.VectorMatch("entity:alice", 1.0d)
+        ));
+        var storage = new TestStorageProvider(delegate, vectorStore);
+        var strategy = new LocalQueryStrategy(
+            new FakeEmbeddingModel(Map.of("alice, focus", List.of(1.0d, 0.0d))),
+            storage,
+            new ContextAssembler()
+        );
+
+        var context = strategy.retrieve(QueryRequest.builder()
+            .query("ambiguous question")
+            .mode(QueryMode.LOCAL)
+            .topK(1)
+            .chunkTopK(2)
+            .llKeywords(List.of("alice", "focus"))
+            .build());
+
+        assertThat(vectorStore.recordedRequest).isNotNull();
+        assertThat(vectorStore.recordedRequest.mode()).isEqualTo(HybridVectorStore.SearchMode.HYBRID);
+        assertThat(vectorStore.recordedRequest.queryVector()).containsExactly(1.0d, 0.0d);
+        assertThat(vectorStore.recordedRequest.queryText()).isEqualTo("ambiguous question");
+        assertThat(vectorStore.recordedRequest.keywords()).containsExactly("alice", "focus");
+        assertThat(context.matchedEntities())
+            .extracting(match -> match.entityId())
+            .containsExactly("entity:alice", "entity:bob");
+    }
+
     static void seedGraph(InMemoryStorageProvider storage) {
         storage.chunkStore().save(new ChunkStore.ChunkRecord("chunk-1", "doc-1", "Alice works with Bob", 4, 0, Map.of()));
         storage.chunkStore().save(new ChunkStore.ChunkRecord("chunk-2", "doc-1", "Bob supports Alice", 4, 1, Map.of()));
@@ -238,6 +272,79 @@ class LocalQueryStrategyTest {
             return texts.stream()
                 .map(text -> vectorsByText.getOrDefault(text, List.of(0.0d, 0.0d)))
                 .toList();
+        }
+    }
+
+    private static final class TestStorageProvider implements StorageProvider {
+        private final InMemoryStorageProvider delegate;
+        private final HybridVectorStore vectorStore;
+
+        private TestStorageProvider(InMemoryStorageProvider delegate, HybridVectorStore vectorStore) {
+            this.delegate = delegate;
+            this.vectorStore = vectorStore;
+        }
+
+        @Override
+        public io.github.lightrag.storage.DocumentStore documentStore() {
+            return delegate.documentStore();
+        }
+
+        @Override
+        public ChunkStore chunkStore() {
+            return delegate.chunkStore();
+        }
+
+        @Override
+        public GraphStore graphStore() {
+            return delegate.graphStore();
+        }
+
+        @Override
+        public VectorStore vectorStore() {
+            return vectorStore;
+        }
+
+        @Override
+        public io.github.lightrag.storage.DocumentStatusStore documentStatusStore() {
+            return delegate.documentStatusStore();
+        }
+
+        @Override
+        public io.github.lightrag.storage.SnapshotStore snapshotStore() {
+            return delegate.snapshotStore();
+        }
+    }
+
+    private static final class RecordingHybridVectorStore implements HybridVectorStore {
+        private final List<VectorMatch> matches;
+        private SearchRequest recordedRequest;
+
+        private RecordingHybridVectorStore(List<VectorMatch> matches) {
+            this.matches = matches;
+        }
+
+        @Override
+        public void saveAll(String namespace, List<VectorRecord> vectors) {
+        }
+
+        @Override
+        public void saveAllEnriched(String namespace, List<EnrichedVectorRecord> records) {
+        }
+
+        @Override
+        public List<VectorMatch> search(String namespace, List<Double> queryVector, int topK) {
+            return List.of();
+        }
+
+        @Override
+        public List<VectorMatch> search(String namespace, SearchRequest request) {
+            this.recordedRequest = request;
+            return matches;
+        }
+
+        @Override
+        public List<VectorRecord> list(String namespace) {
+            return List.of();
         }
     }
 }

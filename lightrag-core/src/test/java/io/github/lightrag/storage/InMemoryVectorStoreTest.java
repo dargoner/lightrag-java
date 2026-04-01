@@ -58,4 +58,66 @@ class InMemoryVectorStoreTest {
             new VectorStore.VectorMatch("relation-2", 1.0d)
         );
     }
+
+    @Test
+    void supportsKeywordSearchUsingSearchableTextAndKeywords() {
+        var store = new InMemoryVectorStore();
+
+        store.saveAllEnriched("chunks", List.of(
+            new HybridVectorStore.EnrichedVectorRecord(
+                "chunk-1",
+                List.of(1.0d, 0.0d),
+                "Milvus hybrid retrieval with BM25 sparse index",
+                List.of("milvus", "hybrid", "bm25")
+            ),
+            new HybridVectorStore.EnrichedVectorRecord(
+                "chunk-2",
+                List.of(0.0d, 1.0d),
+                "Graph traversal only",
+                List.of("neo4j", "graph")
+            )
+        ));
+
+        assertThat(store.search("chunks", new HybridVectorStore.SearchRequest(
+            List.of(),
+            "milvus bm25",
+            List.of("milvus", "bm25"),
+            HybridVectorStore.SearchMode.KEYWORD,
+            2
+        ))).containsExactly(
+            new VectorStore.VectorMatch("chunk-1", 4.0d),
+            new VectorStore.VectorMatch("chunk-2", 0.0d)
+        );
+    }
+
+    @Test
+    void supportsHybridSearchByCombiningSemanticAndKeywordSignals() {
+        var store = new InMemoryVectorStore();
+
+        store.saveAllEnriched("chunks", List.of(
+            new HybridVectorStore.EnrichedVectorRecord(
+                "chunk-1",
+                List.of(0.2d, 1.0d),
+                "Milvus hybrid retrieval with BM25 sparse index",
+                List.of("milvus", "hybrid", "bm25")
+            ),
+            new HybridVectorStore.EnrichedVectorRecord(
+                "chunk-2",
+                List.of(1.0d, 0.0d),
+                "Dense embedding semantics only",
+                List.of("semantic", "dense")
+            )
+        ));
+
+        assertThat(store.search("chunks", new HybridVectorStore.SearchRequest(
+            List.of(1.0d, 0.0d),
+            "milvus hybrid",
+            List.of("milvus", "hybrid"),
+            HybridVectorStore.SearchMode.HYBRID,
+            2
+        ))).containsExactly(
+            new VectorStore.VectorMatch("chunk-1", 4.2d),
+            new VectorStore.VectorMatch("chunk-2", 1.0d)
+        );
+    }
 }
