@@ -9,6 +9,7 @@ import io.github.lightrag.api.GraphRelation;
 import io.github.lightrag.api.MergeEntitiesRequest;
 import io.github.lightrag.storage.AtomicStorageProvider;
 import io.github.lightrag.storage.GraphStore;
+import io.github.lightrag.storage.HybridVectorStore;
 import io.github.lightrag.storage.SnapshotStore;
 import io.github.lightrag.storage.VectorStore;
 import io.github.lightrag.types.Entity;
@@ -52,10 +53,7 @@ public final class GraphManagementPipeline {
                 List.of()
             );
             storage.graphStore().saveEntity(created);
-            storage.vectorStore().saveAll(
-                StorageSnapshots.ENTITY_NAMESPACE,
-                indexingPipeline.entityVectors(List.of(toEntity(created)))
-            );
+            saveEntityVectors(storage.vectorStore(), List.of(toEntity(created)));
             return created;
         });
         StorageSnapshots.persistIfConfigured(storageProvider, snapshotPath);
@@ -78,10 +76,7 @@ public final class GraphManagementPipeline {
             );
             validateCreateRelation(storage.graphStore().allRelations(), created);
             storage.graphStore().saveRelation(created);
-            storage.vectorStore().saveAll(
-                StorageSnapshots.RELATION_NAMESPACE,
-                indexingPipeline.relationVectors(List.of(toRelation(created)))
-            );
+            saveRelationVectors(storage.vectorStore(), List.of(toRelation(created)));
             return created;
         });
         StorageSnapshots.persistIfConfigured(storageProvider, snapshotPath);
@@ -639,5 +634,35 @@ public final class GraphManagementPipeline {
         }
         values.addAll(replacementVectors);
         return List.copyOf(values);
+    }
+
+    private void saveEntityVectors(VectorStore vectorStore, List<Entity> entities) {
+        var vectors = indexingPipeline.entityVectors(entities);
+        if (vectors.isEmpty()) {
+            return;
+        }
+        if (vectorStore instanceof HybridVectorStore hybridVectorStore) {
+            hybridVectorStore.saveAllEnriched(
+                StorageSnapshots.ENTITY_NAMESPACE,
+                HybridVectorPayloads.entityPayloads(entities, vectors)
+            );
+            return;
+        }
+        vectorStore.saveAll(StorageSnapshots.ENTITY_NAMESPACE, vectors);
+    }
+
+    private void saveRelationVectors(VectorStore vectorStore, List<Relation> relations) {
+        var vectors = indexingPipeline.relationVectors(relations);
+        if (vectors.isEmpty()) {
+            return;
+        }
+        if (vectorStore instanceof HybridVectorStore hybridVectorStore) {
+            hybridVectorStore.saveAllEnriched(
+                StorageSnapshots.RELATION_NAMESPACE,
+                HybridVectorPayloads.relationPayloads(relations, vectors)
+            );
+            return;
+        }
+        vectorStore.saveAll(StorageSnapshots.RELATION_NAMESPACE, vectors);
     }
 }

@@ -6,7 +6,6 @@ import org.springframework.boot.context.properties.ConfigurationProperties;
 import java.time.Duration;
 import java.util.List;
 import java.util.Locale;
-import java.util.List;
 
 @ConfigurationProperties(prefix = "lightrag")
 public class LightRagProperties {
@@ -97,6 +96,8 @@ public class LightRagProperties {
     public static class StorageProperties {
         private Type type = Type.IN_MEMORY;
         private final PostgresProperties postgres = new PostgresProperties();
+        private final MySqlProperties mysql = new MySqlProperties();
+        private final MilvusProperties milvus = new MilvusProperties();
         private final Neo4jProperties neo4j = new Neo4jProperties();
 
         public Type getType() {
@@ -109,6 +110,14 @@ public class LightRagProperties {
 
         public PostgresProperties getPostgres() {
             return postgres;
+        }
+
+        public MySqlProperties getMysql() {
+            return mysql;
+        }
+
+        public MilvusProperties getMilvus() {
+            return milvus;
         }
 
         public Neo4jProperties getNeo4j() {
@@ -483,7 +492,8 @@ public class LightRagProperties {
     public enum Type {
         IN_MEMORY,
         POSTGRES,
-        POSTGRES_NEO4J
+        POSTGRES_NEO4J,
+        MYSQL_MILVUS_NEO4J
     }
 
     public static class PostgresProperties {
@@ -579,6 +589,150 @@ public class LightRagProperties {
 
         public void setDatabase(String database) {
             this.database = database;
+        }
+    }
+
+    public static class MySqlProperties {
+        private String jdbcUrl;
+        private String username;
+        private String password;
+        private String tablePrefix = "rag_";
+
+        public String getJdbcUrl() {
+            return jdbcUrl;
+        }
+
+        public void setJdbcUrl(String jdbcUrl) {
+            this.jdbcUrl = jdbcUrl;
+        }
+
+        public String getUsername() {
+            return username;
+        }
+
+        public void setUsername(String username) {
+            this.username = username;
+        }
+
+        public String getPassword() {
+            return password;
+        }
+
+        public void setPassword(String password) {
+            this.password = password;
+        }
+
+        public String getTablePrefix() {
+            return tablePrefix;
+        }
+
+        public void setTablePrefix(String tablePrefix) {
+            this.tablePrefix = tablePrefix;
+        }
+    }
+
+    public static class MilvusProperties {
+        private String uri;
+        private String token;
+        private String username;
+        private String password;
+        private String database = "default";
+        private String collectionPrefix = "rag_";
+        private Integer vectorDimensions;
+        private String analyzerType = "chinese";
+        private String hybridRanker = "rrf";
+        private int hybridRrfK = 60;
+        private io.github.lightrag.storage.milvus.MilvusVectorConfig.SchemaDriftStrategy schemaDriftStrategy =
+            io.github.lightrag.storage.milvus.MilvusVectorConfig.SchemaDriftStrategy.STRICT_FAIL;
+
+        public String getUri() {
+            return uri;
+        }
+
+        public void setUri(String uri) {
+            this.uri = uri;
+        }
+
+        public String getToken() {
+            return token;
+        }
+
+        public void setToken(String token) {
+            this.token = token;
+        }
+
+        public String getUsername() {
+            return username;
+        }
+
+        public void setUsername(String username) {
+            this.username = username;
+        }
+
+        public String getPassword() {
+            return password;
+        }
+
+        public void setPassword(String password) {
+            this.password = password;
+        }
+
+        public String getDatabase() {
+            return database;
+        }
+
+        public void setDatabase(String database) {
+            this.database = database;
+        }
+
+        public String getCollectionPrefix() {
+            return collectionPrefix;
+        }
+
+        public void setCollectionPrefix(String collectionPrefix) {
+            this.collectionPrefix = collectionPrefix;
+        }
+
+        public Integer getVectorDimensions() {
+            return vectorDimensions;
+        }
+
+        public void setVectorDimensions(Integer vectorDimensions) {
+            this.vectorDimensions = vectorDimensions;
+        }
+
+        public String getAnalyzerType() {
+            return analyzerType;
+        }
+
+        public void setAnalyzerType(String analyzerType) {
+            this.analyzerType = analyzerType;
+        }
+
+        public String getHybridRanker() {
+            return hybridRanker;
+        }
+
+        public void setHybridRanker(String hybridRanker) {
+            this.hybridRanker = hybridRanker;
+        }
+
+        public int getHybridRrfK() {
+            return hybridRrfK;
+        }
+
+        public void setHybridRrfK(int hybridRrfK) {
+            this.hybridRrfK = hybridRrfK;
+        }
+
+        public io.github.lightrag.storage.milvus.MilvusVectorConfig.SchemaDriftStrategy getSchemaDriftStrategy() {
+            return schemaDriftStrategy;
+        }
+
+        public void setSchemaDriftStrategy(
+            io.github.lightrag.storage.milvus.MilvusVectorConfig.SchemaDriftStrategy schemaDriftStrategy
+        ) {
+            this.schemaDriftStrategy = schemaDriftStrategy;
         }
     }
 }

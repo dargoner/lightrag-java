@@ -6,6 +6,9 @@ import io.github.lightrag.storage.InMemoryStorageProvider;
 import io.github.lightrag.storage.SnapshotStore;
 import io.github.lightrag.storage.StorageProvider;
 import io.github.lightrag.storage.WorkspaceStorageProvider;
+import io.github.lightrag.storage.milvus.MilvusVectorConfig;
+import io.github.lightrag.storage.mysql.MySqlMilvusNeo4jStorageProvider;
+import io.github.lightrag.storage.mysql.MySqlStorageConfig;
 import io.github.lightrag.storage.neo4j.Neo4jGraphConfig;
 import io.github.lightrag.storage.neo4j.PostgresNeo4jStorageProvider;
 import io.github.lightrag.storage.postgres.PostgresStorageConfig;
@@ -151,6 +154,22 @@ public final class SpringWorkspaceStorageProvider implements WorkspaceStoragePro
                 snapshotStore,
                 scope
             );
+            case MYSQL_MILVUS_NEO4J -> dataSource != null
+                ? new MySqlMilvusNeo4jStorageProvider(
+                    dataSource,
+                    mySqlConfig(),
+                    milvusConfig(),
+                    neo4jConfig(),
+                    snapshotStore,
+                    scope
+                )
+                : new MySqlMilvusNeo4jStorageProvider(
+                    mySqlConfig(),
+                    milvusConfig(),
+                    neo4jConfig(),
+                    snapshotStore,
+                    scope
+                );
         };
     }
 
@@ -176,6 +195,36 @@ public final class SpringWorkspaceStorageProvider implements WorkspaceStoragePro
             requireValue(neo4j.getUsername(), "lightrag.storage.neo4j.username"),
             requireValue(neo4j.getPassword(), "lightrag.storage.neo4j.password"),
             requireValue(neo4j.getDatabase(), "lightrag.storage.neo4j.database")
+        );
+    }
+
+    private MySqlStorageConfig mySqlConfig() {
+        var mysql = properties.getStorage().getMysql();
+        return new MySqlStorageConfig(
+            requireValue(mysql.getJdbcUrl(), "lightrag.storage.mysql.jdbc-url"),
+            requireValue(mysql.getUsername(), "lightrag.storage.mysql.username"),
+            requireValue(mysql.getPassword(), "lightrag.storage.mysql.password"),
+            requireValue(mysql.getTablePrefix(), "lightrag.storage.mysql.table-prefix")
+        );
+    }
+
+    private MilvusVectorConfig milvusConfig() {
+        var milvus = properties.getStorage().getMilvus();
+        if (milvus.getVectorDimensions() == null) {
+            throw new IllegalStateException("lightrag.storage.milvus.vector-dimensions is required");
+        }
+        return new MilvusVectorConfig(
+            requireValue(milvus.getUri(), "lightrag.storage.milvus.uri"),
+            milvus.getToken(),
+            milvus.getUsername(),
+            milvus.getPassword(),
+            requireValue(milvus.getDatabase(), "lightrag.storage.milvus.database"),
+            requireValue(milvus.getCollectionPrefix(), "lightrag.storage.milvus.collection-prefix"),
+            milvus.getVectorDimensions(),
+            milvus.getAnalyzerType(),
+            milvus.getHybridRanker(),
+            milvus.getHybridRrfK(),
+            milvus.getSchemaDriftStrategy()
         );
     }
 
@@ -232,7 +281,8 @@ public final class SpringWorkspaceStorageProvider implements WorkspaceStoragePro
         }
         return !(storageProvider instanceof InMemoryStorageProvider)
             && !(storageProvider instanceof PostgresStorageProvider)
-            && !(storageProvider instanceof PostgresNeo4jStorageProvider);
+            && !(storageProvider instanceof PostgresNeo4jStorageProvider)
+            && !(storageProvider instanceof MySqlMilvusNeo4jStorageProvider);
     }
 
     private static String slug(String workspaceId) {

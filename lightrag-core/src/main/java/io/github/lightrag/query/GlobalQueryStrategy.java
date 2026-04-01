@@ -42,7 +42,14 @@ public final class GlobalQueryStrategy implements QueryStrategy {
         }
         var queryVector = embeddingModel.embedAll(List.of(embeddingText)).get(0);
         var relationScores = new LinkedHashMap<String, Double>();
-        for (var match : storageProvider.vectorStore().search(RELATION_NAMESPACE, queryVector, query.topK())) {
+        for (var match : VectorSearches.search(
+            storageProvider.vectorStore(),
+            RELATION_NAMESPACE,
+            queryVector,
+            query.query(),
+            query.hlKeywords(),
+            query.topK()
+        )) {
             relationScores.merge(match.id(), match.score(), Math::max);
         }
 

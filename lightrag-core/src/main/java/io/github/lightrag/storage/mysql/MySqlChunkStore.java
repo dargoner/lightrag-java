@@ -1,0 +1,143 @@
+package io.github.lightrag.storage.mysql;
+
+import io.github.lightrag.storage.ChunkStore;
+
+import javax.sql.DataSource;
+import java.sql.ResultSet;
+import java.sql.SQLException;
+import java.util.List;
+import java.util.Objects;
+import java.util.Optional;
+
+public final class MySqlChunkStore implements ChunkStore {
+    private final MySqlJdbcConnectionAccess connectionAccess;
+    private final String tableName;
+    private final String workspaceId;
+
+    public MySqlChunkStore(DataSource dataSource, MySqlStorageConfig config) {
+        this(dataSource, config, "default");
+    }
+
+    public MySqlChunkStore(DataSource dataSource, MySqlStorageConfig config, String workspaceId) {
+        this(MySqlJdbcConnectionAccess.forDataSource(dataSource), config, workspaceId);
+    }
+
+    MySqlChunkStore(MySqlJdbcConnectionAccess connectionAccess, MySqlStorageConfig config, String workspaceId) {
+        this.connectionAccess = Objects.requireNonNull(connectionAccess, "connectionAccess");
+        this.tableName = Objects.requireNonNull(config, "config").qualifiedTableName("chunks");
+        this.workspaceId = Objects.requireNonNull(workspaceId, "workspaceId");
+    }
+
+    @Override
+    public void save(ChunkRecord chunk) {
+        var record = Objects.requireNonNull(chunk, "chunk");
+        connectionAccess.withConnection(connection -> {
+            try (var statement = connection.prepareStatement(
+                """
+                INSERT INTO %s (workspace_id, id, document_id, text, token_count, chunk_order, metadata)
+                VALUES (?, ?, ?, ?, ?, ?, ?)
+                ON DUPLICATE KEY UPDATE
+                    document_id = VALUES(document_id),
+                    text = VALUES(text),
+                    token_count = VALUES(token_count),
+                    chunk_order = VALUES(chunk_order),
+                    metadata = VALUES(metadata)
+                """.formatted(tableName)
+            )) {
+                statement.setString(1, workspaceId);
+                statement.setString(2, record.id());
+                statement.setString(3, record.documentId());
+                statement.setString(4, record.text());
+                statement.setInt(5, record.tokenCount());
+                statement.setInt(6, record.order());
+                statement.setString(7, MySqlJsonCodec.writeStringMap(record.metadata()));
+                statement.executeUpdate();
+                return null;
+            }
+        });
+    }
+
+    @Override
+    public Optional<ChunkRecord> load(String chunkId) {
+        var id = Objects.requireNonNull(chunkId, "chunkId");
+        return connectionAccess.withConnection(connection -> {
+            try (var statement = connection.prepareStatement(
+                """
+                SELECT id, document_id, text, token_count, chunk_order, metadata
+                FROM %s
+                WHERE workspace_id = ?
+                  AND id = ?
+                """.formatted(tableName)
+            )) {
+                statement.setString(1, workspaceId);
+                statement.setString(2, id);
+                try (var resultSet = statement.executeQuery()) {
+                    if (!resultSet.next()) {
+                        return Optional.empty();
+                    }
+                    return Optional.of(readChunk(resultSet));
+                }
+            }
+        });
+    }
+
+    @Override
+    public List<ChunkRecord> list() {
+        return connectionAccess.withConnection(connection -> {
+            try (var statement = connection.prepareStatement(
+                """
+                SELECT id, document_id, text, token_count, chunk_order, metadata
+                FROM %s
+                WHERE workspace_id = ?
+                ORDER BY id
+                """.formatted(tableName)
+            )) {
+                statement.setString(1, workspaceId);
+                try (var resultSet = statement.executeQuery()) {
+                    var chunks = new java.util.ArrayList<ChunkRecord>();
+                    while (resultSet.next()) {
+                        chunks.add(readChunk(resultSet));
+                    }
+                    return List.copyOf(chunks);
+                }
+            }
+        });
+    }
+
+    @Override
+    public List<ChunkRecord> listByDocument(String documentId) {
+        var id = Objects.requireNonNull(documentId, "documentId");
+        return connectionAccess.withConnection(connection -> {
+            try (var statement = connection.prepareStatement(
+                """
+                SELECT id, document_id, text, token_count, chunk_order, metadata
+                FROM %s
+                WHERE workspace_id = ?
+                  AND document_id = ?
+                ORDER BY chunk_order, id
+                """.formatted(tableName)
+            )) {
+                statement.setString(1, workspaceId);
+                statement.setString(2, id);
+                try (var resultSet = statement.executeQuery()) {
+                    var chunks = new java.util.ArrayList<ChunkRecord>();
+                    while (resultSet.next()) {
+                        chunks.add(readChunk(resultSet));
+                    }
+                    return List.copyOf(chunks);
+                }
+            }
+        });
+    }
+
+    private static ChunkRecord readChunk(ResultSet resultSet) throws SQLException {
+        return new ChunkRecord(
+            resultSet.getString("id"),
+            resultSet.getString("document_id"),
+            resultSet.getString("text"),
+            resultSet.getInt("token_count"),
+            resultSet.getInt("chunk_order"),
+            MySqlJsonCodec.readStringMap(resultSet.getString("metadata"))
+        );
+    }
+}

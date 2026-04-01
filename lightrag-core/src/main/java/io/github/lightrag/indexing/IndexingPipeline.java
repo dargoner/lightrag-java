@@ -6,6 +6,7 @@ import io.github.lightrag.model.EmbeddingModel;
 import io.github.lightrag.storage.AtomicStorageProvider;
 import io.github.lightrag.storage.DocumentStatusStore;
 import io.github.lightrag.storage.GraphStore;
+import io.github.lightrag.storage.HybridVectorStore;
 import io.github.lightrag.storage.SnapshotStore;
 import io.github.lightrag.storage.VectorStore;
 import io.github.lightrag.types.Document;
@@ -353,10 +354,10 @@ public final class IndexingPipeline {
             synchronized (storageMutationMonitor) {
                 storageProvider.writeAtomically(storage -> {
                     documentIngestor.persist(computed.prepared(), storage);
-                    saveVectors(StorageSnapshots.CHUNK_NAMESPACE, computed.chunkVectors(), storage.vectorStore());
+                    saveChunkVectors(computed.prepared().chunks(), computed.chunkVectors(), storage.vectorStore());
                     saveGraph(computed.graph().entities(), computed.graph().relations(), storage);
-                    saveVectors(StorageSnapshots.ENTITY_NAMESPACE, computed.entityVectors(), storage.vectorStore());
-                    saveVectors(StorageSnapshots.RELATION_NAMESPACE, computed.relationVectors(), storage.vectorStore());
+                    saveEntityVectors(computed.graph().entities(), computed.entityVectors(), storage.vectorStore());
+                    saveRelationVectors(computed.graph().relations(), computed.relationVectors(), storage.vectorStore());
                     storage.documentStatusStore().save(new DocumentStatusStore.StatusRecord(
                         computed.source().id(),
                         DocumentStatus.PROCESSED,
@@ -420,6 +421,56 @@ public final class IndexingPipeline {
             return;
         }
         vectorStore.saveAll(namespace, vectors);
+    }
+
+    private void saveChunkVectors(
+        List<io.github.lightrag.types.Chunk> chunks,
+        List<VectorStore.VectorRecord> vectors,
+        VectorStore vectorStore
+    ) {
+        if (vectors.isEmpty()) {
+            return;
+        }
+        if (vectorStore instanceof HybridVectorStore hybridVectorStore) {
+            hybridVectorStore.saveAllEnriched(
+                StorageSnapshots.CHUNK_NAMESPACE,
+                HybridVectorPayloads.chunkPayloads(chunks, vectors)
+            );
+            return;
+        }
+        saveVectors(StorageSnapshots.CHUNK_NAMESPACE, vectors, vectorStore);
+    }
+
+    private void saveEntityVectors(List<Entity> entities, List<VectorStore.VectorRecord> vectors, VectorStore vectorStore) {
+        if (vectors.isEmpty()) {
+            return;
+        }
+        if (vectorStore instanceof HybridVectorStore hybridVectorStore) {
+            hybridVectorStore.saveAllEnriched(
+                StorageSnapshots.ENTITY_NAMESPACE,
+                HybridVectorPayloads.entityPayloads(entities, vectors)
+            );
+            return;
+        }
+        saveVectors(StorageSnapshots.ENTITY_NAMESPACE, vectors, vectorStore);
+    }
+
+    private void saveRelationVectors(
+        List<Relation> relations,
+        List<VectorStore.VectorRecord> vectors,
+        VectorStore vectorStore
+    ) {
+        if (vectors.isEmpty()) {
+            return;
+        }
+        if (vectorStore instanceof HybridVectorStore hybridVectorStore) {
+            hybridVectorStore.saveAllEnriched(
+                StorageSnapshots.RELATION_NAMESPACE,
+                HybridVectorPayloads.relationPayloads(relations, vectors)
+            );
+            return;
+        }
+        saveVectors(StorageSnapshots.RELATION_NAMESPACE, vectors, vectorStore);
     }
 
     private void persistSnapshotIfConfigured() {
