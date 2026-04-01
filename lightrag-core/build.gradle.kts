@@ -4,10 +4,14 @@ plugins {
 
 description = "Core LightRAG Java SDK with indexing, retrieval, and storage integrations."
 
-java {
-    withJavadocJar()
-    withSourcesJar()
-}
+val hasSigningConfig =
+    (
+        providers.gradleProperty("signingInMemoryKey").isPresent &&
+            providers.gradleProperty("signingInMemoryKeyPassword").isPresent
+        ) || (
+        providers.gradleProperty("signing.secretKeyRingFile").isPresent &&
+            providers.gradleProperty("signing.password").isPresent
+        )
 
 dependencies {
     testImplementation("org.junit.jupiter:junit-jupiter:5.12.1")
@@ -48,7 +52,9 @@ tasks.register<JavaExec>("runRagasBatchEval") {
 mavenPublishing {
     coordinates("io.github.dargoner", "lightrag-core", version.toString())
     publishToMavenCentral()
-    signAllPublications()
+    if (hasSigningConfig) {
+        signAllPublications()
+    }
 
     pom {
         name.set("lightrag-core")
