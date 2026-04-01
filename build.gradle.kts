@@ -7,7 +7,11 @@ plugins {
 // 2) 将 maven-publish 插件接入可发布模块
 // Central Portal 凭据、签名和完整发布参数在 Task 2/3 配置。
 group = "io.github.dargoner"
-version = providers.gradleProperty("releaseVersion").orElse("0.1.0-SNAPSHOT").get()
+version =
+    providers.gradleProperty("releaseVersion")
+        .orElse(providers.gradleProperty("projectVersion"))
+        .orElse("0.1.0-SNAPSHOT")
+        .get()
 
 repositories {
     mavenCentral()

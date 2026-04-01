@@ -12,7 +12,7 @@ on:
         type: string
 
 permissions:
-  contents: read
+  contents: write
 
 concurrency:
   group: release-${{ github.ref }}
@@ -21,6 +21,8 @@ concurrency:
 jobs:
   publish:
     runs-on: ubuntu-latest
+    outputs:
+      release_version: ${{ steps.version.outputs.value }}
 
     env:
       ORG_GRADLE_PROJECT_mavenCentralUsername: ${{ secrets.ORG_GRADLE_PROJECT_mavenCentralUsername }}
@@ -65,3 +67,75 @@ jobs:
           -PreleaseVersion=${{ steps.version.outputs.value }}
           :lightrag-core:publishAndReleaseToMavenCentral
           :lightrag-spring-boot-starter:publishAndReleaseToMavenCentral
+
+  bump-next-snapshot:
+    needs: publish
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout default branch
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.repository.default_branch }}
+
+      - name: Compute next minor snapshot
+        id: next-version
+        shell: bash
+        env:
+          RELEASE_VERSION: ${{ needs.publish.outputs.release_version }}
+        run: |
+          if [[ ! "${RELEASE_VERSION}" =~ ^([0-9]+)\.([0-9]+)\.([0-9]+)$ ]]; then
+            echo "release version must match X.Y.Z, got: ${RELEASE_VERSION}" >&2
+            exit 1
+          fi
+
+          major="${BASH_REMATCH[1]}"
+          minor="${BASH_REMATCH[2]}"
+          next_minor=$((minor + 1))
+          next_version="${major}.${next_minor}.0-SNAPSHOT"
+
+          echo "value=${next_version}" >> "${GITHUB_OUTPUT}"
+
+      - name: Update default project version
+        shell: bash
+        env:
+          NEXT_VERSION: ${{ steps.next-version.outputs.value }}
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          import os
+
+          path = Path("gradle.properties")
+          next_version = os.environ["NEXT_VERSION"]
+          lines = path.read_text().splitlines()
+          updated = []
+          replaced = False
+
+          for line in lines:
+              if line.startswith("projectVersion="):
+                  updated.append(f"projectVersion={next_version}")
+                  replaced = True
+              else:
+                  updated.append(line)
+
+          if not replaced:
+              updated.insert(0, f"projectVersion={next_version}")
+
+          path.write_text("\\n".join(updated) + "\\n")
+          PY
+
+      - name: Commit next snapshot version
+        shell: bash
+        env:
+          NEXT_VERSION: ${{ steps.next-version.outputs.value }}
+        run: |
+          if git diff --quiet -- gradle.properties; then
+            echo "projectVersion already set to ${NEXT_VERSION}"
+            exit 0
+          fi
+
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add gradle.properties
+          git commit -m "chore: bump version to ${NEXT_VERSION}"
+          git push origin HEAD:${{ github.event.repository.default_branch }}
