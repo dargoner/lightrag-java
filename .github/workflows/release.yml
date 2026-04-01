@@ -61,6 +61,20 @@ jobs:
 
           echo "value=${version}" >> "${GITHUB_OUTPUT}"
 
+      - name: Normalize signing key
+        shell: bash
+        run: |
+          if [[ -z "${ORG_GRADLE_PROJECT_signingInMemoryKey:-}" ]]; then
+            echo "signing key is not set" >&2
+            exit 1
+          fi
+
+          {
+            echo "ORG_GRADLE_PROJECT_signingInMemoryKey<<EOF"
+            printf '%b\n' "${ORG_GRADLE_PROJECT_signingInMemoryKey}"
+            echo "EOF"
+          } >> "${GITHUB_ENV}"
+
       - name: Publish to Maven Central
         run: >
           ./gradlew --no-daemon --console=plain
