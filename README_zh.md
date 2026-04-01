@@ -4,6 +4,7 @@
 ![Gradle 8](https://img.shields.io/badge/Gradle-8.14.3-02303A)
 ![Spring Boot Starter](https://img.shields.io/badge/Spring_Boot-Starter-6DB33F)
 ![RAGAS Eval](https://img.shields.io/badge/Evaluation-RAGAS-7B61FF)
+[![Maven Central](https://img.shields.io/maven-central/v/io.github.dargoner/lightrag-core)](https://search.maven.org/artifact/io.github.dargoner/lightrag-core)
 
 `lightrag-java` 是一个面向 Java 17 的 LightRAG 风格 SDK，支持文档 ingest、图检索、向量检索、结构化引用、流式查询、RAGAS 评测，以及 Spring Boot Starter / Demo 接入。
 

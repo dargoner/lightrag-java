@@ -4,6 +4,7 @@
 ![Gradle 8](https://img.shields.io/badge/Gradle-8.14.3-02303A)
 ![Spring Boot Starter](https://img.shields.io/badge/Spring_Boot-Starter-6DB33F)
 ![RAGAS Eval](https://img.shields.io/badge/Evaluation-RAGAS-7B61FF)
+[![Maven Central](https://img.shields.io/maven-central/v/io.github.dargoner/lightrag-core)](https://search.maven.org/artifact/io.github.dargoner/lightrag-core)
 ![License](https://img.shields.io/badge/License-Apache_2.0-blue)
 
 Standalone Java SDK for a LightRAG-style indexing and retrieval pipeline.
