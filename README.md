@@ -13,6 +13,42 @@ Standalone Java SDK for a LightRAG-style indexing and retrieval pipeline.
 - A local JDK 17 is supported.
 - If JDK 17 is not installed, Gradle is configured to auto-provision a matching toolchain.
 
+## Publishing
+
+Published artifacts use the `io.github.dargoner` group:
+
+- `io.github.dargoner:lightrag-core`
+- `io.github.dargoner:lightrag-spring-boot-starter`
+
+The `lightrag-spring-boot-demo` module is for local demo usage and is not a Maven Central artifact.
+
+Before releasing, make sure you have:
+
+- a verified `io.github.dargoner` namespace in Maven Central Portal
+- a Central Portal publishing token (username/password pair)
+- an ASCII-armored GPG private key and passphrase for signing
+
+Configure credentials in `~/.gradle/gradle.properties`:
+
+```properties
+mavenCentralUsername=YOUR_CENTRAL_PORTAL_USERNAME
+mavenCentralPassword=YOUR_CENTRAL_PORTAL_PASSWORD
+signingInMemoryKey=-----BEGIN PGP PRIVATE KEY BLOCK-----\n...\n-----END PGP PRIVATE KEY BLOCK-----
+signingInMemoryKeyPassword=YOUR_GPG_PASSPHRASE
+```
+
+Local `publishToMavenLocal` validation can run without signing credentials. It is used to verify generated artifacts before release.
+
+```bash
+./gradlew --console=plain --no-daemon -PreleaseVersion=0.1.0 :lightrag-core:publishToMavenLocal :lightrag-spring-boot-starter:publishToMavenLocal
+```
+
+Release to Maven Central requires full signing configuration (including `signingInMemoryKey` and `signingInMemoryKeyPassword`) plus Maven Central credentials:
+
+```bash
+./gradlew --console=plain --no-daemon -PreleaseVersion=0.1.0 :lightrag-core:publishAndReleaseToMavenCentral :lightrag-spring-boot-starter:publishAndReleaseToMavenCentral
+```
+
 ## Quick Start
 
 ```java
