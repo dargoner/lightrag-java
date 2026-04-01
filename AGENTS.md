@@ -28,7 +28,7 @@ Follow the existing Java style in the repository:
 
 - 4-space indentation, no tabs.
 - `UpperCamelCase` for classes, `lowerCamelCase` for methods/fields, `UPPER_SNAKE_CASE` for constants.
-- Keep packages under `io.github.lightragjava.<area>`.
+- Keep packages under `io.github.lightrag.<area>`.
 - Prefer small, focused classes and fluent builder usage consistent with `LightRagBuilder`.
 
 No dedicated formatter or linter is configured in Gradle today, so match surrounding code closely and keep imports/order clean.

@@ -39,14 +39,14 @@ tasks.register<JavaExec>("runRagasQuery") {
     group = "evaluation"
     description = "Runs a single LightRAG query for RAGAS evaluation."
     classpath = sourceSets.main.get().runtimeClasspath
-    mainClass.set("io.github.lightragjava.evaluation.RagasEvaluationCli")
+    mainClass.set("io.github.lightrag.evaluation.RagasEvaluationCli")
 }
 
 tasks.register<JavaExec>("runRagasBatchEval") {
     group = "evaluation"
     description = "Runs the full LightRAG evaluation dataset and returns answers plus contexts."
     classpath = sourceSets.main.get().runtimeClasspath
-    mainClass.set("io.github.lightragjava.evaluation.RagasBatchEvaluationCli")
+    mainClass.set("io.github.lightrag.evaluation.RagasBatchEvaluationCli")
 }
 
 mavenPublishing {

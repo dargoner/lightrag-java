@@ -131,11 +131,11 @@
 
 对应自动化测试：
 
-- `io.github.lightragjava.evaluation.RealConvertedMarkdownRetrievalEvaluationTest`
+- `io.github.lightrag.evaluation.RealConvertedMarkdownRetrievalEvaluationTest`
 
 运行命令：
 
 ```bash
 cd /home/dargoner/work/lightrag-java/.worktrees/smart-chunker
-GRADLE_USER_HOME=/tmp/gradle-user-home ./gradlew :lightrag-core:test --tests 'io.github.lightragjava.evaluation.RealConvertedMarkdownRetrievalEvaluationTest'
+GRADLE_USER_HOME=/tmp/gradle-user-home ./gradlew :lightrag-core:test --tests 'io.github.lightrag.evaluation.RealConvertedMarkdownRetrievalEvaluationTest'
 ```
