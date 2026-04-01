@@ -1,6 +1,8 @@
 plugins {
-    `maven-publish`
+    `java-library`
 }
+
+description = "Core LightRAG Java SDK with indexing, retrieval, and storage integrations."
 
 java {
     withJavadocJar()
@@ -43,11 +45,36 @@ tasks.register<JavaExec>("runRagasBatchEval") {
     mainClass.set("io.github.lightragjava.evaluation.RagasBatchEvaluationCli")
 }
 
-publishing {
-    publications {
-        create<MavenPublication>("mavenJava") {
-            from(components["java"])
-            artifactId = "lightrag-core"
+mavenPublishing {
+    coordinates("io.github.dargoner", "lightrag-core", version.toString())
+    publishToMavenCentral()
+    signAllPublications()
+
+    pom {
+        name.set("lightrag-core")
+        description.set(project.description)
+        url.set("https://github.com/dargoner/lightrag-java")
+
+        licenses {
+            license {
+                name.set("The Apache License, Version 2.0")
+                url.set("https://www.apache.org/licenses/LICENSE-2.0.txt")
+                distribution.set("repo")
+            }
+        }
+
+        developers {
+            developer {
+                id.set("dargoner")
+                name.set("dargoner")
+                url.set("https://github.com/dargoner")
+            }
+        }
+
+        scm {
+            url.set("https://github.com/dargoner/lightrag-java")
+            connection.set("scm:git:https://github.com/dargoner/lightrag-java.git")
+            developerConnection.set("scm:git:ssh://git@github.com/dargoner/lightrag-java.git")
         }
     }
 }
