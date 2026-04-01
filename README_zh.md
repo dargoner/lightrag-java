@@ -53,6 +53,8 @@ git tag v0.2.1
 git push origin v0.2.1
 ```
 
+如果补丁版 / 安全修复版是从 hotfix 分支发布的，它只会发布这个补丁版本，不会改 `main`。例如发布 `v0.2.1` 后，`main` 仍然保持在 `0.3.0-SNAPSHOT`。
+
 如果需要，也可以在 GitHub Actions 页面手动运行 `Release` 工作流，并填写 `release_version`。默认还是推荐直接推发布 tag。
 
 当 `main` 上的正式版发布成功后，仓库默认开发版本会自动推进到下一个 minor 的快照版本。例如发布 `v0.2.0` 后，`main` 会自动进入 `0.3.0-SNAPSHOT`。

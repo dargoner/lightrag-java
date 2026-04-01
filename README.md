@@ -44,6 +44,8 @@ git tag v0.2.1
 git push origin v0.2.1
 ```
 
+Patch/security releases from a hotfix branch do not change `main`. Example: releasing `v0.2.1` keeps `main` on `0.3.0-SNAPSHOT`.
+
 You can also run the `Release` workflow manually from GitHub Actions and set `release_version`, but pushing the release tag is the normal path.
 
 After a successful release from `main`, the repository default version is advanced automatically to the next minor snapshot. Example: `v0.2.0` releases `0.2.0`, then `main` moves to `0.3.0-SNAPSHOT`.

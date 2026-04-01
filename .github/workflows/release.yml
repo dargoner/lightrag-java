@@ -23,6 +23,7 @@ jobs:
     runs-on: ubuntu-latest
     outputs:
       release_version: ${{ steps.version.outputs.value }}
+      released_sha: ${{ steps.release-sha.outputs.value }}
 
     env:
       ORG_GRADLE_PROJECT_mavenCentralUsername: ${{ secrets.ORG_GRADLE_PROJECT_mavenCentralUsername }}
@@ -61,6 +62,12 @@ jobs:
 
           echo "value=${version}" >> "${GITHUB_OUTPUT}"
 
+      - name: Capture released commit SHA
+        id: release-sha
+        shell: bash
+        run: |
+          echo "value=${GITHUB_SHA}" >> "${GITHUB_OUTPUT}"
+
       - name: Normalize signing key
         shell: bash
         run: |
@@ -92,8 +99,26 @@ jobs:
         with:
           ref: ${{ github.event.repository.default_branch }}
 
+      - name: Check whether released commit is the default branch head
+        id: bump-guard
+        shell: bash
+        env:
+          RELEASED_SHA: ${{ needs.publish.outputs.released_sha }}
+        run: |
+          default_branch_head_sha="$(git rev-parse HEAD)"
+
+          echo "default_branch_head_sha=${default_branch_head_sha}"
+          echo "released_sha=${RELEASED_SHA}"
+
+          if [[ "${default_branch_head_sha}" == "${RELEASED_SHA}" ]]; then
+            echo "should_bump=true" >> "${GITHUB_OUTPUT}"
+          else
+            echo "should_bump=false" >> "${GITHUB_OUTPUT}"
+          fi
+
       - name: Compute next minor snapshot
         id: next-version
+        if: steps.bump-guard.outputs.should_bump == 'true'
         shell: bash
         env:
           RELEASE_VERSION: ${{ needs.publish.outputs.release_version }}
@@ -111,6 +136,7 @@ jobs:
           echo "value=${next_version}" >> "${GITHUB_OUTPUT}"
 
       - name: Update default project version
+        if: steps.bump-guard.outputs.should_bump == 'true'
         shell: bash
         env:
           NEXT_VERSION: ${{ steps.next-version.outputs.value }}
@@ -139,6 +165,7 @@ jobs:
           PY
 
       - name: Commit next snapshot version
+        if: steps.bump-guard.outputs.should_bump == 'true'
         shell: bash
         env:
           NEXT_VERSION: ${{ steps.next-version.outputs.value }}
@@ -153,3 +180,9 @@ jobs:
           git add gradle.properties
           git commit -m "chore: bump version to ${NEXT_VERSION}"
           git push origin HEAD:${{ github.event.repository.default_branch }}
+
+      - name: Skip bump for non-default-branch release
+        if: steps.bump-guard.outputs.should_bump != 'true'
+        shell: bash
+        run: |
+          echo "released commit is not the default branch head; skipping main version bump"
