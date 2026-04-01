@@ -6,8 +6,7 @@ description = "Core LightRAG Java SDK with indexing, retrieval, and storage inte
 
 val hasSigningConfig =
     (
-        providers.gradleProperty("signingInMemoryKey").isPresent &&
-            providers.gradleProperty("signingInMemoryKeyPassword").isPresent
+        providers.gradleProperty("signingInMemoryKey").isPresent
         ) || (
         providers.gradleProperty("signing.secretKeyRingFile").isPresent &&
             providers.gradleProperty("signing.password").isPresent
