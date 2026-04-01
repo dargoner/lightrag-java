@@ -1,11 +1,17 @@
 plugins {
-    `maven-publish`
+    `java-library`
 }
 
-java {
-    withJavadocJar()
-    withSourcesJar()
-}
+description = "Core LightRAG Java SDK with indexing, retrieval, and storage integrations."
+
+val hasSigningConfig =
+    (
+        providers.gradleProperty("signingInMemoryKey").isPresent &&
+            providers.gradleProperty("signingInMemoryKeyPassword").isPresent
+        ) || (
+        providers.gradleProperty("signing.secretKeyRingFile").isPresent &&
+            providers.gradleProperty("signing.password").isPresent
+        )
 
 dependencies {
     testImplementation("org.junit.jupiter:junit-jupiter:5.12.1")
@@ -43,11 +49,38 @@ tasks.register<JavaExec>("runRagasBatchEval") {
     mainClass.set("io.github.lightragjava.evaluation.RagasBatchEvaluationCli")
 }
 
-publishing {
-    publications {
-        create<MavenPublication>("mavenJava") {
-            from(components["java"])
-            artifactId = "lightrag-core"
+mavenPublishing {
+    coordinates("io.github.dargoner", "lightrag-core", version.toString())
+    publishToMavenCentral()
+    if (hasSigningConfig) {
+        signAllPublications()
+    }
+
+    pom {
+        name.set("lightrag-core")
+        description.set(project.description)
+        url.set("https://github.com/dargoner/lightrag-java")
+
+        licenses {
+            license {
+                name.set("The Apache License, Version 2.0")
+                url.set("https://www.apache.org/licenses/LICENSE-2.0.txt")
+                distribution.set("repo")
+            }
+        }
+
+        developers {
+            developer {
+                id.set("dargoner")
+                name.set("dargoner")
+                url.set("https://github.com/dargoner")
+            }
+        }
+
+        scm {
+            url.set("https://github.com/dargoner/lightrag-java")
+            connection.set("scm:git:https://github.com/dargoner/lightrag-java.git")
+            developerConnection.set("scm:git:ssh://git@github.com/dargoner/lightrag-java.git")
         }
     }
 }
