@@ -23,32 +23,30 @@ Published artifacts use the `io.github.dargoner` group:
 
 The `lightrag-spring-boot-demo` module is for local demo usage and is not a Maven Central artifact.
 
-Before releasing, make sure you have:
+Releases are published by the GitHub Actions `Release` workflow.
 
-- a verified `io.github.dargoner` namespace in Maven Central Portal
-- a Central Portal publishing token (username/password pair)
-- an ASCII-armored GPG private key and passphrase for signing
-
-Configure credentials in `~/.gradle/gradle.properties`:
-
-```properties
-mavenCentralUsername=YOUR_CENTRAL_PORTAL_USERNAME
-mavenCentralPassword=YOUR_CENTRAL_PORTAL_PASSWORD
-signingInMemoryKey=-----BEGIN PGP PRIVATE KEY BLOCK-----\n...\n-----END PGP PRIVATE KEY BLOCK-----
-signingInMemoryKeyPassword=YOUR_GPG_PASSPHRASE
-```
-
-Local `publishToMavenLocal` validation can run without signing credentials. It is used to verify generated artifacts before release.
+Standard release:
 
 ```bash
-./gradlew --console=plain --no-daemon -PreleaseVersion=0.1.0 :lightrag-core:publishToMavenLocal :lightrag-spring-boot-starter:publishToMavenLocal
+git tag v0.3.0
+git push origin v0.3.0
 ```
 
-Release to Maven Central requires full signing configuration (including `signingInMemoryKey` and `signingInMemoryKeyPassword`) plus Maven Central credentials:
+Patch or security-fix release:
 
 ```bash
-./gradlew --console=plain --no-daemon -PreleaseVersion=0.1.0 :lightrag-core:publishAndReleaseToMavenCentral :lightrag-spring-boot-starter:publishAndReleaseToMavenCentral
+git switch -c hotfix/0.2.x v0.2.0
+# apply the fix
+git commit -am "fix: security patch"
+git push origin hotfix/0.2.x
+
+git tag v0.2.1
+git push origin v0.2.1
 ```
+
+You can also run the `Release` workflow manually from GitHub Actions and set `release_version`, but pushing the release tag is the normal path.
+
+After a successful release from `main`, the repository default version is advanced automatically to the next minor snapshot. Example: `v0.2.0` releases `0.2.0`, then `main` moves to `0.3.0-SNAPSHOT`.
 
 ## Quick Start
 

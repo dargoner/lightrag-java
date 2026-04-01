@@ -23,6 +23,40 @@
 - Gradle Wrapper 已内置
 - 如果使用 PostgreSQL / Neo4j / Testcontainers 相关功能，需要本机有对应服务或 Docker 环境
 
+## 发布
+
+发布到 Maven Central 的产物坐标是：
+
+- `io.github.dargoner:lightrag-core`
+- `io.github.dargoner:lightrag-spring-boot-starter`
+
+`lightrag-spring-boot-demo` 只用于本地演示，不会发布到 Maven Central。
+
+正式发布由 GitHub Actions 的 `Release` 工作流完成。
+
+正常正式版发布：
+
+```bash
+git tag v0.3.0
+git push origin v0.3.0
+```
+
+安全修复 / 补丁版发布：
+
+```bash
+git switch -c hotfix/0.2.x v0.2.0
+# 修复问题
+git commit -am "fix: security patch"
+git push origin hotfix/0.2.x
+
+git tag v0.2.1
+git push origin v0.2.1
+```
+
+如果需要，也可以在 GitHub Actions 页面手动运行 `Release` 工作流，并填写 `release_version`。默认还是推荐直接推发布 tag。
+
+当 `main` 上的正式版发布成功后，仓库默认开发版本会自动推进到下一个 minor 的快照版本。例如发布 `v0.2.0` 后，`main` 会自动进入 `0.3.0-SNAPSHOT`。
+
 ## 仓库结构
 
 - `lightrag-core`
