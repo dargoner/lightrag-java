@@ -65,7 +65,7 @@ class MySqlMilvusNeo4jStorageProviderTest {
                 "seed",
                 List.of("seed")
             )));
-            graphProjection.failOnRestore(new IllegalStateException("projection failed"));
+            graphProjection.failOnSaveEntity(new IllegalStateException("projection failed"));
 
             try (var provider = new MySqlMilvusNeo4jStorageProvider(
                 dataSource,
@@ -199,14 +199,6 @@ class MySqlMilvusNeo4jStorageProviderTest {
     }
 
     @Test
-    void rollsBackStateWhenMilvusDeleteFailsAfterCommit() {
-        assertRollbackWhenMilvusProjectionFails(
-            milvusProjection -> milvusProjection.failOnDeleteNamespace(new IllegalStateException("milvus delete failed")),
-            "milvus delete failed"
-        );
-    }
-
-    @Test
     void rollsBackStateWhenMilvusSaveFailsAfterCommit() {
         assertRollbackWhenMilvusProjectionFails(
             milvusProjection -> milvusProjection.failOnSaveAllEnriched(new IllegalStateException("milvus save failed")),
@@ -220,6 +212,119 @@ class MySqlMilvusNeo4jStorageProviderTest {
             milvusProjection -> milvusProjection.failOnFlushNamespaces(new IllegalStateException("milvus flush failed")),
             "milvus flush failed"
         );
+    }
+
+    @Test
+    void appliesGraphAndMilvusIncrementallyWhenStateOnlyGrows() {
+        try (
+            var container = newMySqlContainer();
+            var dataSource = newDataSource(startedConfig(container));
+        ) {
+            var config = startedConfig(container);
+            new MySqlSchemaManager(dataSource, config).bootstrap();
+
+            var graphProjection = new RecordingGraphProjection();
+            graphProjection.saveEntity(new GraphStore.EntityRecord(
+                "entity-0",
+                "Seed",
+                "seed",
+                "Seed entity",
+                List.of("S"),
+                List.of("doc-0:0")
+            ));
+            graphProjection.saveRelation(new GraphStore.RelationRecord(
+                "relation-0",
+                "entity-0",
+                "entity-0",
+                "self",
+                "Seed relation",
+                1.0d,
+                List.of("doc-0:0")
+            ));
+
+            var milvusProjection = new RecordingMilvusProjection();
+            milvusProjection.saveAllEnriched("chunks", List.of(new HybridVectorStore.EnrichedVectorRecord(
+                "doc-0:0",
+                List.of(1.0d, 0.0d, 0.0d),
+                "seed",
+                List.of("seed")
+            )));
+            graphProjection.resetMetrics();
+            milvusProjection.resetMetrics();
+
+            try (var provider = new MySqlMilvusNeo4jStorageProvider(
+                dataSource,
+                config,
+                new InMemorySnapshotStore(),
+                new WorkspaceScope("default"),
+                graphProjection,
+                milvusProjection,
+                new ReentrantReadWriteLock(true)
+            )) {
+                provider.documentStore().save(new DocumentStore.DocumentRecord("doc-0", "Seed", "seed", Map.of("seed", "true")));
+                provider.chunkStore().save(new ChunkStore.ChunkRecord("doc-0:0", "doc-0", "seed", 4, 0, Map.of("seed", "true")));
+                provider.documentStatusStore().save(new DocumentStatusStore.StatusRecord(
+                    "doc-0",
+                    DocumentStatus.PROCESSED,
+                    "seeded",
+                    null
+                ));
+
+                provider.writeAtomically(storage -> {
+                    storage.documentStore().save(new DocumentStore.DocumentRecord("doc-1", "Incoming", "body", Map.of()));
+                    storage.chunkStore().save(new ChunkStore.ChunkRecord("doc-1:0", "doc-1", "body", 4, 0, Map.of()));
+                    storage.documentStatusStore().save(new DocumentStatusStore.StatusRecord(
+                        "doc-1",
+                        DocumentStatus.PROCESSED,
+                        "incoming",
+                        null
+                    ));
+                    storage.graphStore().saveEntity(new GraphStore.EntityRecord(
+                        "entity-1",
+                        "Incoming",
+                        "person",
+                        "Incoming entity",
+                        List.of(),
+                        List.of("doc-1:0")
+                    ));
+                    storage.graphStore().saveRelation(new GraphStore.RelationRecord(
+                        "relation-1",
+                        "entity-0",
+                        "entity-1",
+                        "handoff_to",
+                        "Seed hands off to incoming",
+                        0.9d,
+                        List.of("doc-1:0")
+                    ));
+                    storage.vectorStore().saveAll("chunks", List.of(new VectorStore.VectorRecord("doc-1:0", List.of(0.0d, 1.0d, 0.0d))));
+                    return null;
+                });
+
+                assertThat(graphProjection.restoreCount).isZero();
+                assertThat(graphProjection.savedEntitiesSinceReset)
+                    .containsExactly(new GraphStore.EntityRecord(
+                        "entity-1",
+                        "Incoming",
+                        "person",
+                        "Incoming entity",
+                        List.of(),
+                        List.of("doc-1:0")
+                    ));
+                assertThat(graphProjection.savedRelationsSinceReset)
+                    .containsExactly(new GraphStore.RelationRecord(
+                        "relation-1",
+                        "entity-0",
+                        "entity-1",
+                        "handoff_to",
+                        "Seed hands off to incoming",
+                        0.9d,
+                        List.of("doc-1:0")
+                    ));
+                assertThat(milvusProjection.deletedNamespaces).isEmpty();
+                assertThat(milvusProjection.savedNamespacesSinceReset).containsExactly("chunks");
+                assertThat(milvusProjection.flushedNamespacesSinceReset).containsExactly(List.of("chunks"));
+            }
+        }
     }
 
     private static void assertRollbackWhenMilvusProjectionFails(
@@ -341,16 +446,33 @@ class MySqlMilvusNeo4jStorageProviderTest {
     private static final class RecordingGraphProjection implements MySqlMilvusNeo4jStorageProvider.GraphProjection {
         private final Map<String, GraphStore.EntityRecord> entities = new LinkedHashMap<>();
         private final Map<String, GraphStore.RelationRecord> relations = new LinkedHashMap<>();
+        private final List<GraphStore.EntityRecord> savedEntitiesSinceReset = new java.util.ArrayList<>();
+        private final List<GraphStore.RelationRecord> savedRelationsSinceReset = new java.util.ArrayList<>();
+        private int restoreCount;
+        private RuntimeException failureOnSaveEntity;
+        private RuntimeException failureOnSaveRelation;
         private RuntimeException failureOnRestore;
 
         @Override
         public void saveEntity(GraphStore.EntityRecord entity) {
+            if (failureOnSaveEntity != null) {
+                var failure = failureOnSaveEntity;
+                failureOnSaveEntity = null;
+                throw failure;
+            }
             entities.put(entity.id(), entity);
+            savedEntitiesSinceReset.add(entity);
         }
 
         @Override
         public void saveRelation(GraphStore.RelationRecord relation) {
+            if (failureOnSaveRelation != null) {
+                var failure = failureOnSaveRelation;
+                failureOnSaveRelation = null;
+                throw failure;
+            }
             relations.put(relation.id(), relation);
+            savedRelationsSinceReset.add(relation);
         }
 
         @Override
@@ -390,6 +512,7 @@ class MySqlMilvusNeo4jStorageProviderTest {
             if (failureOnRestore != null) {
                 throw failureOnRestore;
             }
+            restoreCount++;
             entities.clear();
             relations.clear();
             snapshot.entities().forEach(entity -> entities.put(entity.id(), entity));
@@ -403,11 +526,28 @@ class MySqlMilvusNeo4jStorageProviderTest {
         void failOnRestore(RuntimeException failure) {
             this.failureOnRestore = Objects.requireNonNull(failure, "failure");
         }
+
+        void failOnSaveEntity(RuntimeException failure) {
+            this.failureOnSaveEntity = Objects.requireNonNull(failure, "failure");
+        }
+
+        void failOnSaveRelation(RuntimeException failure) {
+            this.failureOnSaveRelation = Objects.requireNonNull(failure, "failure");
+        }
+
+        void resetMetrics() {
+            savedEntitiesSinceReset.clear();
+            savedRelationsSinceReset.clear();
+            restoreCount = 0;
+        }
     }
 
     private static final class RecordingMilvusProjection implements MySqlMilvusNeo4jStorageProvider.VectorProjection {
         private final Map<String, LinkedHashMap<String, HybridVectorStore.EnrichedVectorRecord>> namespaces = new LinkedHashMap<>();
         private final AtomicBoolean closed = new AtomicBoolean();
+        private final List<String> deletedNamespaces = new java.util.ArrayList<>();
+        private final List<String> savedNamespacesSinceReset = new java.util.ArrayList<>();
+        private final List<List<String>> flushedNamespacesSinceReset = new java.util.ArrayList<>();
         private RuntimeException failureOnDeleteNamespace;
         private RuntimeException failureOnSaveAllEnriched;
         private RuntimeException failureOnFlushNamespaces;
@@ -440,6 +580,7 @@ class MySqlMilvusNeo4jStorageProviderTest {
                 throw failure;
             }
             var target = namespace(namespace);
+            savedNamespacesSinceReset.add(namespace);
             for (var record : records) {
                 target.put(record.id(), record);
             }
@@ -457,6 +598,7 @@ class MySqlMilvusNeo4jStorageProviderTest {
                 failureOnDeleteNamespace = null;
                 throw failure;
             }
+            deletedNamespaces.add(namespace);
             namespace(namespace).clear();
         }
 
@@ -467,6 +609,7 @@ class MySqlMilvusNeo4jStorageProviderTest {
                 failureOnFlushNamespaces = null;
                 throw failure;
             }
+            flushedNamespacesSinceReset.add(List.copyOf(namespaces));
         }
 
         @Override
@@ -488,6 +631,12 @@ class MySqlMilvusNeo4jStorageProviderTest {
 
         void failOnFlushNamespaces(RuntimeException failure) {
             this.failureOnFlushNamespaces = Objects.requireNonNull(failure, "failure");
+        }
+
+        void resetMetrics() {
+            deletedNamespaces.clear();
+            savedNamespacesSinceReset.clear();
+            flushedNamespacesSinceReset.clear();
         }
     }
 

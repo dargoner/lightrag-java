@@ -1,5 +1,7 @@
 package io.github.lightrag.storage.milvus;
 
+import io.milvus.v2.common.ConsistencyLevel;
+
 import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
@@ -18,12 +20,16 @@ public record MilvusVectorConfig(
     String analyzerType,
     String hybridRanker,
     int hybridRrfK,
-    SchemaDriftStrategy schemaDriftStrategy
+    SchemaDriftStrategy schemaDriftStrategy,
+    QueryConsistency queryConsistency,
+    boolean flushOnWrite
 ) {
     public static final String DEFAULT_ANALYZER_TYPE = "chinese";
     public static final String DEFAULT_HYBRID_RANKER = "rrf";
     public static final int DEFAULT_HYBRID_RRF_K = 60;
     public static final SchemaDriftStrategy DEFAULT_SCHEMA_DRIFT_STRATEGY = SchemaDriftStrategy.STRICT_FAIL;
+    public static final QueryConsistency DEFAULT_QUERY_CONSISTENCY = QueryConsistency.BOUNDED;
+    public static final boolean DEFAULT_FLUSH_ON_WRITE = true;
 
     private static final Pattern IDENTIFIER_PATTERN = Pattern.compile("[A-Za-z_][A-Za-z0-9_]*");
     private static final int MAX_COLLECTION_NAME_LENGTH = 255;
@@ -48,7 +54,9 @@ public record MilvusVectorConfig(
             DEFAULT_ANALYZER_TYPE,
             DEFAULT_HYBRID_RANKER,
             DEFAULT_HYBRID_RRF_K,
-            DEFAULT_SCHEMA_DRIFT_STRATEGY
+            DEFAULT_SCHEMA_DRIFT_STRATEGY,
+            DEFAULT_QUERY_CONSISTENCY,
+            DEFAULT_FLUSH_ON_WRITE
         );
     }
 
@@ -75,7 +83,39 @@ public record MilvusVectorConfig(
             analyzerType,
             hybridRanker,
             hybridRrfK,
-            DEFAULT_SCHEMA_DRIFT_STRATEGY
+            DEFAULT_SCHEMA_DRIFT_STRATEGY,
+            DEFAULT_QUERY_CONSISTENCY,
+            DEFAULT_FLUSH_ON_WRITE
+        );
+    }
+
+    public MilvusVectorConfig(
+        String uri,
+        String token,
+        String username,
+        String password,
+        String databaseName,
+        String collectionPrefix,
+        int vectorDimensions,
+        String analyzerType,
+        String hybridRanker,
+        int hybridRrfK,
+        SchemaDriftStrategy schemaDriftStrategy
+    ) {
+        this(
+            uri,
+            token,
+            username,
+            password,
+            databaseName,
+            collectionPrefix,
+            vectorDimensions,
+            analyzerType,
+            hybridRanker,
+            hybridRrfK,
+            schemaDriftStrategy,
+            DEFAULT_QUERY_CONSISTENCY,
+            DEFAULT_FLUSH_ON_WRITE
         );
     }
 
@@ -89,6 +129,7 @@ public record MilvusVectorConfig(
         analyzerType = requireNonBlank(defaultIfBlank(analyzerType, DEFAULT_ANALYZER_TYPE), "analyzerType");
         hybridRanker = normalizeHybridRanker(hybridRanker);
         schemaDriftStrategy = schemaDriftStrategy == null ? DEFAULT_SCHEMA_DRIFT_STRATEGY : schemaDriftStrategy;
+        queryConsistency = queryConsistency == null ? DEFAULT_QUERY_CONSISTENCY : queryConsistency;
         if (vectorDimensions <= 0) {
             throw new IllegalArgumentException("vectorDimensions must be positive");
         }
@@ -98,6 +139,10 @@ public record MilvusVectorConfig(
         if (token == null && (username == null || password == null)) {
             throw new IllegalArgumentException("Either token or username/password must be provided");
         }
+    }
+
+    public ConsistencyLevel queryConsistencyLevel() {
+        return queryConsistency.toMilvusConsistencyLevel();
     }
 
     public String collectionName(String workspaceId, String namespace) {
@@ -179,5 +224,22 @@ public record MilvusVectorConfig(
         STRICT_REBUILD,
         STRICT_FAIL,
         IGNORE
+    }
+
+    public enum QueryConsistency {
+        STRONG(ConsistencyLevel.STRONG),
+        SESSION(ConsistencyLevel.SESSION),
+        BOUNDED(ConsistencyLevel.BOUNDED),
+        EVENTUALLY(ConsistencyLevel.EVENTUALLY);
+
+        private final ConsistencyLevel milvusConsistencyLevel;
+
+        QueryConsistency(ConsistencyLevel milvusConsistencyLevel) {
+            this.milvusConsistencyLevel = milvusConsistencyLevel;
+        }
+
+        ConsistencyLevel toMilvusConsistencyLevel() {
+            return milvusConsistencyLevel;
+        }
     }
 }

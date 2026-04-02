@@ -238,7 +238,7 @@ public final class MySqlMilvusNeo4jStorageProvider implements AtomicStorageProvi
                         throw new StorageException("Failed to open MySQL transaction", exception);
                     }
 
-                    applyGraphSnapshot(stagedGraphStore.snapshot());
+                    applyGraphChanges(baseGraphSnapshot, stagedGraphStore.snapshot());
                     applyMilvusSnapshot(beforeSnapshot, stagedVectorStore.namespaceRecords());
                     return result;
                 } catch (RuntimeException failure) {
@@ -342,23 +342,56 @@ public final class MySqlMilvusNeo4jStorageProvider implements AtomicStorageProvi
         graphProjection.restore(snapshot);
     }
 
+    private void applyGraphChanges(Neo4jGraphSnapshot beforeSnapshot, Neo4jGraphSnapshot afterSnapshot) {
+        var before = Objects.requireNonNull(beforeSnapshot, "beforeSnapshot");
+        var after = Objects.requireNonNull(afterSnapshot, "afterSnapshot");
+        if (!canApplyGraphIncrementally(before, after)) {
+            applyGraphSnapshot(after);
+            return;
+        }
+        var beforeEntities = mapEntitiesById(before.entities());
+        for (var entity : after.entities()) {
+            if (!entity.equals(beforeEntities.get(entity.id()))) {
+                graphProjection.saveEntity(entity);
+            }
+        }
+        var beforeRelations = mapRelationsById(before.relations());
+        for (var relation : after.relations()) {
+            if (!relation.equals(beforeRelations.get(relation.id()))) {
+                graphProjection.saveRelation(relation);
+            }
+        }
+    }
+
     private void applyMilvusSnapshot(
         SnapshotStore.Snapshot baseSnapshot,
         Map<String, List<HybridVectorStore.EnrichedVectorRecord>> namespaceRecords
     ) {
+        var changedNamespaces = new java.util.ArrayList<String>(VECTOR_NAMESPACES.size());
         for (var namespace : VECTOR_NAMESPACES) {
-            vectorProjection.deleteNamespace(namespace);
+            var beforeVectors = baseSnapshot.vectors().getOrDefault(namespace, List.of());
             var records = namespaceRecords.getOrDefault(namespace, List.of());
+            if (canApplyMilvusIncrementally(beforeVectors, records)) {
+                if (!records.isEmpty()) {
+                    vectorProjection.saveAllEnriched(namespace, records);
+                    changedNamespaces.add(namespace);
+                }
+                continue;
+            }
+            vectorProjection.deleteNamespace(namespace);
             if (!records.isEmpty()) {
                 vectorProjection.saveAllEnriched(namespace, records);
             }
+            changedNamespaces.add(namespace);
         }
-        vectorProjection.flushNamespaces(VECTOR_NAMESPACES);
+        if (!changedNamespaces.isEmpty()) {
+            vectorProjection.flushNamespaces(changedNamespaces);
+        }
     }
 
     private void restoreMilvusSnapshot(SnapshotStore.Snapshot snapshot) {
         var restored = buildEnrichedVectors(snapshot);
-        applyMilvusSnapshot(snapshot, restored);
+        replaceMilvusSnapshot(restored);
     }
 
     private Map<String, List<HybridVectorStore.EnrichedVectorRecord>> buildEnrichedVectors(SnapshotStore.Snapshot snapshot) {
@@ -377,6 +410,55 @@ public final class MySqlMilvusNeo4jStorageProvider implements AtomicStorageProvi
                 vectors.getOrDefault("relations", List.of())
             )
         );
+    }
+
+    private void replaceMilvusSnapshot(Map<String, List<HybridVectorStore.EnrichedVectorRecord>> namespaceRecords) {
+        var changedNamespaces = new java.util.ArrayList<String>(VECTOR_NAMESPACES.size());
+        for (var namespace : VECTOR_NAMESPACES) {
+            vectorProjection.deleteNamespace(namespace);
+            var records = namespaceRecords.getOrDefault(namespace, List.of());
+            if (!records.isEmpty()) {
+                vectorProjection.saveAllEnriched(namespace, records);
+            }
+            changedNamespaces.add(namespace);
+        }
+        vectorProjection.flushNamespaces(changedNamespaces);
+    }
+
+    private static boolean canApplyGraphIncrementally(Neo4jGraphSnapshot before, Neo4jGraphSnapshot after) {
+        return after.entities().stream().map(GraphStore.EntityRecord::id).collect(java.util.stream.Collectors.toSet())
+            .containsAll(before.entities().stream().map(GraphStore.EntityRecord::id).toList())
+            && after.relations().stream().map(GraphStore.RelationRecord::id).collect(java.util.stream.Collectors.toSet())
+            .containsAll(before.relations().stream().map(GraphStore.RelationRecord::id).toList());
+    }
+
+    private static boolean canApplyMilvusIncrementally(
+        List<VectorStore.VectorRecord> beforeVectors,
+        List<HybridVectorStore.EnrichedVectorRecord> afterRecords
+    ) {
+        if (beforeVectors.isEmpty()) {
+            return true;
+        }
+        var afterIds = afterRecords.stream()
+            .map(HybridVectorStore.EnrichedVectorRecord::id)
+            .collect(java.util.stream.Collectors.toSet());
+        return afterIds.containsAll(beforeVectors.stream().map(VectorStore.VectorRecord::id).toList());
+    }
+
+    private static Map<String, GraphStore.EntityRecord> mapEntitiesById(List<GraphStore.EntityRecord> entities) {
+        var values = new LinkedHashMap<String, GraphStore.EntityRecord>(entities.size());
+        for (var entity : entities) {
+            values.put(entity.id(), entity);
+        }
+        return values;
+    }
+
+    private static Map<String, GraphStore.RelationRecord> mapRelationsById(List<GraphStore.RelationRecord> relations) {
+        var values = new LinkedHashMap<String, GraphStore.RelationRecord>(relations.size());
+        for (var relation : relations) {
+            values.put(relation.id(), relation);
+        }
+        return values;
     }
 
     private void restoreMySqlSnapshot(SnapshotStore.Snapshot snapshot) {

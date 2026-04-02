@@ -127,6 +127,9 @@ public final class MilvusVectorStore implements HybridVectorStore, AutoCloseable
     }
 
     public void flushNamespaces(List<String> namespaces) {
+        if (!config.flushOnWrite()) {
+            return;
+        }
         clientAdapter.flush(namespaces.stream().map(this::collectionName).distinct().toList());
     }
 

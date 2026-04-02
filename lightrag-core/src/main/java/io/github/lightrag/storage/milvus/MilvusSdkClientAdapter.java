@@ -46,9 +46,11 @@ final class MilvusSdkClientAdapter implements MilvusClientAdapter {
 
     private final MilvusVectorConfig config;
     private final MilvusClientV2 client;
+    private final ConsistencyLevel queryConsistency;
 
     MilvusSdkClientAdapter(MilvusVectorConfig config) {
         this.config = Objects.requireNonNull(config, "config");
+        this.queryConsistency = resolveQueryConsistency(config);
         this.client = new MilvusClientV2(connectConfig(config));
     }
 
@@ -107,7 +109,7 @@ final class MilvusSdkClientAdapter implements MilvusClientAdapter {
                     .outputFields(List.of(ID_FIELD, DENSE_VECTOR_FIELD))
                     .limit(QUERY_PAGE_SIZE)
                     .offset(offset)
-                    .consistencyLevel(ConsistencyLevel.BOUNDED)
+                    .consistencyLevel(queryConsistency)
                     .build());
                 var page = response.getQueryResults();
                 if (page == null || page.isEmpty()) {
@@ -148,7 +150,7 @@ final class MilvusSdkClientAdapter implements MilvusClientAdapter {
                 .topK(searchRequest.topK())
                 .outputFields(List.of(ID_FIELD))
                 .data(List.of(new FloatVec(toFloatList(searchRequest.queryVector()))))
-                .consistencyLevel(ConsistencyLevel.BOUNDED)
+                .consistencyLevel(queryConsistency)
                 .build()));
         } catch (RuntimeException exception) {
             throw new StorageException("Failed semantic search in Milvus collection: " + searchRequest.collectionName(), exception);
@@ -170,7 +172,7 @@ final class MilvusSdkClientAdapter implements MilvusClientAdapter {
                 .topK(searchRequest.topK())
                 .outputFields(List.of(ID_FIELD))
                 .data(List.of(new EmbeddedText(searchRequest.queryText())))
-                .consistencyLevel(ConsistencyLevel.BOUNDED)
+                .consistencyLevel(queryConsistency)
                 .build()));
         } catch (RuntimeException exception) {
             throw new StorageException("Failed keyword search in Milvus collection: " + searchRequest.collectionName(), exception);
@@ -203,7 +205,7 @@ final class MilvusSdkClientAdapter implements MilvusClientAdapter {
                 .ranker(buildRanker(searchRequest))
                 .topK(searchRequest.topK())
                 .outFields(List.of(ID_FIELD))
-                .consistencyLevel(ConsistencyLevel.BOUNDED)
+                .consistencyLevel(queryConsistency)
                 .build()));
         } catch (RuntimeException exception) {
             throw new StorageException("Failed hybrid search in Milvus collection: " + searchRequest.collectionName(), exception);
@@ -250,6 +252,10 @@ final class MilvusSdkClientAdapter implements MilvusClientAdapter {
     @Override
     public void close() {
         client.close();
+    }
+
+    static ConsistencyLevel resolveQueryConsistency(MilvusVectorConfig config) {
+        return Objects.requireNonNull(config, "config").queryConsistencyLevel();
     }
 
     void dropCollection(String collectionName) {

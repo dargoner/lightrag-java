@@ -195,6 +195,44 @@ class MilvusVectorStoreTest {
         );
     }
 
+    @Test
+    void flushNamespacesDelegatesToMilvusWhenFlushOnWriteEnabled() {
+        var adapter = new FakeMilvusClientAdapter();
+        var store = new MilvusVectorStore(adapter, testConfig(), "alpha");
+
+        store.flushNamespaces(List.of("chunks", "chunks", "entities"));
+
+        assertThat(adapter.flushedCollectionNames).containsExactly("rag_alpha_chunks", "rag_alpha_entities");
+    }
+
+    @Test
+    void flushNamespacesSkipsMilvusWhenFlushOnWriteDisabled() {
+        var adapter = new FakeMilvusClientAdapter();
+        var store = new MilvusVectorStore(
+            adapter,
+            new MilvusVectorConfig(
+                "http://localhost:19530",
+                "root:Milvus",
+                null,
+                null,
+                "default",
+                "rag_",
+                3,
+                "chinese",
+                "rrf",
+                60,
+                MilvusVectorConfig.SchemaDriftStrategy.STRICT_FAIL,
+                MilvusVectorConfig.QueryConsistency.BOUNDED,
+                false
+            ),
+            "alpha"
+        );
+
+        store.flushNamespaces(List.of("chunks", "entities"));
+
+        assertThat(adapter.flushedCollectionNames).isEmpty();
+    }
+
     private static MilvusVectorConfig testConfig() {
         return new MilvusVectorConfig(
             "http://localhost:19530",
@@ -213,6 +251,7 @@ class MilvusVectorStoreTest {
         private MilvusClientAdapter.SemanticSearchRequest lastSemanticRequest;
         private MilvusClientAdapter.KeywordSearchRequest lastKeywordRequest;
         private MilvusClientAdapter.HybridSearchRequest lastHybridRequest;
+        private final List<String> flushedCollectionNames = new ArrayList<>();
         private List<VectorStore.VectorMatch> semanticResults = List.of();
         private List<VectorStore.VectorMatch> keywordResults = List.of();
         private List<VectorStore.VectorMatch> hybridResults = List.of();
@@ -252,6 +291,11 @@ class MilvusVectorStoreTest {
         public List<VectorStore.VectorMatch> hybridSearch(MilvusClientAdapter.HybridSearchRequest request) {
             lastHybridRequest = request;
             return hybridResults;
+        }
+
+        @Override
+        public void flush(List<String> collectionNames) {
+            flushedCollectionNames.addAll(collectionNames);
         }
 
         @Override
