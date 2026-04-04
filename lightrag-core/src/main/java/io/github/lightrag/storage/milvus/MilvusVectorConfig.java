@@ -136,9 +136,6 @@ public record MilvusVectorConfig(
         if (hybridRrfK <= 0) {
             throw new IllegalArgumentException("hybridRrfK must be positive");
         }
-        if (token == null && (username == null || password == null)) {
-            throw new IllegalArgumentException("Either token or username/password must be provided");
-        }
     }
 
     public ConsistencyLevel queryConsistencyLevel() {

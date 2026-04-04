@@ -11,6 +11,7 @@ import io.github.lightrag.storage.mysql.MySqlMilvusNeo4jStorageProvider;
 import io.github.lightrag.storage.mysql.MySqlStorageConfig;
 import io.github.lightrag.storage.neo4j.Neo4jGraphConfig;
 import io.github.lightrag.storage.neo4j.PostgresNeo4jStorageProvider;
+import io.github.lightrag.storage.postgres.PostgresMilvusNeo4jStorageProvider;
 import io.github.lightrag.storage.postgres.PostgresStorageConfig;
 import io.github.lightrag.storage.postgres.PostgresStorageProvider;
 import org.springframework.beans.factory.ObjectProvider;
@@ -154,6 +155,22 @@ public final class SpringWorkspaceStorageProvider implements WorkspaceStoragePro
                 snapshotStore,
                 scope
             );
+            case POSTGRES_MILVUS_NEO4J -> dataSource != null
+                ? new PostgresMilvusNeo4jStorageProvider(
+                    dataSource,
+                    postgresConfig(),
+                    milvusConfig(),
+                    neo4jConfig(),
+                    snapshotStore,
+                    scope
+                )
+                : new PostgresMilvusNeo4jStorageProvider(
+                    postgresConfig(),
+                    milvusConfig(),
+                    neo4jConfig(),
+                    snapshotStore,
+                    scope
+                );
             case MYSQL_MILVUS_NEO4J -> dataSource != null
                 ? new MySqlMilvusNeo4jStorageProvider(
                     dataSource,
@@ -282,6 +299,7 @@ public final class SpringWorkspaceStorageProvider implements WorkspaceStoragePro
         return !(storageProvider instanceof InMemoryStorageProvider)
             && !(storageProvider instanceof PostgresStorageProvider)
             && !(storageProvider instanceof PostgresNeo4jStorageProvider)
+            && !(storageProvider instanceof PostgresMilvusNeo4jStorageProvider)
             && !(storageProvider instanceof MySqlMilvusNeo4jStorageProvider);
     }
 

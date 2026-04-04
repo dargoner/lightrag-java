@@ -493,6 +493,7 @@ public class LightRagProperties {
         IN_MEMORY,
         POSTGRES,
         POSTGRES_NEO4J,
+        POSTGRES_MILVUS_NEO4J,
         MYSQL_MILVUS_NEO4J
     }
 

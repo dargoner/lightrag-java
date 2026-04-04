@@ -217,6 +217,58 @@ class KnowledgeExtractorTest {
     }
 
     @Test
+    void acceptsJsonObjectEmbeddedInSurroundingText() {
+        var extractor = new KnowledgeExtractor(new StubChatModel("""
+            以下是提取结果，请直接使用：
+            {
+              "entities": [
+                {
+                  "name": "Alice",
+                  "type": "person",
+                  "description": "Researcher",
+                  "aliases": []
+                }
+              ],
+              "relations": []
+            }
+            输出结束。
+            """));
+
+        var result = extractor.extract(chunk("Alice works with Bob"));
+
+        assertThat(result.entities()).containsExactly(
+            new ExtractedEntity("Alice", "person", "Researcher", List.of())
+        );
+    }
+
+    @Test
+    void acceptsJsonCodeFenceEmbeddedInSurroundingText() {
+        var extractor = new KnowledgeExtractor(new StubChatModel("""
+            以下是提取结果，请直接使用：
+            ```json
+            {
+              "entities": [
+                {
+                  "name": "Alice",
+                  "type": "person",
+                  "description": "Researcher",
+                  "aliases": []
+                }
+              ],
+              "relations": []
+            }
+            ```
+            输出结束。
+            """));
+
+        var result = extractor.extract(chunk("Alice works with Bob"));
+
+        assertThat(result.entities()).containsExactly(
+            new ExtractedEntity("Alice", "person", "Researcher", List.of())
+        );
+    }
+
+    @Test
     void clampsRelationWeightAndFallsBackToConfidence() {
         var extractor = new KnowledgeExtractor(new StubChatModel("""
             {

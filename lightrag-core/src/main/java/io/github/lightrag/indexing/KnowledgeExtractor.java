@@ -17,6 +17,7 @@ import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Locale;
 import java.util.Objects;
+import java.util.Optional;
 
 public final class KnowledgeExtractor {
     private static final ObjectMapper OBJECT_MAPPER = new ObjectMapper();
@@ -148,29 +149,133 @@ public final class KnowledgeExtractor {
     }
 
     private static JsonNode parseResponse(String response) {
-        try {
-            var root = OBJECT_MAPPER.readTree(normalizeResponse(response));
-            if (root == null || !root.isObject()) {
-                throw new ExtractionException("Knowledge extraction response must be a JSON object");
+        var invalidJson = (JsonProcessingException) null;
+        for (var candidate : responseCandidates(response)) {
+            try {
+                var root = OBJECT_MAPPER.readTree(candidate);
+                if (root != null && root.isObject()) {
+                    return root;
+                }
+            } catch (JsonProcessingException exception) {
+                if (invalidJson == null) {
+                    invalidJson = exception;
+                }
             }
-            return root;
-        } catch (JsonProcessingException | IllegalArgumentException exception) {
-            throw new ExtractionException("Knowledge extraction response is not valid JSON", exception);
         }
+        if (invalidJson != null) {
+            throw new ExtractionException("Knowledge extraction response is not valid JSON", invalidJson);
+        }
+        throw new ExtractionException("Knowledge extraction response must be a JSON object");
     }
 
-    private static String normalizeResponse(String response) {
+    private static List<String> responseCandidates(String response) {
         var normalized = Objects.requireNonNull(response, "response").strip();
-        if (normalized.startsWith("```")) {
-            var firstNewline = normalized.indexOf('\n');
-            if (firstNewline >= 0) {
-                normalized = normalized.substring(firstNewline + 1);
+        if (normalized.isEmpty()) {
+            return List.of(normalized);
+        }
+        var candidates = new LinkedHashSet<String>();
+        var strippedFence = stripWholeCodeFence(normalized);
+        candidates.add(strippedFence);
+        extractFirstCodeFence(normalized).ifPresent(candidates::add);
+        extractFirstJsonObject(strippedFence).ifPresent(candidates::add);
+        extractFirstCodeFence(normalized)
+            .flatMap(KnowledgeExtractor::extractFirstJsonObject)
+            .ifPresent(candidates::add);
+        return List.copyOf(candidates);
+    }
+
+    private static String stripWholeCodeFence(String response) {
+        var normalized = response.strip();
+        if (!normalized.startsWith("```")) {
+            return normalized;
+        }
+        var firstNewline = normalized.indexOf('\n');
+        if (firstNewline < 0) {
+            return normalized;
+        }
+        var body = normalized.substring(firstNewline + 1);
+        if (body.endsWith("```")) {
+            body = body.substring(0, body.length() - 3);
+        }
+        return body.strip();
+    }
+
+    private static Optional<String> extractFirstCodeFence(String response) {
+        var start = response.indexOf("```");
+        while (start >= 0) {
+            var blockStart = response.indexOf('\n', start);
+            if (blockStart < 0) {
+                return Optional.empty();
             }
-            if (normalized.endsWith("```")) {
-                normalized = normalized.substring(0, normalized.length() - 3);
+            var end = response.indexOf("```", blockStart + 1);
+            if (end < 0) {
+                return Optional.empty();
+            }
+            var candidate = response.substring(blockStart + 1, end).strip();
+            if (!candidate.isEmpty()) {
+                return Optional.of(candidate);
+            }
+            start = response.indexOf("```", end + 3);
+        }
+        return Optional.empty();
+    }
+
+    private static Optional<String> extractFirstJsonObject(String response) {
+        var candidateStart = response.indexOf('{');
+        while (candidateStart >= 0) {
+            var candidate = balancedJsonObjectAt(response, candidateStart);
+            if (candidate.isPresent() && isJsonObject(candidate.get())) {
+                return candidate;
+            }
+            candidateStart = response.indexOf('{', candidateStart + 1);
+        }
+        return Optional.empty();
+    }
+
+    private static Optional<String> balancedJsonObjectAt(String response, int startIndex) {
+        var depth = 0;
+        var inString = false;
+        var escaping = false;
+        for (int index = startIndex; index < response.length(); index++) {
+            var current = response.charAt(index);
+            if (inString) {
+                if (escaping) {
+                    escaping = false;
+                    continue;
+                }
+                if (current == '\\') {
+                    escaping = true;
+                } else if (current == '"') {
+                    inString = false;
+                }
+                continue;
+            }
+            if (current == '"') {
+                inString = true;
+                continue;
+            }
+            if (current == '{') {
+                depth++;
+            } else if (current == '}') {
+                depth--;
+                if (depth == 0) {
+                    return Optional.of(response.substring(startIndex, index + 1).strip());
+                }
+                if (depth < 0) {
+                    return Optional.empty();
+                }
             }
         }
-        return normalized.strip();
+        return Optional.empty();
+    }
+
+    private static boolean isJsonObject(String candidate) {
+        try {
+            var root = OBJECT_MAPPER.readTree(candidate);
+            return root != null && root.isObject();
+        } catch (JsonProcessingException exception) {
+            return false;
+        }
     }
 
     private static JsonNode topLevelArray(JsonNode root, String fieldName) {

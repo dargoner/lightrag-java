@@ -497,7 +497,7 @@ final class MilvusSdkClientAdapter implements MilvusClientAdapter {
             .enablePrecheck(true);
         if (config.token() != null) {
             builder.token(config.token());
-        } else {
+        } else if (config.username() != null && config.password() != null) {
             builder.username(config.username());
             builder.password(config.password());
         }

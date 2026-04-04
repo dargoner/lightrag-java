@@ -26,6 +26,7 @@ import io.github.lightrag.storage.mysql.MySqlMilvusNeo4jStorageProvider;
 import io.github.lightrag.storage.mysql.MySqlStorageConfig;
 import io.github.lightrag.storage.neo4j.Neo4jGraphConfig;
 import io.github.lightrag.storage.neo4j.PostgresNeo4jStorageProvider;
+import io.github.lightrag.storage.postgres.PostgresMilvusNeo4jStorageProvider;
 import io.github.lightrag.storage.postgres.PostgresStorageConfig;
 import io.github.lightrag.storage.postgres.PostgresStorageProvider;
 import org.springframework.beans.factory.ObjectProvider;
@@ -170,6 +171,20 @@ public class LightRagAutoConfiguration {
                 )
                 : new PostgresNeo4jStorageProvider(
                     postgresConfig(properties),
+                    neo4jConfig(properties),
+                    snapshotStore
+                );
+            case POSTGRES_MILVUS_NEO4J -> dataSource != null
+                ? new PostgresMilvusNeo4jStorageProvider(
+                    dataSource,
+                    postgresConfig(properties),
+                    milvusConfig(properties),
+                    neo4jConfig(properties),
+                    snapshotStore
+                )
+                : new PostgresMilvusNeo4jStorageProvider(
+                    postgresConfig(properties),
+                    milvusConfig(properties),
                     neo4jConfig(properties),
                     snapshotStore
                 );

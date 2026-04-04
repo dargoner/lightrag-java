@@ -161,6 +161,44 @@ class LightRagAutoConfigurationTest {
     }
 
     @Test
+    void bindsPostgresMilvusNeo4jStorageProperties() {
+        contextRunner
+            .withUserConfiguration(CustomStorageProviderConfig.class)
+            .withPropertyValues(
+                "lightrag.storage.type=postgres_milvus_neo4j",
+                "lightrag.storage.postgres.jdbc-url=jdbc:postgresql://localhost:5432/lightrag",
+                "lightrag.storage.postgres.username=postgres",
+                "lightrag.storage.postgres.password=secret",
+                "lightrag.storage.postgres.schema=cfg",
+                "lightrag.storage.postgres.vector-dimensions=768",
+                "lightrag.storage.postgres.table-prefix=cfg_",
+                "lightrag.storage.milvus.uri=http://localhost:19530",
+                "lightrag.storage.milvus.token=root:Milvus",
+                "lightrag.storage.milvus.database=rag",
+                "lightrag.storage.milvus.collection-prefix=vec_",
+                "lightrag.storage.milvus.vector-dimensions=768",
+                "lightrag.storage.neo4j.uri=bolt://localhost:7687",
+                "lightrag.storage.neo4j.username=neo4j",
+                "lightrag.storage.neo4j.password=password",
+                "lightrag.storage.neo4j.database=neo4j"
+            )
+            .run(context -> {
+                var properties = context.getBean(LightRagProperties.class);
+
+                assertThat(properties.getStorage().getType()).isEqualTo(LightRagProperties.Type.POSTGRES_MILVUS_NEO4J);
+                assertThat(properties.getStorage().getPostgres().getJdbcUrl()).isEqualTo("jdbc:postgresql://localhost:5432/lightrag");
+                assertThat(properties.getStorage().getPostgres().getUsername()).isEqualTo("postgres");
+                assertThat(properties.getStorage().getPostgres().getPassword()).isEqualTo("secret");
+                assertThat(properties.getStorage().getPostgres().getSchema()).isEqualTo("cfg");
+                assertThat(properties.getStorage().getPostgres().getTablePrefix()).isEqualTo("cfg_");
+                assertThat(properties.getStorage().getMilvus().getUri()).isEqualTo("http://localhost:19530");
+                assertThat(properties.getStorage().getMilvus().getToken()).isEqualTo("root:Milvus");
+                assertThat(properties.getStorage().getMilvus().getCollectionPrefix()).isEqualTo("vec_");
+                assertThat(properties.getStorage().getNeo4j().getUri()).isEqualTo("bolt://localhost:7687");
+            });
+    }
+
+    @Test
     void bindsMineruAndChunkingDefaultsFromSpringProperties() {
         contextRunner
             .withUserConfiguration(MineruApiTransportConfiguration.class)
@@ -507,6 +545,45 @@ class LightRagAutoConfigurationTest {
         properties.getStorage().getMysql().setUsername("unused");
         properties.getStorage().getMysql().setPassword("unused");
         properties.getStorage().getMysql().setTablePrefix("rag_");
+        properties.getStorage().getMilvus().setUri("http://localhost:19530");
+        properties.getStorage().getMilvus().setToken("root:Milvus");
+        properties.getStorage().getMilvus().setDatabase("default");
+        properties.getStorage().getMilvus().setCollectionPrefix("rag_");
+        properties.getStorage().getMilvus().setVectorDimensions(3);
+        properties.getStorage().getNeo4j().setUri("bolt://localhost:7687");
+        properties.getStorage().getNeo4j().setUsername("neo4j");
+        properties.getStorage().getNeo4j().setPassword("password");
+        properties.getStorage().getNeo4j().setDatabase("neo4j");
+        var dataSource = new StubDataSource();
+        var seenDataSources = new java.util.ArrayList<DataSource>();
+
+        var provider = new SpringWorkspaceStorageProvider(
+            properties,
+            null,
+            dataSource,
+            new NoopSnapshotStore(),
+            (scope, applicationDataSource, lock, snapshotStore) -> {
+                seenDataSources.add(applicationDataSource);
+                return InMemoryStorageProvider.create(snapshotStore);
+            }
+        );
+
+        provider.forWorkspace(new WorkspaceScope("alpha"));
+        provider.forWorkspace(new WorkspaceScope("beta"));
+
+        assertThat(seenDataSources).containsExactly(dataSource, dataSource);
+    }
+
+    @Test
+    void reusesApplicationDataSourceForWorkspaceScopedPostgresMilvusNeo4jProviders() {
+        var properties = new LightRagProperties();
+        properties.getStorage().setType(LightRagProperties.Type.POSTGRES_MILVUS_NEO4J);
+        properties.getStorage().getPostgres().setJdbcUrl("jdbc:postgresql://unused");
+        properties.getStorage().getPostgres().setUsername("unused");
+        properties.getStorage().getPostgres().setPassword("unused");
+        properties.getStorage().getPostgres().setSchema("lightrag");
+        properties.getStorage().getPostgres().setVectorDimensions(3);
+        properties.getStorage().getPostgres().setTablePrefix("rag_");
         properties.getStorage().getMilvus().setUri("http://localhost:19530");
         properties.getStorage().getMilvus().setToken("root:Milvus");
         properties.getStorage().getMilvus().setDatabase("default");
