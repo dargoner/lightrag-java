@@ -25,7 +25,11 @@ public final class MilvusVectorStore implements HybridVectorStore, AutoCloseable
         this(new MilvusSdkClientAdapter(config), config, workspaceId);
     }
 
-    MilvusVectorStore(MilvusClientAdapter clientAdapter, MilvusVectorConfig config, String workspaceId) {
+    public MilvusVectorStore(MilvusClientAdapter clientAdapter, MilvusVectorConfig config) {
+        this(clientAdapter, config, "default");
+    }
+
+    public MilvusVectorStore(MilvusClientAdapter clientAdapter, MilvusVectorConfig config, String workspaceId) {
         this.clientAdapter = Objects.requireNonNull(clientAdapter, "clientAdapter");
         this.config = Objects.requireNonNull(config, "config");
         this.workspaceId = Objects.requireNonNull(workspaceId, "workspaceId");

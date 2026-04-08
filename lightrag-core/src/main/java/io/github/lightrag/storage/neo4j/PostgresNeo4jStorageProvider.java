@@ -89,6 +89,18 @@ public final class PostgresNeo4jStorageProvider implements AtomicStorageProvider
         );
     }
 
+    public PostgresNeo4jStorageProvider(
+        PostgresStorageProvider postgresProvider,
+        WorkspaceScopedNeo4jGraphStore neo4jGraphStore
+    ) {
+        this(
+            Objects.requireNonNull(postgresProvider, "postgresProvider"),
+            Objects.requireNonNull(neo4jGraphStore, "neo4jGraphStore"),
+            new ReentrantReadWriteLock(true),
+            null
+        );
+    }
+
     PostgresNeo4jStorageProvider(
         PostgresStorageProvider postgresProvider,
         WorkspaceScopedNeo4jGraphStore neo4jGraphStore,

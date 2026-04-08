@@ -4,7 +4,7 @@ import io.github.lightrag.storage.VectorStore;
 
 import java.util.List;
 
-interface MilvusClientAdapter extends AutoCloseable {
+public interface MilvusClientAdapter extends AutoCloseable {
     void ensureCollection(CollectionDefinition collectionDefinition);
 
     void upsert(String collectionName, List<StoredVectorRow> rows);

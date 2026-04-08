@@ -93,7 +93,13 @@ public final class PostgresStorageProvider implements AtomicStorageProvider, Aut
         SnapshotStore snapshotStore,
         String workspaceId
     ) {
-        this.config = Objects.requireNonNull(config, "config");
+        var resolvedConfig = ownsDataSource
+            ? Objects.requireNonNull(config, "config")
+            : PostgresSchemaResolver.alignWithDataSourceSchema(
+                Objects.requireNonNull(dataSource, "dataSource"),
+                Objects.requireNonNull(config, "config")
+            );
+        this.config = resolvedConfig;
         this.snapshotStore = Objects.requireNonNull(snapshotStore, "snapshotStore");
         this.workspaceId = new WorkspaceScope(workspaceId).workspaceId();
         this.jdbcDataSource = Objects.requireNonNull(dataSource, "dataSource");
@@ -103,15 +109,15 @@ public final class PostgresStorageProvider implements AtomicStorageProvider, Aut
         this.lock = new ReentrantReadWriteLock(true);
         this.dataSource = dataSource instanceof HikariDataSource hikari ? hikari : null;
         this.lockDataSource = lockDataSource instanceof HikariDataSource hikari ? hikari : null;
-        this.advisoryLockManager = new PostgresAdvisoryLockManager(jdbcLockDataSource, config, this.workspaceId);
+        this.advisoryLockManager = new PostgresAdvisoryLockManager(jdbcLockDataSource, resolvedConfig, this.workspaceId);
         this.exclusiveAdvisoryLockHeld = ThreadLocal.withInitial(() -> Boolean.FALSE);
         try {
-            new PostgresSchemaManager(jdbcDataSource, config).bootstrap();
-            this.documentStore = new PostgresDocumentStore(jdbcDataSource, config, this.workspaceId);
-            this.chunkStore = new PostgresChunkStore(jdbcDataSource, config, this.workspaceId);
-            this.graphStore = new PostgresGraphStore(jdbcDataSource, config, this.workspaceId);
-            this.vectorStore = new PostgresVectorStore(jdbcDataSource, config, this.workspaceId);
-            this.documentStatusStore = new PostgresDocumentStatusStore(jdbcDataSource, config, this.workspaceId);
+            new PostgresSchemaManager(jdbcDataSource, resolvedConfig).bootstrap();
+            this.documentStore = new PostgresDocumentStore(jdbcDataSource, resolvedConfig, this.workspaceId);
+            this.chunkStore = new PostgresChunkStore(jdbcDataSource, resolvedConfig, this.workspaceId);
+            this.graphStore = new PostgresGraphStore(jdbcDataSource, resolvedConfig, this.workspaceId);
+            this.vectorStore = new PostgresVectorStore(jdbcDataSource, resolvedConfig, this.workspaceId);
+            this.documentStatusStore = new PostgresDocumentStatusStore(jdbcDataSource, resolvedConfig, this.workspaceId);
             this.lockedDocumentStatusStore = new LockedDocumentStatusStore(documentStatusStore);
             this.lockedDocumentStore = new LockedDocumentStore(documentStore);
             this.lockedChunkStore = new LockedChunkStore(chunkStore);

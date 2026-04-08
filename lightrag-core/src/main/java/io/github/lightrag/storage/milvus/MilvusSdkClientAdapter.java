@@ -35,7 +35,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.Objects;
 
-final class MilvusSdkClientAdapter implements MilvusClientAdapter {
+public final class MilvusSdkClientAdapter implements MilvusClientAdapter {
     private static final String ID_FIELD = "id";
     private static final String DENSE_VECTOR_FIELD = "dense_vector";
     private static final String SEARCHABLE_TEXT_FIELD = "searchable_text";
@@ -46,12 +46,26 @@ final class MilvusSdkClientAdapter implements MilvusClientAdapter {
 
     private final MilvusVectorConfig config;
     private final MilvusClientV2 client;
+    private final boolean ownsClient;
     private final ConsistencyLevel queryConsistency;
 
-    MilvusSdkClientAdapter(MilvusVectorConfig config) {
+    public MilvusSdkClientAdapter(MilvusVectorConfig config) {
+        this(Objects.requireNonNull(config, "config"), createOwnedClient(config), true);
+    }
+
+    public MilvusSdkClientAdapter(MilvusVectorConfig config, MilvusClientV2 client) {
+        this(config, client, false);
+    }
+
+    private MilvusSdkClientAdapter(MilvusVectorConfig config, MilvusClientV2 client, boolean ownsClient) {
         this.config = Objects.requireNonNull(config, "config");
+        this.client = Objects.requireNonNull(client, "client");
+        this.ownsClient = ownsClient;
         this.queryConsistency = resolveQueryConsistency(config);
-        this.client = new MilvusClientV2(connectConfig(config));
+    }
+
+    private static MilvusClientV2 createOwnedClient(MilvusVectorConfig config) {
+        return new MilvusClientV2(connectConfig(Objects.requireNonNull(config, "config")));
     }
 
     @Override
@@ -251,7 +265,9 @@ final class MilvusSdkClientAdapter implements MilvusClientAdapter {
 
     @Override
     public void close() {
-        client.close();
+        if (ownsClient) {
+            client.close();
+        }
     }
 
     static ConsistencyLevel resolveQueryConsistency(MilvusVectorConfig config) {

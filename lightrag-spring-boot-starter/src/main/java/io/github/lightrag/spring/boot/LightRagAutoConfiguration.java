@@ -39,6 +39,7 @@ import org.springframework.boot.context.properties.EnableConfigurationProperties
 import org.springframework.context.annotation.Bean;
 
 import javax.sql.DataSource;
+import java.sql.SQLException;
 import java.util.Locale;
 
 @AutoConfiguration
@@ -160,30 +161,30 @@ public class LightRagAutoConfiguration {
         return switch (properties.getStorage().getType()) {
             case IN_MEMORY -> InMemoryStorageProvider.create(snapshotStore);
             case POSTGRES -> dataSource != null
-                ? new PostgresStorageProvider(dataSource, postgresConfig(properties), snapshotStore)
-                : new PostgresStorageProvider(postgresConfig(properties), snapshotStore);
+                ? new PostgresStorageProvider(dataSource, postgresConfig(properties, dataSource), snapshotStore)
+                : new PostgresStorageProvider(postgresConfig(properties, null), snapshotStore);
             case POSTGRES_NEO4J -> dataSource != null
                 ? new PostgresNeo4jStorageProvider(
                     dataSource,
-                    postgresConfig(properties),
+                    postgresConfig(properties, dataSource),
                     neo4jConfig(properties),
                     snapshotStore
                 )
                 : new PostgresNeo4jStorageProvider(
-                    postgresConfig(properties),
+                    postgresConfig(properties, null),
                     neo4jConfig(properties),
                     snapshotStore
                 );
             case POSTGRES_MILVUS_NEO4J -> dataSource != null
                 ? new PostgresMilvusNeo4jStorageProvider(
                     dataSource,
-                    postgresConfig(properties),
+                    postgresConfig(properties, dataSource),
                     milvusConfig(properties),
                     neo4jConfig(properties),
                     snapshotStore
                 )
                 : new PostgresMilvusNeo4jStorageProvider(
-                    postgresConfig(properties),
+                    postgresConfig(properties, null),
                     milvusConfig(properties),
                     neo4jConfig(properties),
                     snapshotStore
@@ -257,7 +258,7 @@ public class LightRagAutoConfiguration {
         return builder.build();
     }
 
-    private static PostgresStorageConfig postgresConfig(LightRagProperties properties) {
+    private static PostgresStorageConfig postgresConfig(LightRagProperties properties, DataSource dataSource) {
         var postgres = properties.getStorage().getPostgres();
         if (postgres.getVectorDimensions() == null) {
             throw new IllegalStateException("lightrag.storage.postgres.vector-dimensions is required");
@@ -266,7 +267,7 @@ public class LightRagAutoConfiguration {
             requireValue(postgres.getJdbcUrl(), "lightrag.storage.postgres.jdbc-url"),
             requireValue(postgres.getUsername(), "lightrag.storage.postgres.username"),
             requireValue(postgres.getPassword(), "lightrag.storage.postgres.password"),
-            requireValue(postgres.getSchema(), "lightrag.storage.postgres.schema"),
+            resolvePostgresSchema(postgres, dataSource),
             postgres.getVectorDimensions(),
             requireValue(postgres.getTablePrefix(), "lightrag.storage.postgres.table-prefix")
         );
@@ -317,6 +318,36 @@ public class LightRagAutoConfiguration {
             throw new IllegalStateException(key + " is required");
         }
         return value;
+    }
+
+    private static String resolvePostgresSchema(LightRagProperties.PostgresProperties postgres, DataSource dataSource) {
+        if (postgres.getSchema() != null && !postgres.getSchema().isBlank()) {
+            return postgres.getSchema().strip();
+        }
+        try (var connection = dataSource != null
+            ? dataSource.getConnection()
+            : java.sql.DriverManager.getConnection(
+                requireValue(postgres.getJdbcUrl(), "lightrag.storage.postgres.jdbc-url"),
+                requireValue(postgres.getUsername(), "lightrag.storage.postgres.username"),
+                requireValue(postgres.getPassword(), "lightrag.storage.postgres.password")
+            )) {
+            var schema = connection.getSchema();
+            if (schema != null && !schema.isBlank()) {
+                return schema.strip();
+            }
+            try (var statement = connection.createStatement();
+                 var result = statement.executeQuery("SELECT current_schema()")) {
+                if (result.next()) {
+                    var current = result.getString(1);
+                    if (current != null && !current.isBlank()) {
+                        return current.strip();
+                    }
+                }
+            }
+            throw new IllegalStateException("Unable to determine PostgreSQL schema from current connection");
+        } catch (SQLException exception) {
+            throw new IllegalStateException("Failed to resolve PostgreSQL schema from current connection", exception);
+        }
     }
 
     private static <T> T requireValue(T value, String message) {

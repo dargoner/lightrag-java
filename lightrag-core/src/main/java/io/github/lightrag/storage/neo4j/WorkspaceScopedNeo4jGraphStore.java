@@ -24,22 +24,45 @@ public final class WorkspaceScopedNeo4jGraphStore implements GraphStore, AutoClo
     private static final Logger log = LoggerFactory.getLogger(WorkspaceScopedNeo4jGraphStore.class);
 
     private final Driver driver;
+    private final boolean ownsDriver;
     private final SessionConfig sessionConfig;
     private final String workspaceId;
 
     public WorkspaceScopedNeo4jGraphStore(Neo4jGraphConfig config, WorkspaceScope scope) {
-        var source = Objects.requireNonNull(config, "config");
-        this.workspaceId = Objects.requireNonNull(scope, "scope").workspaceId();
-        this.driver = GraphDatabase.driver(
-            source.boltUri(),
-            AuthTokens.basic(source.username(), source.password())
+        this(
+            createDriver(config),
+            sessionConfig(config),
+            scope,
+            true
         );
-        this.sessionConfig = SessionConfig.forDatabase(source.database());
+    }
+
+    public WorkspaceScopedNeo4jGraphStore(Driver driver, String database, WorkspaceScope scope) {
+        this(
+            driver,
+            SessionConfig.forDatabase(requireNonBlank(database, "database")),
+            scope,
+            false
+        );
+    }
+
+    private WorkspaceScopedNeo4jGraphStore(
+        Driver driver,
+        SessionConfig sessionConfig,
+        WorkspaceScope scope,
+        boolean ownsDriver
+    ) {
+        this.workspaceId = Objects.requireNonNull(scope, "scope").workspaceId();
+        this.driver = Objects.requireNonNull(driver, "driver");
+        this.sessionConfig = Objects.requireNonNull(sessionConfig, "sessionConfig");
+        this.ownsDriver = ownsDriver;
         try {
-            driver.verifyConnectivity();
+            this.driver.verifyConnectivity();
             bootstrap();
         } catch (RuntimeException exception) {
-            driver.close();
+            if (ownsDriver) {
+                this.driver.close();
+            }
             throw exception;
         }
     }
@@ -175,7 +198,29 @@ public final class WorkspaceScopedNeo4jGraphStore implements GraphStore, AutoClo
 
     @Override
     public void close() {
-        driver.close();
+        if (ownsDriver) {
+            driver.close();
+        }
+    }
+
+    private static String requireNonBlank(String value, String label) {
+        Objects.requireNonNull(value, label);
+        if (value.isBlank()) {
+            throw new IllegalArgumentException(label + " must not be blank");
+        }
+        return value.strip();
+    }
+
+    private static Driver createDriver(Neo4jGraphConfig config) {
+        var source = Objects.requireNonNull(config, "config");
+        return GraphDatabase.driver(
+            source.boltUri(),
+            AuthTokens.basic(source.username(), source.password())
+        );
+    }
+
+    private static SessionConfig sessionConfig(Neo4jGraphConfig config) {
+        return SessionConfig.forDatabase(Objects.requireNonNull(config, "config").database());
     }
 
     private void bootstrap() {

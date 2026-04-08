@@ -129,7 +129,26 @@ public final class MySqlMilvusNeo4jStorageProvider implements AtomicStorageProvi
         );
     }
 
-    MySqlMilvusNeo4jStorageProvider(
+    public MySqlMilvusNeo4jStorageProvider(
+        DataSource dataSource,
+        MySqlStorageConfig mySqlConfig,
+        SnapshotStore snapshotStore,
+        WorkspaceScope workspaceScope,
+        GraphProjection graphProjection,
+        VectorProjection vectorProjection
+    ) {
+        this(
+            dataSource,
+            mySqlConfig,
+            snapshotStore,
+            workspaceScope,
+            graphProjection,
+            vectorProjection,
+            new ReentrantReadWriteLock(true)
+        );
+    }
+
+    public MySqlMilvusNeo4jStorageProvider(
         DataSource dataSource,
         MySqlStorageConfig mySqlConfig,
         SnapshotStore snapshotStore,
@@ -681,7 +700,7 @@ public final class MySqlMilvusNeo4jStorageProvider implements AtomicStorageProvi
         }
     }
 
-    interface GraphProjection extends GraphStore, AutoCloseable {
+    public interface GraphProjection extends GraphStore, AutoCloseable {
         Neo4jGraphSnapshot captureSnapshot();
 
         void restore(Neo4jGraphSnapshot snapshot);
@@ -690,7 +709,7 @@ public final class MySqlMilvusNeo4jStorageProvider implements AtomicStorageProvi
         void close();
     }
 
-    interface VectorProjection extends HybridVectorStore, AutoCloseable {
+    public interface VectorProjection extends HybridVectorStore, AutoCloseable {
         void deleteNamespace(String namespace);
 
         void flushNamespaces(List<String> namespaces);

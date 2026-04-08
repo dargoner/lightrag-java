@@ -440,6 +440,49 @@ class PostgresStorageProviderTest {
     }
 
     @Test
+    void alignsSchemaWithExternalDataSourceCurrentSchema() throws Exception {
+        PostgreSQLContainer<?> container = newPostgresContainer();
+        container.start();
+
+        var declaredConfig = new PostgresStorageConfig(
+            container.getJdbcUrl(),
+            container.getUsername(),
+            container.getPassword(),
+            "lightrag",
+            3,
+            "rag_"
+        );
+        var externalDataSourceConfig = new PostgresStorageConfig(
+            withCurrentSchema(container.getJdbcUrl(), "public"),
+            container.getUsername(),
+            container.getPassword(),
+            "public",
+            3,
+            "rag_"
+        );
+
+        try (
+            container;
+            HikariDataSource externalDataSource = newDataSource(externalDataSourceConfig);
+            PostgresStorageProvider provider = new PostgresStorageProvider(
+                externalDataSource,
+                declaredConfig,
+                new InMemorySnapshotStore(),
+                "alpha"
+            )
+        ) {
+            provider.documentStore().save(new DocumentStore.DocumentRecord("doc-1", "Title", "Body", Map.of("source", "external")));
+
+            var effectiveConfig = (PostgresStorageConfig) readField(provider, "config");
+            assertThat(effectiveConfig.schema()).isEqualTo("public");
+            try (var connection = externalDataSource.getConnection()) {
+                assertThat(existingTables(connection, "public")).contains("rag_documents");
+                assertThat(existingTables(connection, "lightrag")).doesNotContain("rag_documents");
+            }
+        }
+    }
+
+    @Test
     void persistsDocumentStatusesAcrossProviderInstances() {
         PostgreSQLContainer<?> container = newPostgresContainer();
         container.start();

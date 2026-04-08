@@ -18,6 +18,7 @@ import org.springframework.beans.factory.ObjectProvider;
 
 import javax.sql.DataSource;
 import java.nio.file.Path;
+import java.sql.SQLException;
 import java.util.List;
 import java.util.Locale;
 import java.util.Objects;
@@ -146,26 +147,33 @@ public final class SpringWorkspaceStorageProvider implements WorkspaceStoragePro
         return switch (properties.getStorage().getType()) {
             case IN_MEMORY -> InMemoryStorageProvider.create(snapshotStore);
             case POSTGRES -> dataSource != null
-                ? new PostgresStorageProvider(dataSource, postgresConfig(), snapshotStore, scope.workspaceId())
-                : new PostgresStorageProvider(postgresConfig(), snapshotStore, scope.workspaceId());
-            case POSTGRES_NEO4J -> new PostgresNeo4jStorageProvider(
-                dataSource,
-                postgresConfig(),
-                neo4jConfig(),
-                snapshotStore,
-                scope
-            );
+                ? new PostgresStorageProvider(dataSource, postgresConfig(dataSource), snapshotStore, scope.workspaceId())
+                : new PostgresStorageProvider(postgresConfig(null), snapshotStore, scope.workspaceId());
+            case POSTGRES_NEO4J -> dataSource != null
+                ? new PostgresNeo4jStorageProvider(
+                    dataSource,
+                    postgresConfig(dataSource),
+                    neo4jConfig(),
+                    snapshotStore,
+                    scope
+                )
+                : new PostgresNeo4jStorageProvider(
+                    postgresConfig(null),
+                    neo4jConfig(),
+                    snapshotStore,
+                    scope
+                );
             case POSTGRES_MILVUS_NEO4J -> dataSource != null
                 ? new PostgresMilvusNeo4jStorageProvider(
                     dataSource,
-                    postgresConfig(),
+                    postgresConfig(dataSource),
                     milvusConfig(),
                     neo4jConfig(),
                     snapshotStore,
                     scope
                 )
                 : new PostgresMilvusNeo4jStorageProvider(
-                    postgresConfig(),
+                    postgresConfig(null),
                     milvusConfig(),
                     neo4jConfig(),
                     snapshotStore,
@@ -190,7 +198,7 @@ public final class SpringWorkspaceStorageProvider implements WorkspaceStoragePro
         };
     }
 
-    private PostgresStorageConfig postgresConfig() {
+    private PostgresStorageConfig postgresConfig(DataSource dataSource) {
         var postgres = properties.getStorage().getPostgres();
         if (postgres.getVectorDimensions() == null) {
             throw new IllegalStateException("lightrag.storage.postgres.vector-dimensions is required");
@@ -199,7 +207,7 @@ public final class SpringWorkspaceStorageProvider implements WorkspaceStoragePro
             requireValue(postgres.getJdbcUrl(), "lightrag.storage.postgres.jdbc-url"),
             requireValue(postgres.getUsername(), "lightrag.storage.postgres.username"),
             requireValue(postgres.getPassword(), "lightrag.storage.postgres.password"),
-            requireValue(postgres.getSchema(), "lightrag.storage.postgres.schema"),
+            resolvePostgresSchema(postgres, dataSource),
             postgres.getVectorDimensions(),
             requireValue(postgres.getTablePrefix(), "lightrag.storage.postgres.table-prefix")
         );
@@ -327,6 +335,36 @@ public final class SpringWorkspaceStorageProvider implements WorkspaceStoragePro
             throw new IllegalStateException(key + " is required");
         }
         return value;
+    }
+
+    private static String resolvePostgresSchema(LightRagProperties.PostgresProperties postgres, DataSource dataSource) {
+        if (postgres.getSchema() != null && !postgres.getSchema().isBlank()) {
+            return postgres.getSchema().strip();
+        }
+        try (var connection = dataSource != null
+            ? dataSource.getConnection()
+            : java.sql.DriverManager.getConnection(
+                requireValue(postgres.getJdbcUrl(), "lightrag.storage.postgres.jdbc-url"),
+                requireValue(postgres.getUsername(), "lightrag.storage.postgres.username"),
+                requireValue(postgres.getPassword(), "lightrag.storage.postgres.password")
+            )) {
+            var schema = connection.getSchema();
+            if (schema != null && !schema.isBlank()) {
+                return schema.strip();
+            }
+            try (var statement = connection.createStatement();
+                 var result = statement.executeQuery("SELECT current_schema()")) {
+                if (result.next()) {
+                    var current = result.getString(1);
+                    if (current != null && !current.isBlank()) {
+                        return current.strip();
+                    }
+                }
+            }
+            throw new IllegalStateException("Unable to determine PostgreSQL schema from current connection");
+        } catch (SQLException exception) {
+            throw new IllegalStateException("Failed to resolve PostgreSQL schema from current connection", exception);
+        }
     }
 
     @FunctionalInterface

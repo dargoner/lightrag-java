@@ -125,7 +125,26 @@ public final class PostgresMilvusNeo4jStorageProvider implements AtomicStoragePr
         );
     }
 
-    PostgresMilvusNeo4jStorageProvider(
+    public PostgresMilvusNeo4jStorageProvider(
+        DataSource dataSource,
+        PostgresStorageConfig postgresConfig,
+        SnapshotStore snapshotStore,
+        WorkspaceScope workspaceScope,
+        GraphProjection graphProjection,
+        VectorProjection vectorProjection
+    ) {
+        this(
+            dataSource,
+            postgresConfig,
+            snapshotStore,
+            workspaceScope,
+            graphProjection,
+            vectorProjection,
+            new ReentrantReadWriteLock(true)
+        );
+    }
+
+    public PostgresMilvusNeo4jStorageProvider(
         DataSource dataSource,
         PostgresStorageConfig postgresConfig,
         SnapshotStore snapshotStore,
@@ -161,18 +180,24 @@ public final class PostgresMilvusNeo4jStorageProvider implements AtomicStoragePr
         this.ownedDataSource = dataSource instanceof HikariDataSource hikari ? hikari : null;
         this.ownsDataSource = ownsDataSource;
         this.snapshotStore = Objects.requireNonNull(snapshotStore, "snapshotStore");
-        this.postgresConfig = Objects.requireNonNull(postgresConfig, "postgresConfig");
+        var resolvedConfig = ownsDataSource
+            ? Objects.requireNonNull(postgresConfig, "postgresConfig")
+            : PostgresSchemaResolver.alignWithDataSourceSchema(
+                dataSource,
+                Objects.requireNonNull(postgresConfig, "postgresConfig")
+            );
+        this.postgresConfig = resolvedConfig;
         this.workspaceId = Objects.requireNonNull(workspaceScope, "workspaceScope").workspaceId();
         this.graphProjection = Objects.requireNonNull(graphProjection, "graphProjection");
         this.vectorProjection = Objects.requireNonNull(vectorProjection, "vectorProjection");
-        this.advisoryLockManager = new PostgresAdvisoryLockManager(jdbcDataSource, postgresConfig, this.workspaceId);
+        this.advisoryLockManager = new PostgresAdvisoryLockManager(jdbcDataSource, resolvedConfig, this.workspaceId);
         this.exclusiveAdvisoryLockHeld = ThreadLocal.withInitial(() -> Boolean.FALSE);
         try {
-            new PostgresMilvusNeo4jSchemaManager(jdbcDataSource, postgresConfig).bootstrap();
-            this.documentStore = new PostgresDocumentStore(jdbcDataSource, postgresConfig, workspaceId);
-            this.chunkStore = new PostgresChunkStore(jdbcDataSource, postgresConfig, workspaceId);
-            this.postgresGraphStore = new PostgresGraphStore(jdbcDataSource, postgresConfig, workspaceId);
-            this.documentStatusStore = new PostgresDocumentStatusStore(jdbcDataSource, postgresConfig, workspaceId);
+            new PostgresMilvusNeo4jSchemaManager(jdbcDataSource, resolvedConfig).bootstrap();
+            this.documentStore = new PostgresDocumentStore(jdbcDataSource, resolvedConfig, workspaceId);
+            this.chunkStore = new PostgresChunkStore(jdbcDataSource, resolvedConfig, workspaceId);
+            this.postgresGraphStore = new PostgresGraphStore(jdbcDataSource, resolvedConfig, workspaceId);
+            this.documentStatusStore = new PostgresDocumentStatusStore(jdbcDataSource, resolvedConfig, workspaceId);
             this.lockedDocumentStore = new LockedDocumentStore(documentStore);
             this.lockedChunkStore = new LockedChunkStore(chunkStore);
             this.lockedDocumentStatusStore = new LockedDocumentStatusStore(documentStatusStore);
@@ -632,7 +657,7 @@ public final class PostgresMilvusNeo4jStorageProvider implements AtomicStoragePr
         }
     }
 
-    interface GraphProjection extends GraphStore, AutoCloseable {
+    public interface GraphProjection extends GraphStore, AutoCloseable {
         Neo4jGraphSnapshot captureSnapshot();
 
         void restore(Neo4jGraphSnapshot snapshot);
@@ -641,7 +666,7 @@ public final class PostgresMilvusNeo4jStorageProvider implements AtomicStoragePr
         void close();
     }
 
-    interface VectorProjection extends HybridVectorStore, AutoCloseable {
+    public interface VectorProjection extends HybridVectorStore, AutoCloseable {
         void deleteNamespace(String namespace);
 
         void flushNamespaces(List<String> namespaces);
