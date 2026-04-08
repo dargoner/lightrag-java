@@ -160,7 +160,21 @@ public final class StorageAssemblyTestDoubles {
                 throw applyFailure;
             }
             for (var entry : writes.upserts().entrySet()) {
-                vectorStore.saveAll(entry.getKey(), entry.getValue());
+                if (entry.getValue().stream().anyMatch(VectorStorageAdapter.VectorWrite::hasMetadata)) {
+                    vectorStore.saveAllEnriched(
+                        entry.getKey(),
+                        entry.getValue().stream()
+                            .map(VectorStorageAdapter.VectorWrite::toEnrichedVectorRecord)
+                            .toList()
+                    );
+                } else {
+                    vectorStore.saveAll(
+                        entry.getKey(),
+                        entry.getValue().stream()
+                            .map(VectorStorageAdapter.VectorWrite::toVectorRecord)
+                            .toList()
+                    );
+                }
             }
         }
 

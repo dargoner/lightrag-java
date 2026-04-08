@@ -187,4 +187,40 @@ class StorageAssemblyTest {
         assertThat(graph.graphStore().allRelations()).containsExactly(seedRelation);
         assertThat(vector.vectorStore().list("chunks")).containsExactly(seedVector);
     }
+
+    @Test
+    void preservesHybridVectorPayloadsAcrossAtomicWrites() {
+        var provider = StorageAssembly.builder()
+            .relationalAdapter(new StorageAssemblyTestDoubles.FakeRelationalStorageAdapter())
+            .graphAdapter(new StorageAssemblyTestDoubles.FakeGraphStorageAdapter())
+            .vectorAdapter(new StorageAssemblyTestDoubles.FakeVectorStorageAdapter())
+            .build()
+            .toStorageProvider();
+
+        provider.writeAtomically(storage -> {
+            assertThat(storage.vectorStore()).isInstanceOf(HybridVectorStore.class);
+            ((HybridVectorStore) storage.vectorStore()).saveAllEnriched(
+                "chunks",
+                List.of(new HybridVectorStore.EnrichedVectorRecord(
+                    "doc-1:0",
+                    List.of(1.0d, 0.0d),
+                    "alpha beta",
+                    List.of("alpha", "beta")
+                ))
+            );
+            return null;
+        });
+
+        assertThat(((HybridVectorStore) provider.vectorStore()).search(
+            "chunks",
+            new HybridVectorStore.SearchRequest(
+                List.of(1.0d, 0.0d),
+                "beta",
+                List.of("alpha"),
+                HybridVectorStore.SearchMode.HYBRID,
+                1
+            )
+        )).extracting(VectorStore.VectorMatch::id)
+            .containsExactly("doc-1:0");
+    }
 }

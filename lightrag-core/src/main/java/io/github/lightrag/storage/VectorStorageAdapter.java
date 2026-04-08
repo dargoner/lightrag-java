@@ -25,10 +25,10 @@ public interface VectorStorageAdapter extends AutoCloseable {
     }
 
     record StagedVectorWrites(
-        Map<String, List<VectorStore.VectorRecord>> upserts
+        Map<String, List<VectorWrite>> upserts
     ) {
         public StagedVectorWrites {
-            upserts = copyVectorNamespaces(Objects.requireNonNull(upserts, "upserts"));
+            upserts = copyWrites(Objects.requireNonNull(upserts, "upserts"));
         }
 
         public static StagedVectorWrites empty() {
@@ -37,6 +37,42 @@ public interface VectorStorageAdapter extends AutoCloseable {
 
         public boolean isEmpty() {
             return upserts.isEmpty();
+        }
+    }
+
+    record VectorWrite(
+        String id,
+        List<Double> vector,
+        String searchableText,
+        List<String> keywords
+    ) {
+        public VectorWrite {
+            id = Objects.requireNonNull(id, "id");
+            vector = List.copyOf(Objects.requireNonNull(vector, "vector"));
+            searchableText = searchableText == null ? "" : searchableText;
+            keywords = List.copyOf(Objects.requireNonNull(keywords, "keywords"));
+        }
+
+        public static VectorWrite of(VectorStore.VectorRecord record) {
+            var source = Objects.requireNonNull(record, "record");
+            return new VectorWrite(source.id(), source.vector(), "", List.of());
+        }
+
+        public static VectorWrite of(HybridVectorStore.EnrichedVectorRecord record) {
+            var source = Objects.requireNonNull(record, "record");
+            return new VectorWrite(source.id(), source.vector(), source.searchableText(), source.keywords());
+        }
+
+        public VectorStore.VectorRecord toVectorRecord() {
+            return new VectorStore.VectorRecord(id, vector);
+        }
+
+        public HybridVectorStore.EnrichedVectorRecord toEnrichedVectorRecord() {
+            return new HybridVectorStore.EnrichedVectorRecord(id, vector, searchableText, keywords);
+        }
+
+        public boolean hasMetadata() {
+            return !searchableText.isBlank() || !keywords.isEmpty();
         }
     }
 
@@ -83,6 +119,14 @@ public interface VectorStorageAdapter extends AutoCloseable {
     ) {
         var copy = new LinkedHashMap<String, List<VectorStore.VectorRecord>>();
         for (var entry : namespaces.entrySet()) {
+            copy.put(entry.getKey(), List.copyOf(entry.getValue()));
+        }
+        return Map.copyOf(copy);
+    }
+
+    private static Map<String, List<VectorWrite>> copyWrites(Map<String, List<VectorWrite>> writes) {
+        var copy = new LinkedHashMap<String, List<VectorWrite>>();
+        for (var entry : writes.entrySet()) {
             copy.put(entry.getKey(), List.copyOf(entry.getValue()));
         }
         return Map.copyOf(copy);

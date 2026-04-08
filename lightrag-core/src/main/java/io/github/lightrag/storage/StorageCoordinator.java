@@ -285,12 +285,14 @@ public final class StorageCoordinator implements AtomicStorageProvider, AutoClos
         }
     }
 
-    private static final class StagedVectorStore implements VectorStore {
+    private static final class StagedVectorStore implements HybridVectorStore {
         private final VectorStore delegate;
-        private final Map<String, Map<String, VectorRecord>> stagedNamespaces = new LinkedHashMap<>();
+        private final HybridVectorStore hybridDelegate;
+        private final Map<String, Map<String, VectorStorageAdapter.VectorWrite>> stagedNamespaces = new LinkedHashMap<>();
 
         private StagedVectorStore(VectorStore delegate) {
             this.delegate = Objects.requireNonNull(delegate, "delegate");
+            this.hybridDelegate = delegate instanceof HybridVectorStore hybrid ? hybrid : null;
         }
 
         @Override
@@ -300,30 +302,42 @@ public final class StorageCoordinator implements AtomicStorageProvider, AutoClos
             var namespaceRecords = ensureNamespaceRecords(ns);
             for (var vector : vectors) {
                 var record = Objects.requireNonNull(vector, "vector");
-                namespaceRecords.put(record.id(), record);
+                namespaceRecords.put(record.id(), VectorStorageAdapter.VectorWrite.of(record));
             }
         }
 
         @Override
         public List<VectorMatch> search(String namespace, List<Double> queryVector, int topK) {
+            return search(
+                namespace,
+                new SearchRequest(queryVector, "", List.of(), SearchMode.SEMANTIC, topK)
+            );
+        }
+
+        @Override
+        public void saveAllEnriched(String namespace, List<EnrichedVectorRecord> records) {
             var ns = Objects.requireNonNull(namespace, "namespace");
-            var query = List.copyOf(Objects.requireNonNull(queryVector, "queryVector"));
-            if (topK <= 0) {
-                return List.of();
+            Objects.requireNonNull(records, "records");
+            var namespaceRecords = ensureNamespaceRecords(ns);
+            for (var record : records) {
+                var normalized = Objects.requireNonNull(record, "record");
+                namespaceRecords.put(normalized.id(), VectorStorageAdapter.VectorWrite.of(normalized));
             }
+        }
+
+        @Override
+        public List<VectorMatch> search(String namespace, SearchRequest request) {
+            var ns = Objects.requireNonNull(namespace, "namespace");
+            var searchRequest = Objects.requireNonNull(request, "request");
             if (!stagedNamespaces.containsKey(ns)) {
-                return delegate.search(ns, query, topK);
+                return hybridDelegate != null
+                    ? hybridDelegate.search(ns, searchRequest)
+                    : delegate.search(ns, searchRequest.queryVector(), searchRequest.topK());
             }
-            var merged = new LinkedHashMap<String, VectorMatch>();
-            for (var match : delegate.search(ns, query, topK)) {
-                merged.put(match.id(), match);
-            }
-            for (var record : stagedNamespaces.get(ns).values()) {
-                merged.put(record.id(), new VectorMatch(record.id(), dotProduct(query, record.vector())));
-            }
-            return merged.values().stream()
+            return mergedWrites(ns).values().stream()
+                .map(write -> new VectorMatch(write.id(), score(write, searchRequest)))
                 .sorted(VECTOR_MATCH_ORDER)
-                .limit(topK)
+                .limit(searchRequest.topK())
                 .toList();
         }
 
@@ -333,28 +347,79 @@ public final class StorageCoordinator implements AtomicStorageProvider, AutoClos
             if (!stagedNamespaces.containsKey(ns)) {
                 return delegate.list(ns);
             }
-            return List.copyOf(stagedNamespaces.get(ns).values());
+            return mergedWrites(ns).values().stream()
+                .map(VectorStorageAdapter.VectorWrite::toVectorRecord)
+                .toList();
         }
 
         private VectorStorageAdapter.StagedVectorWrites toWrites() {
             if (stagedNamespaces.isEmpty()) {
                 return VectorStorageAdapter.StagedVectorWrites.empty();
             }
-            var upserts = new LinkedHashMap<String, List<VectorRecord>>();
+            var upserts = new LinkedHashMap<String, List<VectorStorageAdapter.VectorWrite>>();
             for (var entry : stagedNamespaces.entrySet()) {
                 upserts.put(entry.getKey(), List.copyOf(entry.getValue().values()));
             }
             return new VectorStorageAdapter.StagedVectorWrites(upserts);
         }
 
-        private Map<String, VectorRecord> ensureNamespaceRecords(String namespace) {
+        private Map<String, VectorStorageAdapter.VectorWrite> ensureNamespaceRecords(String namespace) {
             return stagedNamespaces.computeIfAbsent(namespace, key -> {
-                var merged = new LinkedHashMap<String, VectorRecord>();
-                for (var record : delegate.list(key)) {
-                    merged.put(record.id(), record);
-                }
-                return merged;
+                return new LinkedHashMap<>();
             });
+        }
+
+        private Map<String, VectorStorageAdapter.VectorWrite> mergedWrites(String namespace) {
+            var merged = new LinkedHashMap<String, VectorStorageAdapter.VectorWrite>();
+            for (var record : delegate.list(namespace)) {
+                merged.put(record.id(), VectorStorageAdapter.VectorWrite.of(record));
+            }
+            merged.putAll(stagedNamespaces.getOrDefault(namespace, Map.of()));
+            return merged;
+        }
+
+        private static double score(VectorStorageAdapter.VectorWrite write, SearchRequest request) {
+            return switch (request.mode()) {
+                case SEMANTIC -> dotProduct(request.queryVector(), write.vector());
+                case KEYWORD -> keywordScore(write, request);
+                case HYBRID -> dotProduct(request.queryVector(), write.vector()) + keywordScore(write, request);
+            };
+        }
+
+        private static double keywordScore(VectorStorageAdapter.VectorWrite write, SearchRequest request) {
+            var searchableText = write.searchableText().toLowerCase(java.util.Locale.ROOT);
+            var loweredKeywords = write.keywords().stream()
+                .map(keyword -> keyword.toLowerCase(java.util.Locale.ROOT))
+                .toList();
+            var tokens = new LinkedHashMap<String, Boolean>();
+            for (var token : tokenize(request.queryText())) {
+                tokens.put(token, Boolean.TRUE);
+            }
+            for (var keyword : request.keywords()) {
+                var normalized = Objects.requireNonNull(keyword, "keyword").toLowerCase(java.util.Locale.ROOT);
+                if (!normalized.isBlank()) {
+                    tokens.put(normalized, Boolean.TRUE);
+                }
+            }
+            double score = 0.0d;
+            for (var token : tokens.keySet()) {
+                if (searchableText.contains(token)) {
+                    score += 1.0d;
+                }
+                if (loweredKeywords.contains(token)) {
+                    score += 1.0d;
+                }
+            }
+            return score;
+        }
+
+        private static List<String> tokenize(String value) {
+            if (value == null || value.isBlank()) {
+                return List.of();
+            }
+            return java.util.Arrays.stream(value.toLowerCase(java.util.Locale.ROOT).split("[^\\p{L}\\p{N}]+"))
+                .filter(token -> !token.isBlank())
+                .toList();
         }
 
         private static double dotProduct(List<Double> left, List<Double> right) {
