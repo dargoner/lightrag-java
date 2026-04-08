@@ -3,6 +3,7 @@ package io.github.lightrag.model.openai;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import io.github.lightrag.exception.ModelException;
+import io.github.lightrag.exception.ModelTimeoutException;
 import io.github.lightrag.model.EmbeddingModel;
 import okhttp3.MediaType;
 import okhttp3.OkHttpClient;
@@ -10,6 +11,8 @@ import okhttp3.Request;
 import okhttp3.RequestBody;
 
 import java.io.IOException;
+import java.io.InterruptedIOException;
+import java.net.SocketTimeoutException;
 import java.time.Duration;
 import java.util.ArrayList;
 import java.util.List;
@@ -63,7 +66,15 @@ public final class OpenAiCompatibleEmbeddingModel implements EmbeddingModel {
                 .build();
             try (var response = httpClient.newCall(httpRequest).execute()) {
                 if (!response.isSuccessful()) {
-                    throw new ModelException("Embedding request failed with status " + response.code());
+                    var body = response.body();
+                    var responseBody = body == null ? null : body.string();
+                    throw new ModelException(
+                        "Embedding request failed",
+                        response.code(),
+                        compactResponseBody(responseBody),
+                        httpRequest.url().toString(),
+                        response.header("x-request-id")
+                    );
                 }
                 var body = response.body();
                 if (body == null) {
@@ -72,8 +83,37 @@ public final class OpenAiCompatibleEmbeddingModel implements EmbeddingModel {
                 return extractEmbeddings(OBJECT_MAPPER.readTree(body.byteStream()));
             }
         } catch (IOException exception) {
-            throw new ModelException("Embedding request failed", exception);
+            throw toModelException("Embedding request", baseUrl + "embeddings", exception);
         }
+    }
+
+    private static ModelException toModelException(String operation, String requestUrl, IOException exception) {
+        if (isTimeout(exception)) {
+            return new ModelTimeoutException(operation + " timed out", exception, requestUrl);
+        }
+        return new ModelException(operation + " failed", null, null, requestUrl, null, exception);
+    }
+
+    private static boolean isTimeout(IOException exception) {
+        if (exception instanceof SocketTimeoutException) {
+            return true;
+        }
+        if (exception instanceof InterruptedIOException interrupted) {
+            var message = interrupted.getMessage();
+            return message != null && message.toLowerCase(java.util.Locale.ROOT).contains("timeout");
+        }
+        return false;
+    }
+
+    private static String compactResponseBody(String responseBody) {
+        if (responseBody == null) {
+            return null;
+        }
+        var normalized = responseBody.strip();
+        if (normalized.length() <= 500) {
+            return normalized;
+        }
+        return normalized.substring(0, 500) + "...";
     }
 
     private static List<List<Double>> extractEmbeddings(JsonNode root) {

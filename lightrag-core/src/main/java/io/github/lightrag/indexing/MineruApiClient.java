@@ -103,7 +103,13 @@ public final class MineruApiClient implements MineruClient {
                 var body = response.body();
                 var responseBody = body == null ? "" : body.string();
                 if (!response.isSuccessful()) {
-                    throw new MineruUnavailableException("MinerU API task creation failed with HTTP " + response.code());
+                    throw new MineruUnavailableException(httpFailureMessage(
+                        "MinerU API task creation failed",
+                        response.code(),
+                        request.url().toString(),
+                        response.header("x-request-id"),
+                        responseBody
+                    ));
                 }
                 var root = objectMapper.readTree(responseBody);
                 ensureSuccess(root, "MinerU API task creation failed");
@@ -125,7 +131,13 @@ public final class MineruApiClient implements MineruClient {
                     var body = response.body();
                     var responseBody = body == null ? "" : body.string();
                     if (!response.isSuccessful()) {
-                        throw new MineruUnavailableException("MinerU API task polling failed with HTTP " + response.code());
+                        throw new MineruUnavailableException(httpFailureMessage(
+                            "MinerU API task polling failed",
+                            response.code(),
+                            request.url().toString(),
+                            response.header("x-request-id"),
+                            responseBody
+                        ));
                     }
                     var root = objectMapper.readTree(responseBody);
                     ensureSuccess(root, "MinerU API task polling failed");
@@ -160,7 +172,14 @@ public final class MineruApiClient implements MineruClient {
             try (var response = httpClient.newCall(request).execute()) {
                 var body = response.body();
                 if (!response.isSuccessful()) {
-                    throw new MineruUnavailableException("MinerU API zip download failed with HTTP " + response.code());
+                    var responseBody = body == null ? "" : body.string();
+                    throw new MineruUnavailableException(httpFailureMessage(
+                        "MinerU API zip download failed",
+                        response.code(),
+                        request.url().toString(),
+                        response.header("x-request-id"),
+                        responseBody
+                    ));
                 }
                 if (body == null) {
                     throw new MineruUnavailableException("MinerU API zip download returned an empty body");
@@ -356,6 +375,38 @@ public final class MineruApiClient implements MineruClient {
             return value
                 .replace("\\", "\\\\")
                 .replace("\"", "\\\"");
+        }
+
+        private static String httpFailureMessage(
+            String prefix,
+            int statusCode,
+            String requestUrl,
+            String requestId,
+            String responseBody
+        ) {
+            var builder = new StringBuilder(prefix).append(" with HTTP ").append(statusCode);
+            if (requestId != null && !requestId.isBlank()) {
+                builder.append("; requestId=").append(requestId);
+            }
+            if (requestUrl != null && !requestUrl.isBlank()) {
+                builder.append("; requestUrl=").append(requestUrl);
+            }
+            var compactBody = compactResponseBody(responseBody);
+            if (compactBody != null && !compactBody.isBlank()) {
+                builder.append("; responseBody=").append(compactBody);
+            }
+            return builder.toString();
+        }
+
+        private static String compactResponseBody(String responseBody) {
+            if (responseBody == null) {
+                return null;
+            }
+            var normalized = responseBody.strip();
+            if (normalized.length() <= 500) {
+                return normalized;
+            }
+            return normalized.substring(0, 500) + "...";
         }
 
         private static String requireNonBlank(String value, String fieldName) {

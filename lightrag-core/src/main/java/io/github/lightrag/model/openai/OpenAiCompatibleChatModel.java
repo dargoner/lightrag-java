@@ -3,6 +3,7 @@ package io.github.lightrag.model.openai;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import io.github.lightrag.exception.ModelException;
+import io.github.lightrag.exception.ModelTimeoutException;
 import io.github.lightrag.model.ChatModel;
 import io.github.lightrag.model.CloseableIterator;
 import okhttp3.MediaType;
@@ -12,6 +13,8 @@ import okhttp3.RequestBody;
 import okhttp3.Response;
 
 import java.io.IOException;
+import java.io.InterruptedIOException;
+import java.net.SocketTimeoutException;
 import java.time.Duration;
 import java.util.LinkedHashMap;
 import java.util.List;
@@ -55,7 +58,7 @@ public final class OpenAiCompatibleChatModel implements ChatModel {
             }
             return extractContent(OBJECT_MAPPER.readTree(body.byteStream()));
         } catch (IOException exception) {
-            throw new ModelException("Chat completion request failed", exception);
+            throw toModelException("Chat completion request", baseUrl + "chat/completions", exception);
         }
     }
 
@@ -69,9 +72,9 @@ public final class OpenAiCompatibleChatModel implements ChatModel {
                 response.close();
                 throw new ModelException("Chat completion response body is missing");
             }
-            return new OpenAiSseIterator(response, body.source());
+            return new OpenAiSseIterator(response, body.source(), response.request().url().toString());
         } catch (IOException exception) {
-            throw new ModelException("Chat completion request failed", exception);
+            throw toModelException("Chat completion request", baseUrl + "chat/completions", exception);
         }
     }
 
@@ -114,10 +117,47 @@ public final class OpenAiCompatibleChatModel implements ChatModel {
         var response = httpClient.newCall(request).execute();
         if (!response.isSuccessful()) {
             try (response) {
-                throw new ModelException("Chat completion request failed with status " + response.code());
+                var body = response.body();
+                var responseBody = body == null ? null : body.string();
+                throw new ModelException(
+                    "Chat completion request failed",
+                    response.code(),
+                    compactResponseBody(responseBody),
+                    request.url().toString(),
+                    response.header("x-request-id")
+                );
             }
         }
         return response;
+    }
+
+    private static ModelException toModelException(String operation, String requestUrl, IOException exception) {
+        if (isTimeout(exception)) {
+            return new ModelTimeoutException(operation + " timed out", exception, requestUrl);
+        }
+        return new ModelException(operation + " failed", null, null, requestUrl, null, exception);
+    }
+
+    private static boolean isTimeout(IOException exception) {
+        if (exception instanceof SocketTimeoutException) {
+            return true;
+        }
+        if (exception instanceof InterruptedIOException interrupted) {
+            var message = interrupted.getMessage();
+            return message != null && message.toLowerCase(java.util.Locale.ROOT).contains("timeout");
+        }
+        return false;
+    }
+
+    private static String compactResponseBody(String responseBody) {
+        if (responseBody == null) {
+            return null;
+        }
+        var normalized = responseBody.strip();
+        if (normalized.length() <= 500) {
+            return normalized;
+        }
+        return normalized.substring(0, 500) + "...";
     }
 
     private static String normalizeBaseUrl(String baseUrl) {
@@ -137,13 +177,15 @@ public final class OpenAiCompatibleChatModel implements ChatModel {
     private static final class OpenAiSseIterator implements CloseableIterator<String> {
         private final Response response;
         private final okio.BufferedSource source;
+        private final String requestUrl;
         private String nextChunk;
         private boolean closed;
         private boolean completed;
 
-        private OpenAiSseIterator(Response response, okio.BufferedSource source) {
+        private OpenAiSseIterator(Response response, okio.BufferedSource source, String requestUrl) {
             this.response = response;
             this.source = source;
+            this.requestUrl = requestUrl;
         }
 
         @Override
@@ -199,7 +241,7 @@ public final class OpenAiCompatibleChatModel implements ChatModel {
                 }
             } catch (IOException exception) {
                 close();
-                throw new ModelException("Chat completion stream failed", exception);
+                throw toModelException("Chat completion stream", requestUrl, exception);
             }
         }
 

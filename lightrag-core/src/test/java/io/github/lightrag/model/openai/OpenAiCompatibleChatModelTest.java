@@ -2,6 +2,7 @@ package io.github.lightrag.model.openai;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 import io.github.lightrag.exception.ModelException;
+import io.github.lightrag.exception.ModelTimeoutException;
 import io.github.lightrag.model.ChatModel;
 import okhttp3.mockwebserver.MockResponse;
 import okhttp3.mockwebserver.MockWebServer;
@@ -219,13 +220,19 @@ class OpenAiCompatibleChatModelTest {
     @Test
     void non2xxResponsesRaiseModelException() throws Exception {
         try (var server = new MockWebServer()) {
-            server.enqueue(new MockResponse().setResponseCode(401).setBody("{\"error\":\"unauthorized\"}"));
+            server.enqueue(new MockResponse()
+                .setResponseCode(401)
+                .setHeader("x-request-id", "req-chat-401")
+                .setBody("{\"error\":\"unauthorized\"}"));
             server.start();
             var model = new OpenAiCompatibleChatModel(server.url("/v1/").toString(), "gpt-test", "secret");
 
             assertThatThrownBy(() -> model.generate(new ChatModel.ChatRequest("System prompt", "User prompt")))
                 .isInstanceOf(ModelException.class)
-                .hasMessageContaining("401");
+                .hasMessageContaining("401")
+                .hasMessageContaining("unauthorized")
+                .hasMessageContaining("/v1/chat/completions")
+                .hasMessageContaining("req-chat-401");
         }
     }
 
@@ -278,6 +285,37 @@ class OpenAiCompatibleChatModelTest {
 
             assertThat(model.generate(new ChatModel.ChatRequest("System prompt", "User prompt")))
                 .isEqualTo("Delayed answer");
+        }
+    }
+
+    @Test
+    void chatAdapterRaisesTimeoutExceptionWhenRequestExceedsTimeout() throws Exception {
+        try (var server = new MockWebServer()) {
+            server.enqueue(new MockResponse()
+                .setBody("""
+                    {
+                      "choices": [
+                        {
+                          "message": {
+                            "content": "Delayed answer"
+                          }
+                        }
+                      ]
+                    }
+                    """)
+                .setBodyDelay(1000, java.util.concurrent.TimeUnit.MILLISECONDS));
+            server.start();
+            var model = new OpenAiCompatibleChatModel(
+                server.url("/v1/").toString(),
+                "gpt-test",
+                "secret",
+                Duration.ofMillis(200)
+            );
+
+            assertThatThrownBy(() -> model.generate(new ChatModel.ChatRequest("System prompt", "User prompt")))
+                .isInstanceOf(ModelTimeoutException.class)
+                .hasMessageContaining("timed out")
+                .hasMessageContaining("/v1/chat/completions");
         }
     }
 

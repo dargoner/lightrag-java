@@ -198,6 +198,32 @@ class MineruApiClientTest {
         }
     }
 
+    @Test
+    void includesResponseContextWhenTaskCreationReturnsNon2xx() throws Exception {
+        try (var server = new MockWebServer()) {
+            server.start();
+            server.enqueue(new MockResponse()
+                .setResponseCode(500)
+                .addHeader("x-request-id", "req-mineru-500")
+                .addHeader("Content-Type", "application/json")
+                .setBody("{\"code\":123,\"msg\":\"creation failed\"}"));
+            var client = new MineruApiClient(new MineruApiClient.HttpTransport(
+                server.url("/api/v4/").toString(),
+                "secret",
+                Duration.ofSeconds(5),
+                1,
+                2
+            ));
+
+            assertThatThrownBy(() -> client.parse(sourceWithUrl("https://files.example.com/guide.pdf")))
+                .isInstanceOf(MineruUnavailableException.class)
+                .hasMessageContaining("HTTP 500")
+                .hasMessageContaining("creation failed")
+                .hasMessageContaining("/api/v4/extract/task")
+                .hasMessageContaining("req-mineru-500");
+        }
+    }
+
     private static RawDocumentSource sourceWithUrl(String url) {
         return RawDocumentSource.bytes(
             "guide.pdf",
