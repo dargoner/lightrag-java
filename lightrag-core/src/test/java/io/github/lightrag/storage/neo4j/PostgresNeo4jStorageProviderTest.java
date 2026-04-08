@@ -1,8 +1,10 @@
 package io.github.lightrag.storage.neo4j;
 
 import io.github.lightrag.persistence.FileSnapshotStore;
+import io.github.lightrag.api.DocumentStatus;
 import io.github.lightrag.api.WorkspaceScope;
 import io.github.lightrag.storage.ChunkStore;
+import io.github.lightrag.storage.DocumentStatusStore;
 import io.github.lightrag.storage.DocumentStore;
 import io.github.lightrag.storage.GraphStorageAdapter;
 import io.github.lightrag.storage.GraphStore;
@@ -67,6 +69,12 @@ class PostgresNeo4jStorageProviderTest {
             provider.writeAtomically(storage -> {
                 storage.documentStore().save(new DocumentStore.DocumentRecord("doc-1", "Title", "Body", Map.of("source", "test")));
                 storage.chunkStore().save(new ChunkStore.ChunkRecord("doc-1:0", "doc-1", "Body", 4, 0, Map.of("source", "test")));
+                storage.documentStatusStore().save(new DocumentStatusStore.StatusRecord(
+                    "doc-1",
+                    DocumentStatus.PROCESSED,
+                    "ok",
+                    null
+                ));
                 storage.graphStore().saveEntity(new GraphStore.EntityRecord(
                     "entity-1",
                     "Alice",
@@ -164,6 +172,12 @@ class PostgresNeo4jStorageProviderTest {
             provider.writeAtomically(storage -> {
                 storage.documentStore().save(new DocumentStore.DocumentRecord("doc-1", "Title", "Body", Map.of("source", "test")));
                 storage.chunkStore().save(new ChunkStore.ChunkRecord("doc-1:0", "doc-1", "Body", 4, 0, Map.of("source", "test")));
+                storage.documentStatusStore().save(new DocumentStatusStore.StatusRecord(
+                    "doc-1",
+                    DocumentStatus.PROCESSED,
+                    "ok",
+                    null
+                ));
                 storage.graphStore().saveEntity(new GraphStore.EntityRecord(
                     "entity-1",
                     "Alice",
@@ -187,6 +201,9 @@ class PostgresNeo4jStorageProviderTest {
 
             assertThat(provider.documentStore().load("doc-1")).isPresent();
             assertThat(provider.chunkStore().load("doc-1:0")).isPresent();
+            assertThat(provider.documentStatusStore().load("doc-1")).contains(
+                new DocumentStatusStore.StatusRecord("doc-1", DocumentStatus.PROCESSED, "ok", null)
+            );
             assertThat(provider.graphStore().loadEntity("entity-1")).isPresent();
             assertThat(provider.graphStore().loadRelation("relation-1")).isPresent();
             assertThat(provider.vectorStore().list("chunks"))
@@ -216,12 +233,19 @@ class PostgresNeo4jStorageProviderTest {
                 0.9d,
                 List.of("doc-1:0")
             )),
-            Map.of("chunks", List.of(new VectorStore.VectorRecord("doc-1:0", List.of(1.0d, 0.0d, 0.0d))))
+            Map.of("chunks", List.of(new VectorStore.VectorRecord("doc-1:0", List.of(1.0d, 0.0d, 0.0d)))),
+            List.of(new DocumentStatusStore.StatusRecord("doc-1", DocumentStatus.PROCESSED, "snapshot", null))
         );
 
         try (var provider = newProvider(new FileSnapshotStore())) {
             provider.documentStore().save(new DocumentStore.DocumentRecord("doc-old", "Old", "Old", Map.of()));
             provider.chunkStore().save(new ChunkStore.ChunkRecord("doc-old:0", "doc-old", "Old", 3, 0, Map.of()));
+            provider.documentStatusStore().save(new DocumentStatusStore.StatusRecord(
+                "doc-old",
+                DocumentStatus.PROCESSED,
+                "old",
+                null
+            ));
             provider.graphStore().saveEntity(new GraphStore.EntityRecord("entity-old", "Old", "type", "Old", List.of(), List.of()));
             provider.graphStore().saveRelation(new GraphStore.RelationRecord("relation-old", "entity-old", "entity-old", "self", "Old", 0.1d, List.of()));
             provider.vectorStore().saveAll("chunks", List.of(new VectorStore.VectorRecord("doc-old:0", List.of(0.0d, 1.0d, 0.0d))));
@@ -233,6 +257,7 @@ class PostgresNeo4jStorageProviderTest {
             assertThat(provider.graphStore().allEntities()).containsExactlyElementsOf(replacement.entities());
             assertThat(provider.graphStore().allRelations()).containsExactlyElementsOf(replacement.relations());
             assertThat(provider.vectorStore().list("chunks")).containsExactlyElementsOf(replacement.vectors().get("chunks"));
+            assertThat(provider.documentStatusStore().list()).containsExactlyElementsOf(replacement.documentStatuses());
             assertThat(provider.vectorStore().list("entities")).isEmpty();
         }
     }
@@ -541,6 +566,148 @@ class PostgresNeo4jStorageProviderTest {
             assertThat(beta.graphStore().allEntities()).isEmpty();
             assertThat(beta.graphStore().allRelations()).isEmpty();
             assertThat(beta.vectorStore().list("chunks")).isEmpty();
+        }
+    }
+
+    @Test
+    void blocksSameWorkspaceWritesUntilProjectionFailureRollbackCompletes() throws Exception {
+        var tablePrefix = nextPrefix();
+        var snapshotStarted = new CountDownLatch(1);
+        var releaseSnapshot = new CountDownLatch(1);
+        var writerStarted = new CountDownLatch(1);
+        var writerFinished = new CountDownLatch(1);
+        var failedWrite = new AtomicReference<Throwable>();
+        var concurrentWriteFailure = new AtomicReference<Throwable>();
+
+        try (var blockingGraphStore = newWorkspaceGraphStore("default");
+             var postgresProvider = new PostgresStorageProvider(newPostgresConfig(tablePrefix), new FileSnapshotStore());
+             var failingProvider = new PostgresNeo4jStorageProvider(
+                 postgresProvider,
+                 new GraphStorageAdapter() {
+                     private final GraphStorageAdapter delegate = new Neo4jGraphStorageAdapter(blockingGraphStore);
+
+                     @Override
+                     public GraphStore graphStore() {
+                         return delegate.graphStore();
+                     }
+
+                     @Override
+                     public GraphSnapshot captureSnapshot() {
+                         snapshotStarted.countDown();
+                         try {
+                             if (!releaseSnapshot.await(10, TimeUnit.SECONDS)) {
+                                 throw new IllegalStateException("timed out waiting to release graph snapshot");
+                             }
+                         } catch (InterruptedException exception) {
+                             Thread.currentThread().interrupt();
+                             throw new IllegalStateException("interrupted while waiting to release graph snapshot", exception);
+                         }
+                         return delegate.captureSnapshot();
+                     }
+
+                     @Override
+                     public void apply(StagedGraphWrites writes) {
+                         throw new IllegalStateException("projection failed");
+                     }
+
+                     @Override
+                     public void restore(GraphSnapshot snapshot) {
+                         delegate.restore(snapshot);
+                     }
+
+                     @Override
+                     public void close() {
+                         delegate.close();
+                     }
+                 }
+             );
+             var concurrentProvider = newWorkspaceProvider(
+                 new FileSnapshotStore(),
+                 tablePrefix,
+                 "default",
+                 new ReentrantReadWriteLock(true)
+             )) {
+            failingProvider.documentStore().save(new DocumentStore.DocumentRecord("doc-0", "Seed", "body", Map.of("seed", "true")));
+            failingProvider.documentStatusStore().save(new DocumentStatusStore.StatusRecord(
+                "doc-0",
+                DocumentStatus.PROCESSED,
+                "seeded",
+                null
+            ));
+
+            var failingThread = new Thread(() -> {
+                try {
+                    failingProvider.writeAtomically(storage -> {
+                        storage.documentStore().save(new DocumentStore.DocumentRecord("doc-1", "Incoming", "body", Map.of()));
+                        storage.documentStatusStore().save(new DocumentStatusStore.StatusRecord(
+                            "doc-1",
+                            DocumentStatus.PROCESSED,
+                            "incoming",
+                            null
+                        ));
+                        storage.graphStore().saveEntity(new GraphStore.EntityRecord(
+                            "entity-1",
+                            "Incoming",
+                            "person",
+                            "Incoming entity",
+                            List.of(),
+                            List.of()
+                        ));
+                        return null;
+                    });
+                } catch (Throwable throwable) {
+                    failedWrite.set(throwable);
+                }
+            });
+            failingThread.start();
+
+            assertThat(snapshotStarted.await(10, TimeUnit.SECONDS)).isTrue();
+
+            var concurrentWriter = new Thread(() -> {
+                writerStarted.countDown();
+                try {
+                    concurrentProvider.writeAtomically(storage -> {
+                        storage.documentStore().save(new DocumentStore.DocumentRecord("doc-2", "Concurrent", "body", Map.of()));
+                        storage.documentStatusStore().save(new DocumentStatusStore.StatusRecord(
+                            "doc-2",
+                            DocumentStatus.PROCESSED,
+                            "concurrent",
+                            null
+                        ));
+                        return null;
+                    });
+                } catch (Throwable throwable) {
+                    concurrentWriteFailure.set(throwable);
+                } finally {
+                    writerFinished.countDown();
+                }
+            });
+            concurrentWriter.start();
+
+            assertThat(writerStarted.await(1, TimeUnit.SECONDS)).isTrue();
+            assertThat(writerFinished.await(200, TimeUnit.MILLISECONDS)).isFalse();
+
+            releaseSnapshot.countDown();
+
+            failingThread.join(Duration.ofSeconds(10).toMillis());
+            concurrentWriter.join(Duration.ofSeconds(10).toMillis());
+
+            assertThat(failingThread.isAlive()).isFalse();
+            assertThat(concurrentWriter.isAlive()).isFalse();
+            assertThat(failedWrite.get())
+                .isInstanceOf(IllegalStateException.class)
+                .hasMessage("projection failed");
+            assertThat(concurrentWriteFailure.get()).isNull();
+            assertThat(concurrentProvider.documentStore().list())
+                .containsExactly(
+                    new DocumentStore.DocumentRecord("doc-0", "Seed", "body", Map.of("seed", "true")),
+                    new DocumentStore.DocumentRecord("doc-2", "Concurrent", "body", Map.of())
+                );
+            assertThat(concurrentProvider.documentStatusStore().list())
+                .containsExactly(
+                    new DocumentStatusStore.StatusRecord("doc-0", DocumentStatus.PROCESSED, "seeded", null),
+                    new DocumentStatusStore.StatusRecord("doc-2", DocumentStatus.PROCESSED, "concurrent", null)
+                );
         }
     }
 

@@ -26,6 +26,7 @@ public final class PostgresNeo4jStorageProvider implements AtomicStorageProvider
     private static final WorkspaceScope DEFAULT_WORKSPACE = new WorkspaceScope("default");
 
     private final ReentrantReadWriteLock lock;
+    private final PostgresStorageProvider postgresProvider;
     private final SnapshotStore snapshotStore;
     private final StorageCoordinator coordinator;
     private final DocumentStore lockedDocumentStore;
@@ -122,6 +123,7 @@ public final class PostgresNeo4jStorageProvider implements AtomicStorageProvider
     ) {
         this.lock = Objects.requireNonNull(lock, "lock");
         var provider = Objects.requireNonNull(postgresProvider, "postgresProvider");
+        this.postgresProvider = provider;
         var relationalAdapter = new PostgresProviderRelationalAdapter(provider);
         this.snapshotStore = relationalAdapter.snapshotStore();
         this.coordinator = new StorageCoordinator(
@@ -169,13 +171,16 @@ public final class PostgresNeo4jStorageProvider implements AtomicStorageProvider
     @Override
     public <T> T writeAtomically(AtomicOperation<T> operation) {
         Objects.requireNonNull(operation, "operation");
-        return withWriteLock(() -> coordinator.writeAtomically(operation));
+        return withWriteLock(() -> postgresProvider.withWorkspaceExclusiveLock(() -> coordinator.writeAtomically(operation)));
     }
 
     @Override
     public void restore(SnapshotStore.Snapshot snapshot) {
         var source = Objects.requireNonNull(snapshot, "snapshot");
-        withWriteLock(() -> coordinator.restore(source));
+        withWriteLock(() -> postgresProvider.withWorkspaceExclusiveLock(() -> {
+            coordinator.restore(source);
+            return null;
+        }));
     }
 
     @Override
@@ -187,7 +192,7 @@ public final class PostgresNeo4jStorageProvider implements AtomicStorageProvider
         var readLock = lock.readLock();
         readLock.lock();
         try {
-            return supplier.get();
+            return postgresProvider.withWorkspaceSharedLock(supplier::get);
         } finally {
             readLock.unlock();
         }

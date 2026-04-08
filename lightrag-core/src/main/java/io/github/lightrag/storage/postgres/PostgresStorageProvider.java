@@ -22,6 +22,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.Objects;
 import java.util.Optional;
+import java.util.function.Supplier;
 import java.util.concurrent.locks.ReentrantReadWriteLock;
 
 public final class PostgresStorageProvider implements AtomicStorageProvider, AutoCloseable {
@@ -162,27 +163,22 @@ public final class PostgresStorageProvider implements AtomicStorageProvider, Aut
     @Override
     public <T> T writeAtomically(AtomicOperation<T> operation) {
         Objects.requireNonNull(operation, "operation");
-        return withExclusiveProviderLock(() -> {
-            return advisoryLockManager.withExclusiveLock(() -> withExclusiveAdvisoryScope(() -> {
-                return PostgresRetrySupport.execute(
-                    "atomic write for workspace '%s'".formatted(workspaceId),
-                    () -> {
-                        try (var connection = jdbcDataSource.getConnection()) {
-                            return withTransaction(connection, () -> operation.execute(newAtomicView(connection)));
-                        } catch (SQLException exception) {
-                            throw new StorageException("Failed to open PostgreSQL transaction", exception);
-                        }
-                    }
-                );
-            }));
-        });
+        return withWorkspaceExclusiveLock(() -> PostgresRetrySupport.execute(
+            "atomic write for workspace '%s'".formatted(workspaceId),
+            () -> {
+                try (var connection = jdbcDataSource.getConnection()) {
+                    return withTransaction(connection, () -> operation.execute(newAtomicView(connection)));
+                } catch (SQLException exception) {
+                    throw new StorageException("Failed to open PostgreSQL transaction", exception);
+                }
+            }
+        ));
     }
 
     @Override
     public void restore(SnapshotStore.Snapshot snapshot) {
         var source = Objects.requireNonNull(snapshot, "snapshot");
-        withExclusiveProviderLock(() -> {
-            advisoryLockManager.withExclusiveLock(() -> withExclusiveAdvisoryScope(() -> {
+        withWorkspaceExclusiveLock(() -> {
                 try (var connection = jdbcDataSource.getConnection()) {
                     withTransaction(connection, () -> {
                         truncateAll(connection);
@@ -212,9 +208,17 @@ public final class PostgresStorageProvider implements AtomicStorageProvider, Aut
                     throw new StorageException("Failed to open PostgreSQL transaction for restore", exception);
                 }
                 return null;
-            }));
-            return null;
         });
+    }
+
+    public <T> T withWorkspaceSharedLock(Supplier<T> supplier) {
+        Objects.requireNonNull(supplier, "supplier");
+        return withSharedWorkspaceLock(supplier::get);
+    }
+
+    public <T> T withWorkspaceExclusiveLock(Supplier<T> supplier) {
+        Objects.requireNonNull(supplier, "supplier");
+        return withExclusiveWorkspaceLock(supplier::get);
     }
 
     @Override
@@ -498,6 +502,10 @@ public final class PostgresStorageProvider implements AtomicStorageProvider, Aut
     }
 
     private <T> T withReadLock(RuntimeSupplier<T> supplier) {
+        return withSharedWorkspaceLock(supplier);
+    }
+
+    private <T> T withSharedWorkspaceLock(RuntimeSupplier<T> supplier) {
         var readLock = lock.readLock();
         readLock.lock();
         try {
@@ -511,12 +519,18 @@ public final class PostgresStorageProvider implements AtomicStorageProvider, Aut
     }
 
     private void withWriteLock(Runnable runnable) {
-        withExclusiveProviderLock(() -> {
-            advisoryLockManager.withExclusiveLock(() -> withExclusiveAdvisoryScope(() -> {
-                runnable.run();
-                return null;
-            }));
+        withExclusiveWorkspaceLock(() -> {
+            runnable.run();
             return null;
+        });
+    }
+
+    private <T> T withExclusiveWorkspaceLock(RuntimeSupplier<T> supplier) {
+        return withExclusiveProviderLock(() -> {
+            if (exclusiveAdvisoryLockHeld.get()) {
+                return supplier.get();
+            }
+            return advisoryLockManager.withExclusiveLock(() -> withExclusiveAdvisoryScope(supplier));
         });
     }
 
