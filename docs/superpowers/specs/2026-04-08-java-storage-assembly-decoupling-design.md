@@ -161,6 +161,15 @@ LightRag.builder()
 
 建议第一阶段范围控制如下：
 
+### Current Status
+
+截至 2026-04-09，当前代码已经完成：
+
+1. `PostgresMilvusNeo4jStorageProvider` 向 `StorageCoordinator` 迁移。
+2. `PostgresNeo4jStorageProvider` 向 `StorageCoordinator` 迁移，并恢复 workspace 级锁语义。
+3. `MySqlMilvusNeo4jStorageProvider` 向 `StorageCoordinator` 迁移。
+4. SDK 侧补充关系库、图库、向量库适配器注入入口。
+
 ### Stage 1
 
 1. 定义 `RelationalStorageAdapter`、`GraphStorageAdapter`、`VectorStorageAdapter`、`StorageAssembly`、`StorageCoordinator`。
@@ -171,9 +180,8 @@ LightRag.builder()
 
 ### Stage 2
 
-1. 迁移 `MySqlMilvusNeo4jStorageProvider`。
-2. 将更多内部 `Projection` 类型替换为正式适配器实现。
-3. 评估 Starter 是否增加基于 `StorageAssembly` 的自动装配。
+1. 将更多内部 `Projection` 类型替换为正式适配器实现。
+2. 评估 Starter 是否增加基于 `StorageAssembly` 的自动装配。
 
 ### Stage 3
 
