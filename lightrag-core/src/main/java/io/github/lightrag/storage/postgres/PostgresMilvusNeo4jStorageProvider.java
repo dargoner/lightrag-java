@@ -8,7 +8,6 @@ import io.github.lightrag.storage.DocumentStatusStore;
 import io.github.lightrag.storage.DocumentStore;
 import io.github.lightrag.storage.GraphStorageAdapter;
 import io.github.lightrag.storage.GraphStore;
-import io.github.lightrag.storage.StorageAssembly;
 import io.github.lightrag.storage.StorageCoordinator;
 import io.github.lightrag.storage.SnapshotStore;
 import io.github.lightrag.storage.VectorStorageAdapter;
@@ -30,8 +29,15 @@ import java.util.concurrent.locks.ReentrantReadWriteLock;
 public final class PostgresMilvusNeo4jStorageProvider implements AtomicStorageProvider, AutoCloseable {
     private static final WorkspaceScope DEFAULT_WORKSPACE = new WorkspaceScope("default");
 
+    private final ReentrantReadWriteLock lock;
+    private final PostgresAdvisoryLockManager advisoryLockManager;
+    private final ThreadLocal<Boolean> exclusiveAdvisoryLockHeld;
     private final SnapshotStore snapshotStore;
     private final StorageCoordinator coordinator;
+    private final DocumentStore lockedDocumentStore;
+    private final ChunkStore lockedChunkStore;
+    private final DocumentStatusStore lockedDocumentStatusStore;
+    private final VectorStore lockedVectorStore;
     private final GraphStore graphStore;
 
     public PostgresMilvusNeo4jStorageProvider(
@@ -117,24 +123,34 @@ public final class PostgresMilvusNeo4jStorageProvider implements AtomicStoragePr
     }
 
     private PostgresMilvusNeo4jStorageProvider(Components components) {
+        this.lock = components.lock;
         this.snapshotStore = components.snapshotStore;
-        this.coordinator = (StorageCoordinator) StorageAssembly.builder()
-            .relationalAdapter(components.relationalAdapter)
-            .graphAdapter(components.graphAdapter)
-            .vectorAdapter(components.vectorAdapter)
-            .build()
-            .toStorageProvider();
+        this.coordinator = new StorageCoordinator(
+            components.relationalAdapter,
+            components.graphAdapter,
+            components.vectorAdapter
+        );
+        this.advisoryLockManager = new PostgresAdvisoryLockManager(
+            components.relationalAdapter.dataSource(),
+            components.relationalAdapter.config(),
+            components.relationalAdapter.workspaceId()
+        );
+        this.exclusiveAdvisoryLockHeld = ThreadLocal.withInitial(() -> Boolean.FALSE);
+        this.lockedDocumentStore = new LockedDocumentStore(coordinator.documentStore());
+        this.lockedChunkStore = new LockedChunkStore(coordinator.chunkStore());
+        this.lockedDocumentStatusStore = new LockedDocumentStatusStore(coordinator.documentStatusStore());
+        this.lockedVectorStore = new LockedVectorStore(coordinator.vectorStore());
         this.graphStore = new MirroringGraphStore();
     }
 
     @Override
     public DocumentStore documentStore() {
-        return coordinator.documentStore();
+        return lockedDocumentStore;
     }
 
     @Override
     public ChunkStore chunkStore() {
-        return coordinator.chunkStore();
+        return lockedChunkStore;
     }
 
     @Override
@@ -144,12 +160,12 @@ public final class PostgresMilvusNeo4jStorageProvider implements AtomicStoragePr
 
     @Override
     public VectorStore vectorStore() {
-        return coordinator.vectorStore();
+        return lockedVectorStore;
     }
 
     @Override
     public DocumentStatusStore documentStatusStore() {
-        return coordinator.documentStatusStore();
+        return lockedDocumentStatusStore;
     }
 
     @Override
@@ -159,12 +175,19 @@ public final class PostgresMilvusNeo4jStorageProvider implements AtomicStoragePr
 
     @Override
     public <T> T writeAtomically(AtomicOperation<T> operation) {
-        return coordinator.writeAtomically(operation);
+        Objects.requireNonNull(operation, "operation");
+        return withExclusiveProviderLock(() -> advisoryLockManager.withExclusiveLock(() -> withExclusiveAdvisoryScope(
+            () -> coordinator.writeAtomically(operation)
+        )));
     }
 
     @Override
     public void restore(SnapshotStore.Snapshot snapshot) {
-        coordinator.restore(snapshot);
+        var source = Objects.requireNonNull(snapshot, "snapshot");
+        withExclusiveProviderLock(() -> advisoryLockManager.withExclusiveLock(() -> withExclusiveAdvisoryScope(() -> {
+            coordinator.restore(source);
+            return null;
+        })));
     }
 
     @Override
@@ -195,7 +218,7 @@ public final class PostgresMilvusNeo4jStorageProvider implements AtomicStoragePr
             ),
             snapshot -> buildMilvusPayloads(snapshot, relationalAdapter)
         );
-        return new Components(snapshotStore, relationalAdapter, graphAdapter, vectorAdapter);
+        return new Components(snapshotStore, relationalAdapter, graphAdapter, vectorAdapter, new ReentrantReadWriteLock(true));
     }
 
     private static Components buildFromDataSourceConfigs(
@@ -223,7 +246,7 @@ public final class PostgresMilvusNeo4jStorageProvider implements AtomicStoragePr
             ),
             snapshot -> buildMilvusPayloads(snapshot, relationalAdapter)
         );
-        return new Components(snapshotStore, relationalAdapter, graphAdapter, vectorAdapter);
+        return new Components(snapshotStore, relationalAdapter, graphAdapter, vectorAdapter, new ReentrantReadWriteLock(true));
     }
 
     private static Components buildFromProjections(
@@ -247,7 +270,7 @@ public final class PostgresMilvusNeo4jStorageProvider implements AtomicStoragePr
             Objects.requireNonNull(vectorProjection, "vectorProjection"),
             snapshot -> buildMilvusPayloads(snapshot, relationalAdapter)
         );
-        return new Components(snapshotStore, relationalAdapter, graphAdapter, vectorAdapter);
+        return new Components(snapshotStore, relationalAdapter, graphAdapter, vectorAdapter, lock);
     }
 
     private static Components buildFromAdapters(
@@ -268,7 +291,8 @@ public final class PostgresMilvusNeo4jStorageProvider implements AtomicStoragePr
             snapshotStore,
             relationalAdapter,
             Objects.requireNonNull(graphAdapter, "graphAdapter"),
-            Objects.requireNonNull(vectorAdapter, "vectorAdapter")
+            Objects.requireNonNull(vectorAdapter, "vectorAdapter"),
+            new ReentrantReadWriteLock(true)
         );
     }
 
@@ -367,27 +391,181 @@ public final class PostgresMilvusNeo4jStorageProvider implements AtomicStoragePr
 
         @Override
         public Optional<EntityRecord> loadEntity(String entityId) {
-            return coordinator.graphStore().loadEntity(entityId);
+            return withReadLock(() -> coordinator.graphStore().loadEntity(entityId));
         }
 
         @Override
         public Optional<RelationRecord> loadRelation(String relationId) {
-            return coordinator.graphStore().loadRelation(relationId);
+            return withReadLock(() -> coordinator.graphStore().loadRelation(relationId));
         }
 
         @Override
         public List<EntityRecord> allEntities() {
-            return coordinator.graphStore().allEntities();
+            return withReadLock(() -> coordinator.graphStore().allEntities());
         }
 
         @Override
         public List<RelationRecord> allRelations() {
-            return coordinator.graphStore().allRelations();
+            return withReadLock(() -> coordinator.graphStore().allRelations());
         }
 
         @Override
         public List<RelationRecord> findRelations(String entityId) {
-            return coordinator.graphStore().findRelations(entityId);
+            return withReadLock(() -> coordinator.graphStore().findRelations(entityId));
+        }
+    }
+
+    private final class LockedDocumentStore implements DocumentStore {
+        private final DocumentStore delegate;
+
+        private LockedDocumentStore(DocumentStore delegate) {
+            this.delegate = Objects.requireNonNull(delegate, "delegate");
+        }
+
+        @Override
+        public void save(DocumentRecord document) {
+            withWriteLock(() -> delegate.save(document));
+        }
+
+        @Override
+        public Optional<DocumentRecord> load(String documentId) {
+            return withReadLock(() -> delegate.load(documentId));
+        }
+
+        @Override
+        public List<DocumentRecord> list() {
+            return withReadLock(delegate::list);
+        }
+
+        @Override
+        public boolean contains(String documentId) {
+            return withReadLock(() -> delegate.contains(documentId));
+        }
+    }
+
+    private final class LockedChunkStore implements ChunkStore {
+        private final ChunkStore delegate;
+
+        private LockedChunkStore(ChunkStore delegate) {
+            this.delegate = Objects.requireNonNull(delegate, "delegate");
+        }
+
+        @Override
+        public void save(ChunkRecord chunk) {
+            withWriteLock(() -> delegate.save(chunk));
+        }
+
+        @Override
+        public Optional<ChunkRecord> load(String chunkId) {
+            return withReadLock(() -> delegate.load(chunkId));
+        }
+
+        @Override
+        public List<ChunkRecord> list() {
+            return withReadLock(delegate::list);
+        }
+
+        @Override
+        public List<ChunkRecord> listByDocument(String documentId) {
+            return withReadLock(() -> delegate.listByDocument(documentId));
+        }
+    }
+
+    private final class LockedDocumentStatusStore implements DocumentStatusStore {
+        private final DocumentStatusStore delegate;
+
+        private LockedDocumentStatusStore(DocumentStatusStore delegate) {
+            this.delegate = Objects.requireNonNull(delegate, "delegate");
+        }
+
+        @Override
+        public void save(StatusRecord statusRecord) {
+            withWriteLock(() -> delegate.save(statusRecord));
+        }
+
+        @Override
+        public Optional<StatusRecord> load(String documentId) {
+            return withReadLock(() -> delegate.load(documentId));
+        }
+
+        @Override
+        public List<StatusRecord> list() {
+            return withReadLock(delegate::list);
+        }
+
+        @Override
+        public void delete(String documentId) {
+            withWriteLock(() -> delegate.delete(documentId));
+        }
+    }
+
+    private final class LockedVectorStore implements VectorStore {
+        private final VectorStore delegate;
+
+        private LockedVectorStore(VectorStore delegate) {
+            this.delegate = Objects.requireNonNull(delegate, "delegate");
+        }
+
+        @Override
+        public void saveAll(String namespace, List<VectorRecord> vectors) {
+            withWriteLock(() -> delegate.saveAll(namespace, vectors));
+        }
+
+        @Override
+        public List<VectorMatch> search(String namespace, List<Double> queryVector, int topK) {
+            return withReadLock(() -> delegate.search(namespace, queryVector, topK));
+        }
+
+        @Override
+        public List<VectorRecord> list(String namespace) {
+            return withReadLock(() -> delegate.list(namespace));
+        }
+    }
+
+    private <T> T withReadLock(RuntimeSupplier<T> supplier) {
+        var readLock = lock.readLock();
+        readLock.lock();
+        try {
+            if (exclusiveAdvisoryLockHeld.get()) {
+                return supplier.get();
+            }
+            return advisoryLockManager.withSharedLock(supplier::get);
+        } finally {
+            readLock.unlock();
+        }
+    }
+
+    private void withWriteLock(Runnable runnable) {
+        withExclusiveProviderLock(() -> {
+            advisoryLockManager.withExclusiveLock(() -> withExclusiveAdvisoryScope(() -> {
+                runnable.run();
+                return null;
+            }));
+            return null;
+        });
+    }
+
+    private <T> T withExclusiveProviderLock(RuntimeSupplier<T> supplier) {
+        var writeLock = lock.writeLock();
+        writeLock.lock();
+        try {
+            return supplier.get();
+        } finally {
+            writeLock.unlock();
+        }
+    }
+
+    private <T> T withExclusiveAdvisoryScope(RuntimeSupplier<T> supplier) {
+        boolean previous = exclusiveAdvisoryLockHeld.get();
+        exclusiveAdvisoryLockHeld.set(true);
+        try {
+            return supplier.get();
+        } finally {
+            if (previous) {
+                exclusiveAdvisoryLockHeld.set(true);
+            } else {
+                exclusiveAdvisoryLockHeld.remove();
+            }
         }
     }
 
@@ -395,13 +573,20 @@ public final class PostgresMilvusNeo4jStorageProvider implements AtomicStoragePr
         SnapshotStore snapshotStore,
         PostgresRelationalStorageAdapter relationalAdapter,
         GraphStorageAdapter graphAdapter,
-        VectorStorageAdapter vectorAdapter
+        VectorStorageAdapter vectorAdapter,
+        ReentrantReadWriteLock lock
     ) {
         private Components {
             snapshotStore = Objects.requireNonNull(snapshotStore, "snapshotStore");
             relationalAdapter = Objects.requireNonNull(relationalAdapter, "relationalAdapter");
             graphAdapter = Objects.requireNonNull(graphAdapter, "graphAdapter");
             vectorAdapter = Objects.requireNonNull(vectorAdapter, "vectorAdapter");
+            lock = Objects.requireNonNull(lock, "lock");
         }
+    }
+
+    @FunctionalInterface
+    private interface RuntimeSupplier<T> {
+        T get();
     }
 }

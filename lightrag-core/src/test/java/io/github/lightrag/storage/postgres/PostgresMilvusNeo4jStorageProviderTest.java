@@ -22,6 +22,9 @@ import java.util.Map;
 import java.util.Objects;
 import java.util.Optional;
 import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicReference;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.TimeUnit;
 import java.util.concurrent.locks.ReentrantReadWriteLock;
 import org.junit.jupiter.api.Test;
 import org.testcontainers.containers.PostgreSQLContainer;
@@ -31,6 +34,100 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 class PostgresMilvusNeo4jStorageProviderTest {
+    @Test
+    void exposesStableTopLevelStoresAndDistinctAtomicViewStores() {
+        try (
+            var container = newPostgresContainer();
+            var dataSource = newDataSource(startedConfig(container))
+        ) {
+            PostgresStorageConfig config = startedConfig(container);
+            try (var provider = new PostgresMilvusNeo4jStorageProvider(
+                dataSource,
+                config,
+                new InMemorySnapshotStore(),
+                new WorkspaceScope("default"),
+                new RecordingGraphProjection(),
+                new RecordingMilvusProjection(),
+                new ReentrantReadWriteLock(true)
+            )) {
+                assertThat(provider.documentStore()).isSameAs(provider.documentStore());
+                assertThat(provider.chunkStore()).isSameAs(provider.chunkStore());
+                assertThat(provider.graphStore()).isSameAs(provider.graphStore());
+                assertThat(provider.vectorStore()).isSameAs(provider.vectorStore());
+                assertThat(provider.snapshotStore()).isSameAs(provider.snapshotStore());
+
+                var atomicDocumentStore = new AtomicReference<DocumentStore>();
+                var atomicChunkStore = new AtomicReference<ChunkStore>();
+                var atomicGraphStore = new AtomicReference<GraphStore>();
+                var atomicVectorStore = new AtomicReference<VectorStore>();
+
+                provider.writeAtomically(storage -> {
+                    atomicDocumentStore.set(storage.documentStore());
+                    atomicChunkStore.set(storage.chunkStore());
+                    atomicGraphStore.set(storage.graphStore());
+                    atomicVectorStore.set(storage.vectorStore());
+                    return null;
+                });
+
+                assertThat(atomicDocumentStore.get()).isNotSameAs(provider.documentStore());
+                assertThat(atomicChunkStore.get()).isNotSameAs(provider.chunkStore());
+                assertThat(atomicGraphStore.get()).isNotSameAs(provider.graphStore());
+                assertThat(atomicVectorStore.get()).isNotSameAs(provider.vectorStore());
+            }
+        }
+    }
+
+    @Test
+    void honorsProvidedLockForTopLevelDocumentWrites() throws Exception {
+        try (
+            var container = newPostgresContainer();
+            var dataSource = newDataSource(startedConfig(container))
+        ) {
+            PostgresStorageConfig config = startedConfig(container);
+            var providerLock = new ReentrantReadWriteLock(true);
+
+            try (var provider = new PostgresMilvusNeo4jStorageProvider(
+                dataSource,
+                config,
+                new InMemorySnapshotStore(),
+                new WorkspaceScope("default"),
+                new RecordingGraphProjection(),
+                new RecordingMilvusProjection(),
+                providerLock
+            )) {
+                var started = new CountDownLatch(1);
+                var finished = new CountDownLatch(1);
+                var failure = new AtomicReference<Throwable>();
+
+                providerLock.writeLock().lock();
+                var writer = new Thread(() -> {
+                    started.countDown();
+                    try {
+                        provider.documentStore().save(new DocumentStore.DocumentRecord("doc-locked", "Title", "Body", Map.of()));
+                    } catch (Throwable throwable) {
+                        failure.set(throwable);
+                    } finally {
+                        finished.countDown();
+                    }
+                });
+                writer.start();
+
+                assertThat(started.await(1, TimeUnit.SECONDS)).isTrue();
+                assertThat(finished.await(200, TimeUnit.MILLISECONDS)).isFalse();
+                providerLock.writeLock().unlock();
+
+                assertThat(finished.await(5, TimeUnit.SECONDS)).isTrue();
+                writer.join(1000);
+                assertThat(failure.get()).isNull();
+                assertThat(provider.documentStore().load("doc-locked")).isPresent();
+            } finally {
+                if (providerLock.isWriteLockedByCurrentThread()) {
+                    providerLock.writeLock().unlock();
+                }
+            }
+        }
+    }
+
     @Test
     void delegatesAtomicWriteToStorageCoordinatorAndPersistsPostgresGraphBaseline() {
         try (

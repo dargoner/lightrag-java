@@ -226,6 +226,18 @@ public final class PostgresRelationalStorageAdapter implements RelationalStorage
         return graphStore;
     }
 
+    DataSource dataSource() {
+        return dataSource;
+    }
+
+    PostgresStorageConfig config() {
+        return config;
+    }
+
+    String workspaceId() {
+        return workspaceId;
+    }
+
     @Override
     public void close() {
         if (ownsDataSource && ownedDataSource != null) {
