@@ -211,6 +211,7 @@ class StorageAssemblyTest {
             return null;
         });
 
+        assertThat(provider.vectorStore()).isInstanceOf(HybridVectorStore.class);
         assertThat(((HybridVectorStore) provider.vectorStore()).search(
             "chunks",
             new HybridVectorStore.SearchRequest(

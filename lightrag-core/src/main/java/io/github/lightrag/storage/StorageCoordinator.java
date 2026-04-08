@@ -302,6 +302,19 @@ public final class StorageCoordinator implements AtomicStorageProvider, AutoClos
             var namespaceRecords = ensureNamespaceRecords(ns);
             for (var vector : vectors) {
                 var record = Objects.requireNonNull(vector, "vector");
+                var existing = namespaceRecords.get(record.id());
+                if (existing != null && existing.hasMetadata()) {
+                    namespaceRecords.put(
+                        record.id(),
+                        new VectorStorageAdapter.VectorWrite(
+                            record.id(),
+                            record.vector(),
+                            existing.searchableText(),
+                            existing.keywords()
+                        )
+                    );
+                    continue;
+                }
                 namespaceRecords.put(record.id(), VectorStorageAdapter.VectorWrite.of(record));
             }
         }
@@ -330,12 +343,16 @@ public final class StorageCoordinator implements AtomicStorageProvider, AutoClos
             var ns = Objects.requireNonNull(namespace, "namespace");
             var searchRequest = Objects.requireNonNull(request, "request");
             if (!stagedNamespaces.containsKey(ns)) {
-                return hybridDelegate != null
-                    ? hybridDelegate.search(ns, searchRequest)
-                    : delegate.search(ns, searchRequest.queryVector(), searchRequest.topK());
+                return baseSearch(ns, searchRequest);
             }
-            return mergedWrites(ns).values().stream()
-                .map(write -> new VectorMatch(write.id(), score(write, searchRequest)))
+            var merged = new LinkedHashMap<String, VectorMatch>();
+            for (var match : baseSearch(ns, searchRequest)) {
+                merged.put(match.id(), match);
+            }
+            for (var write : stagedNamespaces.get(ns).values()) {
+                merged.put(write.id(), new VectorMatch(write.id(), score(write, searchRequest)));
+            }
+            return merged.values().stream()
                 .sorted(VECTOR_MATCH_ORDER)
                 .limit(searchRequest.topK())
                 .toList();
@@ -378,6 +395,16 @@ public final class StorageCoordinator implements AtomicStorageProvider, AutoClos
             return merged;
         }
 
+        private List<VectorMatch> baseSearch(String namespace, SearchRequest request) {
+            if (request.mode() == SearchMode.SEMANTIC) {
+                return delegate.search(namespace, request.queryVector(), request.topK());
+            }
+            if (hybridDelegate == null) {
+                throw new UnsupportedOperationException("Hybrid vector search requires a HybridVectorStore delegate");
+            }
+            return hybridDelegate.search(namespace, request);
+        }
+
         private static double score(VectorStorageAdapter.VectorWrite write, SearchRequest request) {
             return switch (request.mode()) {
                 case SEMANTIC -> dotProduct(request.queryVector(), write.vector());
@@ -390,7 +417,7 @@ public final class StorageCoordinator implements AtomicStorageProvider, AutoClos
             var searchableText = write.searchableText().toLowerCase(java.util.Locale.ROOT);
             var loweredKeywords = write.keywords().stream()
                 .map(keyword -> keyword.toLowerCase(java.util.Locale.ROOT))
-                .toList();
+                .collect(java.util.stream.Collectors.toCollection(java.util.LinkedHashSet::new));
             var tokens = new LinkedHashMap<String, Boolean>();
             for (var token : tokenize(request.queryText())) {
                 tokens.put(token, Boolean.TRUE);
