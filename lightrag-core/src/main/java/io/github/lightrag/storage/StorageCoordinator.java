@@ -7,6 +7,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.Objects;
 import java.util.Optional;
+import java.util.PriorityQueue;
 
 public final class StorageCoordinator implements AtomicStorageProvider, AutoCloseable {
     private static final Comparator<VectorStore.VectorMatch> VECTOR_MATCH_ORDER =
@@ -352,10 +353,7 @@ public final class StorageCoordinator implements AtomicStorageProvider, AutoClos
             for (var write : stagedNamespaces.get(ns).values()) {
                 merged.put(write.id(), new VectorMatch(write.id(), score(write, searchRequest)));
             }
-            return merged.values().stream()
-                .sorted(VECTOR_MATCH_ORDER)
-                .limit(searchRequest.topK())
-                .toList();
+            return topMatches(merged.values(), searchRequest.topK());
         }
 
         @Override
@@ -458,6 +456,24 @@ public final class StorageCoordinator implements AtomicStorageProvider, AutoClos
                 score += left.get(index) * right.get(index);
             }
             return score;
+        }
+
+        private static List<VectorMatch> topMatches(java.util.Collection<VectorMatch> matches, int topK) {
+            var ascending = Comparator.comparingDouble(VectorMatch::score).thenComparing(VectorMatch::id);
+            var heap = new PriorityQueue<VectorMatch>(ascending);
+            for (var match : matches) {
+                if (heap.size() < topK) {
+                    heap.add(match);
+                    continue;
+                }
+                if (ascending.compare(match, heap.peek()) > 0) {
+                    heap.poll();
+                    heap.add(match);
+                }
+            }
+            return heap.stream()
+                .sorted(VECTOR_MATCH_ORDER)
+                .toList();
         }
     }
 }
