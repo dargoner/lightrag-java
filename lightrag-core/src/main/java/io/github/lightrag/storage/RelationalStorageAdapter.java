@@ -1,5 +1,7 @@
 package io.github.lightrag.storage;
 
+import java.util.Optional;
+
 public interface RelationalStorageAdapter extends AutoCloseable {
     DocumentStore documentStore();
 
@@ -13,6 +15,17 @@ public interface RelationalStorageAdapter extends AutoCloseable {
 
     void restore(SnapshotStore.Snapshot snapshot);
 
+    default SnapshotStore.Snapshot toRelationalRestoreSnapshot(SnapshotStore.Snapshot snapshot) {
+        return new SnapshotStore.Snapshot(
+            snapshot.documents(),
+            snapshot.chunks(),
+            java.util.List.of(),
+            java.util.List.of(),
+            java.util.Map.of(),
+            snapshot.documentStatuses()
+        );
+    }
+
     <T> T writeInTransaction(RelationalWriteOperation<T> operation);
 
     interface RelationalStorageView {
@@ -21,6 +34,14 @@ public interface RelationalStorageAdapter extends AutoCloseable {
         ChunkStore chunkStore();
 
         DocumentStatusStore documentStatusStore();
+
+        default Optional<GraphStore> transactionalGraphStore() {
+            return Optional.empty();
+        }
+
+        default Optional<VectorStore> transactionalVectorStore() {
+            return Optional.empty();
+        }
     }
 
     @FunctionalInterface

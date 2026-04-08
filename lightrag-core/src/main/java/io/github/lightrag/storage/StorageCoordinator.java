@@ -65,8 +65,14 @@ public final class StorageCoordinator implements AtomicStorageProvider, AutoClos
         var vectorSnapshot = vectorAdapter.captureSnapshot();
         try {
             return relationalAdapter.writeInTransaction(storage -> {
-                var stagedGraphStore = new StagedGraphStore(graphAdapter.graphStore());
-                var stagedVectorStore = new StagedVectorStore(vectorAdapter.vectorStore());
+                var stagedGraphStore = new StagedGraphStore(
+                    graphAdapter.graphStore(),
+                    storage.transactionalGraphStore().orElse(null)
+                );
+                var stagedVectorStore = new StagedVectorStore(
+                    vectorAdapter.vectorStore(),
+                    storage.transactionalVectorStore().orElse(null)
+                );
                 var result = operation.execute(new AtomicView(
                     storage.documentStore(),
                     storage.chunkStore(),
@@ -93,38 +99,15 @@ public final class StorageCoordinator implements AtomicStorageProvider, AutoClos
     @Override
     public void restore(SnapshotStore.Snapshot snapshot) {
         var source = Objects.requireNonNull(snapshot, "snapshot");
-        RuntimeException failure = null;
+        var relationalSnapshot = relationalAdapter.captureSnapshot();
+        var graphSnapshot = graphAdapter.captureSnapshot();
+        var vectorSnapshot = vectorAdapter.captureSnapshot();
         try {
-            relationalAdapter.restore(new SnapshotStore.Snapshot(
-                source.documents(),
-                source.chunks(),
-                List.of(),
-                List.of(),
-                Map.of(),
-                source.documentStatuses()
-            ));
-        } catch (RuntimeException exception) {
-            failure = exception;
-        }
-        try {
+            relationalAdapter.restore(relationalAdapter.toRelationalRestoreSnapshot(source));
             graphAdapter.restore(new GraphStorageAdapter.GraphSnapshot(source.entities(), source.relations()));
-        } catch (RuntimeException exception) {
-            if (failure == null) {
-                failure = exception;
-            } else {
-                failure.addSuppressed(exception);
-            }
-        }
-        try {
             vectorAdapter.restore(new VectorStorageAdapter.VectorSnapshot(source.vectors()));
-        } catch (RuntimeException exception) {
-            if (failure == null) {
-                failure = exception;
-            } else {
-                failure.addSuppressed(exception);
-            }
-        }
-        if (failure != null) {
+        } catch (RuntimeException | Error failure) {
+            rollback(relationalSnapshot, graphSnapshot, vectorSnapshot, failure);
             throw failure;
         }
     }
@@ -210,22 +193,30 @@ public final class StorageCoordinator implements AtomicStorageProvider, AutoClos
 
     private static final class StagedGraphStore implements GraphStore {
         private final GraphStore delegate;
+        private final GraphStore transactionalBase;
         private final Map<String, EntityRecord> stagedEntities = new LinkedHashMap<>();
         private final Map<String, RelationRecord> stagedRelations = new LinkedHashMap<>();
 
-        private StagedGraphStore(GraphStore delegate) {
+        private StagedGraphStore(GraphStore delegate, GraphStore transactionalBase) {
             this.delegate = Objects.requireNonNull(delegate, "delegate");
+            this.transactionalBase = transactionalBase;
         }
 
         @Override
         public void saveEntity(EntityRecord entity) {
             var record = Objects.requireNonNull(entity, "entity");
+            if (transactionalBase != null) {
+                transactionalBase.saveEntity(record);
+            }
             stagedEntities.put(record.id(), record);
         }
 
         @Override
         public void saveRelation(RelationRecord relation) {
             var record = Objects.requireNonNull(relation, "relation");
+            if (transactionalBase != null) {
+                transactionalBase.saveRelation(record);
+            }
             stagedRelations.put(record.id(), record);
         }
 
@@ -235,7 +226,7 @@ public final class StorageCoordinator implements AtomicStorageProvider, AutoClos
             if (stagedEntities.containsKey(id)) {
                 return Optional.ofNullable(stagedEntities.get(id));
             }
-            return delegate.loadEntity(id);
+            return baseStore().loadEntity(id);
         }
 
         @Override
@@ -244,13 +235,13 @@ public final class StorageCoordinator implements AtomicStorageProvider, AutoClos
             if (stagedRelations.containsKey(id)) {
                 return Optional.ofNullable(stagedRelations.get(id));
             }
-            return delegate.loadRelation(id);
+            return baseStore().loadRelation(id);
         }
 
         @Override
         public List<EntityRecord> allEntities() {
             var merged = new LinkedHashMap<String, EntityRecord>();
-            for (var entity : delegate.allEntities()) {
+            for (var entity : baseStore().allEntities()) {
                 merged.put(entity.id(), entity);
             }
             merged.putAll(stagedEntities);
@@ -260,7 +251,7 @@ public final class StorageCoordinator implements AtomicStorageProvider, AutoClos
         @Override
         public List<RelationRecord> allRelations() {
             var merged = new LinkedHashMap<String, RelationRecord>();
-            for (var relation : delegate.allRelations()) {
+            for (var relation : baseStore().allRelations()) {
                 merged.put(relation.id(), relation);
             }
             merged.putAll(stagedRelations);
@@ -284,22 +275,31 @@ public final class StorageCoordinator implements AtomicStorageProvider, AutoClos
                 new ArrayList<>(stagedRelations.values())
             );
         }
+
+        private GraphStore baseStore() {
+            return transactionalBase != null ? transactionalBase : delegate;
+        }
     }
 
     private static final class StagedVectorStore implements HybridVectorStore {
         private final VectorStore delegate;
         private final HybridVectorStore hybridDelegate;
+        private final VectorStore transactionalBase;
         private final Map<String, Map<String, VectorStorageAdapter.VectorWrite>> stagedNamespaces = new LinkedHashMap<>();
 
-        private StagedVectorStore(VectorStore delegate) {
+        private StagedVectorStore(VectorStore delegate, VectorStore transactionalBase) {
             this.delegate = Objects.requireNonNull(delegate, "delegate");
             this.hybridDelegate = delegate instanceof HybridVectorStore hybrid ? hybrid : null;
+            this.transactionalBase = transactionalBase;
         }
 
         @Override
         public void saveAll(String namespace, List<VectorRecord> vectors) {
             var ns = Objects.requireNonNull(namespace, "namespace");
             Objects.requireNonNull(vectors, "vectors");
+            if (transactionalBase != null && !vectors.isEmpty()) {
+                transactionalBase.saveAll(ns, vectors);
+            }
             var namespaceRecords = ensureNamespaceRecords(ns);
             for (var vector : vectors) {
                 var record = Objects.requireNonNull(vector, "vector");
@@ -332,6 +332,14 @@ public final class StorageCoordinator implements AtomicStorageProvider, AutoClos
         public void saveAllEnriched(String namespace, List<EnrichedVectorRecord> records) {
             var ns = Objects.requireNonNull(namespace, "namespace");
             Objects.requireNonNull(records, "records");
+            if (transactionalBase instanceof HybridVectorStore hybridBase && !records.isEmpty()) {
+                hybridBase.saveAllEnriched(ns, records);
+            } else if (transactionalBase != null && !records.isEmpty()) {
+                transactionalBase.saveAll(
+                    ns,
+                    records.stream().map(EnrichedVectorRecord::toVectorRecord).toList()
+                );
+            }
             var namespaceRecords = ensureNamespaceRecords(ns);
             for (var record : records) {
                 var normalized = Objects.requireNonNull(record, "record");
@@ -360,7 +368,7 @@ public final class StorageCoordinator implements AtomicStorageProvider, AutoClos
         public List<VectorRecord> list(String namespace) {
             var ns = Objects.requireNonNull(namespace, "namespace");
             if (!stagedNamespaces.containsKey(ns)) {
-                return delegate.list(ns);
+                return baseVectorStore().list(ns);
             }
             return mergedWrites(ns).values().stream()
                 .map(VectorStorageAdapter.VectorWrite::toVectorRecord)
@@ -386,7 +394,7 @@ public final class StorageCoordinator implements AtomicStorageProvider, AutoClos
 
         private Map<String, VectorStorageAdapter.VectorWrite> mergedWrites(String namespace) {
             var merged = new LinkedHashMap<String, VectorStorageAdapter.VectorWrite>();
-            for (var record : delegate.list(namespace)) {
+            for (var record : baseVectorStore().list(namespace)) {
                 merged.put(record.id(), VectorStorageAdapter.VectorWrite.of(record));
             }
             merged.putAll(stagedNamespaces.getOrDefault(namespace, Map.of()));
@@ -394,13 +402,15 @@ public final class StorageCoordinator implements AtomicStorageProvider, AutoClos
         }
 
         private List<VectorMatch> baseSearch(String namespace, SearchRequest request) {
+            var baseStore = baseVectorStore();
             if (request.mode() == SearchMode.SEMANTIC) {
-                return delegate.search(namespace, request.queryVector(), request.topK());
+                return baseStore.search(namespace, request.queryVector(), request.topK());
             }
-            if (hybridDelegate == null) {
+            var hybridBase = baseStore instanceof HybridVectorStore hybrid ? hybrid : hybridDelegate;
+            if (hybridBase == null) {
                 throw new UnsupportedOperationException("Hybrid vector search requires a HybridVectorStore delegate");
             }
-            return hybridDelegate.search(namespace, request);
+            return hybridBase.search(namespace, request);
         }
 
         private static double score(VectorStorageAdapter.VectorWrite write, SearchRequest request) {
@@ -474,6 +484,10 @@ public final class StorageCoordinator implements AtomicStorageProvider, AutoClos
             return heap.stream()
                 .sorted(VECTOR_MATCH_ORDER)
                 .toList();
+        }
+
+        private VectorStore baseVectorStore() {
+            return transactionalBase != null ? transactionalBase : delegate;
         }
     }
 }

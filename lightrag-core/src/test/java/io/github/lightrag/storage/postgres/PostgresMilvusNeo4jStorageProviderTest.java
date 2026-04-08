@@ -7,12 +7,15 @@ import io.github.lightrag.api.WorkspaceScope;
 import io.github.lightrag.storage.ChunkStore;
 import io.github.lightrag.storage.DocumentStatusStore;
 import io.github.lightrag.storage.DocumentStore;
+import io.github.lightrag.storage.GraphStorageAdapter;
 import io.github.lightrag.storage.GraphStore;
 import io.github.lightrag.storage.HybridVectorStore;
 import io.github.lightrag.storage.SnapshotStore;
+import io.github.lightrag.storage.VectorStorageAdapter;
 import io.github.lightrag.storage.VectorStore;
 import io.github.lightrag.storage.neo4j.Neo4jGraphSnapshot;
 import java.nio.file.Path;
+import java.sql.SQLException;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
@@ -28,6 +31,47 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 class PostgresMilvusNeo4jStorageProviderTest {
+    @Test
+    void delegatesAtomicWriteToStorageCoordinatorAndPersistsPostgresGraphBaseline() {
+        try (
+            var container = newPostgresContainer();
+            var dataSource = newDataSource(startedConfig(container))
+        ) {
+            PostgresStorageConfig config = startedConfig(container);
+            RecordingGraphStorageAdapter graphAdapter = new RecordingGraphStorageAdapter();
+            RecordingVectorStorageAdapter vectorAdapter = new RecordingVectorStorageAdapter();
+
+            try (var provider = new PostgresMilvusNeo4jStorageProvider(
+                dataSource,
+                config,
+                new InMemorySnapshotStore(),
+                new WorkspaceScope("default"),
+                graphAdapter,
+                vectorAdapter
+            )) {
+                provider.writeAtomically(storage -> {
+                    storage.documentStore().save(new DocumentStore.DocumentRecord("doc-1", "Title", "Body", Map.of("source", "test")));
+                    storage.chunkStore().save(new ChunkStore.ChunkRecord("doc-1:0", "doc-1", "Body", 4, 0, Map.of("source", "test")));
+                    storage.graphStore().saveEntity(new GraphStore.EntityRecord(
+                        "entity-1",
+                        "Alice",
+                        "person",
+                        "Researcher",
+                        List.of("A"),
+                        List.of("doc-1:0")
+                    ));
+                    storage.vectorStore().saveAll("chunks", List.of(new VectorStore.VectorRecord("doc-1:0", List.of(1.0d, 0.0d, 0.0d))));
+                    return null;
+                });
+
+                assertThat(graphAdapter.applyCount()).isEqualTo(1);
+                assertThat(vectorAdapter.applyCount()).isEqualTo(1);
+                assertThat(provider.graphStore().loadEntity("entity-1")).isPresent();
+                assertThat(countRows(dataSource, config, "entities", "entity-1")).isEqualTo(1);
+            }
+        }
+    }
+
 
     @Test
     void commitsAcrossPostgresMilvusAndNeo4jStoresWithoutPgvector() {
@@ -269,6 +313,27 @@ class PostgresMilvusNeo4jStorageProviderTest {
         return new HikariDataSource(hikariConfig);
     }
 
+    private static int countRows(
+        HikariDataSource dataSource,
+        PostgresStorageConfig config,
+        String tableName,
+        String id
+    ) {
+        try (var connection = dataSource.getConnection();
+             var statement = connection.prepareStatement(
+                 "SELECT COUNT(*) FROM " + config.qualifiedTableName(tableName) + " WHERE workspace_id = ? AND id = ?"
+             )) {
+            statement.setString(1, "default");
+            statement.setString(2, id);
+            try (var resultSet = statement.executeQuery()) {
+                resultSet.next();
+                return resultSet.getInt(1);
+            }
+        } catch (SQLException exception) {
+            throw new IllegalStateException("Failed to count rows for table " + tableName, exception);
+        }
+    }
+
     private static final class RecordingGraphProjection implements PostgresMilvusNeo4jStorageProvider.GraphProjection {
         private final Map<String, GraphStore.EntityRecord> entities = new LinkedHashMap<>();
         private final Map<String, GraphStore.RelationRecord> relations = new LinkedHashMap<>();
@@ -405,6 +470,85 @@ class PostgresMilvusNeo4jStorageProviderTest {
 
         private LinkedHashMap<String, HybridVectorStore.EnrichedVectorRecord> namespace(String namespace) {
             return namespaces.computeIfAbsent(namespace, ignored -> new LinkedHashMap<>());
+        }
+    }
+
+    private static final class RecordingGraphStorageAdapter implements GraphStorageAdapter {
+        private final RecordingGraphProjection projection = new RecordingGraphProjection();
+        private int applyCount;
+
+        @Override
+        public GraphStore graphStore() {
+            return projection;
+        }
+
+        @Override
+        public GraphSnapshot captureSnapshot() {
+            return new GraphSnapshot(projection.allEntities(), projection.allRelations());
+        }
+
+        @Override
+        public void apply(StagedGraphWrites writes) {
+            applyCount++;
+            for (var entity : writes.entities()) {
+                projection.saveEntity(entity);
+            }
+            for (var relation : writes.relations()) {
+                projection.saveRelation(relation);
+            }
+        }
+
+        @Override
+        public void restore(GraphSnapshot snapshot) {
+            projection.restore(new Neo4jGraphSnapshot(snapshot.entities(), snapshot.relations()));
+        }
+
+        int applyCount() {
+            return applyCount;
+        }
+    }
+
+    private static final class RecordingVectorStorageAdapter implements VectorStorageAdapter {
+        private final RecordingMilvusProjection projection = new RecordingMilvusProjection();
+        private int applyCount;
+
+        @Override
+        public VectorStore vectorStore() {
+            return projection;
+        }
+
+        @Override
+        public VectorSnapshot captureSnapshot() {
+            return new VectorSnapshot(Map.of(
+                "chunks", projection.list("chunks"),
+                "entities", projection.list("entities"),
+                "relations", projection.list("relations")
+            ));
+        }
+
+        @Override
+        public void apply(StagedVectorWrites writes) {
+            applyCount++;
+            for (var entry : writes.upserts().entrySet()) {
+                projection.saveAll(entry.getKey(), entry.getValue().stream().map(VectorWrite::toVectorRecord).toList());
+            }
+            projection.flushNamespaces(List.copyOf(writes.upserts().keySet()));
+        }
+
+        @Override
+        public void restore(VectorSnapshot snapshot) {
+            for (var namespace : List.of("chunks", "entities", "relations")) {
+                projection.deleteNamespace(namespace);
+                var vectors = snapshot.namespaces().getOrDefault(namespace, List.of());
+                if (!vectors.isEmpty()) {
+                    projection.saveAll(namespace, vectors);
+                }
+            }
+            projection.flushNamespaces(List.of("chunks", "entities", "relations"));
+        }
+
+        int applyCount() {
+            return applyCount;
         }
     }
 
