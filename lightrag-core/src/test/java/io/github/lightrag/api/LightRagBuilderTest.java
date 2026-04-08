@@ -15,6 +15,8 @@ import io.github.lightrag.storage.DocumentStore;
 import io.github.lightrag.storage.DocumentStatusStore;
 import io.github.lightrag.storage.GraphStore;
 import io.github.lightrag.storage.InMemoryStorageProvider;
+import io.github.lightrag.storage.StorageAssembly;
+import io.github.lightrag.storage.StorageAssemblyTestDoubles;
 import io.github.lightrag.storage.SnapshotStore;
 import io.github.lightrag.storage.StorageProvider;
 import io.github.lightrag.storage.VectorStore;
@@ -63,6 +65,23 @@ class LightRagBuilderTest {
         assertThat(rag.config().embeddingModel()).isSameAs(embeddingModel);
         assertThat(rag.config().storageProvider()).isSameAs(storageProvider);
         assertThat(rag.config().workspaceStorageProvider()).isInstanceOf(FixedWorkspaceStorageProvider.class);
+    }
+
+    @Test
+    void buildsWithStorageAssembly() {
+        var assembly = StorageAssembly.builder()
+            .relationalAdapter(new StorageAssemblyTestDoubles.FakeRelationalStorageAdapter())
+            .graphAdapter(new StorageAssemblyTestDoubles.FakeGraphStorageAdapter())
+            .vectorAdapter(new StorageAssemblyTestDoubles.FakeVectorStorageAdapter())
+            .build();
+
+        var rag = LightRag.builder()
+            .chatModel(new FakeChatModel())
+            .embeddingModel(new FakeEmbeddingModel())
+            .storageAssembly(assembly)
+            .build();
+
+        assertThat(rag.config().storageProvider()).isInstanceOf(AtomicStorageProvider.class);
     }
 
     @Test

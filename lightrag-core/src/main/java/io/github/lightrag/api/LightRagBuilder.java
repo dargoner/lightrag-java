@@ -15,6 +15,7 @@ import io.github.lightrag.storage.DocumentStore;
 import io.github.lightrag.storage.FixedWorkspaceStorageProvider;
 import io.github.lightrag.storage.GraphStore;
 import io.github.lightrag.storage.SnapshotStore;
+import io.github.lightrag.storage.StorageAssembly;
 import io.github.lightrag.storage.StorageProvider;
 import io.github.lightrag.storage.VectorStore;
 import io.github.lightrag.storage.WorkspaceStorageProvider;
@@ -65,6 +66,10 @@ public final class LightRagBuilder {
         }
         this.storageProvider = Objects.requireNonNull(storageProvider, "storageProvider");
         return this;
+    }
+
+    public LightRagBuilder storageAssembly(StorageAssembly storageAssembly) {
+        return storage(Objects.requireNonNull(storageAssembly, "storageAssembly").toStorageProvider());
     }
 
     public LightRagBuilder workspaceStorage(WorkspaceStorageProvider workspaceStorageProvider) {
