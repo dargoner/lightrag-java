@@ -3,29 +3,35 @@ package io.github.lightrag.storage.neo4j;
 import io.github.lightrag.api.WorkspaceScope;
 import io.github.lightrag.storage.AtomicStorageProvider;
 import io.github.lightrag.storage.ChunkStore;
-import io.github.lightrag.storage.DocumentStore;
 import io.github.lightrag.storage.DocumentStatusStore;
+import io.github.lightrag.storage.DocumentStore;
+import io.github.lightrag.storage.GraphStorageAdapter;
 import io.github.lightrag.storage.GraphStore;
+import io.github.lightrag.storage.RelationalStorageAdapter;
 import io.github.lightrag.storage.SnapshotStore;
+import io.github.lightrag.storage.StorageCoordinator;
 import io.github.lightrag.storage.VectorStore;
 import io.github.lightrag.storage.postgres.PostgresStorageConfig;
 import io.github.lightrag.storage.postgres.PostgresStorageProvider;
+import io.github.lightrag.storage.postgres.PostgresVectorStorageAdapter;
 
 import javax.sql.DataSource;
-import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
+import java.util.Optional;
 import java.util.concurrent.locks.ReentrantReadWriteLock;
 
 public final class PostgresNeo4jStorageProvider implements AtomicStorageProvider, AutoCloseable {
-    private static final List<String> VECTOR_NAMESPACES = List.of("chunks", "entities", "relations");
     private static final WorkspaceScope DEFAULT_WORKSPACE = new WorkspaceScope("default");
 
     private final ReentrantReadWriteLock lock;
-    private final PostgresStorageProvider postgresProvider;
-    private final WorkspaceScopedNeo4jGraphStore neo4jGraphStore;
-    private final ProjectionApplier projectionApplier;
+    private final SnapshotStore snapshotStore;
+    private final StorageCoordinator coordinator;
+    private final DocumentStore lockedDocumentStore;
+    private final ChunkStore lockedChunkStore;
+    private final DocumentStatusStore lockedDocumentStatusStore;
+    private final VectorStore lockedVectorStore;
     private final GraphStore graphStore;
 
     public PostgresNeo4jStorageProvider(
@@ -57,12 +63,11 @@ public final class PostgresNeo4jStorageProvider implements AtomicStorageProvider
                 Objects.requireNonNull(snapshotStore, "snapshotStore"),
                 Objects.requireNonNull(workspaceScope, "workspaceScope").workspaceId()
             ),
-            new WorkspaceScopedNeo4jGraphStore(
+            new Neo4jGraphStorageAdapter(
                 Objects.requireNonNull(neo4jConfig, "neo4jConfig"),
                 workspaceScope
             ),
-            new ReentrantReadWriteLock(true),
-            null
+            new ReentrantReadWriteLock(true)
         );
     }
 
@@ -80,12 +85,11 @@ public final class PostgresNeo4jStorageProvider implements AtomicStorageProvider
                 Objects.requireNonNull(snapshotStore, "snapshotStore"),
                 Objects.requireNonNull(workspaceScope, "workspaceScope").workspaceId()
             ),
-            new WorkspaceScopedNeo4jGraphStore(
+            new Neo4jGraphStorageAdapter(
                 Objects.requireNonNull(neo4jConfig, "neo4jConfig"),
                 workspaceScope
             ),
-            new ReentrantReadWriteLock(true),
-            null
+            new ReentrantReadWriteLock(true)
         );
     }
 
@@ -95,33 +99,51 @@ public final class PostgresNeo4jStorageProvider implements AtomicStorageProvider
     ) {
         this(
             Objects.requireNonNull(postgresProvider, "postgresProvider"),
-            Objects.requireNonNull(neo4jGraphStore, "neo4jGraphStore"),
-            new ReentrantReadWriteLock(true),
-            null
+            new Neo4jGraphStorageAdapter(Objects.requireNonNull(neo4jGraphStore, "neo4jGraphStore")),
+            new ReentrantReadWriteLock(true)
+        );
+    }
+
+    public PostgresNeo4jStorageProvider(
+        PostgresStorageProvider postgresProvider,
+        GraphStorageAdapter graphAdapter
+    ) {
+        this(
+            Objects.requireNonNull(postgresProvider, "postgresProvider"),
+            Objects.requireNonNull(graphAdapter, "graphAdapter"),
+            new ReentrantReadWriteLock(true)
         );
     }
 
     PostgresNeo4jStorageProvider(
         PostgresStorageProvider postgresProvider,
-        WorkspaceScopedNeo4jGraphStore neo4jGraphStore,
-        ReentrantReadWriteLock lock,
-        ProjectionApplier projectionApplier
+        GraphStorageAdapter graphAdapter,
+        ReentrantReadWriteLock lock
     ) {
         this.lock = Objects.requireNonNull(lock, "lock");
-        this.postgresProvider = Objects.requireNonNull(postgresProvider, "postgresProvider");
-        this.neo4jGraphStore = Objects.requireNonNull(neo4jGraphStore, "neo4jGraphStore");
-        this.projectionApplier = projectionApplier == null ? this::applyProjection : projectionApplier;
+        var provider = Objects.requireNonNull(postgresProvider, "postgresProvider");
+        var relationalAdapter = new PostgresProviderRelationalAdapter(provider);
+        this.snapshotStore = relationalAdapter.snapshotStore();
+        this.coordinator = new StorageCoordinator(
+            relationalAdapter,
+            Objects.requireNonNull(graphAdapter, "graphAdapter"),
+            new PostgresVectorStorageAdapter(provider)
+        );
+        this.lockedDocumentStore = new LockedDocumentStore(coordinator.documentStore());
+        this.lockedChunkStore = new LockedChunkStore(coordinator.chunkStore());
+        this.lockedDocumentStatusStore = new LockedDocumentStatusStore(coordinator.documentStatusStore());
+        this.lockedVectorStore = new LockedVectorStore(provider.vectorStore());
         this.graphStore = new MirroringGraphStore();
     }
 
     @Override
     public DocumentStore documentStore() {
-        return postgresProvider.documentStore();
+        return lockedDocumentStore;
     }
 
     @Override
     public ChunkStore chunkStore() {
-        return postgresProvider.chunkStore();
+        return lockedChunkStore;
     }
 
     @Override
@@ -131,262 +153,309 @@ public final class PostgresNeo4jStorageProvider implements AtomicStorageProvider
 
     @Override
     public VectorStore vectorStore() {
-        return postgresProvider.vectorStore();
+        return lockedVectorStore;
     }
 
     @Override
     public DocumentStatusStore documentStatusStore() {
-        return postgresProvider.documentStatusStore();
+        return lockedDocumentStatusStore;
     }
 
     @Override
     public SnapshotStore snapshotStore() {
-        return postgresProvider.snapshotStore();
+        return snapshotStore;
     }
 
     @Override
     public <T> T writeAtomically(AtomicOperation<T> operation) {
-        lock.writeLock().lock();
-        try {
-            var beforePostgres = capturePostgresSnapshot();
-            var beforeNeo4j = neo4jGraphStore.captureSnapshot();
-            var stagedEntities = new LinkedHashMap<String, GraphStore.EntityRecord>();
-            var stagedRelations = new LinkedHashMap<String, GraphStore.RelationRecord>();
-
-            try {
-                T result = postgresProvider.writeAtomically(storage -> operation.execute(new AtomicView(
-                    storage.documentStore(),
-                    storage.chunkStore(),
-                    new ProjectionStagingGraphStore(storage.graphStore(), stagedEntities, stagedRelations),
-                    storage.vectorStore(),
-                    storage.documentStatusStore()
-                )));
-                projectionApplier.apply(stagedEntities.values(), stagedRelations.values());
-                return result;
-            } catch (RuntimeException failure) {
-                restoreSnapshots(beforePostgres, beforeNeo4j, failure);
-                throw failure;
-            }
-        } finally {
-            lock.writeLock().unlock();
-        }
+        Objects.requireNonNull(operation, "operation");
+        return withWriteLock(() -> coordinator.writeAtomically(operation));
     }
 
     @Override
     public void restore(SnapshotStore.Snapshot snapshot) {
-        var replacement = Objects.requireNonNull(snapshot, "snapshot");
-        lock.writeLock().lock();
-        try {
-            var beforePostgres = capturePostgresSnapshot();
-            var beforeNeo4j = neo4jGraphStore.captureSnapshot();
-            try {
-                postgresProvider.restore(replacement);
-                neo4jGraphStore.restore(new Neo4jGraphSnapshot(replacement.entities(), replacement.relations()));
-            } catch (RuntimeException failure) {
-                restoreSnapshots(beforePostgres, beforeNeo4j, failure);
-                throw failure;
-            }
-        } finally {
-            lock.writeLock().unlock();
-        }
+        var source = Objects.requireNonNull(snapshot, "snapshot");
+        withWriteLock(() -> coordinator.restore(source));
     }
 
     @Override
     public void close() {
-        RuntimeException failure = null;
-        try {
-            neo4jGraphStore.close();
-        } catch (RuntimeException exception) {
-            failure = exception;
-        }
+        coordinator.close();
+    }
 
+    private <T> T withReadLock(RuntimeSupplier<T> supplier) {
+        var readLock = lock.readLock();
+        readLock.lock();
         try {
-            postgresProvider.close();
-        } catch (RuntimeException exception) {
-            if (failure == null) {
-                failure = exception;
-            } else {
-                failure.addSuppressed(exception);
-            }
-        }
-
-        if (failure != null) {
-            throw failure;
+            return supplier.get();
+        } finally {
+            readLock.unlock();
         }
     }
 
-    private SnapshotStore.Snapshot capturePostgresSnapshot() {
-        return new SnapshotStore.Snapshot(
-            postgresProvider.documentStore().list(),
-            postgresProvider.chunkStore().list(),
-            postgresProvider.graphStore().allEntities(),
-            postgresProvider.graphStore().allRelations(),
-            Map.of(
-                "chunks", postgresProvider.vectorStore().list("chunks"),
-                "entities", postgresProvider.vectorStore().list("entities"),
-                "relations", postgresProvider.vectorStore().list("relations")
-            ),
-            postgresProvider.documentStatusStore().list()
-        );
-    }
-
-    private void applyProjection(
-        java.util.Collection<GraphStore.EntityRecord> entities,
-        java.util.Collection<GraphStore.RelationRecord> relations
-    ) {
-        for (var entity : entities) {
-            neo4jGraphStore.saveEntity(entity);
-        }
-        for (var relation : relations) {
-            neo4jGraphStore.saveRelation(relation);
+    private <T> T withWriteLock(RuntimeSupplier<T> supplier) {
+        var writeLock = lock.writeLock();
+        writeLock.lock();
+        try {
+            return supplier.get();
+        } finally {
+            writeLock.unlock();
         }
     }
 
-    private void restoreSnapshots(
-        SnapshotStore.Snapshot postgresSnapshot,
-        Neo4jGraphSnapshot neo4jSnapshot,
-        RuntimeException failure
-    ) {
-        try {
-            postgresProvider.restore(postgresSnapshot);
-        } catch (RuntimeException exception) {
-            failure.addSuppressed(exception);
-        }
-
-        try {
-            neo4jGraphStore.restore(neo4jSnapshot);
-        } catch (RuntimeException exception) {
-            failure.addSuppressed(exception);
-        }
+    private void withWriteLock(Runnable runnable) {
+        withWriteLock(() -> {
+            runnable.run();
+            return null;
+        });
     }
 
     private final class MirroringGraphStore implements GraphStore {
         @Override
         public void saveEntity(EntityRecord entity) {
-            mirrorWrite(entity, null);
+            writeAtomically(storage -> {
+                storage.graphStore().saveEntity(entity);
+                return null;
+            });
         }
 
         @Override
         public void saveRelation(RelationRecord relation) {
-            mirrorWrite(null, relation);
+            writeAtomically(storage -> {
+                storage.graphStore().saveRelation(relation);
+                return null;
+            });
         }
 
         @Override
-        public java.util.Optional<EntityRecord> loadEntity(String entityId) {
-            return neo4jGraphStore.loadEntity(entityId);
+        public Optional<EntityRecord> loadEntity(String entityId) {
+            return withReadLock(() -> coordinator.graphStore().loadEntity(entityId));
         }
 
         @Override
-        public java.util.Optional<RelationRecord> loadRelation(String relationId) {
-            return neo4jGraphStore.loadRelation(relationId);
+        public Optional<RelationRecord> loadRelation(String relationId) {
+            return withReadLock(() -> coordinator.graphStore().loadRelation(relationId));
         }
 
         @Override
         public List<EntityRecord> allEntities() {
-            return neo4jGraphStore.allEntities();
+            return withReadLock(() -> coordinator.graphStore().allEntities());
         }
 
         @Override
         public List<RelationRecord> allRelations() {
-            return neo4jGraphStore.allRelations();
+            return withReadLock(() -> coordinator.graphStore().allRelations());
         }
 
         @Override
         public List<RelationRecord> findRelations(String entityId) {
-            return neo4jGraphStore.findRelations(entityId);
+            return withReadLock(() -> coordinator.graphStore().findRelations(entityId));
+        }
+    }
+
+    private final class LockedDocumentStore implements DocumentStore {
+        private final DocumentStore delegate;
+
+        private LockedDocumentStore(DocumentStore delegate) {
+            this.delegate = Objects.requireNonNull(delegate, "delegate");
         }
 
-        private void mirrorWrite(EntityRecord entity, RelationRecord relation) {
-            lock.writeLock().lock();
-            try {
-                var beforePostgres = capturePostgresSnapshot();
-                var beforeNeo4j = neo4jGraphStore.captureSnapshot();
-                try {
-                    if (entity != null) {
-                        postgresProvider.graphStore().saveEntity(entity);
-                        projectionApplier.apply(List.of(entity), List.of());
-                    }
-                    if (relation != null) {
-                        postgresProvider.graphStore().saveRelation(relation);
-                        projectionApplier.apply(List.of(), List.of(relation));
-                    }
-                } catch (RuntimeException failure) {
-                    restoreSnapshots(beforePostgres, beforeNeo4j, failure);
-                    throw failure;
+        @Override
+        public void save(DocumentRecord document) {
+            withWriteLock(() -> delegate.save(document));
+        }
+
+        @Override
+        public Optional<DocumentRecord> load(String documentId) {
+            return withReadLock(() -> delegate.load(documentId));
+        }
+
+        @Override
+        public List<DocumentRecord> list() {
+            return withReadLock(delegate::list);
+        }
+
+        @Override
+        public boolean contains(String documentId) {
+            return withReadLock(() -> delegate.contains(documentId));
+        }
+    }
+
+    private final class LockedChunkStore implements ChunkStore {
+        private final ChunkStore delegate;
+
+        private LockedChunkStore(ChunkStore delegate) {
+            this.delegate = Objects.requireNonNull(delegate, "delegate");
+        }
+
+        @Override
+        public void save(ChunkRecord chunk) {
+            withWriteLock(() -> delegate.save(chunk));
+        }
+
+        @Override
+        public Optional<ChunkRecord> load(String chunkId) {
+            return withReadLock(() -> delegate.load(chunkId));
+        }
+
+        @Override
+        public List<ChunkRecord> list() {
+            return withReadLock(delegate::list);
+        }
+
+        @Override
+        public List<ChunkRecord> listByDocument(String documentId) {
+            return withReadLock(() -> delegate.listByDocument(documentId));
+        }
+    }
+
+    private final class LockedDocumentStatusStore implements DocumentStatusStore {
+        private final DocumentStatusStore delegate;
+
+        private LockedDocumentStatusStore(DocumentStatusStore delegate) {
+            this.delegate = Objects.requireNonNull(delegate, "delegate");
+        }
+
+        @Override
+        public void save(StatusRecord statusRecord) {
+            withWriteLock(() -> delegate.save(statusRecord));
+        }
+
+        @Override
+        public Optional<StatusRecord> load(String documentId) {
+            return withReadLock(() -> delegate.load(documentId));
+        }
+
+        @Override
+        public List<StatusRecord> list() {
+            return withReadLock(delegate::list);
+        }
+
+        @Override
+        public void delete(String documentId) {
+            withWriteLock(() -> delegate.delete(documentId));
+        }
+    }
+
+    private final class LockedVectorStore implements VectorStore {
+        private final VectorStore delegate;
+
+        private LockedVectorStore(VectorStore delegate) {
+            this.delegate = Objects.requireNonNull(delegate, "delegate");
+        }
+
+        @Override
+        public void saveAll(String namespace, List<VectorRecord> vectors) {
+            withWriteLock(() -> delegate.saveAll(namespace, vectors));
+        }
+
+        @Override
+        public List<VectorMatch> search(String namespace, List<Double> queryVector, int topK) {
+            return withReadLock(() -> delegate.search(namespace, queryVector, topK));
+        }
+
+        @Override
+        public List<VectorRecord> list(String namespace) {
+            return withReadLock(() -> delegate.list(namespace));
+        }
+    }
+
+    private static final class PostgresProviderRelationalAdapter implements RelationalStorageAdapter {
+        private final PostgresStorageProvider postgresProvider;
+
+        private PostgresProviderRelationalAdapter(PostgresStorageProvider postgresProvider) {
+            this.postgresProvider = Objects.requireNonNull(postgresProvider, "postgresProvider");
+        }
+
+        @Override
+        public DocumentStore documentStore() {
+            return postgresProvider.documentStore();
+        }
+
+        @Override
+        public ChunkStore chunkStore() {
+            return postgresProvider.chunkStore();
+        }
+
+        @Override
+        public DocumentStatusStore documentStatusStore() {
+            return postgresProvider.documentStatusStore();
+        }
+
+        @Override
+        public SnapshotStore snapshotStore() {
+            return postgresProvider.snapshotStore();
+        }
+
+        @Override
+        public SnapshotStore.Snapshot captureSnapshot() {
+            return new SnapshotStore.Snapshot(
+                postgresProvider.documentStore().list(),
+                postgresProvider.chunkStore().list(),
+                postgresProvider.graphStore().allEntities(),
+                postgresProvider.graphStore().allRelations(),
+                Map.of(),
+                postgresProvider.documentStatusStore().list()
+            );
+        }
+
+        @Override
+        public SnapshotStore.Snapshot toRelationalRestoreSnapshot(SnapshotStore.Snapshot snapshot) {
+            var source = Objects.requireNonNull(snapshot, "snapshot");
+            return new SnapshotStore.Snapshot(
+                source.documents(),
+                source.chunks(),
+                source.entities(),
+                source.relations(),
+                Map.of(),
+                source.documentStatuses()
+            );
+        }
+
+        @Override
+        public void restore(SnapshotStore.Snapshot snapshot) {
+            postgresProvider.restore(toRelationalRestoreSnapshot(snapshot));
+        }
+
+        @Override
+        public <T> T writeInTransaction(RelationalWriteOperation<T> operation) {
+            Objects.requireNonNull(operation, "operation");
+            return postgresProvider.writeAtomically(storage -> operation.execute(new RelationalStorageView() {
+                @Override
+                public DocumentStore documentStore() {
+                    return storage.documentStore();
                 }
-            } finally {
-                lock.writeLock().unlock();
-            }
-        }
-    }
 
-    private record AtomicView(
-        DocumentStore documentStore,
-        ChunkStore chunkStore,
-        GraphStore graphStore,
-        VectorStore vectorStore,
-        DocumentStatusStore documentStatusStore
-    ) implements AtomicStorageView {
-    }
+                @Override
+                public ChunkStore chunkStore() {
+                    return storage.chunkStore();
+                }
 
-    private static final class ProjectionStagingGraphStore implements GraphStore {
-        private final GraphStore postgresGraphStore;
-        private final Map<String, EntityRecord> stagedEntities;
-        private final Map<String, RelationRecord> stagedRelations;
+                @Override
+                public DocumentStatusStore documentStatusStore() {
+                    return storage.documentStatusStore();
+                }
 
-        private ProjectionStagingGraphStore(
-            GraphStore postgresGraphStore,
-            Map<String, EntityRecord> stagedEntities,
-            Map<String, RelationRecord> stagedRelations
-        ) {
-            this.postgresGraphStore = Objects.requireNonNull(postgresGraphStore, "postgresGraphStore");
-            this.stagedEntities = Objects.requireNonNull(stagedEntities, "stagedEntities");
-            this.stagedRelations = Objects.requireNonNull(stagedRelations, "stagedRelations");
+                @Override
+                public Optional<GraphStore> transactionalGraphStore() {
+                    return Optional.of(storage.graphStore());
+                }
+
+                @Override
+                public Optional<VectorStore> transactionalVectorStore() {
+                    return Optional.of(storage.vectorStore());
+                }
+            }));
         }
 
         @Override
-        public void saveEntity(EntityRecord entity) {
-            postgresGraphStore.saveEntity(entity);
-            stagedEntities.put(entity.id(), entity);
-        }
-
-        @Override
-        public void saveRelation(RelationRecord relation) {
-            postgresGraphStore.saveRelation(relation);
-            stagedRelations.put(relation.id(), relation);
-        }
-
-        @Override
-        public java.util.Optional<EntityRecord> loadEntity(String entityId) {
-            return postgresGraphStore.loadEntity(entityId);
-        }
-
-        @Override
-        public java.util.Optional<RelationRecord> loadRelation(String relationId) {
-            return postgresGraphStore.loadRelation(relationId);
-        }
-
-        @Override
-        public List<EntityRecord> allEntities() {
-            return postgresGraphStore.allEntities();
-        }
-
-        @Override
-        public List<RelationRecord> allRelations() {
-            return postgresGraphStore.allRelations();
-        }
-
-        @Override
-        public List<RelationRecord> findRelations(String entityId) {
-            return postgresGraphStore.findRelations(entityId);
+        public void close() {
+            postgresProvider.close();
         }
     }
 
     @FunctionalInterface
-    interface ProjectionApplier {
-        void apply(
-            java.util.Collection<GraphStore.EntityRecord> entities,
-            java.util.Collection<GraphStore.RelationRecord> relations
-        );
+    private interface RuntimeSupplier<T> {
+        T get();
     }
 }

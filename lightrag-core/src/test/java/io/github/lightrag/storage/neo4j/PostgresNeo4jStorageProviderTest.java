@@ -4,6 +4,7 @@ import io.github.lightrag.persistence.FileSnapshotStore;
 import io.github.lightrag.api.WorkspaceScope;
 import io.github.lightrag.storage.ChunkStore;
 import io.github.lightrag.storage.DocumentStore;
+import io.github.lightrag.storage.GraphStorageAdapter;
 import io.github.lightrag.storage.GraphStore;
 import io.github.lightrag.storage.SnapshotStore;
 import io.github.lightrag.storage.VectorStore;
@@ -56,6 +57,39 @@ class PostgresNeo4jStorageProviderTest {
     }
 
     @Test
+    void delegatesThroughInjectedGraphAdapterAndKeepsPostgresVectorStore() {
+        var snapshotStore = new FileSnapshotStore();
+        var tablePrefix = nextPrefix();
+        var graphAdapter = new RecordingGraphStorageAdapter();
+
+        try (var postgresProvider = new PostgresStorageProvider(newPostgresConfig(tablePrefix), snapshotStore);
+             var provider = new PostgresNeo4jStorageProvider(postgresProvider, graphAdapter)) {
+            provider.writeAtomically(storage -> {
+                storage.documentStore().save(new DocumentStore.DocumentRecord("doc-1", "Title", "Body", Map.of("source", "test")));
+                storage.chunkStore().save(new ChunkStore.ChunkRecord("doc-1:0", "doc-1", "Body", 4, 0, Map.of("source", "test")));
+                storage.graphStore().saveEntity(new GraphStore.EntityRecord(
+                    "entity-1",
+                    "Alice",
+                    "person",
+                    "Researcher",
+                    List.of("A"),
+                    List.of("doc-1:0")
+                ));
+                storage.vectorStore().saveAll("chunks", List.of(new VectorStore.VectorRecord("doc-1:0", List.of(1.0d, 0.0d, 0.0d))));
+                return null;
+            });
+
+            assertThat(graphAdapter.applyCount()).isEqualTo(1);
+            assertThat(postgresProvider.graphStore().loadEntity("entity-1")).isPresent();
+            assertThat(postgresProvider.vectorStore().list("chunks"))
+                .containsExactly(new VectorStore.VectorRecord("doc-1:0", List.of(1.0d, 0.0d, 0.0d)));
+            assertThat(provider.graphStore().loadEntity("entity-1")).isPresent();
+            assertThat(provider.vectorStore().list("chunks"))
+                .containsExactly(new VectorStore.VectorRecord("doc-1:0", List.of(1.0d, 0.0d, 0.0d)));
+        }
+    }
+
+    @Test
     void exposesStableTopLevelStoresAndDistinctAtomicViewStores() {
         try (var provider = newProvider(new FileSnapshotStore())) {
             assertThat(provider.documentStore()).isSameAs(provider.documentStore());
@@ -82,6 +116,14 @@ class PostgresNeo4jStorageProviderTest {
             assertThat(atomicGraphStore.get()).isNotSameAs(provider.graphStore());
             assertThat(atomicVectorStore.get()).isNotSameAs(provider.vectorStore());
         }
+    }
+
+    @Test
+    void exposesGraphAdapterInjectionConstructor() throws Exception {
+        assertThat(PostgresNeo4jStorageProvider.class.getConstructor(
+            PostgresStorageProvider.class,
+            GraphStorageAdapter.class
+        )).isNotNull();
     }
 
     @Test
@@ -608,11 +650,62 @@ class PostgresNeo4jStorageProviderTest {
                 newPostgresConfig(tablePrefix),
                 snapshotStore
             ),
-            newWorkspaceGraphStore("default"),
-            new ReentrantReadWriteLock(true),
-            (entities, relations) -> {
-                throw new IllegalStateException("projection failed");
+            newWorkspaceGraphAdapter(
+                "default",
+                (entities, relations) -> {
+                    throw new IllegalStateException("projection failed");
+                }
+            ),
+            new ReentrantReadWriteLock(true)
+        );
+    }
+
+    private static GraphStorageAdapter newWorkspaceGraphAdapter(String workspaceId) {
+        return newWorkspaceGraphAdapter(workspaceId, null);
+    }
+
+    private static GraphStorageAdapter newWorkspaceGraphAdapter(
+        String workspaceId,
+        GraphProjectionApplier projectionApplier
+    ) {
+        var delegate = new Neo4jGraphStorageAdapter(newWorkspaceGraphStore(workspaceId));
+        return new GraphStorageAdapter() {
+            @Override
+            public GraphStore graphStore() {
+                return delegate.graphStore();
             }
+
+            @Override
+            public GraphSnapshot captureSnapshot() {
+                return delegate.captureSnapshot();
+            }
+
+            @Override
+            public void apply(StagedGraphWrites writes) {
+                if (projectionApplier == null) {
+                    delegate.apply(writes);
+                    return;
+                }
+                projectionApplier.apply(writes.entities(), writes.relations());
+            }
+
+            @Override
+            public void restore(GraphSnapshot snapshot) {
+                delegate.restore(snapshot);
+            }
+
+            @Override
+            public void close() {
+                delegate.close();
+            }
+        };
+    }
+
+    @FunctionalInterface
+    private interface GraphProjectionApplier {
+        void apply(
+            java.util.Collection<GraphStore.EntityRecord> entities,
+            java.util.Collection<GraphStore.RelationRecord> relations
         );
     }
 
@@ -636,16 +729,15 @@ class PostgresNeo4jStorageProviderTest {
         String tablePrefix,
         String workspaceId,
         ReentrantReadWriteLock lock,
-        PostgresNeo4jStorageProvider.ProjectionApplier projectionApplier
+        GraphProjectionApplier projectionApplier
     ) {
         return new PostgresNeo4jStorageProvider(
             new PostgresStorageProvider(
                 newPostgresConfig(tablePrefix),
                 snapshotStore
             ),
-            newWorkspaceGraphStore(workspaceId),
-            lock,
-            projectionApplier
+            newWorkspaceGraphAdapter(workspaceId, projectionApplier),
+            lock
         );
     }
 
@@ -688,5 +780,81 @@ class PostgresNeo4jStorageProviderTest {
 
     private static String nextPrefix() {
         return "rag_" + UUID.randomUUID().toString().replace("-", "") + "_";
+    }
+
+    private static final class RecordingGraphStorageAdapter implements GraphStorageAdapter {
+        private final java.util.LinkedHashMap<String, GraphStore.EntityRecord> entities = new java.util.LinkedHashMap<>();
+        private final java.util.LinkedHashMap<String, GraphStore.RelationRecord> relations = new java.util.LinkedHashMap<>();
+        private int applyCount;
+
+        @Override
+        public GraphStore graphStore() {
+            return new GraphStore() {
+                @Override
+                public void saveEntity(EntityRecord entity) {
+                    entities.put(entity.id(), entity);
+                }
+
+                @Override
+                public void saveRelation(RelationRecord relation) {
+                    relations.put(relation.id(), relation);
+                }
+
+                @Override
+                public java.util.Optional<EntityRecord> loadEntity(String entityId) {
+                    return java.util.Optional.ofNullable(entities.get(entityId));
+                }
+
+                @Override
+                public java.util.Optional<RelationRecord> loadRelation(String relationId) {
+                    return java.util.Optional.ofNullable(relations.get(relationId));
+                }
+
+                @Override
+                public java.util.List<EntityRecord> allEntities() {
+                    return java.util.List.copyOf(entities.values());
+                }
+
+                @Override
+                public java.util.List<RelationRecord> allRelations() {
+                    return java.util.List.copyOf(relations.values());
+                }
+
+                @Override
+                public java.util.List<RelationRecord> findRelations(String entityId) {
+                    return relations.values().stream()
+                        .filter(relation -> relation.sourceEntityId().equals(entityId) || relation.targetEntityId().equals(entityId))
+                        .toList();
+                }
+            };
+        }
+
+        @Override
+        public GraphSnapshot captureSnapshot() {
+            return new GraphSnapshot(List.copyOf(entities.values()), List.copyOf(relations.values()));
+        }
+
+        @Override
+        public void apply(StagedGraphWrites writes) {
+            applyCount++;
+            for (var entity : writes.entities()) {
+                entities.put(entity.id(), entity);
+            }
+            for (var relation : writes.relations()) {
+                relations.put(relation.id(), relation);
+            }
+        }
+
+        @Override
+        public void restore(GraphSnapshot snapshot) {
+            entities.clear();
+            relations.clear();
+            snapshot.entities().forEach(entity -> entities.put(entity.id(), entity));
+            snapshot.relations().forEach(relation -> relations.put(relation.id(), relation));
+        }
+
+        int applyCount() {
+            return applyCount;
+        }
     }
 }

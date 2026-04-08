@@ -51,6 +51,10 @@ class StorageInjectionApiTest {
             PostgresStorageProvider.class,
             WorkspaceScopedNeo4jGraphStore.class
         )).isNotNull();
+        assertThat(PostgresNeo4jStorageProvider.class.getConstructor(
+            PostgresStorageProvider.class,
+            GraphStorageAdapter.class
+        )).isNotNull();
         assertThat(PostgresMilvusNeo4jStorageProvider.class.getConstructor(
             DataSource.class,
             PostgresStorageConfig.class,
@@ -78,5 +82,10 @@ class StorageInjectionApiTest {
         assertThat(Modifier.isPublic(PostgresRelationalStorageAdapter.class.getModifiers())).isTrue();
         assertThat(Modifier.isPublic(Neo4jGraphStorageAdapter.class.getModifiers())).isTrue();
         assertThat(Modifier.isPublic(MilvusVectorStorageAdapter.class.getModifiers())).isTrue();
+        Class<?> postgresVectorStorageAdapter = Class.forName(
+            "io.github.lightrag.storage.postgres.PostgresVectorStorageAdapter"
+        );
+        assertThat(Modifier.isPublic(postgresVectorStorageAdapter.getModifiers())).isTrue();
+        assertThat(postgresVectorStorageAdapter.getConstructor(PostgresStorageProvider.class)).isNotNull();
     }
 }
