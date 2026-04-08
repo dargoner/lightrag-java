@@ -159,17 +159,9 @@ public final class StorageAssemblyTestDoubles {
             if (applyFailure != null) {
                 throw applyFailure;
             }
-            var nextSnapshot = new LinkedHashMap<>(vectorStore.snapshot());
-            for (var namespace : writes.namespacesToReset()) {
-                nextSnapshot.remove(namespace);
-            }
             for (var entry : writes.upserts().entrySet()) {
-                nextSnapshot.put(
-                    entry.getKey(),
-                    entry.getValue().stream().map(HybridVectorStore.EnrichedVectorRecord::toVectorRecord).toList()
-                );
+                vectorStore.saveAll(entry.getKey(), entry.getValue());
             }
-            vectorStore.restore(nextSnapshot);
         }
 
         @Override

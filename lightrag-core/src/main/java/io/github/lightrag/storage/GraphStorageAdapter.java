@@ -4,7 +4,7 @@ import java.util.List;
 import java.util.Objects;
 import java.util.Optional;
 
-public interface GraphStorageAdapter {
+public interface GraphStorageAdapter extends AutoCloseable {
     GraphStore graphStore();
 
     GraphSnapshot captureSnapshot();
@@ -38,6 +38,10 @@ public interface GraphStorageAdapter {
 
         public static StagedGraphWrites empty() {
             return new StagedGraphWrites(List.of(), List.of());
+        }
+
+        public boolean isEmpty() {
+            return entities.isEmpty() && relations.isEmpty();
         }
     }
 
@@ -96,5 +100,9 @@ public interface GraphStorageAdapter {
             public void restore(GraphSnapshot snapshot) {
             }
         };
+    }
+
+    @Override
+    default void close() {
     }
 }

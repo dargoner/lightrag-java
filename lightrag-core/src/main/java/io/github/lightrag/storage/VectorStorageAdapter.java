@@ -5,7 +5,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.Objects;
 
-public interface VectorStorageAdapter {
+public interface VectorStorageAdapter extends AutoCloseable {
     VectorStore vectorStore();
 
     VectorSnapshot captureSnapshot();
@@ -25,16 +25,18 @@ public interface VectorStorageAdapter {
     }
 
     record StagedVectorWrites(
-        Map<String, List<HybridVectorStore.EnrichedVectorRecord>> upserts,
-        List<String> namespacesToReset
+        Map<String, List<VectorStore.VectorRecord>> upserts
     ) {
         public StagedVectorWrites {
-            upserts = copyEnrichedNamespaces(Objects.requireNonNull(upserts, "upserts"));
-            namespacesToReset = List.copyOf(Objects.requireNonNull(namespacesToReset, "namespacesToReset"));
+            upserts = copyVectorNamespaces(Objects.requireNonNull(upserts, "upserts"));
         }
 
         public static StagedVectorWrites empty() {
-            return new StagedVectorWrites(Map.of(), List.of());
+            return new StagedVectorWrites(Map.of());
+        }
+
+        public boolean isEmpty() {
+            return upserts.isEmpty();
         }
     }
 
@@ -86,13 +88,7 @@ public interface VectorStorageAdapter {
         return Map.copyOf(copy);
     }
 
-    private static Map<String, List<HybridVectorStore.EnrichedVectorRecord>> copyEnrichedNamespaces(
-        Map<String, List<HybridVectorStore.EnrichedVectorRecord>> namespaces
-    ) {
-        var copy = new LinkedHashMap<String, List<HybridVectorStore.EnrichedVectorRecord>>();
-        for (var entry : namespaces.entrySet()) {
-            copy.put(entry.getKey(), List.copyOf(entry.getValue()));
-        }
-        return Map.copyOf(copy);
+    @Override
+    default void close() {
     }
 }

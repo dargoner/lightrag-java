@@ -1,6 +1,6 @@
 package io.github.lightrag.storage;
 
-public interface RelationalStorageAdapter {
+public interface RelationalStorageAdapter extends AutoCloseable {
     DocumentStore documentStore();
 
     ChunkStore chunkStore();
@@ -26,5 +26,9 @@ public interface RelationalStorageAdapter {
     @FunctionalInterface
     interface RelationalWriteOperation<T> {
         T execute(RelationalStorageView storage);
+    }
+
+    @Override
+    default void close() {
     }
 }

@@ -73,8 +73,14 @@ public final class StorageCoordinator implements AtomicStorageProvider, AutoClos
                     stagedVectorStore,
                     storage.documentStatusStore()
                 ));
-                graphAdapter.apply(stagedGraphStore.toWrites());
-                vectorAdapter.apply(stagedVectorStore.toWrites());
+                var graphWrites = stagedGraphStore.toWrites();
+                if (!graphWrites.isEmpty()) {
+                    graphAdapter.apply(graphWrites);
+                }
+                var vectorWrites = stagedVectorStore.toWrites();
+                if (!vectorWrites.isEmpty()) {
+                    vectorAdapter.apply(vectorWrites);
+                }
                 return result;
             });
         } catch (RuntimeException | Error failure) {
@@ -86,9 +92,40 @@ public final class StorageCoordinator implements AtomicStorageProvider, AutoClos
     @Override
     public void restore(SnapshotStore.Snapshot snapshot) {
         var source = Objects.requireNonNull(snapshot, "snapshot");
-        relationalAdapter.restore(new SnapshotStore.Snapshot(source.documents(), source.chunks(), List.of(), List.of(), Map.of(), source.documentStatuses()));
-        graphAdapter.restore(new GraphStorageAdapter.GraphSnapshot(source.entities(), source.relations()));
-        vectorAdapter.restore(new VectorStorageAdapter.VectorSnapshot(source.vectors()));
+        RuntimeException failure = null;
+        try {
+            relationalAdapter.restore(new SnapshotStore.Snapshot(
+                source.documents(),
+                source.chunks(),
+                List.of(),
+                List.of(),
+                Map.of(),
+                source.documentStatuses()
+            ));
+        } catch (RuntimeException exception) {
+            failure = exception;
+        }
+        try {
+            graphAdapter.restore(new GraphStorageAdapter.GraphSnapshot(source.entities(), source.relations()));
+        } catch (RuntimeException exception) {
+            if (failure == null) {
+                failure = exception;
+            } else {
+                failure.addSuppressed(exception);
+            }
+        }
+        try {
+            vectorAdapter.restore(new VectorStorageAdapter.VectorSnapshot(source.vectors()));
+        } catch (RuntimeException exception) {
+            if (failure == null) {
+                failure = exception;
+            } else {
+                failure.addSuppressed(exception);
+            }
+        }
+        if (failure != null) {
+            throw failure;
+        }
     }
 
     @Override
@@ -277,8 +314,14 @@ public final class StorageCoordinator implements AtomicStorageProvider, AutoClos
             if (!stagedNamespaces.containsKey(ns)) {
                 return delegate.search(ns, query, topK);
             }
-            return stagedNamespaces.get(ns).values().stream()
-                .map(record -> new VectorMatch(record.id(), dotProduct(query, record.vector())))
+            var merged = new LinkedHashMap<String, VectorMatch>();
+            for (var match : delegate.search(ns, query, topK)) {
+                merged.put(match.id(), match);
+            }
+            for (var record : stagedNamespaces.get(ns).values()) {
+                merged.put(record.id(), new VectorMatch(record.id(), dotProduct(query, record.vector())));
+            }
+            return merged.values().stream()
                 .sorted(VECTOR_MATCH_ORDER)
                 .limit(topK)
                 .toList();
@@ -297,16 +340,11 @@ public final class StorageCoordinator implements AtomicStorageProvider, AutoClos
             if (stagedNamespaces.isEmpty()) {
                 return VectorStorageAdapter.StagedVectorWrites.empty();
             }
-            var upserts = new LinkedHashMap<String, List<HybridVectorStore.EnrichedVectorRecord>>();
-            var namespacesToReset = new ArrayList<String>();
+            var upserts = new LinkedHashMap<String, List<VectorRecord>>();
             for (var entry : stagedNamespaces.entrySet()) {
-                namespacesToReset.add(entry.getKey());
-                var enrichedRecords = entry.getValue().values().stream()
-                    .map(record -> new HybridVectorStore.EnrichedVectorRecord(record.id(), record.vector(), "", List.of()))
-                    .toList();
-                upserts.put(entry.getKey(), enrichedRecords);
+                upserts.put(entry.getKey(), List.copyOf(entry.getValue().values()));
             }
-            return new VectorStorageAdapter.StagedVectorWrites(upserts, namespacesToReset);
+            return new VectorStorageAdapter.StagedVectorWrites(upserts);
         }
 
         private Map<String, VectorRecord> ensureNamespaceRecords(String namespace) {
