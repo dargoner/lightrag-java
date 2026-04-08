@@ -177,17 +177,23 @@ public final class StorageCoordinator implements AtomicStorageProvider, AutoClos
         try {
             relationalAdapter.restore(relationalSnapshot);
         } catch (RuntimeException | Error restoreFailure) {
-            failure.addSuppressed(restoreFailure);
+            addSuppressedIfDistinct(failure, restoreFailure);
         }
         try {
             graphAdapter.restore(graphSnapshot);
         } catch (RuntimeException | Error restoreFailure) {
-            failure.addSuppressed(restoreFailure);
+            addSuppressedIfDistinct(failure, restoreFailure);
         }
         try {
             vectorAdapter.restore(vectorSnapshot);
         } catch (RuntimeException | Error restoreFailure) {
-            failure.addSuppressed(restoreFailure);
+            addSuppressedIfDistinct(failure, restoreFailure);
+        }
+    }
+
+    private static void addSuppressedIfDistinct(Throwable target, Throwable suppressed) {
+        if (target != suppressed) {
+            target.addSuppressed(suppressed);
         }
     }
 

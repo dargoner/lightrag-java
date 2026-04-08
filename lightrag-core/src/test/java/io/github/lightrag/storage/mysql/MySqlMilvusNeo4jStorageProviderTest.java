@@ -7,15 +7,18 @@ import io.github.lightrag.api.WorkspaceScope;
 import io.github.lightrag.storage.ChunkStore;
 import io.github.lightrag.storage.DocumentStatusStore;
 import io.github.lightrag.storage.DocumentStore;
+import io.github.lightrag.storage.GraphStorageAdapter;
 import io.github.lightrag.storage.GraphStore;
 import io.github.lightrag.storage.HybridVectorStore;
 import io.github.lightrag.storage.SnapshotStore;
+import io.github.lightrag.storage.VectorStorageAdapter;
 import io.github.lightrag.storage.VectorStore;
 import io.github.lightrag.storage.neo4j.Neo4jGraphSnapshot;
 import org.junit.jupiter.api.Test;
 import org.testcontainers.containers.MySQLContainer;
 import org.testcontainers.utility.DockerImageName;
 
+import javax.sql.DataSource;
 import java.nio.file.Path;
 import java.sql.DriverManager;
 import java.util.LinkedHashMap;
@@ -30,6 +33,57 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 class MySqlMilvusNeo4jStorageProviderTest {
+    @Test
+    void delegatesMySqlMilvusNeo4jWritesThroughStorageCoordinator() throws Exception {
+        try (
+            var container = newMySqlContainer();
+            var dataSource = newDataSource(startedConfig(container))
+        ) {
+            var config = startedConfig(container);
+            new MySqlSchemaManager(dataSource, config).bootstrap();
+
+            var constructor = MySqlMilvusNeo4jStorageProvider.class.getConstructor(
+                javax.sql.DataSource.class,
+                MySqlStorageConfig.class,
+                SnapshotStore.class,
+                WorkspaceScope.class,
+                GraphStorageAdapter.class,
+                VectorStorageAdapter.class
+            );
+            var graphAdapter = new RecordingGraphStorageAdapter();
+            var vectorAdapter = new RecordingVectorStorageAdapter();
+
+            try (var provider = (MySqlMilvusNeo4jStorageProvider) constructor.newInstance(
+                dataSource,
+                config,
+                new InMemorySnapshotStore(),
+                new WorkspaceScope("default"),
+                graphAdapter,
+                vectorAdapter
+            )) {
+                provider.writeAtomically(storage -> {
+                    storage.documentStore().save(new DocumentStore.DocumentRecord("doc-1", "Title", "Body", Map.of("source", "test")));
+                    storage.chunkStore().save(new ChunkStore.ChunkRecord("doc-1:0", "doc-1", "Body", 4, 0, Map.of("source", "test")));
+                    storage.graphStore().saveEntity(new GraphStore.EntityRecord(
+                        "entity-1",
+                        "Alice",
+                        "person",
+                        "Researcher",
+                        List.of("A"),
+                        List.of("doc-1:0")
+                    ));
+                    storage.vectorStore().saveAll("chunks", List.of(new VectorStore.VectorRecord("doc-1:0", List.of(1.0d, 0.0d, 0.0d))));
+                    return null;
+                });
+
+                assertThat(graphAdapter.applyCount()).isEqualTo(1);
+                assertThat(vectorAdapter.applyCount()).isEqualTo(1);
+                assertThat(provider.graphStore().loadEntity("entity-1")).isPresent();
+                assertThat(countRows(dataSource, config, "documents", "doc-1")).isEqualTo(1);
+            }
+        }
+    }
+
     @Test
     void rollsBackMySqlRowsWhenProjectionFailsAfterCommit() {
         try (
@@ -443,6 +497,22 @@ class MySqlMilvusNeo4jStorageProviderTest {
         return new HikariDataSource(hikariConfig);
     }
 
+    private static int countRows(DataSource dataSource, MySqlStorageConfig config, String tableName, String id) {
+        try (var connection = dataSource.getConnection();
+             var statement = connection.prepareStatement(
+                 "SELECT COUNT(*) FROM " + config.qualifiedTableName(tableName) + " WHERE workspace_id = ? AND id = ?"
+             )) {
+            statement.setString(1, "default");
+            statement.setString(2, id);
+            try (var resultSet = statement.executeQuery()) {
+                resultSet.next();
+                return resultSet.getInt(1);
+            }
+        } catch (Exception exception) {
+            throw new IllegalStateException("Failed to count MySQL rows", exception);
+        }
+    }
+
     private static final class RecordingGraphProjection implements MySqlMilvusNeo4jStorageProvider.GraphProjection {
         private final Map<String, GraphStore.EntityRecord> entities = new LinkedHashMap<>();
         private final Map<String, GraphStore.RelationRecord> relations = new LinkedHashMap<>();
@@ -539,6 +609,78 @@ class MySqlMilvusNeo4jStorageProviderTest {
             savedEntitiesSinceReset.clear();
             savedRelationsSinceReset.clear();
             restoreCount = 0;
+        }
+    }
+
+    private static final class RecordingGraphStorageAdapter implements GraphStorageAdapter {
+        private final LinkedHashMap<String, GraphStore.EntityRecord> entities = new LinkedHashMap<>();
+        private final LinkedHashMap<String, GraphStore.RelationRecord> relations = new LinkedHashMap<>();
+        private int applyCount;
+
+        @Override
+        public GraphStore graphStore() {
+            return new GraphStore() {
+                @Override
+                public void saveEntity(EntityRecord entity) {
+                    entities.put(entity.id(), entity);
+                }
+
+                @Override
+                public void saveRelation(RelationRecord relation) {
+                    relations.put(relation.id(), relation);
+                }
+
+                @Override
+                public Optional<EntityRecord> loadEntity(String entityId) {
+                    return Optional.ofNullable(entities.get(entityId));
+                }
+
+                @Override
+                public Optional<RelationRecord> loadRelation(String relationId) {
+                    return Optional.ofNullable(relations.get(relationId));
+                }
+
+                @Override
+                public List<EntityRecord> allEntities() {
+                    return List.copyOf(entities.values());
+                }
+
+                @Override
+                public List<RelationRecord> allRelations() {
+                    return List.copyOf(relations.values());
+                }
+
+                @Override
+                public List<RelationRecord> findRelations(String entityId) {
+                    return relations.values().stream()
+                        .filter(relation -> relation.sourceEntityId().equals(entityId) || relation.targetEntityId().equals(entityId))
+                        .toList();
+                }
+            };
+        }
+
+        @Override
+        public GraphSnapshot captureSnapshot() {
+            return new GraphSnapshot(List.copyOf(entities.values()), List.copyOf(relations.values()));
+        }
+
+        @Override
+        public void apply(StagedGraphWrites writes) {
+            applyCount++;
+            writes.entities().forEach(entity -> entities.put(entity.id(), entity));
+            writes.relations().forEach(relation -> relations.put(relation.id(), relation));
+        }
+
+        @Override
+        public void restore(GraphSnapshot snapshot) {
+            entities.clear();
+            relations.clear();
+            snapshot.entities().forEach(entity -> entities.put(entity.id(), entity));
+            snapshot.relations().forEach(relation -> relations.put(relation.id(), relation));
+        }
+
+        int applyCount() {
+            return applyCount;
         }
     }
 
@@ -653,6 +795,65 @@ class MySqlMilvusNeo4jStorageProviderTest {
         @Override
         public List<Path> list() {
             return List.of();
+        }
+    }
+
+    private static final class RecordingVectorStorageAdapter implements VectorStorageAdapter {
+        private final LinkedHashMap<String, LinkedHashMap<String, VectorStore.VectorRecord>> namespaces = new LinkedHashMap<>();
+        private int applyCount;
+
+        @Override
+        public VectorStore vectorStore() {
+            return new VectorStore() {
+                @Override
+                public void saveAll(String namespace, List<VectorRecord> vectors) {
+                    var target = namespace(namespace);
+                    vectors.forEach(vector -> target.put(vector.id(), vector));
+                }
+
+                @Override
+                public List<VectorMatch> search(String namespace, List<Double> queryVector, int topK) {
+                    throw new UnsupportedOperationException("Not needed in this test");
+                }
+
+                @Override
+                public List<VectorRecord> list(String namespace) {
+                    return List.copyOf(namespace(namespace).values());
+                }
+            };
+        }
+
+        @Override
+        public VectorSnapshot captureSnapshot() {
+            var snapshot = new LinkedHashMap<String, List<VectorStore.VectorRecord>>();
+            namespaces.forEach((namespace, vectors) -> snapshot.put(namespace, List.copyOf(vectors.values())));
+            return new VectorSnapshot(snapshot);
+        }
+
+        @Override
+        public void apply(StagedVectorWrites writes) {
+            applyCount++;
+            writes.upserts().forEach((namespace, vectors) -> {
+                var target = namespace(namespace);
+                vectors.forEach(vector -> target.put(vector.id(), vector.toVectorRecord()));
+            });
+        }
+
+        @Override
+        public void restore(VectorSnapshot snapshot) {
+            namespaces.clear();
+            snapshot.namespaces().forEach((namespace, vectors) -> {
+                var target = namespace(namespace);
+                vectors.forEach(vector -> target.put(vector.id(), vector));
+            });
+        }
+
+        int applyCount() {
+            return applyCount;
+        }
+
+        private LinkedHashMap<String, VectorStore.VectorRecord> namespace(String namespace) {
+            return namespaces.computeIfAbsent(namespace, ignored -> new LinkedHashMap<>());
         }
     }
 }

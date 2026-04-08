@@ -79,6 +79,14 @@ class StorageInjectionApiTest {
             MySqlMilvusNeo4jStorageProvider.GraphProjection.class,
             MySqlMilvusNeo4jStorageProvider.VectorProjection.class
         )).isNotNull();
+        assertThat(MySqlMilvusNeo4jStorageProvider.class.getConstructor(
+            DataSource.class,
+            MySqlStorageConfig.class,
+            SnapshotStore.class,
+            WorkspaceScope.class,
+            GraphStorageAdapter.class,
+            VectorStorageAdapter.class
+        )).isNotNull();
         assertThat(Modifier.isPublic(PostgresRelationalStorageAdapter.class.getModifiers())).isTrue();
         assertThat(Modifier.isPublic(Neo4jGraphStorageAdapter.class.getModifiers())).isTrue();
         assertThat(Modifier.isPublic(MilvusVectorStorageAdapter.class.getModifiers())).isTrue();

@@ -8,6 +8,7 @@ import io.github.lightrag.storage.DocumentStatusStore;
 import io.github.lightrag.storage.DocumentStore;
 import io.github.lightrag.storage.GraphStorageAdapter;
 import io.github.lightrag.storage.GraphStore;
+import io.github.lightrag.storage.HybridVectorStore;
 import io.github.lightrag.storage.StorageCoordinator;
 import io.github.lightrag.storage.SnapshotStore;
 import io.github.lightrag.storage.VectorStorageAdapter;
@@ -499,7 +500,7 @@ public final class PostgresMilvusNeo4jStorageProvider implements AtomicStoragePr
         }
     }
 
-    private final class LockedVectorStore implements VectorStore {
+    private final class LockedVectorStore implements HybridVectorStore {
         private final VectorStore delegate;
 
         private LockedVectorStore(VectorStore delegate) {
@@ -519,6 +520,23 @@ public final class PostgresMilvusNeo4jStorageProvider implements AtomicStoragePr
         @Override
         public List<VectorRecord> list(String namespace) {
             return withReadLock(() -> delegate.list(namespace));
+        }
+
+        @Override
+        public void saveAllEnriched(String namespace, List<EnrichedVectorRecord> records) {
+            withWriteLock(() -> hybridDelegate().saveAllEnriched(namespace, records));
+        }
+
+        @Override
+        public List<VectorMatch> search(String namespace, SearchRequest request) {
+            return withReadLock(() -> hybridDelegate().search(namespace, request));
+        }
+
+        private HybridVectorStore hybridDelegate() {
+            if (delegate instanceof HybridVectorStore hybridVectorStore) {
+                return hybridVectorStore;
+            }
+            throw new UnsupportedOperationException("Delegate vector store does not support hybrid search");
         }
     }
 
