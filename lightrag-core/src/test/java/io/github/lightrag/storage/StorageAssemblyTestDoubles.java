@@ -21,6 +21,7 @@ public final class StorageAssemblyTestDoubles {
         private final InMemoryChunkStore chunkStore = new InMemoryChunkStore();
         private final InMemoryDocumentStatusStore documentStatusStore = new InMemoryDocumentStatusStore();
         private final SnapshotStore snapshotStore = new NoopSnapshotStore();
+        private int restoreCount;
 
         @Override
         public DocumentStore documentStore() {
@@ -59,6 +60,7 @@ public final class StorageAssemblyTestDoubles {
             documentStore.restore(snapshot.documents());
             chunkStore.restore(snapshot.chunks());
             documentStatusStore.restore(snapshot.documentStatuses());
+            restoreCount++;
         }
 
         @Override
@@ -80,10 +82,17 @@ public final class StorageAssemblyTestDoubles {
                 }
             });
         }
+
+        int restoreCount() {
+            return restoreCount;
+        }
     }
 
     public static final class FakeGraphStorageAdapter implements GraphStorageAdapter {
         private final InMemoryGraphStore graphStore = new InMemoryGraphStore();
+        private int applyCount;
+        private int restoreCount;
+        private RuntimeException applyFailure;
 
         @Override
         public GraphStore graphStore() {
@@ -97,6 +106,10 @@ public final class StorageAssemblyTestDoubles {
 
         @Override
         public void apply(StagedGraphWrites writes) {
+            applyCount++;
+            if (applyFailure != null) {
+                throw applyFailure;
+            }
             for (var entity : writes.entities()) {
                 graphStore.saveEntity(entity);
             }
@@ -108,11 +121,27 @@ public final class StorageAssemblyTestDoubles {
         @Override
         public void restore(GraphSnapshot snapshot) {
             graphStore.restore(snapshot.entities(), snapshot.relations());
+            restoreCount++;
+        }
+
+        void failOnApply(RuntimeException exception) {
+            applyFailure = exception;
+        }
+
+        int applyCount() {
+            return applyCount;
+        }
+
+        int restoreCount() {
+            return restoreCount;
         }
     }
 
     public static final class FakeVectorStorageAdapter implements VectorStorageAdapter {
         private final InMemoryVectorStore vectorStore = new InMemoryVectorStore();
+        private int applyCount;
+        private int restoreCount;
+        private RuntimeException applyFailure;
 
         @Override
         public VectorStore vectorStore() {
@@ -126,6 +155,10 @@ public final class StorageAssemblyTestDoubles {
 
         @Override
         public void apply(StagedVectorWrites writes) {
+            applyCount++;
+            if (applyFailure != null) {
+                throw applyFailure;
+            }
             var nextSnapshot = new LinkedHashMap<>(vectorStore.snapshot());
             for (var namespace : writes.namespacesToReset()) {
                 nextSnapshot.remove(namespace);
@@ -142,6 +175,19 @@ public final class StorageAssemblyTestDoubles {
         @Override
         public void restore(VectorSnapshot snapshot) {
             vectorStore.restore(snapshot.namespaces());
+            restoreCount++;
+        }
+
+        void failOnApply(RuntimeException exception) {
+            applyFailure = exception;
+        }
+
+        int applyCount() {
+            return applyCount;
+        }
+
+        int restoreCount() {
+            return restoreCount;
         }
     }
 
