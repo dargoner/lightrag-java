@@ -9,6 +9,8 @@ import io.github.lightrag.storage.DocumentStatusStore;
 import io.github.lightrag.storage.DocumentStore;
 import io.github.lightrag.storage.RelationalStorageAdapter;
 import io.github.lightrag.storage.SnapshotStore;
+import io.github.lightrag.storage.TaskStageStore;
+import io.github.lightrag.storage.TaskStore;
 
 import javax.sql.DataSource;
 import java.sql.Connection;
@@ -30,6 +32,8 @@ public final class MySqlRelationalStorageAdapter implements RelationalStorageAda
     private final DocumentStore documentStore;
     private final ChunkStore chunkStore;
     private final DocumentStatusStore documentStatusStore;
+    private final TaskStore taskStore;
+    private final TaskStageStore taskStageStore;
 
     public MySqlRelationalStorageAdapter(
         DataSource dataSource,
@@ -77,6 +81,8 @@ public final class MySqlRelationalStorageAdapter implements RelationalStorageAda
         this.documentStore = new MySqlDocumentStore(this.dataSource, this.config, this.workspaceId);
         this.chunkStore = new MySqlChunkStore(this.dataSource, this.config, this.workspaceId);
         this.documentStatusStore = new MySqlDocumentStatusStore(this.dataSource, this.config, this.workspaceId);
+        this.taskStore = new MySqlTaskStore(this.dataSource, this.config, this.workspaceId);
+        this.taskStageStore = new MySqlTaskStageStore(this.dataSource, this.config, this.workspaceId);
     }
 
     @Override
@@ -92,6 +98,16 @@ public final class MySqlRelationalStorageAdapter implements RelationalStorageAda
     @Override
     public DocumentStatusStore documentStatusStore() {
         return documentStatusStore;
+    }
+
+    @Override
+    public TaskStore taskStore() {
+        return taskStore;
+    }
+
+    @Override
+    public TaskStageStore taskStageStore() {
+        return taskStageStore;
     }
 
     @Override
@@ -159,6 +175,16 @@ public final class MySqlRelationalStorageAdapter implements RelationalStorageAda
                 @Override
                 public DocumentStatusStore documentStatusStore() {
                     return new MySqlDocumentStatusStore(connectionAccess, config, workspaceId);
+                }
+
+                @Override
+                public TaskStore taskStore() {
+                    return new MySqlTaskStore(connectionAccess, config, workspaceId);
+                }
+
+                @Override
+                public TaskStageStore taskStageStore() {
+                    return new MySqlTaskStageStore(connectionAccess, config, workspaceId);
                 }
             }));
         } catch (SQLException exception) {

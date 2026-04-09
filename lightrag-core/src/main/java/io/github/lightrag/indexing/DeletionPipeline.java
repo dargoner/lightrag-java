@@ -131,6 +131,28 @@ public final class DeletionPipeline {
         }
     }
 
+    public void rebuildAllDocuments() {
+        var beforeSnapshot = StorageSnapshots.capture(storageProvider);
+        var documents = beforeSnapshot.documents().stream()
+            .map(DeletionPipeline::toDocument)
+            .toList();
+        try {
+            storageProvider.restore(StorageSnapshots.empty());
+            if (!documents.isEmpty()) {
+                indexingPipeline.ingest(documents);
+            }
+            StorageSnapshots.persistIfConfigured(storageProvider, snapshotPath);
+        } catch (RuntimeException | Error failure) {
+            try {
+                storageProvider.restore(beforeSnapshot);
+                StorageSnapshots.persistIfConfigured(storageProvider, snapshotPath);
+            } catch (RuntimeException | Error restoreFailure) {
+                failure.addSuppressed(restoreFailure);
+            }
+            throw failure;
+        }
+    }
+
     private static List<VectorStore.VectorRecord> filterVectors(
         SnapshotStore.Snapshot snapshot,
         String namespace,

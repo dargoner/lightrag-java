@@ -3486,6 +3486,16 @@ class E2ELightRagTest {
         }
 
         @Override
+        public io.github.lightrag.storage.TaskStore taskStore() {
+            return delegate.taskStore();
+        }
+
+        @Override
+        public io.github.lightrag.storage.TaskStageStore taskStageStore() {
+            return delegate.taskStageStore();
+        }
+
+        @Override
         public SnapshotStore snapshotStore() {
             return delegate.snapshotStore();
         }

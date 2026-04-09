@@ -3,6 +3,10 @@ package io.github.lightrag.storage.postgres;
 import com.zaxxer.hikari.HikariConfig;
 import com.zaxxer.hikari.HikariDataSource;
 import io.github.lightrag.api.DocumentStatus;
+import io.github.lightrag.api.TaskStage;
+import io.github.lightrag.api.TaskStageStatus;
+import io.github.lightrag.api.TaskStatus;
+import io.github.lightrag.api.TaskType;
 import io.github.lightrag.api.WorkspaceScope;
 import io.github.lightrag.storage.ChunkStore;
 import io.github.lightrag.storage.DocumentStatusStore;
@@ -218,6 +222,54 @@ class PostgresMilvusNeo4jStorageProviderTest {
                 assertThat(provider.graphStore().loadEntity("entity-1")).isPresent();
                 assertThat(provider.vectorStore().list("chunks"))
                     .containsExactly(new VectorStore.VectorRecord("doc-1:0", List.of(1.0d, 0.0d, 0.0d)));
+            }
+        }
+    }
+
+    @Test
+    void persistsTaskStoresWhenUsingPostgresMilvusNeo4jProviderBootstrap() {
+        try (
+            var container = newPostgresContainer();
+            var dataSource = newDataSource(startedConfig(container))
+        ) {
+            PostgresStorageConfig config = startedConfig(container);
+            try (var provider = new PostgresMilvusNeo4jStorageProvider(
+                dataSource,
+                config,
+                new InMemorySnapshotStore(),
+                new WorkspaceScope("default"),
+                new RecordingGraphProjection(),
+                new RecordingMilvusProjection(),
+                new ReentrantReadWriteLock(true)
+            )) {
+                provider.taskStore().save(new io.github.lightrag.storage.TaskStore.TaskRecord(
+                    "task-1",
+                    "default",
+                    TaskType.INGEST_DOCUMENTS,
+                    TaskStatus.PENDING,
+                    java.time.Instant.parse("2026-04-09T00:00:00Z"),
+                    null,
+                    null,
+                    "queued",
+                    null,
+                    false,
+                    Map.of("documentCount", "1")
+                ));
+                provider.taskStageStore().save(new io.github.lightrag.storage.TaskStageStore.TaskStageRecord(
+                    "task-1",
+                    TaskStage.PREPARING,
+                    TaskStageStatus.RUNNING,
+                    1,
+                    java.time.Instant.parse("2026-04-09T00:00:01Z"),
+                    null,
+                    "starting",
+                    null
+                ));
+
+                assertThat(provider.taskStore().load("task-1")).isPresent();
+                assertThat(provider.taskStageStore().listByTask("task-1"))
+                    .extracting(io.github.lightrag.storage.TaskStageStore.TaskStageRecord::stage)
+                    .containsExactly(TaskStage.PREPARING);
             }
         }
     }

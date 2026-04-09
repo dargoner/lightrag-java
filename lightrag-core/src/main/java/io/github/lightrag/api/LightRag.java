@@ -5,6 +5,7 @@ import io.github.lightrag.indexing.Chunker;
 import io.github.lightrag.indexing.DeletionPipeline;
 import io.github.lightrag.indexing.DocumentParsingOrchestrator;
 import io.github.lightrag.indexing.GraphManagementPipeline;
+import io.github.lightrag.indexing.IndexingProgressListener;
 import io.github.lightrag.indexing.IndexingPipeline;
 import io.github.lightrag.indexing.StorageSnapshots;
 import io.github.lightrag.indexing.refinement.ExtractionRefinementOptions;
@@ -22,12 +23,14 @@ import io.github.lightrag.query.ReasoningContextAssembler;
 import io.github.lightrag.query.RuleBasedQueryIntentClassifier;
 import io.github.lightrag.synthesis.PathAwareAnswerSynthesizer;
 import io.github.lightrag.storage.AtomicStorageProvider;
+import io.github.lightrag.task.TaskExecutionService;
 import io.github.lightrag.types.Document;
 import io.github.lightrag.types.RawDocumentSource;
 
 import java.nio.file.Path;
 import java.util.EnumMap;
 import java.util.List;
+import java.util.Map;
 import java.util.NoSuchElementException;
 import java.util.Objects;
 import java.util.concurrent.atomic.AtomicBoolean;
@@ -47,6 +50,7 @@ public final class LightRag implements AutoCloseable {
     private final double embeddingSemanticMergeThreshold;
     private final ExtractionRefinementOptions extractionRefinementOptions;
     private final DocumentParsingOrchestrator documentParsingOrchestrator;
+    private final TaskExecutionService taskExecutionService;
     private final AtomicBoolean closed = new AtomicBoolean();
 
     LightRag(LightRagConfig config) {
@@ -101,6 +105,7 @@ public final class LightRag implements AutoCloseable {
         this.embeddingSemanticMergeThreshold = embeddingSemanticMergeThreshold;
         this.extractionRefinementOptions = Objects.requireNonNull(extractionRefinementOptions, "extractionRefinementOptions");
         this.documentParsingOrchestrator = documentParsingOrchestrator;
+        this.taskExecutionService = new TaskExecutionService(workspaceId -> resolveProvider(resolveScope(workspaceId)));
     }
 
     public static LightRagBuilder builder() {
@@ -112,6 +117,7 @@ public final class LightRag implements AutoCloseable {
         if (!closed.compareAndSet(false, true)) {
             return;
         }
+        taskExecutionService.close();
         config.workspaceStorageProvider().close();
     }
 
@@ -123,6 +129,49 @@ public final class LightRag implements AutoCloseable {
     public void ingestSources(String workspaceId, List<RawDocumentSource> sources, DocumentIngestOptions options) {
         var scope = resolveScope(workspaceId);
         newIndexingPipeline(resolveProvider(scope)).ingestSources(sources, options);
+    }
+
+    public String submitIngest(String workspaceId, List<Document> documents) {
+        var normalizedDocuments = List.copyOf(Objects.requireNonNull(documents, "documents"));
+        return taskExecutionService.submit(
+            workspaceId,
+            TaskType.INGEST_DOCUMENTS,
+            Map.of("documentCount", Integer.toString(normalizedDocuments.size())),
+            progressListener -> newIndexingPipeline(resolveProvider(resolveScope(workspaceId)), progressListener).ingest(normalizedDocuments)
+        );
+    }
+
+    public String submitIngestSources(String workspaceId, List<RawDocumentSource> sources, DocumentIngestOptions options) {
+        var normalizedSources = List.copyOf(Objects.requireNonNull(sources, "sources"));
+        var resolvedOptions = Objects.requireNonNull(options, "options");
+        return taskExecutionService.submit(
+            workspaceId,
+            TaskType.INGEST_SOURCES,
+            Map.of("sourceCount", Integer.toString(normalizedSources.size())),
+            progressListener -> newIndexingPipeline(resolveProvider(resolveScope(workspaceId)), progressListener)
+                .ingestSources(normalizedSources, resolvedOptions)
+        );
+    }
+
+    public String submitRebuild(String workspaceId) {
+        return taskExecutionService.submit(
+            workspaceId,
+            TaskType.REBUILD_GRAPH,
+            Map.of(),
+            progressListener -> newDeletionPipeline(resolveProvider(resolveScope(workspaceId)), progressListener).rebuildAllDocuments()
+        );
+    }
+
+    public TaskSnapshot getTask(String workspaceId, String taskId) {
+        return taskExecutionService.getTask(workspaceId, taskId);
+    }
+
+    public List<TaskSnapshot> listTasks(String workspaceId) {
+        return taskExecutionService.listTasks(workspaceId);
+    }
+
+    public TaskSnapshot cancelTask(String workspaceId, String taskId) {
+        return taskExecutionService.cancel(workspaceId, taskId);
     }
 
     public GraphEntity createEntity(String workspaceId, CreateEntityRequest request) {
@@ -283,6 +332,13 @@ public final class LightRag implements AutoCloseable {
     }
 
     private IndexingPipeline newIndexingPipeline(AtomicStorageProvider storageProvider) {
+        return newIndexingPipeline(storageProvider, IndexingProgressListener.noop());
+    }
+
+    private IndexingPipeline newIndexingPipeline(
+        AtomicStorageProvider storageProvider,
+        IndexingProgressListener progressListener
+    ) {
         return new IndexingPipeline(
             config.extractionModel(),
             config.summaryModel(),
@@ -299,12 +355,20 @@ public final class LightRag implements AutoCloseable {
             entityTypes,
             embeddingSemanticMergeEnabled,
             embeddingSemanticMergeThreshold,
-            extractionRefinementOptions
+            extractionRefinementOptions,
+            progressListener
         );
     }
 
     private DeletionPipeline newDeletionPipeline(AtomicStorageProvider storageProvider) {
-        return new DeletionPipeline(storageProvider, newIndexingPipeline(storageProvider), config.snapshotPath());
+        return newDeletionPipeline(storageProvider, IndexingProgressListener.noop());
+    }
+
+    private DeletionPipeline newDeletionPipeline(
+        AtomicStorageProvider storageProvider,
+        IndexingProgressListener progressListener
+    ) {
+        return new DeletionPipeline(storageProvider, newIndexingPipeline(storageProvider, progressListener), config.snapshotPath());
     }
 
     private GraphManagementPipeline newGraphManagementPipeline(AtomicStorageProvider storageProvider) {

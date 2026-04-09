@@ -55,6 +55,7 @@ public final class IndexingPipeline {
     private final String entityExtractionLanguage;
     private final List<String> entityTypes;
     private final ExtractionRefinementOptions extractionRefinementOptions;
+    private final IndexingProgressListener progressListener;
     private final Object storageMutationMonitor = new Object();
 
     public IndexingPipeline(
@@ -90,7 +91,8 @@ public final class IndexingPipeline {
             entityTypes,
             embeddingSemanticMergeEnabled,
             embeddingSemanticMergeThreshold,
-            extractionRefinementOptions
+            extractionRefinementOptions,
+            IndexingProgressListener.noop()
         );
     }
 
@@ -111,6 +113,46 @@ public final class IndexingPipeline {
         boolean embeddingSemanticMergeEnabled,
         double embeddingSemanticMergeThreshold,
         ExtractionRefinementOptions extractionRefinementOptions
+    ) {
+        this(
+            extractionModel,
+            summaryModel,
+            embeddingModel,
+            storageProvider,
+            snapshotPath,
+            chunker,
+            documentParsingOrchestrator,
+            embeddingBatchSize,
+            maxParallelInsert,
+            entityExtractMaxGleaning,
+            maxExtractInputTokens,
+            entityExtractionLanguage,
+            entityTypes,
+            embeddingSemanticMergeEnabled,
+            embeddingSemanticMergeThreshold,
+            extractionRefinementOptions,
+            IndexingProgressListener.noop()
+        );
+    }
+
+    public IndexingPipeline(
+        ChatModel extractionModel,
+        ChatModel summaryModel,
+        EmbeddingModel embeddingModel,
+        AtomicStorageProvider storageProvider,
+        Path snapshotPath,
+        Chunker chunker,
+        DocumentParsingOrchestrator documentParsingOrchestrator,
+        int embeddingBatchSize,
+        int maxParallelInsert,
+        int entityExtractMaxGleaning,
+        int maxExtractInputTokens,
+        String entityExtractionLanguage,
+        List<String> entityTypes,
+        boolean embeddingSemanticMergeEnabled,
+        double embeddingSemanticMergeThreshold,
+        ExtractionRefinementOptions extractionRefinementOptions,
+        IndexingProgressListener progressListener
     ) {
         this.storageProvider = Objects.requireNonNull(storageProvider, "storageProvider");
         this.snapshotPath = snapshotPath;
@@ -160,6 +202,7 @@ public final class IndexingPipeline {
         this.documentParsingOrchestrator = documentParsingOrchestrator == null
             ? new DocumentParsingOrchestrator(new PlainTextParsingProvider())
             : documentParsingOrchestrator;
+        this.progressListener = progressListener == null ? IndexingProgressListener.noop() : progressListener;
     }
 
     public IndexingPipeline(
@@ -218,6 +261,7 @@ public final class IndexingPipeline {
     public void ingestSources(List<RawDocumentSource> sources, io.github.lightrag.api.DocumentIngestOptions options) {
         var rawSources = List.copyOf(Objects.requireNonNull(sources, "sources"));
         var resolvedOptions = Objects.requireNonNull(options, "options");
+        progressListener.onStageStarted(io.github.lightrag.api.TaskStage.PARSING, "parsing source documents");
         for (var source : rawSources) {
             saveStatus(processingStatus(source.sourceId()));
         }
@@ -237,6 +281,7 @@ public final class IndexingPipeline {
                 throw failure;
             }
         }
+        progressListener.onStageSucceeded(io.github.lightrag.api.TaskStage.PARSING, "parsed %d source documents".formatted(parsedDocuments.size()));
         if (parsedDocuments.size() <= 1 || maxParallelInsert <= 1) {
             for (var parsed : parsedDocuments) {
                 ingestParsedSequentially(parsed, resolvedOptions);
@@ -378,12 +423,23 @@ public final class IndexingPipeline {
 
     private ComputedIngest computeDocument(Document document) {
         var source = Objects.requireNonNull(document, "document");
+        progressListener.onStageStarted(io.github.lightrag.api.TaskStage.CHUNKING, "chunking document " + source.id());
         var prepared = documentIngestor.prepare(List.of(source));
+        progressListener.onStageSucceeded(
+            io.github.lightrag.api.TaskStage.CHUNKING,
+            "chunked %d chunks for %s".formatted(prepared.chunks().size(), source.id())
+        );
         var chunks = prepared.chunks();
+        progressListener.onStageStarted(io.github.lightrag.api.TaskStage.VECTOR_INDEXING, "embedding chunks for " + source.id());
         var chunkVectors = chunkVectors(chunks);
+        progressListener.onStageSucceeded(io.github.lightrag.api.TaskStage.VECTOR_INDEXING, "embedded chunk vectors for " + source.id());
+        progressListener.onStageStarted(io.github.lightrag.api.TaskStage.GRAPH_ASSEMBLY, "assembling graph for " + source.id());
         var graph = graphAssembler.assemble(refineExtractions(chunks));
+        progressListener.onStageSucceeded(io.github.lightrag.api.TaskStage.GRAPH_ASSEMBLY, "assembled graph for " + source.id());
+        progressListener.onStageStarted(io.github.lightrag.api.TaskStage.VECTOR_INDEXING, "embedding graph vectors for " + source.id());
         var entityVectors = entityVectors(graph.entities());
         var relationVectors = relationVectors(graph.relations());
+        progressListener.onStageSucceeded(io.github.lightrag.api.TaskStage.VECTOR_INDEXING, "embedded graph vectors for " + source.id());
         return new ComputedIngest(source, prepared, chunkVectors, graph, entityVectors, relationVectors);
     }
 
@@ -392,20 +448,40 @@ public final class IndexingPipeline {
         io.github.lightrag.api.DocumentIngestOptions options
     ) {
         var source = Objects.requireNonNull(parsedDocument, "parsedDocument");
+        progressListener.onStageStarted(io.github.lightrag.api.TaskStage.CHUNKING, "chunking document " + source.documentId());
         var prepared = documentIngestor.prepareParsed(source, Objects.requireNonNull(options, "options"));
+        progressListener.onStageSucceeded(
+            io.github.lightrag.api.TaskStage.CHUNKING,
+            "chunked %d chunks for %s".formatted(prepared.chunks().size(), source.documentId())
+        );
         var chunks = prepared.chunks();
+        progressListener.onStageStarted(io.github.lightrag.api.TaskStage.VECTOR_INDEXING, "embedding chunks for " + source.documentId());
         var chunkVectors = chunkVectors(chunks);
+        progressListener.onStageSucceeded(io.github.lightrag.api.TaskStage.VECTOR_INDEXING, "embedded chunk vectors for " + source.documentId());
+        progressListener.onStageStarted(io.github.lightrag.api.TaskStage.GRAPH_ASSEMBLY, "assembling graph for " + source.documentId());
         var graph = graphAssembler.assemble(refineExtractions(chunks));
+        progressListener.onStageSucceeded(io.github.lightrag.api.TaskStage.GRAPH_ASSEMBLY, "assembled graph for " + source.documentId());
+        progressListener.onStageStarted(io.github.lightrag.api.TaskStage.VECTOR_INDEXING, "embedding graph vectors for " + source.documentId());
         var entityVectors = entityVectors(graph.entities());
         var relationVectors = relationVectors(graph.relations());
+        progressListener.onStageSucceeded(io.github.lightrag.api.TaskStage.VECTOR_INDEXING, "embedded graph vectors for " + source.documentId());
         return new ComputedIngest(toDocument(source), prepared, chunkVectors, graph, entityVectors, relationVectors);
     }
 
     private List<GraphAssembler.ChunkExtraction> refineExtractions(List<io.github.lightrag.types.Chunk> chunks) {
+        progressListener.onStageStarted(io.github.lightrag.api.TaskStage.PRIMARY_EXTRACTION, "extracting entities and relations");
         var primaryExtractions = chunks.stream()
             .map(chunk -> new PrimaryChunkExtraction(chunk, knowledgeExtractor.extract(chunk)))
             .toList();
-        return extractionRefinementPipeline.refine(primaryExtractions);
+        progressListener.onStageSucceeded(io.github.lightrag.api.TaskStage.PRIMARY_EXTRACTION, "primary extraction completed");
+        if (!extractionRefinementOptions.enabled()) {
+            progressListener.onStageSkipped(io.github.lightrag.api.TaskStage.REFINEMENT_EXTRACTION, "contextual refinement disabled");
+            return extractionRefinementPipeline.refine(primaryExtractions);
+        }
+        progressListener.onStageStarted(io.github.lightrag.api.TaskStage.REFINEMENT_EXTRACTION, "running contextual refinement");
+        var refined = extractionRefinementPipeline.refine(primaryExtractions);
+        progressListener.onStageSucceeded(io.github.lightrag.api.TaskStage.REFINEMENT_EXTRACTION, "contextual refinement completed");
+        return refined;
     }
 
     private static void cancelPending(Collection<? extends Future<?>> futures) {
@@ -435,6 +511,7 @@ public final class IndexingPipeline {
 
     private void commitComputedIngest(ComputedIngest computed) {
         try {
+            progressListener.onStageStarted(io.github.lightrag.api.TaskStage.COMMITTING, "committing storage mutations");
             synchronized (storageMutationMonitor) {
                 storageProvider.writeAtomically(storage -> {
                     documentIngestor.persist(computed.prepared(), storage);
@@ -451,6 +528,7 @@ public final class IndexingPipeline {
                     return null;
                 });
             }
+            progressListener.onStageSucceeded(io.github.lightrag.api.TaskStage.COMMITTING, "committed storage mutations");
         } catch (RuntimeException | Error failure) {
             saveFailureStatus(computed.source().id(), failure);
             throw failure;

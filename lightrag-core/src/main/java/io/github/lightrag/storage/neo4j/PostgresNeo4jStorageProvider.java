@@ -10,6 +10,8 @@ import io.github.lightrag.storage.GraphStore;
 import io.github.lightrag.storage.RelationalStorageAdapter;
 import io.github.lightrag.storage.SnapshotStore;
 import io.github.lightrag.storage.StorageCoordinator;
+import io.github.lightrag.storage.TaskStageStore;
+import io.github.lightrag.storage.TaskStore;
 import io.github.lightrag.storage.VectorStore;
 import io.github.lightrag.storage.postgres.PostgresStorageConfig;
 import io.github.lightrag.storage.postgres.PostgresStorageProvider;
@@ -32,6 +34,8 @@ public final class PostgresNeo4jStorageProvider implements AtomicStorageProvider
     private final DocumentStore lockedDocumentStore;
     private final ChunkStore lockedChunkStore;
     private final DocumentStatusStore lockedDocumentStatusStore;
+    private final TaskStore lockedTaskStore;
+    private final TaskStageStore lockedTaskStageStore;
     private final VectorStore lockedVectorStore;
     private final GraphStore graphStore;
 
@@ -134,6 +138,8 @@ public final class PostgresNeo4jStorageProvider implements AtomicStorageProvider
         this.lockedDocumentStore = new LockedDocumentStore(coordinator.documentStore());
         this.lockedChunkStore = new LockedChunkStore(coordinator.chunkStore());
         this.lockedDocumentStatusStore = new LockedDocumentStatusStore(coordinator.documentStatusStore());
+        this.lockedTaskStore = new LockedTaskStore(coordinator.taskStore());
+        this.lockedTaskStageStore = new LockedTaskStageStore(coordinator.taskStageStore());
         this.lockedVectorStore = new LockedVectorStore(provider.vectorStore());
         this.graphStore = new MirroringGraphStore();
     }
@@ -161,6 +167,16 @@ public final class PostgresNeo4jStorageProvider implements AtomicStorageProvider
     @Override
     public DocumentStatusStore documentStatusStore() {
         return lockedDocumentStatusStore;
+    }
+
+    @Override
+    public TaskStore taskStore() {
+        return lockedTaskStore;
+    }
+
+    @Override
+    public TaskStageStore taskStageStore() {
+        return lockedTaskStageStore;
     }
 
     @Override
@@ -342,6 +358,57 @@ public final class PostgresNeo4jStorageProvider implements AtomicStorageProvider
         }
     }
 
+    private final class LockedTaskStore implements TaskStore {
+        private final TaskStore delegate;
+
+        private LockedTaskStore(TaskStore delegate) {
+            this.delegate = Objects.requireNonNull(delegate, "delegate");
+        }
+
+        @Override
+        public void save(TaskRecord taskRecord) {
+            withWriteLock(() -> delegate.save(taskRecord));
+        }
+
+        @Override
+        public Optional<TaskRecord> load(String taskId) {
+            return withReadLock(() -> delegate.load(taskId));
+        }
+
+        @Override
+        public List<TaskRecord> list() {
+            return withReadLock(delegate::list);
+        }
+
+        @Override
+        public void delete(String taskId) {
+            withWriteLock(() -> delegate.delete(taskId));
+        }
+    }
+
+    private final class LockedTaskStageStore implements TaskStageStore {
+        private final TaskStageStore delegate;
+
+        private LockedTaskStageStore(TaskStageStore delegate) {
+            this.delegate = Objects.requireNonNull(delegate, "delegate");
+        }
+
+        @Override
+        public void save(TaskStageRecord taskStageRecord) {
+            withWriteLock(() -> delegate.save(taskStageRecord));
+        }
+
+        @Override
+        public List<TaskStageRecord> listByTask(String taskId) {
+            return withReadLock(() -> delegate.listByTask(taskId));
+        }
+
+        @Override
+        public void deleteByTask(String taskId) {
+            withWriteLock(() -> delegate.deleteByTask(taskId));
+        }
+    }
+
     private final class LockedVectorStore implements VectorStore {
         private final VectorStore delegate;
 
@@ -385,6 +452,16 @@ public final class PostgresNeo4jStorageProvider implements AtomicStorageProvider
         @Override
         public DocumentStatusStore documentStatusStore() {
             return postgresProvider.documentStatusStore();
+        }
+
+        @Override
+        public TaskStore taskStore() {
+            return postgresProvider.taskStore();
+        }
+
+        @Override
+        public TaskStageStore taskStageStore() {
+            return postgresProvider.taskStageStore();
         }
 
         @Override
@@ -439,6 +516,16 @@ public final class PostgresNeo4jStorageProvider implements AtomicStorageProvider
                 @Override
                 public DocumentStatusStore documentStatusStore() {
                     return storage.documentStatusStore();
+                }
+
+                @Override
+                public TaskStore taskStore() {
+                    return postgresProvider.taskStore();
+                }
+
+                @Override
+                public TaskStageStore taskStageStore() {
+                    return postgresProvider.taskStageStore();
                 }
 
                 @Override

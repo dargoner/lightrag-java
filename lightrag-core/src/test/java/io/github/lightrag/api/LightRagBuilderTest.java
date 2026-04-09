@@ -19,10 +19,14 @@ import io.github.lightrag.storage.StorageAssembly;
 import io.github.lightrag.storage.StorageAssemblyTestDoubles;
 import io.github.lightrag.storage.SnapshotStore;
 import io.github.lightrag.storage.StorageProvider;
+import io.github.lightrag.storage.TaskStageStore;
+import io.github.lightrag.storage.TaskStore;
 import io.github.lightrag.storage.VectorStore;
 import io.github.lightrag.storage.FixedWorkspaceStorageProvider;
 import io.github.lightrag.storage.WorkspaceStorageProvider;
 import io.github.lightrag.storage.memory.InMemoryDocumentStatusStore;
+import io.github.lightrag.storage.memory.InMemoryTaskStageStore;
+import io.github.lightrag.storage.memory.InMemoryTaskStore;
 import io.github.lightrag.types.Chunk;
 import io.github.lightrag.types.Document;
 import io.github.lightrag.types.ExtractedRelation;
@@ -1345,6 +1349,8 @@ class LightRagBuilderTest {
         private final GraphStore graphStore = new FakeGraphStore();
         private final VectorStore vectorStore = new FakeVectorStore();
         private final DocumentStatusStore documentStatusStore = new InMemoryDocumentStatusStore();
+        private final TaskStore taskStore = new InMemoryTaskStore();
+        private final TaskStageStore taskStageStore = new InMemoryTaskStageStore();
         private final SnapshotStore snapshotStore = new FakeSnapshotStore();
 
         @Override
@@ -1370,6 +1376,16 @@ class LightRagBuilderTest {
         @Override
         public DocumentStatusStore documentStatusStore() {
             return documentStatusStore;
+        }
+
+        @Override
+        public TaskStore taskStore() {
+            return taskStore;
+        }
+
+        @Override
+        public TaskStageStore taskStageStore() {
+            return taskStageStore;
         }
 
         @Override
@@ -1468,6 +1484,16 @@ class LightRagBuilderTest {
         @Override
         public DocumentStatusStore documentStatusStore() {
             return delegate.documentStatusStore();
+        }
+
+        @Override
+        public TaskStore taskStore() {
+            return delegate.taskStore();
+        }
+
+        @Override
+        public TaskStageStore taskStageStore() {
+            return delegate.taskStageStore();
         }
 
         @Override

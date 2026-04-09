@@ -11,5 +11,9 @@ public interface StorageProvider {
 
     DocumentStatusStore documentStatusStore();
 
+    TaskStore taskStore();
+
+    TaskStageStore taskStageStore();
+
     SnapshotStore snapshotStore();
 }

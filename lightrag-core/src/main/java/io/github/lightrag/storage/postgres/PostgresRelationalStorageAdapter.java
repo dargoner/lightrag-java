@@ -10,6 +10,8 @@ import io.github.lightrag.storage.DocumentStore;
 import io.github.lightrag.storage.GraphStore;
 import io.github.lightrag.storage.RelationalStorageAdapter;
 import io.github.lightrag.storage.SnapshotStore;
+import io.github.lightrag.storage.TaskStageStore;
+import io.github.lightrag.storage.TaskStore;
 
 import javax.sql.DataSource;
 import java.sql.Connection;
@@ -33,6 +35,8 @@ public final class PostgresRelationalStorageAdapter implements RelationalStorage
     private final ChunkStore chunkStore;
     private final GraphStore graphStore;
     private final DocumentStatusStore documentStatusStore;
+    private final TaskStore taskStore;
+    private final TaskStageStore taskStageStore;
 
     public PostgresRelationalStorageAdapter(
         DataSource dataSource,
@@ -101,6 +105,8 @@ public final class PostgresRelationalStorageAdapter implements RelationalStorage
         this.chunkStore = new PostgresChunkStore(this.dataSource, this.config, this.workspaceId);
         this.graphStore = new PostgresGraphStore(this.dataSource, this.config, this.workspaceId);
         this.documentStatusStore = new PostgresDocumentStatusStore(this.dataSource, this.config, this.workspaceId);
+        this.taskStore = new PostgresTaskStore(this.dataSource, this.config, this.workspaceId);
+        this.taskStageStore = new PostgresTaskStageStore(this.dataSource, this.config, this.workspaceId);
     }
 
     @Override
@@ -116,6 +122,16 @@ public final class PostgresRelationalStorageAdapter implements RelationalStorage
     @Override
     public DocumentStatusStore documentStatusStore() {
         return documentStatusStore;
+    }
+
+    @Override
+    public TaskStore taskStore() {
+        return taskStore;
+    }
+
+    @Override
+    public TaskStageStore taskStageStore() {
+        return taskStageStore;
     }
 
     @Override
@@ -208,6 +224,16 @@ public final class PostgresRelationalStorageAdapter implements RelationalStorage
                         @Override
                         public DocumentStatusStore documentStatusStore() {
                             return new PostgresDocumentStatusStore(connectionAccess, config, workspaceId);
+                        }
+
+                        @Override
+                        public TaskStore taskStore() {
+                            return new PostgresTaskStore(connectionAccess, config, workspaceId);
+                        }
+
+                        @Override
+                        public TaskStageStore taskStageStore() {
+                            return new PostgresTaskStageStore(connectionAccess, config, workspaceId);
                         }
 
                         @Override
@@ -440,7 +466,37 @@ public final class PostgresRelationalStorageAdapter implements RelationalStorage
                         error_message TEXT,
                         PRIMARY KEY (workspace_id, document_id)
                     )
-                    """.formatted(config.qualifiedTableName("document_status"))
+                    """.formatted(config.qualifiedTableName("document_status")),
+                """
+                    CREATE TABLE IF NOT EXISTS %s (
+                        workspace_id TEXT NOT NULL,
+                        task_id TEXT NOT NULL,
+                        task_type TEXT NOT NULL,
+                        status TEXT NOT NULL,
+                        requested_at TIMESTAMPTZ NOT NULL,
+                        started_at TIMESTAMPTZ NULL,
+                        finished_at TIMESTAMPTZ NULL,
+                        summary TEXT NOT NULL DEFAULT '',
+                        error_message TEXT NULL,
+                        cancel_requested BOOLEAN NOT NULL DEFAULT FALSE,
+                        metadata JSONB NOT NULL DEFAULT '{}'::jsonb,
+                        PRIMARY KEY (workspace_id, task_id)
+                    )
+                    """.formatted(config.qualifiedTableName("task")),
+                """
+                    CREATE TABLE IF NOT EXISTS %s (
+                        workspace_id TEXT NOT NULL,
+                        task_id TEXT NOT NULL,
+                        stage TEXT NOT NULL,
+                        status TEXT NOT NULL,
+                        sequence INTEGER NOT NULL,
+                        started_at TIMESTAMPTZ NULL,
+                        finished_at TIMESTAMPTZ NULL,
+                        message TEXT NOT NULL DEFAULT '',
+                        error_message TEXT NULL,
+                        PRIMARY KEY (workspace_id, task_id, stage)
+                    )
+                    """.formatted(config.qualifiedTableName("task_stage"))
             );
         }
 

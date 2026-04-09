@@ -3,6 +3,10 @@ package io.github.lightrag.storage.mysql;
 import com.zaxxer.hikari.HikariConfig;
 import com.zaxxer.hikari.HikariDataSource;
 import io.github.lightrag.api.DocumentStatus;
+import io.github.lightrag.api.TaskStage;
+import io.github.lightrag.api.TaskStageStatus;
+import io.github.lightrag.api.TaskStatus;
+import io.github.lightrag.api.TaskType;
 import io.github.lightrag.api.WorkspaceScope;
 import io.github.lightrag.storage.ChunkStore;
 import io.github.lightrag.storage.DocumentStatusStore;
@@ -377,6 +381,56 @@ class MySqlMilvusNeo4jStorageProviderTest {
                 assertThat(milvusProjection.deletedNamespaces).isEmpty();
                 assertThat(milvusProjection.savedNamespacesSinceReset).containsExactly("chunks");
                 assertThat(milvusProjection.flushedNamespacesSinceReset).containsExactly(List.of("chunks"));
+            }
+        }
+    }
+
+    @Test
+    void exposesTaskStoresInsideMySqlTransactionalView() {
+        try (
+            var container = newMySqlContainer();
+            var dataSource = newDataSource(startedConfig(container))
+        ) {
+            var config = startedConfig(container);
+            new MySqlSchemaManager(dataSource, config).bootstrap();
+
+            try (var adapter = new MySqlRelationalStorageAdapter(
+                dataSource,
+                config,
+                new InMemorySnapshotStore(),
+                new WorkspaceScope("default")
+            )) {
+                adapter.writeInTransaction(storage -> {
+                    storage.taskStore().save(new io.github.lightrag.storage.TaskStore.TaskRecord(
+                        "task-1",
+                        "default",
+                        TaskType.INGEST_DOCUMENTS,
+                        TaskStatus.RUNNING,
+                        java.time.Instant.parse("2026-04-09T00:00:00Z"),
+                        java.time.Instant.parse("2026-04-09T00:00:01Z"),
+                        null,
+                        "running",
+                        null,
+                        false,
+                        Map.of("documentCount", "1")
+                    ));
+                    storage.taskStageStore().save(new io.github.lightrag.storage.TaskStageStore.TaskStageRecord(
+                        "task-1",
+                        TaskStage.PREPARING,
+                        TaskStageStatus.RUNNING,
+                        1,
+                        java.time.Instant.parse("2026-04-09T00:00:01Z"),
+                        null,
+                        "starting",
+                        null
+                    ));
+                    return null;
+                });
+
+                assertThat(adapter.taskStore().load("task-1")).isPresent();
+                assertThat(adapter.taskStageStore().listByTask("task-1"))
+                    .extracting(io.github.lightrag.storage.TaskStageStore.TaskStageRecord::stage)
+                    .containsExactly(TaskStage.PREPARING);
             }
         }
     }

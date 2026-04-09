@@ -89,7 +89,10 @@ public final class MySqlSchemaManager {
     }
 
     private List<Migration> migrations() {
-        return List.of(new Migration(1, versionOneStatements()));
+        return List.of(
+            new Migration(1, versionOneStatements()),
+            new Migration(2, versionTwoStatements())
+        );
     }
 
     private int latestSchemaVersion() {
@@ -137,6 +140,41 @@ public final class MySqlSchemaManager {
                     PRIMARY KEY (workspace_id, document_id)
                 )
                 """.formatted(config.qualifiedTableName("document_status"))
+        );
+    }
+
+    private List<String> versionTwoStatements() {
+        return List.of(
+            """
+                CREATE TABLE IF NOT EXISTS %s (
+                    workspace_id VARCHAR(191) NOT NULL,
+                    task_id VARCHAR(191) NOT NULL,
+                    task_type VARCHAR(64) NOT NULL,
+                    status VARCHAR(64) NOT NULL,
+                    requested_at TIMESTAMP NOT NULL,
+                    started_at TIMESTAMP NULL,
+                    finished_at TIMESTAMP NULL,
+                    summary TEXT NOT NULL,
+                    error_message TEXT NULL,
+                    cancel_requested BOOLEAN NOT NULL DEFAULT FALSE,
+                    metadata LONGTEXT NOT NULL,
+                    PRIMARY KEY (workspace_id, task_id)
+                )
+                """.formatted(config.qualifiedTableName("task")),
+            """
+                CREATE TABLE IF NOT EXISTS %s (
+                    workspace_id VARCHAR(191) NOT NULL,
+                    task_id VARCHAR(191) NOT NULL,
+                    stage VARCHAR(64) NOT NULL,
+                    status VARCHAR(64) NOT NULL,
+                    sequence INT NOT NULL,
+                    started_at TIMESTAMP NULL,
+                    finished_at TIMESTAMP NULL,
+                    message TEXT NOT NULL,
+                    error_message TEXT NULL,
+                    PRIMARY KEY (workspace_id, task_id, stage)
+                )
+                """.formatted(config.qualifiedTableName("task_stage"))
         );
     }
 

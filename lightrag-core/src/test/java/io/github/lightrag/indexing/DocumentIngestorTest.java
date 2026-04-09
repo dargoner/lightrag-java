@@ -6,7 +6,11 @@ import io.github.lightrag.storage.DocumentStore;
 import io.github.lightrag.storage.DocumentStatusStore;
 import io.github.lightrag.storage.AtomicStorageProvider;
 import io.github.lightrag.storage.InMemoryStorageProvider;
+import io.github.lightrag.storage.TaskStageStore;
+import io.github.lightrag.storage.TaskStore;
 import io.github.lightrag.storage.memory.InMemoryDocumentStatusStore;
+import io.github.lightrag.storage.memory.InMemoryTaskStageStore;
+import io.github.lightrag.storage.memory.InMemoryTaskStore;
 import io.github.lightrag.storage.postgres.PostgresStorageConfig;
 import io.github.lightrag.storage.postgres.PostgresStorageProvider;
 import io.github.lightrag.types.Chunk;
@@ -397,6 +401,8 @@ class DocumentIngestorTest {
         private final AtomicTestDocumentStore documentStore = new AtomicTestDocumentStore();
         private final AtomicTestChunkStore chunkStore = new AtomicTestChunkStore();
         private final DocumentStatusStore documentStatusStore = new InMemoryDocumentStatusStore();
+        private final TaskStore taskStore = new InMemoryTaskStore();
+        private final TaskStageStore taskStageStore = new InMemoryTaskStageStore();
         private DocumentStore.DocumentRecord documentToInsertBeforeWrite;
 
         @Override
@@ -422,6 +428,16 @@ class DocumentIngestorTest {
         @Override
         public DocumentStatusStore documentStatusStore() {
             return documentStatusStore;
+        }
+
+        @Override
+        public TaskStore taskStore() {
+            return taskStore;
+        }
+
+        @Override
+        public TaskStageStore taskStageStore() {
+            return taskStageStore;
         }
 
         @Override

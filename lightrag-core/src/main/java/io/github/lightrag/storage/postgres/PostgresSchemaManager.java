@@ -98,7 +98,8 @@ public final class PostgresSchemaManager {
 
     private List<Migration> migrations() {
         return List.of(
-            new Migration(3, versionThreeStatements())
+            new Migration(3, versionThreeStatements()),
+            new Migration(4, versionFourStatements())
         );
     }
 
@@ -207,6 +208,41 @@ public final class PostgresSchemaManager {
                     PRIMARY KEY (workspace_id, document_id)
                 )
                 """.formatted(config.qualifiedTableName("document_status"))
+        );
+    }
+
+    private List<String> versionFourStatements() {
+        return List.of(
+            """
+                CREATE TABLE IF NOT EXISTS %s (
+                    workspace_id TEXT NOT NULL,
+                    task_id TEXT NOT NULL,
+                    task_type TEXT NOT NULL,
+                    status TEXT NOT NULL,
+                    requested_at TIMESTAMPTZ NOT NULL,
+                    started_at TIMESTAMPTZ NULL,
+                    finished_at TIMESTAMPTZ NULL,
+                    summary TEXT NOT NULL DEFAULT '',
+                    error_message TEXT NULL,
+                    cancel_requested BOOLEAN NOT NULL DEFAULT FALSE,
+                    metadata JSONB NOT NULL DEFAULT '{}'::jsonb,
+                    PRIMARY KEY (workspace_id, task_id)
+                )
+                """.formatted(config.qualifiedTableName("task")),
+            """
+                CREATE TABLE IF NOT EXISTS %s (
+                    workspace_id TEXT NOT NULL,
+                    task_id TEXT NOT NULL,
+                    stage TEXT NOT NULL,
+                    status TEXT NOT NULL,
+                    sequence INTEGER NOT NULL,
+                    started_at TIMESTAMPTZ NULL,
+                    finished_at TIMESTAMPTZ NULL,
+                    message TEXT NOT NULL DEFAULT '',
+                    error_message TEXT NULL,
+                    PRIMARY KEY (workspace_id, task_id, stage)
+                )
+                """.formatted(config.qualifiedTableName("task_stage"))
         );
     }
 

@@ -72,6 +72,8 @@ class PostgresStorageProviderTest {
                     "rag_relations",
                     "rag_relation_chunks",
                     "rag_schema_version",
+                    "rag_task",
+                    "rag_task_stage",
                     "rag_vectors"
                 );
                 assertThat(columnNames(connection, config, "documents")).contains("workspace_id");
@@ -80,6 +82,8 @@ class PostgresStorageProviderTest {
                 assertThat(columnNames(connection, config, "relations")).contains("workspace_id");
                 assertThat(columnNames(connection, config, "vectors")).contains("workspace_id");
                 assertThat(columnNames(connection, config, "document_status")).contains("workspace_id");
+                assertThat(columnNames(connection, config, "task")).contains("workspace_id");
+                assertThat(columnNames(connection, config, "task_stage")).contains("workspace_id");
                 assertThat(primaryKeyColumns(connection, config, "documents")).containsExactly("workspace_id", "id");
                 assertThat(primaryKeyColumns(connection, config, "chunks")).containsExactly("workspace_id", "id");
                 assertThat(primaryKeyColumns(connection, config, "entities")).containsExactly("workspace_id", "id");
@@ -88,7 +92,11 @@ class PostgresStorageProviderTest {
                     .containsExactly("workspace_id", "namespace", "vector_id");
                 assertThat(primaryKeyColumns(connection, config, "document_status"))
                     .containsExactly("workspace_id", "document_id");
-                assertThat(schemaVersion(connection, config)).contains(3);
+                assertThat(primaryKeyColumns(connection, config, "task"))
+                    .containsExactly("workspace_id", "task_id");
+                assertThat(primaryKeyColumns(connection, config, "task_stage"))
+                    .containsExactly("workspace_id", "task_id", "stage");
+                assertThat(schemaVersion(connection, config)).contains(4);
             }
         }
     }
@@ -206,7 +214,7 @@ class PostgresStorageProviderTest {
                 .isInstanceOf(IllegalStateException.class)
                 .hasMessageContaining("schema version")
                 .hasMessageContaining("999")
-                .hasMessageContaining("3");
+                .hasMessageContaining("4");
         }
     }
 
@@ -235,7 +243,7 @@ class PostgresStorageProviderTest {
                 )) {
                     connection.createStatement().execute("DROP TABLE " + config.qualifiedTableName("documents"));
                     assertThat(existingTables(connection, config.schema())).doesNotContain("rag_documents");
-                    assertThat(schemaVersion(connection, config)).contains(3);
+                    assertThat(schemaVersion(connection, config)).contains(4);
                 }
             }
 
@@ -249,7 +257,9 @@ class PostgresStorageProviderTest {
             ) {
                 assertThat(existingTables(connection, config.schema())).contains("rag_documents");
                 assertThat(existingTables(connection, config.schema())).contains("rag_document_status");
-                assertThat(schemaVersion(connection, config)).contains(3);
+                assertThat(existingTables(connection, config.schema())).contains("rag_task");
+                assertThat(existingTables(connection, config.schema())).contains("rag_task_stage");
+                assertThat(schemaVersion(connection, config)).contains(4);
             }
         }
     }

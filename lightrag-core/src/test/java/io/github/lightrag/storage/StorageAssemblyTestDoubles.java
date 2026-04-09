@@ -4,6 +4,8 @@ import io.github.lightrag.storage.memory.InMemoryChunkStore;
 import io.github.lightrag.storage.memory.InMemoryDocumentStatusStore;
 import io.github.lightrag.storage.memory.InMemoryDocumentStore;
 import io.github.lightrag.storage.memory.InMemoryGraphStore;
+import io.github.lightrag.storage.memory.InMemoryTaskStageStore;
+import io.github.lightrag.storage.memory.InMemoryTaskStore;
 import io.github.lightrag.storage.memory.InMemoryVectorStore;
 
 import java.nio.file.Path;
@@ -20,6 +22,8 @@ public final class StorageAssemblyTestDoubles {
         private final InMemoryDocumentStore documentStore = new InMemoryDocumentStore();
         private final InMemoryChunkStore chunkStore = new InMemoryChunkStore();
         private final InMemoryDocumentStatusStore documentStatusStore = new InMemoryDocumentStatusStore();
+        private final InMemoryTaskStore taskStore = new InMemoryTaskStore();
+        private final InMemoryTaskStageStore taskStageStore = new InMemoryTaskStageStore();
         private final SnapshotStore snapshotStore = new NoopSnapshotStore();
         private int restoreCount;
 
@@ -36,6 +40,16 @@ public final class StorageAssemblyTestDoubles {
         @Override
         public DocumentStatusStore documentStatusStore() {
             return documentStatusStore;
+        }
+
+        @Override
+        public TaskStore taskStore() {
+            return taskStore;
+        }
+
+        @Override
+        public TaskStageStore taskStageStore() {
+            return taskStageStore;
         }
 
         @Override
@@ -79,6 +93,16 @@ public final class StorageAssemblyTestDoubles {
                 @Override
                 public DocumentStatusStore documentStatusStore() {
                     return documentStatusStore;
+                }
+
+                @Override
+                public TaskStore taskStore() {
+                    return taskStore;
+                }
+
+                @Override
+                public TaskStageStore taskStageStore() {
+                    return taskStageStore;
                 }
             });
         }

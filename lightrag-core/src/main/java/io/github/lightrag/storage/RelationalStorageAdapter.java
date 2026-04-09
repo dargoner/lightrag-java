@@ -9,6 +9,10 @@ public interface RelationalStorageAdapter extends AutoCloseable {
 
     DocumentStatusStore documentStatusStore();
 
+    TaskStore taskStore();
+
+    TaskStageStore taskStageStore();
+
     SnapshotStore snapshotStore();
 
     SnapshotStore.Snapshot captureSnapshot();
@@ -34,6 +38,14 @@ public interface RelationalStorageAdapter extends AutoCloseable {
         ChunkStore chunkStore();
 
         DocumentStatusStore documentStatusStore();
+
+        default TaskStore taskStore() {
+            throw new UnsupportedOperationException("taskStore is not available in relational transaction view");
+        }
+
+        default TaskStageStore taskStageStore() {
+            throw new UnsupportedOperationException("taskStageStore is not available in relational transaction view");
+        }
 
         default Optional<GraphStore> transactionalGraphStore() {
             return Optional.empty();
