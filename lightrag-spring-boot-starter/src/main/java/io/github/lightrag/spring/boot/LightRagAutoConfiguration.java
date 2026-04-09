@@ -30,24 +30,32 @@ import io.github.lightrag.storage.postgres.PostgresMilvusNeo4jStorageProvider;
 import io.github.lightrag.storage.postgres.PostgresStorageConfig;
 import io.github.lightrag.storage.postgres.PostgresStorageProvider;
 import org.springframework.beans.factory.ObjectProvider;
+import org.springframework.beans.factory.ListableBeanFactory;
 import org.springframework.boot.autoconfigure.AutoConfiguration;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnClass;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnExpression;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnMissingBean;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.boot.context.properties.EnableConfigurationProperties;
+import org.springframework.context.annotation.Condition;
 import org.springframework.context.annotation.Bean;
+import org.springframework.context.annotation.Conditional;
+import org.springframework.context.annotation.ConditionContext;
+import org.springframework.core.type.AnnotatedTypeMetadata;
 
 import javax.sql.DataSource;
 import java.sql.SQLException;
+import java.util.Arrays;
 import java.util.Locale;
+import java.util.Map;
+import java.util.Set;
 
 @AutoConfiguration
 @ConditionalOnClass(LightRag.class)
 @EnableConfigurationProperties(LightRagProperties.class)
 public class LightRagAutoConfiguration {
     @Bean
-    @ConditionalOnMissingBean
+    @Conditional(DefaultChatModelCondition.class)
     ChatModel chatModel(LightRagProperties properties) {
         var chat = properties.getChat();
         return new OpenAiCompatibleChatModel(
@@ -220,7 +228,7 @@ public class LightRagAutoConfiguration {
     @Bean
     @ConditionalOnMissingBean
     LightRag lightRag(
-        ChatModel chatModel,
+        Map<String, ChatModel> chatModels,
         EmbeddingModel embeddingModel,
         WorkspaceStorageProvider workspaceStorageProvider,
         ObjectProvider<Chunker> chunker,
@@ -229,12 +237,25 @@ public class LightRagAutoConfiguration {
         LightRagProperties properties
     ) {
         var query = properties.getQuery();
+        var chatModel = resolveDefaultChatModel(chatModels);
         var builder = LightRag.builder()
             .chatModel(chatModel)
             .embeddingModel(embeddingModel)
             .workspaceStorage(workspaceStorageProvider)
             .automaticQueryKeywordExtraction(query.isAutomaticKeywordExtraction())
             .rerankCandidateMultiplier(query.getRerankCandidateMultiplier());
+        var configuredQueryModel = chatModels.get("queryModel");
+        if (configuredQueryModel != null) {
+            builder.queryModel(configuredQueryModel);
+        }
+        var configuredExtractionModel = chatModels.get("extractionModel");
+        if (configuredExtractionModel != null) {
+            builder.extractionModel(configuredExtractionModel);
+        }
+        var configuredSummaryModel = chatModels.get("summaryModel");
+        if (configuredSummaryModel != null) {
+            builder.summaryModel(configuredSummaryModel);
+        }
         if (properties.getIndexing().getEmbeddingBatchSize() > 0) {
             builder.embeddingBatchSize(properties.getIndexing().getEmbeddingBatchSize());
         }
@@ -256,6 +277,44 @@ public class LightRagAutoConfiguration {
             builder.rerankModel(configuredRerankModel);
         }
         return builder.build();
+    }
+
+    private static ChatModel resolveDefaultChatModel(Map<String, ChatModel> chatModels) {
+        var namedDefault = chatModels.get("chatModel");
+        if (namedDefault != null) {
+            return namedDefault;
+        }
+        var candidates = chatModels.entrySet().stream()
+            .filter(entry -> !DefaultChatModelCondition.DEDICATED_CHAT_MODEL_BEANS.contains(entry.getKey()))
+            .map(Map.Entry::getValue)
+            .distinct()
+            .toList();
+        if (candidates.size() == 1) {
+            return candidates.get(0);
+        }
+        throw new IllegalStateException(
+            "No default ChatModel bean is available; declare a bean named 'chatModel' when multiple ChatModel beans exist"
+        );
+    }
+
+    static final class DefaultChatModelCondition implements Condition {
+        private static final Set<String> DEDICATED_CHAT_MODEL_BEANS = Set.of("queryModel", "extractionModel", "summaryModel");
+
+        @Override
+        public boolean matches(ConditionContext context, AnnotatedTypeMetadata metadata) {
+            var beanFactory = context.getBeanFactory();
+            if (beanFactory == null) {
+                return true;
+            }
+            var chatModelBeans = beanFactory.getBeanNamesForType(ChatModel.class);
+            if (chatModelBeans.length == 0) {
+                return true;
+            }
+            if (Arrays.stream(chatModelBeans).anyMatch("chatModel"::equals)) {
+                return false;
+            }
+            return Arrays.stream(chatModelBeans).allMatch(DEDICATED_CHAT_MODEL_BEANS::contains);
+        }
     }
 
     private static PostgresStorageConfig postgresConfig(LightRagProperties properties, DataSource dataSource) {

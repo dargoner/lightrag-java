@@ -84,6 +84,69 @@ class LightRagAutoConfigurationTest {
     }
 
     @Test
+    void usesDedicatedCapabilityChatModelBeansWhenPresent() {
+        contextRunner
+            .withUserConfiguration(DedicatedCapabilityModelConfiguration.class)
+            .run(context -> {
+                var lightRag = context.getBean(LightRag.class);
+                var config = (io.github.lightrag.config.LightRagConfig) extractField(lightRag, "config");
+
+                assertThat(config.queryModel()).isSameAs(context.getBean("queryModel", ChatModel.class));
+                assertThat(config.extractionModel()).isSameAs(context.getBean("extractionModel", ChatModel.class));
+                assertThat(config.summaryModel()).isSameAs(context.getBean("summaryModel", ChatModel.class));
+            });
+    }
+
+    @Test
+    void fallsBackDedicatedCapabilityBeansToDefaultChatModelBean() {
+        contextRunner
+            .withUserConfiguration(TestModelConfiguration.class)
+            .run(context -> {
+                var lightRag = context.getBean(LightRag.class);
+                var config = (io.github.lightrag.config.LightRagConfig) extractField(lightRag, "config");
+                var defaultChatModel = context.getBean(ChatModel.class);
+
+                assertThat(config.queryModel()).isSameAs(defaultChatModel);
+                assertThat(config.extractionModel()).isSameAs(defaultChatModel);
+                assertThat(config.summaryModel()).isSameAs(defaultChatModel);
+            });
+    }
+
+    @Test
+    void stillAutoConfiguresDefaultChatModelWhenOnlyDedicatedCapabilityBeansAreProvided() {
+        contextRunner
+            .withUserConfiguration(DedicatedCapabilityOnlyConfiguration.class)
+            .run(context -> {
+                var lightRag = context.getBean(LightRag.class);
+                var config = (io.github.lightrag.config.LightRagConfig) extractField(lightRag, "config");
+                var defaultChatModel = context.getBean("chatModel", ChatModel.class);
+
+                assertThat(defaultChatModel).isInstanceOf(OpenAiCompatibleChatModel.class);
+                assertThat(config.defaultChatModel()).isSameAs(defaultChatModel);
+                assertThat(config.queryModel()).isSameAs(context.getBean("queryModel", ChatModel.class));
+                assertThat(config.extractionModel()).isSameAs(context.getBean("extractionModel", ChatModel.class));
+                assertThat(config.summaryModel()).isSameAs(context.getBean("summaryModel", ChatModel.class));
+            });
+    }
+
+    @Test
+    void usesSingleCustomDefaultChatModelBeanEvenWhenBeanNameDiffers() {
+        contextRunner
+            .withUserConfiguration(CustomNamedDefaultChatModelConfiguration.class)
+            .run(context -> {
+                var lightRag = context.getBean(LightRag.class);
+                var config = (io.github.lightrag.config.LightRagConfig) extractField(lightRag, "config");
+                var defaultChatModel = context.getBean("customDefaultChatModel", ChatModel.class);
+
+                assertThat(context.getBeansOfType(ChatModel.class)).hasSize(1);
+                assertThat(config.defaultChatModel()).isSameAs(defaultChatModel);
+                assertThat(config.queryModel()).isSameAs(defaultChatModel);
+                assertThat(config.extractionModel()).isSameAs(defaultChatModel);
+                assertThat(config.summaryModel()).isSameAs(defaultChatModel);
+            });
+    }
+
+    @Test
     void bindsPipelineWorkspaceAndDemoDefaults() {
         contextRunner.run(context -> {
             var properties = context.getBean(LightRagProperties.class);
@@ -727,6 +790,62 @@ class LightRagAutoConfigurationTest {
             return texts -> texts.stream()
                 .map(text -> List.of((double) text.length()))
                 .toList();
+        }
+    }
+
+    @Configuration(proxyBeanMethods = false)
+    static class DedicatedCapabilityModelConfiguration {
+        @Bean
+        ChatModel chatModel() {
+            return request -> "default";
+        }
+
+        @Bean("queryModel")
+        ChatModel queryModel() {
+            return request -> "query";
+        }
+
+        @Bean("extractionModel")
+        ChatModel extractionModel() {
+            return request -> "{\"entities\":[],\"relations\":[]}";
+        }
+
+        @Bean("summaryModel")
+        ChatModel summaryModel() {
+            return request -> "summary";
+        }
+
+        @Bean
+        EmbeddingModel embeddingModel() {
+            return texts -> texts.stream()
+                .map(text -> List.of((double) text.length()))
+                .toList();
+        }
+    }
+
+    @Configuration(proxyBeanMethods = false)
+    static class DedicatedCapabilityOnlyConfiguration {
+        @Bean("queryModel")
+        ChatModel queryModel() {
+            return request -> "query";
+        }
+
+        @Bean("extractionModel")
+        ChatModel extractionModel() {
+            return request -> "{\"entities\":[],\"relations\":[]}";
+        }
+
+        @Bean("summaryModel")
+        ChatModel summaryModel() {
+            return request -> "summary";
+        }
+    }
+
+    @Configuration(proxyBeanMethods = false)
+    static class CustomNamedDefaultChatModelConfiguration {
+        @Bean("customDefaultChatModel")
+        ChatModel customDefaultChatModel() {
+            return request -> "custom-default";
         }
     }
 
