@@ -266,7 +266,8 @@ public final class LightRag implements AutoCloseable {
 
     private IndexingPipeline newIndexingPipeline(AtomicStorageProvider storageProvider) {
         return new IndexingPipeline(
-            config.chatModel(),
+            config.extractionModel(),
+            config.summaryModel(),
             config.embeddingModel(),
             storageProvider,
             config.snapshotPath(),
@@ -311,7 +312,7 @@ public final class LightRag implements AutoCloseable {
         strategies.put(QueryMode.HYBRID, hybrid);
         strategies.put(QueryMode.MIX, mix);
         return new QueryEngine(
-            config.chatModel(),
+            config.queryModel(),
             contextAssembler,
             strategies,
             config.rerankModel(),

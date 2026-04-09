@@ -35,6 +35,8 @@ public final class IndexingPipeline {
     private final AtomicStorageProvider storageProvider;
     private final DocumentIngestor documentIngestor;
     private final KnowledgeExtractor knowledgeExtractor;
+    // Reserved for upcoming summarization stages so capability routing stays centralized.
+    private final ChatModel summaryModel;
     private final GraphAssembler graphAssembler;
     private final EmbeddingBatcher embeddingBatcher;
     private final DocumentParsingOrchestrator documentParsingOrchestrator;
@@ -48,6 +50,42 @@ public final class IndexingPipeline {
 
     public IndexingPipeline(
         ChatModel chatModel,
+        EmbeddingModel embeddingModel,
+        AtomicStorageProvider storageProvider,
+        Path snapshotPath,
+        Chunker chunker,
+        DocumentParsingOrchestrator documentParsingOrchestrator,
+        int embeddingBatchSize,
+        int maxParallelInsert,
+        int entityExtractMaxGleaning,
+        int maxExtractInputTokens,
+        String entityExtractionLanguage,
+        List<String> entityTypes,
+        boolean embeddingSemanticMergeEnabled,
+        double embeddingSemanticMergeThreshold
+    ) {
+        this(
+            chatModel,
+            chatModel,
+            embeddingModel,
+            storageProvider,
+            snapshotPath,
+            chunker,
+            documentParsingOrchestrator,
+            embeddingBatchSize,
+            maxParallelInsert,
+            entityExtractMaxGleaning,
+            maxExtractInputTokens,
+            entityExtractionLanguage,
+            entityTypes,
+            embeddingSemanticMergeEnabled,
+            embeddingSemanticMergeThreshold
+        );
+    }
+
+    public IndexingPipeline(
+        ChatModel extractionModel,
+        ChatModel summaryModel,
         EmbeddingModel embeddingModel,
         AtomicStorageProvider storageProvider,
         Path snapshotPath,
@@ -86,8 +124,9 @@ public final class IndexingPipeline {
             chunkPreparationStrategy(effectiveChunker, embeddingSemanticMergeEnabled, embeddingSemanticMergeThreshold),
             new ChunkingOrchestrator()
         );
+        this.summaryModel = Objects.requireNonNull(summaryModel, "summaryModel");
         this.knowledgeExtractor = new KnowledgeExtractor(
-            Objects.requireNonNull(chatModel, "chatModel"),
+            Objects.requireNonNull(extractionModel, "extractionModel"),
             this.entityExtractMaxGleaning,
             this.maxExtractInputTokens,
             this.entityExtractionLanguage,
@@ -107,6 +146,23 @@ public final class IndexingPipeline {
     ) {
         this(
             chatModel,
+            chatModel,
+            embeddingModel,
+            storageProvider,
+            snapshotPath
+        );
+    }
+
+    public IndexingPipeline(
+        ChatModel extractionModel,
+        ChatModel summaryModel,
+        EmbeddingModel embeddingModel,
+        AtomicStorageProvider storageProvider,
+        Path snapshotPath
+    ) {
+        this(
+            extractionModel,
+            summaryModel,
             embeddingModel,
             storageProvider,
             snapshotPath,

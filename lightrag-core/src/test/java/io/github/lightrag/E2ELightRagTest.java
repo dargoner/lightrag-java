@@ -76,6 +76,31 @@ class E2ELightRagTest {
     }
 
     @Test
+    void usesDedicatedQueryAndExtractionModels() {
+        var storage = InMemoryStorageProvider.create();
+        var queryModel = new QueryOnlyChatModel("query-answer");
+        var extractionModel = new CountingExtractionChatModel();
+        var rag = LightRag.builder()
+            .chatModel(new DefaultChatModel("default-answer"))
+            .queryModel(queryModel)
+            .extractionModel(extractionModel)
+            .embeddingModel(new FakeEmbeddingModel())
+            .storage(storage)
+            .build();
+
+        rag.ingest(WORKSPACE, List.of(new Document("doc-1", "Title", "Alice works with Bob", Map.of())));
+        var extractionInvocationsAfterIngest = extractionModel.invocationCount();
+        var result = rag.query(WORKSPACE, QueryRequest.builder()
+            .query("Who works with Bob?")
+            .build());
+
+        assertThat(extractionInvocationsAfterIngest).isGreaterThan(0);
+        assertThat(extractionModel.invocationCount()).isEqualTo(extractionInvocationsAfterIngest);
+        assertThat(queryModel.lastPrompt()).contains("Who works with Bob?");
+        assertThat(result.answer()).isEqualTo("query-answer");
+    }
+
+    @Test
     void ingestPersistsSnapshotWhenConfigured() {
         var storage = InMemoryStorageProvider.create(new FileSnapshotStore());
         var snapshotPath = tempDir.resolve("doc-1.snapshot.json");
@@ -3065,6 +3090,64 @@ class E2ELightRagTest {
 
         int keywordExtractionCallCount() {
             return keywordExtractionCallCount;
+        }
+    }
+
+    private static final class DefaultChatModel implements ChatModel {
+        private final String queryAnswer;
+
+        private DefaultChatModel(String queryAnswer) {
+            this.queryAnswer = queryAnswer;
+        }
+
+        @Override
+        public String generate(ChatRequest request) {
+            if (isRetrievalPrompt(request)) {
+                return queryAnswer;
+            }
+            return new FakeChatModel().generate(request);
+        }
+    }
+
+    private static final class QueryOnlyChatModel implements ChatModel {
+        private final String answer;
+        private String lastPrompt;
+
+        private QueryOnlyChatModel(String answer) {
+            this.answer = answer;
+        }
+
+        @Override
+        public String generate(ChatRequest request) {
+            if (isKeywordExtractionPrompt(request)) {
+                return keywordExtractionResponse(request.userPrompt());
+            }
+            if (!isRetrievalPrompt(request)) {
+                throw new IllegalStateException("query model should not be used outside query flow");
+            }
+            lastPrompt = request.userPrompt();
+            return answer;
+        }
+
+        String lastPrompt() {
+            return lastPrompt;
+        }
+    }
+
+    private static final class CountingExtractionChatModel implements ChatModel {
+        private int invocationCount;
+
+        @Override
+        public String generate(ChatRequest request) {
+            if (isRetrievalPrompt(request)) {
+                throw new IllegalStateException("extraction model should not be used for query");
+            }
+            invocationCount++;
+            return new FakeChatModel().generate(request);
+        }
+
+        int invocationCount() {
+            return invocationCount;
         }
     }
 
