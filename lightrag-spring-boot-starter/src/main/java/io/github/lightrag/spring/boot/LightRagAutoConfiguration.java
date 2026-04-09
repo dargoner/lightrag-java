@@ -30,7 +30,7 @@ import io.github.lightrag.storage.postgres.PostgresMilvusNeo4jStorageProvider;
 import io.github.lightrag.storage.postgres.PostgresStorageConfig;
 import io.github.lightrag.storage.postgres.PostgresStorageProvider;
 import org.springframework.beans.factory.ObjectProvider;
-import org.springframework.beans.factory.ListableBeanFactory;
+import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.boot.autoconfigure.AutoConfiguration;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnClass;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnExpression;
@@ -47,7 +47,6 @@ import javax.sql.DataSource;
 import java.sql.SQLException;
 import java.util.Arrays;
 import java.util.Locale;
-import java.util.Map;
 import java.util.Set;
 
 @AutoConfiguration
@@ -228,31 +227,35 @@ public class LightRagAutoConfiguration {
     @Bean
     @ConditionalOnMissingBean
     LightRag lightRag(
-        Map<String, ChatModel> chatModels,
+        ObjectProvider<ChatModel> chatModelProvider,
+        @Qualifier("chatModel") ObjectProvider<ChatModel> defaultChatModelProvider,
         EmbeddingModel embeddingModel,
         WorkspaceStorageProvider workspaceStorageProvider,
+        @Qualifier("queryModel") ObjectProvider<ChatModel> queryModelProvider,
+        @Qualifier("extractionModel") ObjectProvider<ChatModel> extractionModelProvider,
+        @Qualifier("summaryModel") ObjectProvider<ChatModel> summaryModelProvider,
         ObjectProvider<Chunker> chunker,
         ObjectProvider<DocumentParsingOrchestrator> documentParsingOrchestrator,
         ObjectProvider<RerankModel> rerankModel,
         LightRagProperties properties
     ) {
         var query = properties.getQuery();
-        var chatModel = resolveDefaultChatModel(chatModels);
+        var chatModel = resolveDefaultChatModel(defaultChatModelProvider, chatModelProvider);
         var builder = LightRag.builder()
             .chatModel(chatModel)
             .embeddingModel(embeddingModel)
             .workspaceStorage(workspaceStorageProvider)
             .automaticQueryKeywordExtraction(query.isAutomaticKeywordExtraction())
             .rerankCandidateMultiplier(query.getRerankCandidateMultiplier());
-        var configuredQueryModel = chatModels.get("queryModel");
+        var configuredQueryModel = queryModelProvider.getIfAvailable();
         if (configuredQueryModel != null) {
             builder.queryModel(configuredQueryModel);
         }
-        var configuredExtractionModel = chatModels.get("extractionModel");
+        var configuredExtractionModel = extractionModelProvider.getIfAvailable();
         if (configuredExtractionModel != null) {
             builder.extractionModel(configuredExtractionModel);
         }
-        var configuredSummaryModel = chatModels.get("summaryModel");
+        var configuredSummaryModel = summaryModelProvider.getIfAvailable();
         if (configuredSummaryModel != null) {
             builder.summaryModel(configuredSummaryModel);
         }
@@ -279,21 +282,17 @@ public class LightRagAutoConfiguration {
         return builder.build();
     }
 
-    private static ChatModel resolveDefaultChatModel(Map<String, ChatModel> chatModels) {
-        var namedDefault = chatModels.get("chatModel");
+    private static ChatModel resolveDefaultChatModel(
+        ObjectProvider<ChatModel> defaultChatModelProvider,
+        ObjectProvider<ChatModel> chatModelProvider
+    ) {
+        var namedDefault = defaultChatModelProvider.getIfAvailable();
         if (namedDefault != null) {
             return namedDefault;
         }
-        var candidates = chatModels.entrySet().stream()
-            .filter(entry -> !DefaultChatModelCondition.DEDICATED_CHAT_MODEL_BEANS.contains(entry.getKey()))
-            .map(Map.Entry::getValue)
-            .distinct()
-            .toList();
-        if (candidates.size() == 1) {
-            return candidates.get(0);
-        }
-        throw new IllegalStateException(
-            "No default ChatModel bean is available; declare a bean named 'chatModel' when multiple ChatModel beans exist"
+        return requireValue(
+            chatModelProvider.getIfAvailable(),
+            "No default ChatModel bean is available; declare a bean named 'chatModel' or mark one ChatModel as @Primary"
         );
     }
 

@@ -24,6 +24,7 @@ import io.github.lightrag.types.RawDocumentSource;
 import org.junit.jupiter.api.Test;
 import org.springframework.boot.autoconfigure.AutoConfigurations;
 import org.springframework.boot.test.context.TestConfiguration;
+import org.springframework.context.annotation.Primary;
 import org.springframework.boot.test.context.runner.ApplicationContextRunner;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
@@ -143,6 +144,22 @@ class LightRagAutoConfigurationTest {
                 assertThat(config.queryModel()).isSameAs(defaultChatModel);
                 assertThat(config.extractionModel()).isSameAs(defaultChatModel);
                 assertThat(config.summaryModel()).isSameAs(defaultChatModel);
+            });
+    }
+
+    @Test
+    void honorsPrimaryCustomDefaultChatModelWhenDedicatedCapabilityBeansAlsoExist() {
+        contextRunner
+            .withUserConfiguration(PrimaryDefaultAndDedicatedCapabilityConfiguration.class)
+            .run(context -> {
+                var lightRag = context.getBean(LightRag.class);
+                var config = (io.github.lightrag.config.LightRagConfig) extractField(lightRag, "config");
+                var defaultChatModel = context.getBean("customDefaultChatModel", ChatModel.class);
+
+                assertThat(config.defaultChatModel()).isSameAs(defaultChatModel);
+                assertThat(config.queryModel()).isSameAs(context.getBean("queryModel", ChatModel.class));
+                assertThat(config.extractionModel()).isSameAs(context.getBean("extractionModel", ChatModel.class));
+                assertThat(config.summaryModel()).isSameAs(context.getBean("summaryModel", ChatModel.class));
             });
     }
 
@@ -846,6 +863,30 @@ class LightRagAutoConfigurationTest {
         @Bean("customDefaultChatModel")
         ChatModel customDefaultChatModel() {
             return request -> "custom-default";
+        }
+    }
+
+    @Configuration(proxyBeanMethods = false)
+    static class PrimaryDefaultAndDedicatedCapabilityConfiguration {
+        @Bean("customDefaultChatModel")
+        @Primary
+        ChatModel customDefaultChatModel() {
+            return request -> "custom-default";
+        }
+
+        @Bean("queryModel")
+        ChatModel queryModel() {
+            return request -> "query";
+        }
+
+        @Bean("extractionModel")
+        ChatModel extractionModel() {
+            return request -> "{\"entities\":[],\"relations\":[]}";
+        }
+
+        @Bean("summaryModel")
+        ChatModel summaryModel() {
+            return request -> "summary";
         }
     }
 
