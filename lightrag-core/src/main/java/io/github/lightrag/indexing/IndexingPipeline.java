@@ -1,6 +1,13 @@
 package io.github.lightrag.indexing;
 
 import io.github.lightrag.api.DocumentStatus;
+import io.github.lightrag.indexing.refinement.DefaultAttributionResolver;
+import io.github.lightrag.indexing.refinement.DefaultExtractionGapDetector;
+import io.github.lightrag.indexing.refinement.DefaultExtractionMergePolicy;
+import io.github.lightrag.indexing.refinement.DefaultRefinementWindowResolver;
+import io.github.lightrag.indexing.refinement.ExtractionRefinementOptions;
+import io.github.lightrag.indexing.refinement.ExtractionRefinementPipeline;
+import io.github.lightrag.indexing.refinement.PrimaryChunkExtraction;
 import io.github.lightrag.model.ChatModel;
 import io.github.lightrag.model.EmbeddingModel;
 import io.github.lightrag.storage.AtomicStorageProvider;
@@ -39,6 +46,7 @@ public final class IndexingPipeline {
     private final ChatModel summaryModel;
     private final GraphAssembler graphAssembler;
     private final EmbeddingBatcher embeddingBatcher;
+    private final ExtractionRefinementPipeline extractionRefinementPipeline;
     private final DocumentParsingOrchestrator documentParsingOrchestrator;
     private final Path snapshotPath;
     private final int maxParallelInsert;
@@ -46,6 +54,7 @@ public final class IndexingPipeline {
     private final int maxExtractInputTokens;
     private final String entityExtractionLanguage;
     private final List<String> entityTypes;
+    private final ExtractionRefinementOptions extractionRefinementOptions;
     private final Object storageMutationMonitor = new Object();
 
     public IndexingPipeline(
@@ -62,7 +71,8 @@ public final class IndexingPipeline {
         String entityExtractionLanguage,
         List<String> entityTypes,
         boolean embeddingSemanticMergeEnabled,
-        double embeddingSemanticMergeThreshold
+        double embeddingSemanticMergeThreshold,
+        ExtractionRefinementOptions extractionRefinementOptions
     ) {
         this(
             chatModel,
@@ -79,7 +89,8 @@ public final class IndexingPipeline {
             entityExtractionLanguage,
             entityTypes,
             embeddingSemanticMergeEnabled,
-            embeddingSemanticMergeThreshold
+            embeddingSemanticMergeThreshold,
+            extractionRefinementOptions
         );
     }
 
@@ -98,7 +109,8 @@ public final class IndexingPipeline {
         String entityExtractionLanguage,
         List<String> entityTypes,
         boolean embeddingSemanticMergeEnabled,
-        double embeddingSemanticMergeThreshold
+        double embeddingSemanticMergeThreshold,
+        ExtractionRefinementOptions extractionRefinementOptions
     ) {
         this.storageProvider = Objects.requireNonNull(storageProvider, "storageProvider");
         this.snapshotPath = snapshotPath;
@@ -114,6 +126,9 @@ public final class IndexingPipeline {
         this.entityTypes = entityTypes == null || entityTypes.isEmpty()
             ? KnowledgeExtractor.DEFAULT_ENTITY_TYPES
             : List.copyOf(entityTypes);
+        this.extractionRefinementOptions = extractionRefinementOptions == null
+            ? ExtractionRefinementOptions.disabled()
+            : extractionRefinementOptions;
         this.embeddingBatcher = new EmbeddingBatcher(Objects.requireNonNull(embeddingModel, "embeddingModel"), effectiveEmbeddingBatchSize);
         var effectiveChunker = chunker == null
             ? new FixedWindowChunker(FixedWindowChunker.DEFAULT_WINDOW_SIZE, FixedWindowChunker.DEFAULT_OVERLAP)
@@ -130,9 +145,18 @@ public final class IndexingPipeline {
             this.entityExtractMaxGleaning,
             this.maxExtractInputTokens,
             this.entityExtractionLanguage,
-            this.entityTypes
+            this.entityTypes,
+            this.extractionRefinementOptions.allowDeterministicAttributionFallback()
         );
         this.graphAssembler = new GraphAssembler();
+        this.extractionRefinementPipeline = new ExtractionRefinementPipeline(
+            this.extractionRefinementOptions,
+            new DefaultExtractionGapDetector(),
+            new DefaultRefinementWindowResolver(),
+            (window, ignored) -> this.knowledgeExtractor.extractWindow(window),
+            new DefaultAttributionResolver(this.extractionRefinementOptions.allowDeterministicAttributionFallback()),
+            new DefaultExtractionMergePolicy()
+        );
         this.documentParsingOrchestrator = documentParsingOrchestrator == null
             ? new DocumentParsingOrchestrator(new PlainTextParsingProvider())
             : documentParsingOrchestrator;
@@ -175,7 +199,8 @@ public final class IndexingPipeline {
             KnowledgeExtractor.DEFAULT_LANGUAGE,
             KnowledgeExtractor.DEFAULT_ENTITY_TYPES,
             false,
-            0.80d
+            0.80d,
+            ExtractionRefinementOptions.disabled()
         );
     }
 
@@ -356,9 +381,7 @@ public final class IndexingPipeline {
         var prepared = documentIngestor.prepare(List.of(source));
         var chunks = prepared.chunks();
         var chunkVectors = chunkVectors(chunks);
-        var graph = graphAssembler.assemble(chunks.stream()
-            .map(chunk -> new GraphAssembler.ChunkExtraction(chunk.id(), knowledgeExtractor.extract(chunk)))
-            .toList());
+        var graph = graphAssembler.assemble(refineExtractions(chunks));
         var entityVectors = entityVectors(graph.entities());
         var relationVectors = relationVectors(graph.relations());
         return new ComputedIngest(source, prepared, chunkVectors, graph, entityVectors, relationVectors);
@@ -372,12 +395,17 @@ public final class IndexingPipeline {
         var prepared = documentIngestor.prepareParsed(source, Objects.requireNonNull(options, "options"));
         var chunks = prepared.chunks();
         var chunkVectors = chunkVectors(chunks);
-        var graph = graphAssembler.assemble(chunks.stream()
-            .map(chunk -> new GraphAssembler.ChunkExtraction(chunk.id(), knowledgeExtractor.extract(chunk)))
-            .toList());
+        var graph = graphAssembler.assemble(refineExtractions(chunks));
         var entityVectors = entityVectors(graph.entities());
         var relationVectors = relationVectors(graph.relations());
         return new ComputedIngest(toDocument(source), prepared, chunkVectors, graph, entityVectors, relationVectors);
+    }
+
+    private List<GraphAssembler.ChunkExtraction> refineExtractions(List<io.github.lightrag.types.Chunk> chunks) {
+        var primaryExtractions = chunks.stream()
+            .map(chunk -> new PrimaryChunkExtraction(chunk, knowledgeExtractor.extract(chunk)))
+            .toList();
+        return extractionRefinementPipeline.refine(primaryExtractions);
     }
 
     private static void cancelPending(Collection<? extends Future<?>> futures) {

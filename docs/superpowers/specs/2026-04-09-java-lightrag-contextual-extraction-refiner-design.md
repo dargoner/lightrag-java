@@ -803,3 +803,10 @@ public final class ExtractionRefinementPipeline {
 最终要达到的效果不是“让 chunk 变大”，而是：
 
 **保留细粒度证据单元，同时用局部上下文补齐跨 chunk 的实体关系。**
+
+## Implementation Status
+
+- Stage 1 已落地，只实现 `previous + current + next` 的相邻窗口 refinement。
+- `enabled` 和 `allowDeterministicAttributionFallback` 为 SDK 静态配置，默认关闭。
+- 窗口抽取结果会先做 chunk 归因，再回流为 per-chunk `ExtractionResult` 后进入 `GraphAssembler`。
+- section 扩窗、动态热切换和模糊归因仍保持 deferred，不在本轮实现范围内。

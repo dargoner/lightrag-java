@@ -1,5 +1,8 @@
 package io.github.lightrag.indexing;
 
+import io.github.lightrag.indexing.refinement.RefinedRelationPatch;
+import io.github.lightrag.indexing.refinement.RefinementScope;
+import io.github.lightrag.indexing.refinement.RefinementWindow;
 import io.github.lightrag.model.ChatModel;
 import io.github.lightrag.types.Chunk;
 import io.github.lightrag.types.ExtractedEntity;
@@ -348,8 +351,133 @@ class KnowledgeExtractorTest {
         );
     }
 
+    @Test
+    void extractsWindowRelationsWithSupportingChunkIndexes() {
+        var extractor = new KnowledgeExtractor(new StubChatModel("""
+            {
+              "entities": [],
+              "relations": [
+                {
+                  "sourceEntityName": "订单系统",
+                  "targetEntityName": "PostgreSQL",
+                  "type": "依赖",
+                  "description": "订单系统依赖 PostgreSQL 进行事务存储",
+                  "weight": 1.0,
+                  "supportingChunkIndexes": [0, 1, 1]
+                }
+              ],
+              "warnings": []
+            }
+            """));
+        var window = new RefinementWindow(
+            "doc-1",
+            List.of(
+                chunk("chunk-1", "订单系统依赖"),
+                chunk("chunk-2", "PostgreSQL 进行事务存储")
+            ),
+            0,
+            RefinementScope.ADJACENT,
+            16
+        );
+
+        var result = extractor.extractWindow(window);
+
+        assertThat(result.relationPatches()).containsExactly(
+            new RefinedRelationPatch(
+                new ExtractedRelation("订单系统", "PostgreSQL", "依赖", "订单系统依赖 PostgreSQL 进行事务存储", 1.0d),
+                List.of("chunk-1", "chunk-2")
+            )
+        );
+    }
+
+    @Test
+    void dropsWindowRelationsWhenSupportingChunkIndexesAreOutOfRange() {
+        var extractor = new KnowledgeExtractor(new StubChatModel("""
+            {
+              "entities": [],
+              "relations": [
+                {
+                  "sourceEntityName": "订单系统",
+                  "targetEntityName": "PostgreSQL",
+                  "type": "依赖",
+                  "description": "bad indexes",
+                  "weight": 1.0,
+                  "supportingChunkIndexes": [3]
+                }
+              ],
+              "warnings": []
+            }
+            """));
+        var window = new RefinementWindow(
+            "doc-1",
+            List.of(
+                chunk("chunk-1", "订单系统依赖"),
+                chunk("chunk-2", "PostgreSQL 进行事务存储")
+            ),
+            0,
+            RefinementScope.ADJACENT,
+            16
+        );
+
+        var result = extractor.extractWindow(window);
+
+        assertThat(result.relationPatches()).isEmpty();
+        assertThat(result.warnings()).contains("dropped relation candidate because supportingChunkIndexes were invalid");
+    }
+
+    @Test
+    void preservesWindowRelationsForFallbackWhenDeterministicAttributionIsEnabled() {
+        var chatModel = new RecordingChatModel("""
+                {
+                  "entities": [],
+                  "relations": [
+                    {
+                      "sourceEntityName": "订单系统",
+                      "targetEntityName": "PostgreSQL",
+                      "type": "依赖",
+                      "description": "订单系统依赖 PostgreSQL 进行事务存储",
+                      "weight": 1.0,
+                      "supportingChunkIndexes": []
+                    }
+                  ],
+                  "warnings": []
+                }
+                """);
+        var extractor = new KnowledgeExtractor(
+            chatModel,
+            0,
+            10_000,
+            KnowledgeExtractor.DEFAULT_LANGUAGE,
+            KnowledgeExtractor.DEFAULT_ENTITY_TYPES,
+            true
+        );
+        var window = new RefinementWindow(
+            "doc-1",
+            List.of(chunk("chunk-1", "订单系统依赖 PostgreSQL 进行事务存储")),
+            0,
+            RefinementScope.ADJACENT,
+            16
+        );
+
+        var result = extractor.extractWindow(window);
+
+        assertThat(result.relationPatches()).containsExactly(
+            new RefinedRelationPatch(
+                new ExtractedRelation("订单系统", "PostgreSQL", "依赖", "订单系统依赖 PostgreSQL 进行事务存储", 1.0d),
+                List.of()
+            )
+        );
+        assertThat(chatModel.requests()).hasSize(1);
+        assertThat(chatModel.requests().get(0).systemPrompt())
+            .contains("you may return the candidate with an empty supportingChunkIndexes array");
+    }
+
     private static Chunk chunk(String text) {
         return new Chunk("doc-1:0", "doc-1", text, text.length(), 0, Map.of());
+    }
+
+    private static Chunk chunk(String chunkId, String text) {
+        return new Chunk(chunkId, "doc-1", text, text.length(), 0, Map.of());
     }
 
     private record StubChatModel(String response) implements ChatModel {

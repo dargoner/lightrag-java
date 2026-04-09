@@ -7,6 +7,7 @@ import io.github.lightrag.indexing.DocumentParsingOrchestrator;
 import io.github.lightrag.indexing.GraphManagementPipeline;
 import io.github.lightrag.indexing.IndexingPipeline;
 import io.github.lightrag.indexing.StorageSnapshots;
+import io.github.lightrag.indexing.refinement.ExtractionRefinementOptions;
 import io.github.lightrag.query.ContextAssembler;
 import io.github.lightrag.query.DefaultPathRetriever;
 import io.github.lightrag.query.DefaultPathScorer;
@@ -44,6 +45,7 @@ public final class LightRag implements AutoCloseable {
     private final List<String> entityTypes;
     private final boolean embeddingSemanticMergeEnabled;
     private final double embeddingSemanticMergeThreshold;
+    private final ExtractionRefinementOptions extractionRefinementOptions;
     private final DocumentParsingOrchestrator documentParsingOrchestrator;
     private final AtomicBoolean closed = new AtomicBoolean();
 
@@ -54,7 +56,8 @@ public final class LightRag implements AutoCloseable {
             io.github.lightrag.indexing.KnowledgeExtractor.DEFAULT_LANGUAGE,
             io.github.lightrag.indexing.KnowledgeExtractor.DEFAULT_ENTITY_TYPES,
             LightRagBuilder.DEFAULT_EMBEDDING_SEMANTIC_MERGE_ENABLED,
-            LightRagBuilder.DEFAULT_EMBEDDING_SEMANTIC_MERGE_THRESHOLD);
+            LightRagBuilder.DEFAULT_EMBEDDING_SEMANTIC_MERGE_THRESHOLD,
+            ExtractionRefinementOptions.disabled());
     }
 
     LightRag(LightRagConfig config, Chunker chunker) {
@@ -64,7 +67,8 @@ public final class LightRag implements AutoCloseable {
             io.github.lightrag.indexing.KnowledgeExtractor.DEFAULT_LANGUAGE,
             io.github.lightrag.indexing.KnowledgeExtractor.DEFAULT_ENTITY_TYPES,
             LightRagBuilder.DEFAULT_EMBEDDING_SEMANTIC_MERGE_ENABLED,
-            LightRagBuilder.DEFAULT_EMBEDDING_SEMANTIC_MERGE_THRESHOLD);
+            LightRagBuilder.DEFAULT_EMBEDDING_SEMANTIC_MERGE_THRESHOLD,
+            ExtractionRefinementOptions.disabled());
     }
 
     LightRag(
@@ -80,7 +84,8 @@ public final class LightRag implements AutoCloseable {
         String entityExtractionLanguage,
         List<String> entityTypes,
         boolean embeddingSemanticMergeEnabled,
-        double embeddingSemanticMergeThreshold
+        double embeddingSemanticMergeThreshold,
+        ExtractionRefinementOptions extractionRefinementOptions
     ) {
         this.config = config;
         this.chunker = chunker;
@@ -94,6 +99,7 @@ public final class LightRag implements AutoCloseable {
         this.entityTypes = List.copyOf(Objects.requireNonNull(entityTypes, "entityTypes"));
         this.embeddingSemanticMergeEnabled = embeddingSemanticMergeEnabled;
         this.embeddingSemanticMergeThreshold = embeddingSemanticMergeThreshold;
+        this.extractionRefinementOptions = Objects.requireNonNull(extractionRefinementOptions, "extractionRefinementOptions");
         this.documentParsingOrchestrator = documentParsingOrchestrator;
     }
 
@@ -253,6 +259,18 @@ public final class LightRag implements AutoCloseable {
         return embeddingSemanticMergeThreshold;
     }
 
+    boolean contextualExtractionRefinementEnabled() {
+        return extractionRefinementOptions.enabled();
+    }
+
+    boolean allowDeterministicAttributionFallback() {
+        return extractionRefinementOptions.allowDeterministicAttributionFallback();
+    }
+
+    ExtractionRefinementOptions extractionRefinementOptions() {
+        return extractionRefinementOptions;
+    }
+
     private WorkspaceScope resolveScope(String workspaceId) {
         return new WorkspaceScope(workspaceId);
     }
@@ -280,7 +298,8 @@ public final class LightRag implements AutoCloseable {
             entityExtractionLanguage,
             entityTypes,
             embeddingSemanticMergeEnabled,
-            embeddingSemanticMergeThreshold
+            embeddingSemanticMergeThreshold,
+            extractionRefinementOptions
         );
     }
 

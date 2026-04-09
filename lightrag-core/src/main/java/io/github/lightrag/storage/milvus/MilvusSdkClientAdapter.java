@@ -43,6 +43,9 @@ public final class MilvusSdkClientAdapter implements MilvusClientAdapter {
     private static final String SPARSE_VECTOR_FIELD = "sparse_vector";
     private static final int MAX_VARCHAR_LENGTH = 65_535;
     private static final int QUERY_PAGE_SIZE = 1_000;
+    private static final long DEFAULT_CONNECT_TIMEOUT_MS = 10_000L;
+    private static final long DEFAULT_RPC_DEADLINE_MS = 60_000L;
+    private static final long DEFAULT_IDLE_TIMEOUT_MS = 60_000L;
 
     private final MilvusVectorConfig config;
     private final MilvusClientV2 client;
@@ -506,10 +509,13 @@ public final class MilvusSdkClientAdapter implements MilvusClientAdapter {
         };
     }
 
-    private static ConnectConfig connectConfig(MilvusVectorConfig config) {
+    static ConnectConfig connectConfig(MilvusVectorConfig config) {
         var builder = ConnectConfig.builder()
             .uri(config.uri())
             .dbName(config.databaseName())
+            .connectTimeoutMs(DEFAULT_CONNECT_TIMEOUT_MS)
+            .rpcDeadlineMs(DEFAULT_RPC_DEADLINE_MS)
+            .idleTimeoutMs(DEFAULT_IDLE_TIMEOUT_MS)
             .enablePrecheck(true);
         if (config.token() != null) {
             builder.token(config.token());

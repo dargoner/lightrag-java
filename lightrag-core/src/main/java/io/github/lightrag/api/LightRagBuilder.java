@@ -5,6 +5,7 @@ import io.github.lightrag.indexing.Chunker;
 import io.github.lightrag.indexing.DocumentParsingOrchestrator;
 import io.github.lightrag.indexing.FixedWindowChunker;
 import io.github.lightrag.indexing.SmartChunker;
+import io.github.lightrag.indexing.refinement.ExtractionRefinementOptions;
 import io.github.lightrag.model.ChatModel;
 import io.github.lightrag.model.EmbeddingModel;
 import io.github.lightrag.model.RerankModel;
@@ -51,6 +52,8 @@ public final class LightRagBuilder {
     private List<String> entityTypes = io.github.lightrag.indexing.KnowledgeExtractor.DEFAULT_ENTITY_TYPES;
     private boolean embeddingSemanticMergeEnabled = DEFAULT_EMBEDDING_SEMANTIC_MERGE_ENABLED;
     private double embeddingSemanticMergeThreshold = DEFAULT_EMBEDDING_SEMANTIC_MERGE_THRESHOLD;
+    private boolean contextualExtractionRefinementEnabled;
+    private boolean allowDeterministicAttributionFallback;
     private DocumentParsingOrchestrator documentParsingOrchestrator;
 
     public LightRagBuilder chatModel(ChatModel chatModel) {
@@ -204,6 +207,16 @@ public final class LightRagBuilder {
         return this;
     }
 
+    public LightRagBuilder contextualExtractionRefinement(boolean enabled) {
+        this.contextualExtractionRefinementEnabled = enabled;
+        return this;
+    }
+
+    public LightRagBuilder allowDeterministicAttributionFallback(boolean enabled) {
+        this.allowDeterministicAttributionFallback = enabled;
+        return this;
+    }
+
     public LightRagBuilder loadFromSnapshot(Path path) {
         if (workspaceStorageProvider != null) {
             throw new IllegalStateException("workspaceStorageProvider does not support snapshots");
@@ -267,6 +280,16 @@ public final class LightRagBuilder {
             }
         }
 
+        var extractionRefinementOptions = new ExtractionRefinementOptions(
+            contextualExtractionRefinementEnabled,
+            allowDeterministicAttributionFallback,
+            3,
+            1_200,
+            1,
+            1,
+            1
+        );
+
         return new LightRag(new LightRagConfig(
             chatModel,
             queryModel,
@@ -280,7 +303,7 @@ public final class LightRagBuilder {
             resolvedWorkspaceStorageProvider
         ), chunker, documentParsingOrchestrator, automaticQueryKeywordExtraction, rerankCandidateMultiplier, embeddingBatchSize, maxParallelInsert,
             entityExtractMaxGleaning, maxExtractInputTokens, entityExtractionLanguage, entityTypes,
-            embeddingSemanticMergeEnabled, embeddingSemanticMergeThreshold);
+            embeddingSemanticMergeEnabled, embeddingSemanticMergeThreshold, extractionRefinementOptions);
     }
 
     private static <T> T requireStore(String componentName, T store, Class<T> storeType) {

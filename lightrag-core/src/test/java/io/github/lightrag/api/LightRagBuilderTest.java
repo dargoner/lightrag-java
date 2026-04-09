@@ -68,6 +68,32 @@ class LightRagBuilderTest {
     }
 
     @Test
+    void keepsContextualExtractionRefinementDisabledByDefault() {
+        var rag = LightRag.builder()
+            .chatModel(new FakeChatModel())
+            .embeddingModel(new FakeEmbeddingModel())
+            .storage(new FakeStorageProvider())
+            .build();
+
+        assertThat(rag.contextualExtractionRefinementEnabled()).isFalse();
+        assertThat(rag.allowDeterministicAttributionFallback()).isFalse();
+    }
+
+    @Test
+    void enablesContextualExtractionRefinementWhenConfigured() {
+        var rag = LightRag.builder()
+            .chatModel(new FakeChatModel())
+            .embeddingModel(new FakeEmbeddingModel())
+            .storage(new FakeStorageProvider())
+            .contextualExtractionRefinement(true)
+            .allowDeterministicAttributionFallback(true)
+            .build();
+
+        assertThat(rag.contextualExtractionRefinementEnabled()).isTrue();
+        assertThat(rag.allowDeterministicAttributionFallback()).isTrue();
+    }
+
+    @Test
     void usesDedicatedCapabilityModelsWhenProvided() {
         var defaultChatModel = new FakeChatModel();
         var queryModel = new FakeChatModel();

@@ -13,6 +13,15 @@ class MilvusSdkClientAdapterTest {
     }
 
     @Test
+    void appliesFiniteConnectionAndRpcTimeouts() {
+        var connectConfig = MilvusSdkClientAdapter.connectConfig(testConfig());
+
+        assertThat(connectConfig.getConnectTimeoutMs()).isPositive();
+        assertThat(connectConfig.getRpcDeadlineMs()).isPositive();
+        assertThat(connectConfig.getIdleTimeoutMs()).isPositive();
+    }
+
+    @Test
     void resolvesConfiguredStrongConsistency() {
         var config = new MilvusVectorConfig(
             "http://localhost:19530",

@@ -4,6 +4,13 @@ import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import io.github.lightrag.exception.ExtractionException;
+import io.github.lightrag.indexing.refinement.RefinedEntityPatch;
+import io.github.lightrag.indexing.refinement.RefinedRelationPatch;
+import io.github.lightrag.indexing.refinement.RefinedWindowExtraction;
+import io.github.lightrag.indexing.refinement.RefinementWindow;
+import io.github.lightrag.indexing.refinement.WindowEntityCandidate;
+import io.github.lightrag.indexing.refinement.WindowExtractionResponse;
+import io.github.lightrag.indexing.refinement.WindowRelationCandidate;
 import io.github.lightrag.model.ChatModel;
 import io.github.lightrag.model.ChatModel.ChatRequest;
 import io.github.lightrag.types.Chunk;
@@ -63,12 +70,25 @@ public final class KnowledgeExtractor {
         Text:
         %s
         """;
+    private static final String WINDOW_SYSTEM_PROMPT_SUFFIX = """
+
+        When the input contains multiple chunks, each extracted entity and relation must include
+        a supportingChunkIndexes array. The indexes must reference the chunk order in the user prompt.
+        Omit any candidate when you cannot attribute it to one or more chunk indexes.
+        """;
+    private static final String WINDOW_SYSTEM_PROMPT_FALLBACK_SUFFIX = """
+
+        When the input contains multiple chunks, include a supportingChunkIndexes array whenever you can.
+        If a candidate is valid but you cannot determine exact chunk indexes, you may return the candidate with an empty supportingChunkIndexes array.
+        The indexes must reference the chunk order in the user prompt.
+        """;
 
     private final ChatModel chatModel;
     private final int entityExtractMaxGleaning;
     private final int maxExtractInputTokens;
     private final String language;
     private final List<String> entityTypes;
+    private final boolean allowDeterministicAttributionFallback;
 
     public KnowledgeExtractor(ChatModel chatModel) {
         this(
@@ -76,12 +96,13 @@ public final class KnowledgeExtractor {
             DEFAULT_ENTITY_EXTRACT_MAX_GLEANING,
             DEFAULT_MAX_EXTRACT_INPUT_TOKENS,
             DEFAULT_LANGUAGE,
-            DEFAULT_ENTITY_TYPES
+            DEFAULT_ENTITY_TYPES,
+            false
         );
     }
 
     public KnowledgeExtractor(ChatModel chatModel, int entityExtractMaxGleaning, int maxExtractInputTokens) {
-        this(chatModel, entityExtractMaxGleaning, maxExtractInputTokens, DEFAULT_LANGUAGE, DEFAULT_ENTITY_TYPES);
+        this(chatModel, entityExtractMaxGleaning, maxExtractInputTokens, DEFAULT_LANGUAGE, DEFAULT_ENTITY_TYPES, false);
     }
 
     public KnowledgeExtractor(
@@ -90,6 +111,17 @@ public final class KnowledgeExtractor {
         int maxExtractInputTokens,
         String language,
         List<String> entityTypes
+    ) {
+        this(chatModel, entityExtractMaxGleaning, maxExtractInputTokens, language, entityTypes, false);
+    }
+
+    public KnowledgeExtractor(
+        ChatModel chatModel,
+        int entityExtractMaxGleaning,
+        int maxExtractInputTokens,
+        String language,
+        List<String> entityTypes,
+        boolean allowDeterministicAttributionFallback
     ) {
         this.chatModel = Objects.requireNonNull(chatModel, "chatModel");
         if (entityExtractMaxGleaning < 0) {
@@ -108,6 +140,7 @@ public final class KnowledgeExtractor {
             throw new IllegalArgumentException("entityTypes must not be empty");
         }
         this.entityTypes = normalizedEntityTypes;
+        this.allowDeterministicAttributionFallback = allowDeterministicAttributionFallback;
     }
 
     public ExtractionResult extract(Chunk chunk) {
@@ -139,12 +172,43 @@ public final class KnowledgeExtractor {
         return new ExtractionResult(current.entities(), current.relations(), List.copyOf(warnings));
     }
 
+    public RefinedWindowExtraction extractWindow(RefinementWindow window) {
+        Objects.requireNonNull(window, "window");
+
+        var response = chatModel.generate(new ChatRequest(buildWindowSystemPrompt(), buildWindowPrompt(window)));
+        var parsed = parseWindowExtractionResponse(response);
+        var warnings = new ArrayList<String>(parsed.warnings());
+        var entityPatches = new ArrayList<RefinedEntityPatch>();
+        for (var candidate : parsed.entities()) {
+            toEntityPatch(candidate, window, warnings).ifPresent(entityPatches::add);
+        }
+        var relationPatches = new ArrayList<RefinedRelationPatch>();
+        for (var candidate : parsed.relations()) {
+            toRelationPatch(candidate, window, warnings, allowDeterministicAttributionFallback).ifPresent(relationPatches::add);
+        }
+        return new RefinedWindowExtraction(
+            List.copyOf(entityPatches),
+            List.copyOf(relationPatches),
+            List.copyOf(warnings),
+            !entityPatches.isEmpty() || !relationPatches.isEmpty()
+        );
+    }
+
     private static ExtractionResult parseExtractionResult(String response) {
         var root = parseResponse(response);
         return new ExtractionResult(
             parseEntities(topLevelArray(root, "entities")),
             parseRelations(topLevelArray(root, "relations")),
             List.of()
+        );
+    }
+
+    private static WindowExtractionResponse parseWindowExtractionResponse(String response) {
+        var root = parseResponse(response);
+        return new WindowExtractionResponse(
+            parseWindowEntities(topLevelArray(root, "entities")),
+            parseWindowRelations(topLevelArray(root, "relations")),
+            parseWarnings(root.get("warnings"))
         );
     }
 
@@ -360,6 +424,92 @@ public final class KnowledgeExtractor {
         return List.copyOf(relations);
     }
 
+    private static List<WindowEntityCandidate> parseWindowEntities(JsonNode entitiesNode) {
+        if (!entitiesNode.isArray()) {
+            return List.of();
+        }
+
+        var entities = new ArrayList<WindowEntityCandidate>();
+        for (var entityNode : entitiesNode) {
+            var name = normalizedText(entityNode.get("name"));
+            if (name.isEmpty()) {
+                continue;
+            }
+
+            entities.add(new WindowEntityCandidate(
+                name,
+                normalizedText(entityNode.get("type")),
+                normalizedText(entityNode.get("description")),
+                parseAliases(entityNode.get("aliases")),
+                parseSupportingChunkIndexes(entityNode.get("supportingChunkIndexes"))
+            ));
+        }
+        return List.copyOf(entities);
+    }
+
+    private static List<WindowRelationCandidate> parseWindowRelations(JsonNode relationsNode) {
+        if (!relationsNode.isArray()) {
+            return List.of();
+        }
+
+        var relations = new ArrayList<WindowRelationCandidate>();
+        for (var relationNode : relationsNode) {
+            var sourceEntityName = normalizedText(relationNode.get("sourceEntityName"));
+            var targetEntityName = normalizedText(relationNode.get("targetEntityName"));
+            var type = normalizedText(relationNode.get("type"));
+
+            if (sourceEntityName.isEmpty() || targetEntityName.isEmpty() || type.isEmpty()) {
+                continue;
+            }
+
+            relations.add(new WindowRelationCandidate(
+                sourceEntityName,
+                targetEntityName,
+                type,
+                normalizedText(relationNode.get("description")),
+                parseWeightOrConfidence(relationNode),
+                parseSupportingChunkIndexes(relationNode.get("supportingChunkIndexes"))
+            ));
+        }
+        return List.copyOf(relations);
+    }
+
+    private static List<String> parseWarnings(JsonNode warningsNode) {
+        if (warningsNode == null || warningsNode.isNull()) {
+            return List.of();
+        }
+        if (!warningsNode.isArray()) {
+            throw new ExtractionException("Knowledge extraction response field 'warnings' must be an array");
+        }
+
+        var warnings = new ArrayList<String>();
+        for (var warningNode : warningsNode) {
+            var warning = normalizedText(warningNode);
+            if (!warning.isEmpty()) {
+                warnings.add(warning);
+            }
+        }
+        return List.copyOf(warnings);
+    }
+
+    private static List<Integer> parseSupportingChunkIndexes(JsonNode indexesNode) {
+        if (indexesNode == null || indexesNode.isNull()) {
+            return List.of();
+        }
+        if (!indexesNode.isArray()) {
+            return List.of();
+        }
+
+        var indexes = new ArrayList<Integer>();
+        for (var indexNode : indexesNode) {
+            if (!indexNode.canConvertToInt()) {
+                return List.of();
+            }
+            indexes.add(indexNode.intValue());
+        }
+        return List.copyOf(indexes);
+    }
+
     private static Double parseWeightOrConfidence(JsonNode relationNode) {
         var weight = parseNumericValue(relationNode.get("weight"));
         if (weight != null) {
@@ -416,6 +566,29 @@ public final class KnowledgeExtractor {
         return SYSTEM_PROMPT_TEMPLATE.formatted(language, String.join(", ", entityTypes));
     }
 
+    private String buildWindowSystemPrompt() {
+        return buildSystemPrompt() + (
+            allowDeterministicAttributionFallback
+                ? WINDOW_SYSTEM_PROMPT_FALLBACK_SUFFIX
+                : WINDOW_SYSTEM_PROMPT_SUFFIX
+        );
+    }
+
+    private static String buildWindowPrompt(RefinementWindow window) {
+        var prompt = new StringBuilder()
+            .append("Document ID: ").append(window.documentId()).append('\n')
+            .append("Scope: ").append(window.scope()).append('\n')
+            .append("Anchor Chunk Index: ").append(window.anchorChunkIndex()).append('\n')
+            .append("Estimated Token Count: ").append(window.estimatedTokenCount()).append('\n')
+            .append("Chunks:\n");
+        for (int index = 0; index < window.chunks().size(); index++) {
+            var chunk = window.chunks().get(index);
+            prompt.append('[').append(index).append("] Chunk ID: ").append(chunk.id()).append('\n')
+                .append(chunk.text()).append('\n');
+        }
+        return prompt.toString().strip();
+    }
+
     private static int estimateTokenCount(String value) {
         var normalized = value == null ? "" : value.strip();
         if (normalized.isEmpty()) {
@@ -428,6 +601,74 @@ public final class KnowledgeExtractor {
         return history.stream()
             .map(message -> message.role() + ": " + message.content())
             .reduce("", (left, right) -> left + "\n" + right);
+    }
+
+    private static Optional<RefinedEntityPatch> toEntityPatch(
+        WindowEntityCandidate candidate,
+        RefinementWindow window,
+        List<String> warnings
+    ) {
+        var supportingChunkIds = resolveSupportingChunkIds(candidate.supportingChunkIndexes(), window);
+        if (supportingChunkIds.isEmpty()) {
+            warnings.add("dropped entity candidate because supportingChunkIndexes were invalid");
+            return Optional.empty();
+        }
+        try {
+            return Optional.of(new RefinedEntityPatch(
+                new ExtractedEntity(
+                    candidate.name(),
+                    candidate.type(),
+                    candidate.description(),
+                    candidate.aliases()
+                ),
+                supportingChunkIds
+            ));
+        } catch (IllegalArgumentException ignored) {
+            return Optional.empty();
+        }
+    }
+
+    private static Optional<RefinedRelationPatch> toRelationPatch(
+        WindowRelationCandidate candidate,
+        RefinementWindow window,
+        List<String> warnings,
+        boolean allowDeterministicAttributionFallback
+    ) {
+        var supportingChunkIds = resolveSupportingChunkIds(candidate.supportingChunkIndexes(), window);
+        if (supportingChunkIds.isEmpty()) {
+            warnings.add("dropped relation candidate because supportingChunkIndexes were invalid");
+            if (!allowDeterministicAttributionFallback) {
+                return Optional.empty();
+            }
+        }
+        try {
+            return Optional.of(new RefinedRelationPatch(
+                new ExtractedRelation(
+                    candidate.sourceEntityName(),
+                    candidate.targetEntityName(),
+                    candidate.type(),
+                    candidate.description(),
+                    candidate.weight()
+                ),
+                supportingChunkIds
+            ));
+        } catch (IllegalArgumentException ignored) {
+            return Optional.empty();
+        }
+    }
+
+    private static List<String> resolveSupportingChunkIds(List<Integer> supportingChunkIndexes, RefinementWindow window) {
+        if (supportingChunkIndexes == null || supportingChunkIndexes.isEmpty()) {
+            return List.of();
+        }
+        var chunkIds = new LinkedHashSet<String>();
+        for (var index : supportingChunkIndexes) {
+            if (index == null || index < 0 || index >= window.chunks().size()) {
+                return List.of();
+            }
+            chunkIds.add(window.chunks().get(index).id());
+        }
+        return List.copyOf(chunkIds);
     }
 
     private static ExtractionResult merge(ExtractionResult base, ExtractionResult gleaned) {

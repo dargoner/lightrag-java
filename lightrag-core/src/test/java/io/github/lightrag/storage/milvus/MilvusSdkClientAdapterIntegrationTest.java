@@ -313,11 +313,6 @@ class MilvusSdkClientAdapterIntegrationTest {
     }
 
     private static ConnectConfig connectConfig(MilvusVectorConfig config) {
-        return ConnectConfig.builder()
-            .uri(config.uri())
-            .dbName(config.databaseName())
-            .token(config.token())
-            .enablePrecheck(true)
-            .build();
+        return MilvusSdkClientAdapter.connectConfig(config);
     }
 }
