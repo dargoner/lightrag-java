@@ -263,6 +263,17 @@ Starter 最终应支持两类装配方式：
 
 ## Implementation Stages
 
+### Current Status
+
+截至 2026-04-09，当前代码已经完成：
+
+1. SDK `LightRagBuilder` 已支持 `queryModel(...)`、`extractionModel(...)`、`summaryModel(...)` 独立注入。
+2. `LightRagConfig` 已集中承载默认模型与专用能力模型，并统一处理回退语义。
+3. 运行时查询阶段已切到 `queryModel()`，实体关系抽取阶段已切到 `extractionModel()`。
+4. `IndexingPipeline` 已保留 `summaryModel` 能力边界，并兼容旧构造签名。
+5. Spring Boot Starter 已支持 `queryModel`、`extractionModel`、`summaryModel` 专用 `ChatModel` Bean 注入。
+6. Starter 默认 `chatModel` 解析已兼容命名默认 Bean、唯一自定义默认 Bean 以及 `@Primary` 默认 Bean。
+
 ### Stage 1
 
 1. 在 SDK Builder 中新增 `queryModel(...)`、`extractionModel(...)`、`summaryModel(...)`。
