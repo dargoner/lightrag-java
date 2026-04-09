@@ -89,6 +89,27 @@ jobs:
           :lightrag-core:publishAndReleaseToMavenCentral
           :lightrag-spring-boot-starter:publishAndReleaseToMavenCentral
 
+      - name: Create or update GitHub Release
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_VERSION: ${{ steps.version.outputs.value }}
+          RELEASED_SHA: ${{ steps.release-sha.outputs.value }}
+        run: |
+          tag="v${RELEASE_VERSION}"
+
+          if gh release view "${tag}" >/dev/null 2>&1; then
+            gh release edit "${tag}" \
+              --title "${tag}" \
+              --latest
+          else
+            gh release create "${tag}" \
+              --target "${RELEASED_SHA}" \
+              --title "${tag}" \
+              --generate-notes \
+              --latest
+          fi
+
   bump-next-snapshot:
     needs: publish
     runs-on: ubuntu-latest
