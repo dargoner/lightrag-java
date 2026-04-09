@@ -83,6 +83,48 @@ For tests, demos, and ephemeral runs, the in-memory provider is still the fastes
 
 All runtime data operations on `LightRag` now require an explicit `workspaceId`. The SDK no longer keeps ambiguous zero-argument runtime aliases for ingest, query, graph management, deletion, document status, or snapshot APIs.
 
+## Async Tasks & Monitoring
+
+The SDK now includes a native async task runtime for long-running ingest and rebuild work.
+
+Use the async APIs when you want durable task records, stage-level progress, cancellation, and polling without building your own job layer:
+
+- `submitIngest(workspaceId, documents)`
+- `submitIngestSources(workspaceId, sources, options)`
+- `submitRebuild(workspaceId)`
+- `getTask(workspaceId, taskId)`
+- `listTasks(workspaceId)`
+- `cancelTask(workspaceId, taskId)`
+
+Example:
+
+```java
+var taskId = rag.submitIngest("default", List.of(
+    new Document("doc-1", "Title", "Alice works with Bob", Map.of("source", "demo"))
+));
+
+TaskSnapshot task = rag.getTask("default", taskId);
+
+if (!task.status().isTerminal()) {
+    System.out.println("Current stage: " + task.stages());
+}
+```
+
+Task snapshots include:
+
+- task type and lifecycle status
+- requested / started / finished timestamps
+- summary, error message, and cancel flag
+- stage snapshots such as `PARSING`, `CHUNKING`, `PRIMARY_EXTRACTION`, `GRAPH_ASSEMBLY`, `VECTOR_INDEXING`, `COMMITTING`, and `COMPLETED`
+
+Current storage support for task persistence and stage monitoring:
+
+- `InMemoryStorageProvider`
+- `PostgresStorageProvider`
+- `PostgresNeo4jStorageProvider`
+- `PostgresMilvusNeo4jStorageProvider`
+- `MySqlMilvusNeo4jStorageProvider`
+
 ## Multi-Workspace Runtime
 
 When one `LightRag` instance needs to serve multiple workspaces, build it through `workspaceStorage(...)`:
@@ -831,7 +873,7 @@ Notes:
 
 ## PostgreSQL Storage
 
-`PostgresStorageProvider` stores documents, chunks, graph records, vectors, and document processing statuses in PostgreSQL so the SDK can survive process restarts without relying on JSON snapshots as the primary data store.
+`PostgresStorageProvider` stores documents, chunks, graph records, vectors, document processing statuses, and task metadata in PostgreSQL so the SDK can survive process restarts without relying on JSON snapshots as the primary data store.
 
 ### Prerequisites
 
@@ -875,11 +917,11 @@ rag.ingest("default", List.of(
 ));
 ```
 
-`PostgresStorageProvider` bootstraps its schema automatically on startup. Ingest writes run atomically across document, chunk, graph, vector, and document-status storage.
+`PostgresStorageProvider` bootstraps its schema automatically on startup. Ingest writes run atomically across document, chunk, graph, vector, and document-status storage. Async SDK tasks are persisted in PostgreSQL task tables and can be polled after process restart.
 
 ## PostgreSQL + Neo4j Storage
 
-`PostgresNeo4jStorageProvider` keeps PostgreSQL as the durable source of truth for documents, chunks, graph rows, vectors, and document statuses, while projecting graph reads into Neo4j.
+`PostgresNeo4jStorageProvider` keeps PostgreSQL as the durable source of truth for documents, chunks, graph rows, vectors, document statuses, and task metadata, while projecting graph reads into Neo4j.
 
 ### Prerequisites
 
