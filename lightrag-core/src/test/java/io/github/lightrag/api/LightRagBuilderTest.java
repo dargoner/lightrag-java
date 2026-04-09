@@ -68,6 +68,65 @@ class LightRagBuilderTest {
     }
 
     @Test
+    void usesDedicatedCapabilityModelsWhenProvided() {
+        var defaultChatModel = new FakeChatModel();
+        var queryModel = new FakeChatModel();
+        var extractionModel = new FakeChatModel();
+        var summaryModel = new FakeChatModel();
+
+        var rag = LightRag.builder()
+            .chatModel(defaultChatModel)
+            .queryModel(queryModel)
+            .extractionModel(extractionModel)
+            .summaryModel(summaryModel)
+            .embeddingModel(new FakeEmbeddingModel())
+            .storage(new FakeStorageProvider())
+            .build();
+
+        assertThat(rag.config().defaultChatModel()).isSameAs(defaultChatModel);
+        assertThat(rag.config().queryModel()).isSameAs(queryModel);
+        assertThat(rag.config().extractionModel()).isSameAs(extractionModel);
+        assertThat(rag.config().summaryModel()).isSameAs(summaryModel);
+    }
+
+    @Test
+    void fallsBackDedicatedCapabilityModelsToDefaultChatModel() {
+        var defaultChatModel = new FakeChatModel();
+
+        var rag = LightRag.builder()
+            .chatModel(defaultChatModel)
+            .embeddingModel(new FakeEmbeddingModel())
+            .storage(new FakeStorageProvider())
+            .build();
+
+        assertThat(rag.config().queryModel()).isSameAs(defaultChatModel);
+        assertThat(rag.config().extractionModel()).isSameAs(defaultChatModel);
+        assertThat(rag.config().summaryModel()).isSameAs(defaultChatModel);
+    }
+
+    @Test
+    void preservesLegacyLightRagConfigConstructorCompatibility() {
+        var chatModel = new FakeChatModel();
+        var embeddingModel = new FakeEmbeddingModel();
+        var storageProvider = new FakeStorageProvider();
+
+        var config = new io.github.lightrag.config.LightRagConfig(
+            chatModel,
+            embeddingModel,
+            storageProvider,
+            storageProvider.documentStatusStore(),
+            Path.of("snapshots", "repository.json"),
+            null,
+            new FixedWorkspaceStorageProvider(storageProvider)
+        );
+
+        assertThat(config.defaultChatModel()).isSameAs(chatModel);
+        assertThat(config.queryModel()).isSameAs(chatModel);
+        assertThat(config.extractionModel()).isSameAs(chatModel);
+        assertThat(config.summaryModel()).isSameAs(chatModel);
+    }
+
+    @Test
     void buildsWithStorageAssembly() {
         var assembly = StorageAssembly.builder()
             .relationalAdapter(new StorageAssemblyTestDoubles.FakeRelationalStorageAdapter())
@@ -527,6 +586,27 @@ class LightRagBuilderTest {
         assertThatThrownBy(() -> LightRag.builder().embeddingModel(null))
             .isInstanceOf(NullPointerException.class)
             .hasMessage("embeddingModel");
+    }
+
+    @Test
+    void rejectsNullQueryModel() {
+        assertThatThrownBy(() -> LightRag.builder().queryModel(null))
+            .isInstanceOf(NullPointerException.class)
+            .hasMessage("queryModel");
+    }
+
+    @Test
+    void rejectsNullExtractionModel() {
+        assertThatThrownBy(() -> LightRag.builder().extractionModel(null))
+            .isInstanceOf(NullPointerException.class)
+            .hasMessage("extractionModel");
+    }
+
+    @Test
+    void rejectsNullSummaryModel() {
+        assertThatThrownBy(() -> LightRag.builder().summaryModel(null))
+            .isInstanceOf(NullPointerException.class)
+            .hasMessage("summaryModel");
     }
 
     @Test

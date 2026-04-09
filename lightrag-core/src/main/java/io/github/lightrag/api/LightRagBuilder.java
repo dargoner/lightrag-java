@@ -32,6 +32,9 @@ public final class LightRagBuilder {
     static final double DEFAULT_EMBEDDING_SEMANTIC_MERGE_THRESHOLD = 0.80d;
 
     private ChatModel chatModel;
+    private ChatModel queryModel;
+    private ChatModel extractionModel;
+    private ChatModel summaryModel;
     private EmbeddingModel embeddingModel;
     private StorageProvider storageProvider;
     private WorkspaceStorageProvider workspaceStorageProvider;
@@ -57,6 +60,21 @@ public final class LightRagBuilder {
 
     public LightRagBuilder embeddingModel(EmbeddingModel embeddingModel) {
         this.embeddingModel = Objects.requireNonNull(embeddingModel, "embeddingModel");
+        return this;
+    }
+
+    public LightRagBuilder queryModel(ChatModel queryModel) {
+        this.queryModel = Objects.requireNonNull(queryModel, "queryModel");
+        return this;
+    }
+
+    public LightRagBuilder extractionModel(ChatModel extractionModel) {
+        this.extractionModel = Objects.requireNonNull(extractionModel, "extractionModel");
+        return this;
+    }
+
+    public LightRagBuilder summaryModel(ChatModel summaryModel) {
+        this.summaryModel = Objects.requireNonNull(summaryModel, "summaryModel");
         return this;
     }
 
@@ -251,6 +269,9 @@ public final class LightRagBuilder {
 
         return new LightRag(new LightRagConfig(
             chatModel,
+            queryModel,
+            extractionModel,
+            summaryModel,
             embeddingModel,
             atomicStorageProvider,
             documentStatusStore,
