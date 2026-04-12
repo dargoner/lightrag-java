@@ -1,6 +1,8 @@
 package io.github.lightrag.storage;
 
 import io.github.lightrag.storage.memory.InMemoryChunkStore;
+import io.github.lightrag.storage.memory.InMemoryDocumentGraphJournalStore;
+import io.github.lightrag.storage.memory.InMemoryDocumentGraphSnapshotStore;
 import io.github.lightrag.storage.memory.InMemoryDocumentStatusStore;
 import io.github.lightrag.storage.memory.InMemoryDocumentStore;
 import io.github.lightrag.storage.memory.InMemoryGraphStore;
@@ -24,6 +26,8 @@ public final class StorageAssemblyTestDoubles {
         private final InMemoryDocumentStatusStore documentStatusStore = new InMemoryDocumentStatusStore();
         private final InMemoryTaskStore taskStore = new InMemoryTaskStore();
         private final InMemoryTaskStageStore taskStageStore = new InMemoryTaskStageStore();
+        private final InMemoryDocumentGraphSnapshotStore documentGraphSnapshotStore = new InMemoryDocumentGraphSnapshotStore();
+        private final InMemoryDocumentGraphJournalStore documentGraphJournalStore = new InMemoryDocumentGraphJournalStore();
         private final SnapshotStore snapshotStore = new NoopSnapshotStore();
         private int restoreCount;
 
@@ -58,14 +62,35 @@ public final class StorageAssemblyTestDoubles {
         }
 
         @Override
+        public DocumentGraphSnapshotStore documentGraphSnapshotStore() {
+            return documentGraphSnapshotStore;
+        }
+
+        @Override
+        public DocumentGraphJournalStore documentGraphJournalStore() {
+            return documentGraphJournalStore;
+        }
+
+        @Override
         public SnapshotStore.Snapshot captureSnapshot() {
+            var documentGraphState = DocumentGraphStateSupport.capture(
+                documentGraphSnapshotStore,
+                documentGraphJournalStore,
+                List.of(),
+                documentStore.snapshot(),
+                documentStatusStore.snapshot()
+            );
             return new SnapshotStore.Snapshot(
                 documentStore.snapshot(),
                 chunkStore.snapshot(),
                 List.of(),
                 List.of(),
                 Map.of(),
-                documentStatusStore.snapshot()
+                documentStatusStore.snapshot(),
+                documentGraphState.documentSnapshots(),
+                documentGraphState.chunkSnapshots(),
+                documentGraphState.documentJournals(),
+                documentGraphState.chunkJournals()
             );
         }
 
@@ -74,6 +99,12 @@ public final class StorageAssemblyTestDoubles {
             documentStore.restore(snapshot.documents());
             chunkStore.restore(snapshot.chunks());
             documentStatusStore.restore(snapshot.documentStatuses());
+            DocumentGraphStateSupport.restore(
+                documentGraphSnapshotStore,
+                documentGraphJournalStore,
+                List.of(),
+                snapshot
+            );
             restoreCount++;
         }
 

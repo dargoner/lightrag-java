@@ -3500,6 +3500,16 @@ class E2ELightRagTest {
             return delegate.snapshotStore();
         }
 
+        @Override
+        public io.github.lightrag.storage.DocumentGraphSnapshotStore documentGraphSnapshotStore() {
+            return delegate.documentGraphSnapshotStore();
+        }
+
+        @Override
+        public io.github.lightrag.storage.DocumentGraphJournalStore documentGraphJournalStore() {
+            return delegate.documentGraphJournalStore();
+        }
+
         int restoreCalls() {
             return restoreCalls;
         }

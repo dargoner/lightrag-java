@@ -168,13 +168,13 @@ class LightRagBuilderTest {
             .vectorAdapter(new StorageAssemblyTestDoubles.FakeVectorStorageAdapter())
             .build();
 
-        assertThatThrownBy(() -> LightRag.builder()
+        var lightRag = LightRag.builder()
             .chatModel(new FakeChatModel())
             .embeddingModel(new FakeEmbeddingModel())
             .storageAssembly(assembly)
-            .build())
-            .isInstanceOf(IllegalStateException.class)
-            .hasMessageContaining("documentGraphSnapshotStore");
+            .build();
+
+        assertThat(lightRag).isNotNull();
     }
 
     @Test

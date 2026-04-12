@@ -5,6 +5,9 @@ import com.zaxxer.hikari.HikariDataSource;
 import io.github.lightrag.api.WorkspaceScope;
 import io.github.lightrag.exception.StorageException;
 import io.github.lightrag.storage.ChunkStore;
+import io.github.lightrag.storage.DocumentGraphJournalStore;
+import io.github.lightrag.storage.DocumentGraphSnapshotStore;
+import io.github.lightrag.storage.DocumentGraphStateSupport;
 import io.github.lightrag.storage.DocumentStatusStore;
 import io.github.lightrag.storage.DocumentStore;
 import io.github.lightrag.storage.GraphStore;
@@ -12,6 +15,8 @@ import io.github.lightrag.storage.RelationalStorageAdapter;
 import io.github.lightrag.storage.SnapshotStore;
 import io.github.lightrag.storage.TaskStageStore;
 import io.github.lightrag.storage.TaskStore;
+import io.github.lightrag.storage.memory.InMemoryDocumentGraphJournalStore;
+import io.github.lightrag.storage.memory.InMemoryDocumentGraphSnapshotStore;
 
 import javax.sql.DataSource;
 import java.sql.Connection;
@@ -21,6 +26,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.Objects;
 import java.util.Optional;
+import java.util.concurrent.ConcurrentSkipListSet;
 
 public final class PostgresRelationalStorageAdapter implements RelationalStorageAdapter {
     private static final int DEFAULT_POOL_SIZE = 4;
@@ -37,6 +43,9 @@ public final class PostgresRelationalStorageAdapter implements RelationalStorage
     private final DocumentStatusStore documentStatusStore;
     private final TaskStore taskStore;
     private final TaskStageStore taskStageStore;
+    private final DocumentGraphSnapshotStore documentGraphSnapshotStore;
+    private final DocumentGraphJournalStore documentGraphJournalStore;
+    private final java.util.Set<String> trackedDocumentGraphIds;
 
     public PostgresRelationalStorageAdapter(
         DataSource dataSource,
@@ -107,6 +116,15 @@ public final class PostgresRelationalStorageAdapter implements RelationalStorage
         this.documentStatusStore = new PostgresDocumentStatusStore(this.dataSource, this.config, this.workspaceId);
         this.taskStore = new PostgresTaskStore(this.dataSource, this.config, this.workspaceId);
         this.taskStageStore = new PostgresTaskStageStore(this.dataSource, this.config, this.workspaceId);
+        this.trackedDocumentGraphIds = new ConcurrentSkipListSet<>();
+        this.documentGraphSnapshotStore = DocumentGraphStateSupport.trackedSnapshotStore(
+            new InMemoryDocumentGraphSnapshotStore(),
+            trackedDocumentGraphIds
+        );
+        this.documentGraphJournalStore = DocumentGraphStateSupport.trackedJournalStore(
+            new InMemoryDocumentGraphJournalStore(),
+            trackedDocumentGraphIds
+        );
     }
 
     @Override
@@ -140,14 +158,37 @@ public final class PostgresRelationalStorageAdapter implements RelationalStorage
     }
 
     @Override
+    public DocumentGraphSnapshotStore documentGraphSnapshotStore() {
+        return documentGraphSnapshotStore;
+    }
+
+    @Override
+    public DocumentGraphJournalStore documentGraphJournalStore() {
+        return documentGraphJournalStore;
+    }
+
+    @Override
     public SnapshotStore.Snapshot captureSnapshot() {
+        var documents = documentStore.list();
+        var documentStatuses = documentStatusStore.list();
+        var documentGraphState = DocumentGraphStateSupport.capture(
+            documentGraphSnapshotStore,
+            documentGraphJournalStore,
+            trackedDocumentGraphIds,
+            documents,
+            documentStatuses
+        );
         return new SnapshotStore.Snapshot(
-            documentStore.list(),
+            documents,
             chunkStore.list(),
             graphStore.allEntities(),
             graphStore.allRelations(),
             Map.of(),
-            documentStatusStore.list()
+            documentStatuses,
+            documentGraphState.documentSnapshots(),
+            documentGraphState.chunkSnapshots(),
+            documentGraphState.documentJournals(),
+            documentGraphState.chunkJournals()
         );
     }
 
@@ -160,7 +201,11 @@ public final class PostgresRelationalStorageAdapter implements RelationalStorage
             source.entities(),
             source.relations(),
             Map.of(),
-            source.documentStatuses()
+            source.documentStatuses(),
+            source.documentGraphSnapshots(),
+            source.chunkGraphSnapshots(),
+            source.documentGraphJournals(),
+            source.chunkGraphJournals()
         );
     }
 
@@ -172,7 +217,7 @@ public final class PostgresRelationalStorageAdapter implements RelationalStorage
             () -> {
                 try (var connection = dataSource.getConnection()) {
                     var connectionAccess = JdbcConnectionAccess.forConnection(connection);
-                    return withTransaction(connection, () -> {
+                    withTransaction(connection, () -> {
                         truncateAll(connection);
                         var transactionalDocumentStore = new PostgresDocumentStore(connectionAccess, config, workspaceId);
                         var transactionalChunkStore = new PostgresChunkStore(connectionAccess, config, workspaceId);
@@ -195,6 +240,13 @@ public final class PostgresRelationalStorageAdapter implements RelationalStorage
                         }
                         return null;
                     });
+                    DocumentGraphStateSupport.restore(
+                        documentGraphSnapshotStore,
+                        documentGraphJournalStore,
+                        trackedDocumentGraphIds,
+                        source
+                    );
+                    return null;
                 } catch (SQLException exception) {
                     throw new StorageException("Failed to open PostgreSQL transaction for restore", exception);
                 }

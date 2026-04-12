@@ -15,6 +15,14 @@ public interface RelationalStorageAdapter extends AutoCloseable {
 
     SnapshotStore snapshotStore();
 
+    default DocumentGraphSnapshotStore documentGraphSnapshotStore() {
+        throw new UnsupportedOperationException("documentGraphSnapshotStore is not available in this relational adapter");
+    }
+
+    default DocumentGraphJournalStore documentGraphJournalStore() {
+        throw new UnsupportedOperationException("documentGraphJournalStore is not available in this relational adapter");
+    }
+
     SnapshotStore.Snapshot captureSnapshot();
 
     void restore(SnapshotStore.Snapshot snapshot);
@@ -26,7 +34,11 @@ public interface RelationalStorageAdapter extends AutoCloseable {
             java.util.List.of(),
             java.util.List.of(),
             java.util.Map.of(),
-            snapshot.documentStatuses()
+            snapshot.documentStatuses(),
+            snapshot.documentGraphSnapshots(),
+            snapshot.chunkGraphSnapshots(),
+            snapshot.documentGraphJournals(),
+            snapshot.chunkGraphJournals()
         );
     }
 

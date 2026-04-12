@@ -5,12 +5,17 @@ import com.zaxxer.hikari.HikariDataSource;
 import io.github.lightrag.api.WorkspaceScope;
 import io.github.lightrag.exception.StorageException;
 import io.github.lightrag.storage.ChunkStore;
+import io.github.lightrag.storage.DocumentGraphJournalStore;
+import io.github.lightrag.storage.DocumentGraphSnapshotStore;
+import io.github.lightrag.storage.DocumentGraphStateSupport;
 import io.github.lightrag.storage.DocumentStatusStore;
 import io.github.lightrag.storage.DocumentStore;
 import io.github.lightrag.storage.RelationalStorageAdapter;
 import io.github.lightrag.storage.SnapshotStore;
 import io.github.lightrag.storage.TaskStageStore;
 import io.github.lightrag.storage.TaskStore;
+import io.github.lightrag.storage.memory.InMemoryDocumentGraphJournalStore;
+import io.github.lightrag.storage.memory.InMemoryDocumentGraphSnapshotStore;
 
 import javax.sql.DataSource;
 import java.sql.Connection;
@@ -19,6 +24,7 @@ import java.sql.SQLException;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
+import java.util.concurrent.ConcurrentSkipListSet;
 
 public final class MySqlRelationalStorageAdapter implements RelationalStorageAdapter {
     private static final int DEFAULT_POOL_SIZE = 4;
@@ -34,6 +40,9 @@ public final class MySqlRelationalStorageAdapter implements RelationalStorageAda
     private final DocumentStatusStore documentStatusStore;
     private final TaskStore taskStore;
     private final TaskStageStore taskStageStore;
+    private final DocumentGraphSnapshotStore documentGraphSnapshotStore;
+    private final DocumentGraphJournalStore documentGraphJournalStore;
+    private final java.util.Set<String> trackedDocumentGraphIds;
 
     public MySqlRelationalStorageAdapter(
         DataSource dataSource,
@@ -83,6 +92,15 @@ public final class MySqlRelationalStorageAdapter implements RelationalStorageAda
         this.documentStatusStore = new MySqlDocumentStatusStore(this.dataSource, this.config, this.workspaceId);
         this.taskStore = new MySqlTaskStore(this.dataSource, this.config, this.workspaceId);
         this.taskStageStore = new MySqlTaskStageStore(this.dataSource, this.config, this.workspaceId);
+        this.trackedDocumentGraphIds = new ConcurrentSkipListSet<>();
+        this.documentGraphSnapshotStore = DocumentGraphStateSupport.trackedSnapshotStore(
+            new InMemoryDocumentGraphSnapshotStore(),
+            trackedDocumentGraphIds
+        );
+        this.documentGraphJournalStore = DocumentGraphStateSupport.trackedJournalStore(
+            new InMemoryDocumentGraphJournalStore(),
+            trackedDocumentGraphIds
+        );
     }
 
     @Override
@@ -116,14 +134,37 @@ public final class MySqlRelationalStorageAdapter implements RelationalStorageAda
     }
 
     @Override
+    public DocumentGraphSnapshotStore documentGraphSnapshotStore() {
+        return documentGraphSnapshotStore;
+    }
+
+    @Override
+    public DocumentGraphJournalStore documentGraphJournalStore() {
+        return documentGraphJournalStore;
+    }
+
+    @Override
     public SnapshotStore.Snapshot captureSnapshot() {
+        var documents = documentStore.list();
+        var documentStatuses = documentStatusStore.list();
+        var documentGraphState = DocumentGraphStateSupport.capture(
+            documentGraphSnapshotStore,
+            documentGraphJournalStore,
+            trackedDocumentGraphIds,
+            documents,
+            documentStatuses
+        );
         return new SnapshotStore.Snapshot(
-            documentStore.list(),
+            documents,
             chunkStore.list(),
             List.of(),
             List.of(),
             Map.of(),
-            documentStatusStore.list()
+            documentStatuses,
+            documentGraphState.documentSnapshots(),
+            documentGraphState.chunkSnapshots(),
+            documentGraphState.documentJournals(),
+            documentGraphState.chunkJournals()
         );
     }
 
@@ -151,6 +192,12 @@ public final class MySqlRelationalStorageAdapter implements RelationalStorageAda
                 }
                 return null;
             });
+            DocumentGraphStateSupport.restore(
+                documentGraphSnapshotStore,
+                documentGraphJournalStore,
+                trackedDocumentGraphIds,
+                source
+            );
         } catch (SQLException exception) {
             throw new StorageException("Failed to open MySQL transaction for restore", exception);
         }

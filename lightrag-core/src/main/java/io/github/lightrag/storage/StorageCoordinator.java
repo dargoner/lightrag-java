@@ -68,6 +68,16 @@ public final class StorageCoordinator implements AtomicStorageProvider, AutoClos
     }
 
     @Override
+    public DocumentGraphSnapshotStore documentGraphSnapshotStore() {
+        return relationalAdapter.documentGraphSnapshotStore();
+    }
+
+    @Override
+    public DocumentGraphJournalStore documentGraphJournalStore() {
+        return relationalAdapter.documentGraphJournalStore();
+    }
+
+    @Override
     public <T> T writeAtomically(AtomicOperation<T> operation) {
         Objects.requireNonNull(operation, "operation");
         var relationalSnapshot = relationalAdapter.captureSnapshot();

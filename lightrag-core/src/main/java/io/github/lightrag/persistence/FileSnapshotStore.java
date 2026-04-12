@@ -18,7 +18,7 @@ import java.util.concurrent.ConcurrentNavigableMap;
 import java.util.concurrent.ConcurrentSkipListMap;
 
 public final class FileSnapshotStore implements SnapshotStore {
-    private static final ObjectMapper OBJECT_MAPPER = new ObjectMapper();
+    private static final ObjectMapper OBJECT_MAPPER = new ObjectMapper().findAndRegisterModules();
 
     private final ConcurrentNavigableMap<String, Path> knownSnapshots = new ConcurrentSkipListMap<>();
 

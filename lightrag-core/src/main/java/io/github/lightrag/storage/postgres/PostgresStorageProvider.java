@@ -6,6 +6,9 @@ import io.github.lightrag.api.WorkspaceScope;
 import io.github.lightrag.exception.StorageException;
 import io.github.lightrag.storage.AtomicStorageProvider;
 import io.github.lightrag.storage.ChunkStore;
+import io.github.lightrag.storage.DocumentGraphJournalStore;
+import io.github.lightrag.storage.DocumentGraphSnapshotStore;
+import io.github.lightrag.storage.DocumentGraphStateSupport;
 import io.github.lightrag.storage.DocumentStore;
 import io.github.lightrag.storage.DocumentStatusStore;
 import io.github.lightrag.storage.GraphStore;
@@ -25,6 +28,7 @@ import java.util.Map;
 import java.util.Objects;
 import java.util.Optional;
 import java.util.function.Supplier;
+import java.util.concurrent.ConcurrentSkipListSet;
 import java.util.concurrent.locks.ReentrantReadWriteLock;
 
 public final class PostgresStorageProvider implements AtomicStorageProvider, AutoCloseable {
@@ -54,6 +58,9 @@ public final class PostgresStorageProvider implements AtomicStorageProvider, Aut
     private final ChunkStore lockedChunkStore;
     private final GraphStore lockedGraphStore;
     private final VectorStore lockedVectorStore;
+    private final DocumentGraphSnapshotStore documentGraphSnapshotStore;
+    private final DocumentGraphJournalStore documentGraphJournalStore;
+    private final java.util.Set<String> trackedDocumentGraphIds;
     private final PostgresStorageConfig config;
     private final String workspaceId;
     private final boolean ownsDataSource;
@@ -118,6 +125,7 @@ public final class PostgresStorageProvider implements AtomicStorageProvider, Aut
         this.lockDataSource = lockDataSource instanceof HikariDataSource hikari ? hikari : null;
         this.advisoryLockManager = new PostgresAdvisoryLockManager(jdbcLockDataSource, resolvedConfig, this.workspaceId);
         this.exclusiveAdvisoryLockHeld = ThreadLocal.withInitial(() -> Boolean.FALSE);
+        this.trackedDocumentGraphIds = new ConcurrentSkipListSet<>();
         try {
             new PostgresSchemaManager(jdbcDataSource, resolvedConfig).bootstrap();
             this.documentStore = new PostgresDocumentStore(jdbcDataSource, resolvedConfig, this.workspaceId);
@@ -127,6 +135,14 @@ public final class PostgresStorageProvider implements AtomicStorageProvider, Aut
             this.documentStatusStore = new PostgresDocumentStatusStore(jdbcDataSource, resolvedConfig, this.workspaceId);
             this.taskStore = new PostgresTaskStore(jdbcDataSource, resolvedConfig, this.workspaceId);
             this.taskStageStore = new PostgresTaskStageStore(jdbcDataSource, resolvedConfig, this.workspaceId);
+            this.documentGraphSnapshotStore = DocumentGraphStateSupport.trackedSnapshotStore(
+                new io.github.lightrag.storage.memory.InMemoryDocumentGraphSnapshotStore(lock),
+                trackedDocumentGraphIds
+            );
+            this.documentGraphJournalStore = DocumentGraphStateSupport.trackedJournalStore(
+                new io.github.lightrag.storage.memory.InMemoryDocumentGraphJournalStore(lock),
+                trackedDocumentGraphIds
+            );
             this.lockedDocumentStatusStore = new LockedDocumentStatusStore(documentStatusStore);
             this.lockedTaskStore = new LockedTaskStore(taskStore);
             this.lockedTaskStageStore = new LockedTaskStageStore(taskStageStore);
@@ -181,24 +197,42 @@ public final class PostgresStorageProvider implements AtomicStorageProvider, Aut
     }
 
     @Override
+    public DocumentGraphSnapshotStore documentGraphSnapshotStore() {
+        return documentGraphSnapshotStore;
+    }
+
+    @Override
+    public DocumentGraphJournalStore documentGraphJournalStore() {
+        return documentGraphJournalStore;
+    }
+
+    @Override
     public <T> T writeAtomically(AtomicOperation<T> operation) {
         Objects.requireNonNull(operation, "operation");
-        return withWorkspaceExclusiveLock(() -> PostgresRetrySupport.execute(
-            "atomic write for workspace '%s'".formatted(workspaceId),
-            () -> {
-                try (var connection = jdbcDataSource.getConnection()) {
-                    return withTransaction(connection, () -> operation.execute(newAtomicView(connection)));
-                } catch (SQLException exception) {
-                    throw new StorageException("Failed to open PostgreSQL transaction", exception);
+        return withWorkspaceExclusiveLock(() -> {
+            var documentGraphState = captureDocumentGraphState();
+            return PostgresRetrySupport.execute(
+                "atomic write for workspace '%s'".formatted(workspaceId),
+                () -> {
+                    try (var connection = jdbcDataSource.getConnection()) {
+                        return withTransaction(connection, () -> operation.execute(newAtomicView(connection)));
+                    } catch (SQLException exception) {
+                        throw new StorageException("Failed to open PostgreSQL transaction", exception);
+                    } catch (RuntimeException | Error failure) {
+                        restoreDocumentGraphState(documentGraphState, failure);
+                        throw failure;
+                    }
                 }
-            }
-        ));
+            );
+        });
     }
 
     @Override
     public void restore(SnapshotStore.Snapshot snapshot) {
         var source = Objects.requireNonNull(snapshot, "snapshot");
         withWorkspaceExclusiveLock(() -> {
+            var previousDocumentGraphState = captureDocumentGraphState();
+            try {
                 try (var connection = jdbcDataSource.getConnection()) {
                     withTransaction(connection, () -> {
                         truncateAll(connection);
@@ -224,10 +258,21 @@ public final class PostgresStorageProvider implements AtomicStorageProvider, Aut
                         }
                         return null;
                     });
-                } catch (SQLException exception) {
-                    throw new StorageException("Failed to open PostgreSQL transaction for restore", exception);
                 }
-                return null;
+                DocumentGraphStateSupport.restore(
+                    documentGraphSnapshotStore,
+                    documentGraphJournalStore,
+                    trackedDocumentGraphIds,
+                    source
+                );
+            } catch (SQLException exception) {
+                restoreDocumentGraphState(previousDocumentGraphState, exception);
+                throw new StorageException("Failed to open PostgreSQL transaction for restore", exception);
+            } catch (RuntimeException | Error failure) {
+                restoreDocumentGraphState(previousDocumentGraphState, failure);
+                throw failure;
+            }
+            return null;
         });
     }
 
@@ -295,6 +340,40 @@ public final class PostgresStorageProvider implements AtomicStorageProvider, Aut
             }
         } catch (SQLException exception) {
             throw new StorageException("Failed to configure PostgreSQL transaction", exception);
+        }
+    }
+
+    private SnapshotStore.DocumentGraphState captureDocumentGraphState() {
+        return DocumentGraphStateSupport.capture(
+            documentGraphSnapshotStore,
+            documentGraphJournalStore,
+            trackedDocumentGraphIds,
+            documentStore.list(),
+            documentStatusStore.list()
+        );
+    }
+
+    private void restoreDocumentGraphState(SnapshotStore.DocumentGraphState state, Throwable failure) {
+        try {
+            DocumentGraphStateSupport.restore(
+                documentGraphSnapshotStore,
+                documentGraphJournalStore,
+                trackedDocumentGraphIds,
+                new SnapshotStore.Snapshot(
+                    List.of(),
+                    List.of(),
+                    List.of(),
+                    List.of(),
+                    Map.of(),
+                    List.of(),
+                    state.documentSnapshots(),
+                    state.chunkSnapshots(),
+                    state.documentJournals(),
+                    state.chunkJournals()
+                )
+            );
+        } catch (RuntimeException restoreFailure) {
+            failure.addSuppressed(restoreFailure);
         }
     }
 

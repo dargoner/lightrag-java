@@ -1,6 +1,7 @@
 package io.github.lightrag.indexing;
 
 import io.github.lightrag.storage.AtomicStorageProvider;
+import io.github.lightrag.storage.DocumentGraphStateSupport;
 import io.github.lightrag.storage.SnapshotStore;
 
 import java.nio.file.Path;
@@ -17,8 +18,17 @@ public final class StorageSnapshots {
 
     public static SnapshotStore.Snapshot capture(AtomicStorageProvider storageProvider) {
         var provider = Objects.requireNonNull(storageProvider, "storageProvider");
+        var documents = provider.documentStore().list();
+        var documentStatuses = provider.documentStatusStore().list();
+        var documentGraphState = DocumentGraphStateSupport.capture(
+            provider.documentGraphSnapshotStore(),
+            provider.documentGraphJournalStore(),
+            java.util.List.of(),
+            documents,
+            documentStatuses
+        );
         return new SnapshotStore.Snapshot(
-            provider.documentStore().list(),
+            documents,
             provider.chunkStore().list(),
             provider.graphStore().allEntities(),
             provider.graphStore().allRelations(),
@@ -27,7 +37,11 @@ public final class StorageSnapshots {
                 ENTITY_NAMESPACE, provider.vectorStore().list(ENTITY_NAMESPACE),
                 RELATION_NAMESPACE, provider.vectorStore().list(RELATION_NAMESPACE)
             ),
-            provider.documentStatusStore().list()
+            documentStatuses,
+            documentGraphState.documentSnapshots(),
+            documentGraphState.chunkSnapshots(),
+            documentGraphState.documentJournals(),
+            documentGraphState.chunkJournals()
         );
     }
 
@@ -45,6 +59,10 @@ public final class StorageSnapshots {
             java.util.List.of(),
             java.util.List.of(),
             Map.of(),
+            java.util.List.of(),
+            java.util.List.of(),
+            java.util.List.of(),
+            java.util.List.of(),
             java.util.List.of()
         );
     }

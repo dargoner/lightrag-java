@@ -1,5 +1,6 @@
 package io.github.lightrag.storage.postgres;
 
+import io.github.lightrag.storage.DocumentGraphStateSupport;
 import io.github.lightrag.storage.SnapshotStore;
 import io.github.lightrag.storage.VectorStorageAdapter;
 import io.github.lightrag.storage.VectorStore;
@@ -42,13 +43,24 @@ public final class PostgresVectorStorageAdapter implements VectorStorageAdapter 
     @Override
     public void restore(VectorSnapshot snapshot) {
         var source = Objects.requireNonNull(snapshot, "snapshot");
+        var documentGraphState = DocumentGraphStateSupport.capture(
+            postgresProvider.documentGraphSnapshotStore(),
+            postgresProvider.documentGraphJournalStore(),
+            java.util.List.of(),
+            postgresProvider.documentStore().list(),
+            postgresProvider.documentStatusStore().list()
+        );
         postgresProvider.restore(new SnapshotStore.Snapshot(
             postgresProvider.documentStore().list(),
             postgresProvider.chunkStore().list(),
             postgresProvider.graphStore().allEntities(),
             postgresProvider.graphStore().allRelations(),
             source.namespaces(),
-            postgresProvider.documentStatusStore().list()
+            postgresProvider.documentStatusStore().list(),
+            documentGraphState.documentSnapshots(),
+            documentGraphState.chunkSnapshots(),
+            documentGraphState.documentJournals(),
+            documentGraphState.chunkJournals()
         ));
     }
 

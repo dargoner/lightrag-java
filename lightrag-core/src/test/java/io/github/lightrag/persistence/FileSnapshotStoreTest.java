@@ -1,6 +1,16 @@
 package io.github.lightrag.persistence;
 
+import io.github.lightrag.api.ChunkExtractStatus;
+import io.github.lightrag.api.ChunkGraphStatus;
+import io.github.lightrag.api.ChunkMergeStatus;
+import io.github.lightrag.api.FailureStage;
+import io.github.lightrag.api.GraphMaterializationMode;
+import io.github.lightrag.api.GraphMaterializationStatus;
+import io.github.lightrag.api.SnapshotSource;
+import io.github.lightrag.api.SnapshotStatus;
 import io.github.lightrag.storage.ChunkStore;
+import io.github.lightrag.storage.DocumentGraphJournalStore;
+import io.github.lightrag.storage.DocumentGraphSnapshotStore;
 import io.github.lightrag.storage.DocumentStore;
 import io.github.lightrag.storage.GraphStore;
 import io.github.lightrag.storage.SnapshotStore;
@@ -10,6 +20,7 @@ import org.junit.jupiter.api.io.TempDir;
 
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.time.Instant;
 import java.util.List;
 import java.util.Map;
 
@@ -70,6 +81,7 @@ class FileSnapshotStoreTest {
     }
 
     private static SnapshotStore.Snapshot sampleSnapshot() {
+        var now = Instant.parse("2026-04-12T08:00:00Z");
         return new SnapshotStore.Snapshot(
             List.of(new DocumentStore.DocumentRecord("doc-1", "Title", "Body", Map.of("source", "test"))),
             List.of(new ChunkStore.ChunkRecord("doc-1:0", "doc-1", "Body", 4, 0, Map.of("source", "test"))),
@@ -90,7 +102,68 @@ class FileSnapshotStoreTest {
                 0.8d,
                 List.of("doc-1:0")
             )),
-            Map.of("chunks", List.of(new VectorStore.VectorRecord("doc-1:0", List.of(1.0d, 0.0d))))
+            Map.of("chunks", List.of(new VectorStore.VectorRecord("doc-1:0", List.of(1.0d, 0.0d)))),
+            List.of(),
+            List.of(new DocumentGraphSnapshotStore.DocumentGraphSnapshot(
+                "doc-1",
+                2,
+                SnapshotStatus.READY,
+                SnapshotSource.PRIMARY_EXTRACTION,
+                1,
+                now.minusSeconds(30),
+                now,
+                null
+            )),
+            List.of(new DocumentGraphSnapshotStore.ChunkGraphSnapshot(
+                "doc-1",
+                "doc-1:0",
+                0,
+                "hash-doc-1:0",
+                ChunkExtractStatus.SUCCEEDED,
+                List.of(new DocumentGraphSnapshotStore.ExtractedEntityRecord(
+                    "Alice",
+                    "person",
+                    "Researcher",
+                    List.of("Al")
+                )),
+                List.of(new DocumentGraphSnapshotStore.ExtractedRelationRecord(
+                    "Alice",
+                    "Bob",
+                    "works_with",
+                    "Collaboration",
+                    0.8d
+                )),
+                now,
+                null
+            )),
+            List.of(new DocumentGraphJournalStore.DocumentGraphJournal(
+                "doc-1",
+                2,
+                GraphMaterializationStatus.MERGED,
+                GraphMaterializationMode.AUTO,
+                1,
+                1,
+                1,
+                1,
+                FailureStage.FINALIZING,
+                now.minusSeconds(20),
+                now,
+                null
+            )),
+            List.of(new DocumentGraphJournalStore.ChunkGraphJournal(
+                "doc-1",
+                "doc-1:0",
+                2,
+                ChunkMergeStatus.SUCCEEDED,
+                ChunkGraphStatus.MATERIALIZED,
+                List.of("alice"),
+                List.of("alice|works_with|bob"),
+                List.of("alice"),
+                List.of("alice|works_with|bob"),
+                FailureStage.RELATION_MATERIALIZATION,
+                now,
+                null
+            ))
         );
     }
 }

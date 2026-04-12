@@ -3,6 +3,9 @@ package io.github.lightrag.storage.neo4j;
 import io.github.lightrag.api.WorkspaceScope;
 import io.github.lightrag.storage.AtomicStorageProvider;
 import io.github.lightrag.storage.ChunkStore;
+import io.github.lightrag.storage.DocumentGraphJournalStore;
+import io.github.lightrag.storage.DocumentGraphSnapshotStore;
+import io.github.lightrag.storage.DocumentGraphStateSupport;
 import io.github.lightrag.storage.DocumentStatusStore;
 import io.github.lightrag.storage.DocumentStore;
 import io.github.lightrag.storage.GraphStorageAdapter;
@@ -38,6 +41,8 @@ public final class PostgresNeo4jStorageProvider implements AtomicStorageProvider
     private final TaskStageStore lockedTaskStageStore;
     private final VectorStore lockedVectorStore;
     private final GraphStore graphStore;
+    private final DocumentGraphSnapshotStore documentGraphSnapshotStore;
+    private final DocumentGraphJournalStore documentGraphJournalStore;
 
     public PostgresNeo4jStorageProvider(
         PostgresStorageConfig postgresConfig,
@@ -142,6 +147,8 @@ public final class PostgresNeo4jStorageProvider implements AtomicStorageProvider
         this.lockedTaskStageStore = new LockedTaskStageStore(coordinator.taskStageStore());
         this.lockedVectorStore = new LockedVectorStore(provider.vectorStore());
         this.graphStore = new MirroringGraphStore();
+        this.documentGraphSnapshotStore = coordinator.documentGraphSnapshotStore();
+        this.documentGraphJournalStore = coordinator.documentGraphJournalStore();
     }
 
     @Override
@@ -182,6 +189,16 @@ public final class PostgresNeo4jStorageProvider implements AtomicStorageProvider
     @Override
     public SnapshotStore snapshotStore() {
         return snapshotStore;
+    }
+
+    @Override
+    public DocumentGraphSnapshotStore documentGraphSnapshotStore() {
+        return documentGraphSnapshotStore;
+    }
+
+    @Override
+    public DocumentGraphJournalStore documentGraphJournalStore() {
+        return documentGraphJournalStore;
     }
 
     @Override
@@ -470,14 +487,35 @@ public final class PostgresNeo4jStorageProvider implements AtomicStorageProvider
         }
 
         @Override
+        public DocumentGraphSnapshotStore documentGraphSnapshotStore() {
+            return postgresProvider.documentGraphSnapshotStore();
+        }
+
+        @Override
+        public DocumentGraphJournalStore documentGraphJournalStore() {
+            return postgresProvider.documentGraphJournalStore();
+        }
+
+        @Override
         public SnapshotStore.Snapshot captureSnapshot() {
+            var documentGraphState = DocumentGraphStateSupport.capture(
+                postgresProvider.documentGraphSnapshotStore(),
+                postgresProvider.documentGraphJournalStore(),
+                java.util.List.of(),
+                postgresProvider.documentStore().list(),
+                postgresProvider.documentStatusStore().list()
+            );
             return new SnapshotStore.Snapshot(
                 postgresProvider.documentStore().list(),
                 postgresProvider.chunkStore().list(),
                 postgresProvider.graphStore().allEntities(),
                 postgresProvider.graphStore().allRelations(),
                 Map.of(),
-                postgresProvider.documentStatusStore().list()
+                postgresProvider.documentStatusStore().list(),
+                documentGraphState.documentSnapshots(),
+                documentGraphState.chunkSnapshots(),
+                documentGraphState.documentJournals(),
+                documentGraphState.chunkJournals()
             );
         }
 
@@ -490,7 +528,11 @@ public final class PostgresNeo4jStorageProvider implements AtomicStorageProvider
                 source.entities(),
                 source.relations(),
                 Map.of(),
-                source.documentStatuses()
+                source.documentStatuses(),
+                source.documentGraphSnapshots(),
+                source.chunkGraphSnapshots(),
+                source.documentGraphJournals(),
+                source.chunkGraphJournals()
             );
         }
 

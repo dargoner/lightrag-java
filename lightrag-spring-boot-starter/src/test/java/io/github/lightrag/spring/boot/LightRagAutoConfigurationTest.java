@@ -959,8 +959,28 @@ class LightRagAutoConfigurationTest {
         }
 
         @Override
+        public io.github.lightrag.storage.TaskStore taskStore() {
+            return delegate.taskStore();
+        }
+
+        @Override
+        public io.github.lightrag.storage.TaskStageStore taskStageStore() {
+            return delegate.taskStageStore();
+        }
+
+        @Override
         public SnapshotStore snapshotStore() {
             return delegate.snapshotStore();
+        }
+
+        @Override
+        public io.github.lightrag.storage.DocumentGraphSnapshotStore documentGraphSnapshotStore() {
+            return delegate.documentGraphSnapshotStore();
+        }
+
+        @Override
+        public io.github.lightrag.storage.DocumentGraphJournalStore documentGraphJournalStore() {
+            return delegate.documentGraphJournalStore();
         }
 
         @Override

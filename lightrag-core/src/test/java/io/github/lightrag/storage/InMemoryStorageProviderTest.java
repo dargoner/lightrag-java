@@ -1,7 +1,16 @@
 package io.github.lightrag.storage;
 
+import io.github.lightrag.api.ChunkExtractStatus;
+import io.github.lightrag.api.ChunkGraphStatus;
+import io.github.lightrag.api.ChunkMergeStatus;
+import io.github.lightrag.api.FailureStage;
+import io.github.lightrag.api.GraphMaterializationMode;
+import io.github.lightrag.api.GraphMaterializationStatus;
+import io.github.lightrag.api.SnapshotSource;
+import io.github.lightrag.api.SnapshotStatus;
 import org.junit.jupiter.api.Test;
 
+import java.time.Instant;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.CountDownLatch;
@@ -20,6 +29,8 @@ class InMemoryStorageProviderTest {
         assertThat(provider.graphStore()).isSameAs(provider.graphStore());
         assertThat(provider.vectorStore()).isSameAs(provider.vectorStore());
         assertThat(provider.snapshotStore()).isSameAs(provider.snapshotStore());
+        assertThat(provider.documentGraphSnapshotStore()).isSameAs(provider.documentGraphSnapshotStore());
+        assertThat(provider.documentGraphJournalStore()).isSameAs(provider.documentGraphJournalStore());
     }
 
     @Test
@@ -86,6 +97,88 @@ class InMemoryStorageProviderTest {
     }
 
     @Test
+    void writeAtomicallyRestoresDocumentGraphStoresWhenOperationFails() {
+        var provider = InMemoryStorageProvider.create();
+        var originalSnapshot = documentSnapshot("doc-0", Instant.parse("2026-04-12T08:00:00Z"));
+        var originalChunkSnapshot = chunkSnapshot("doc-0", "doc-0:0", Instant.parse("2026-04-12T08:00:01Z"));
+        var originalDocumentJournal = documentJournal("doc-0", 1, Instant.parse("2026-04-12T08:00:02Z"));
+        var originalChunkJournal = chunkJournal("doc-0", "doc-0:0", 1, Instant.parse("2026-04-12T08:00:03Z"));
+        provider.documentGraphSnapshotStore().saveDocument(originalSnapshot);
+        provider.documentGraphSnapshotStore().saveChunks("doc-0", List.of(originalChunkSnapshot));
+        provider.documentGraphJournalStore().appendDocument(originalDocumentJournal);
+        provider.documentGraphJournalStore().appendChunks("doc-0", List.of(originalChunkJournal));
+
+        assertThatThrownBy(() -> provider.writeAtomically(storage -> {
+            provider.documentGraphSnapshotStore().saveDocument(documentSnapshot("doc-1", Instant.parse("2026-04-12T08:01:00Z")));
+            provider.documentGraphSnapshotStore().saveChunks(
+                "doc-1",
+                List.of(chunkSnapshot("doc-1", "doc-1:0", Instant.parse("2026-04-12T08:01:01Z")))
+            );
+            provider.documentGraphJournalStore().appendDocument(
+                documentJournal("doc-1", 2, Instant.parse("2026-04-12T08:01:02Z"))
+            );
+            provider.documentGraphJournalStore().appendChunks(
+                "doc-1",
+                List.of(chunkJournal("doc-1", "doc-1:0", 2, Instant.parse("2026-04-12T08:01:03Z")))
+            );
+            throw new IllegalStateException("boom");
+        }))
+            .isInstanceOf(IllegalStateException.class)
+            .hasMessage("boom");
+
+        assertThat(provider.documentGraphSnapshotStore().loadDocument("doc-0")).contains(originalSnapshot);
+        assertThat(provider.documentGraphSnapshotStore().listChunks("doc-0")).containsExactly(originalChunkSnapshot);
+        assertThat(provider.documentGraphSnapshotStore().loadDocument("doc-1")).isEmpty();
+        assertThat(provider.documentGraphSnapshotStore().listChunks("doc-1")).isEmpty();
+        assertThat(provider.documentGraphJournalStore().listDocumentJournals("doc-0")).containsExactly(originalDocumentJournal);
+        assertThat(provider.documentGraphJournalStore().listChunkJournals("doc-0")).containsExactly(originalChunkJournal);
+        assertThat(provider.documentGraphJournalStore().listDocumentJournals("doc-1")).isEmpty();
+        assertThat(provider.documentGraphJournalStore().listChunkJournals("doc-1")).isEmpty();
+    }
+
+    @Test
+    void restoreReplacesDocumentGraphStores() {
+        var provider = InMemoryStorageProvider.create();
+        provider.documentGraphSnapshotStore().saveDocument(documentSnapshot("doc-old", Instant.parse("2026-04-12T08:00:00Z")));
+        provider.documentGraphSnapshotStore().saveChunks(
+            "doc-old",
+            List.of(chunkSnapshot("doc-old", "doc-old:0", Instant.parse("2026-04-12T08:00:01Z")))
+        );
+        provider.documentGraphJournalStore().appendDocument(documentJournal("doc-old", 1, Instant.parse("2026-04-12T08:00:02Z")));
+        provider.documentGraphJournalStore().appendChunks(
+            "doc-old",
+            List.of(chunkJournal("doc-old", "doc-old:0", 1, Instant.parse("2026-04-12T08:00:03Z")))
+        );
+
+        var replacementSnapshot = documentSnapshot("doc-1", Instant.parse("2026-04-12T09:00:00Z"));
+        var replacementChunkSnapshot = chunkSnapshot("doc-1", "doc-1:0", Instant.parse("2026-04-12T09:00:01Z"));
+        var replacementDocumentJournal = documentJournal("doc-1", 2, Instant.parse("2026-04-12T09:00:02Z"));
+        var replacementChunkJournal = chunkJournal("doc-1", "doc-1:0", 2, Instant.parse("2026-04-12T09:00:03Z"));
+
+        provider.restore(new SnapshotStore.Snapshot(
+            List.of(),
+            List.of(),
+            List.of(),
+            List.of(),
+            Map.of(),
+            List.of(),
+            List.of(replacementSnapshot),
+            List.of(replacementChunkSnapshot),
+            List.of(replacementDocumentJournal),
+            List.of(replacementChunkJournal)
+        ));
+
+        assertThat(provider.documentGraphSnapshotStore().loadDocument("doc-old")).isEmpty();
+        assertThat(provider.documentGraphSnapshotStore().listChunks("doc-old")).isEmpty();
+        assertThat(provider.documentGraphJournalStore().listDocumentJournals("doc-old")).isEmpty();
+        assertThat(provider.documentGraphJournalStore().listChunkJournals("doc-old")).isEmpty();
+        assertThat(provider.documentGraphSnapshotStore().loadDocument("doc-1")).contains(replacementSnapshot);
+        assertThat(provider.documentGraphSnapshotStore().listChunks("doc-1")).containsExactly(replacementChunkSnapshot);
+        assertThat(provider.documentGraphJournalStore().listDocumentJournals("doc-1")).containsExactly(replacementDocumentJournal);
+        assertThat(provider.documentGraphJournalStore().listChunkJournals("doc-1")).containsExactly(replacementChunkJournal);
+    }
+
+    @Test
     void readersDoNotObservePartialStateDuringAtomicWrite() throws Exception {
         var provider = InMemoryStorageProvider.create();
         var documentSaved = new CountDownLatch(1);
@@ -142,5 +235,82 @@ class InMemoryStorageProviderTest {
             Thread.currentThread().interrupt();
             throw new AssertionError("Test interrupted", exception);
         }
+    }
+
+    private static DocumentGraphSnapshotStore.DocumentGraphSnapshot documentSnapshot(String documentId, Instant now) {
+        return new DocumentGraphSnapshotStore.DocumentGraphSnapshot(
+            documentId,
+            1,
+            SnapshotStatus.READY,
+            SnapshotSource.PRIMARY_EXTRACTION,
+            1,
+            now.minusSeconds(1),
+            now,
+            null
+        );
+    }
+
+    private static DocumentGraphSnapshotStore.ChunkGraphSnapshot chunkSnapshot(String documentId, String chunkId, Instant now) {
+        return new DocumentGraphSnapshotStore.ChunkGraphSnapshot(
+            documentId,
+            chunkId,
+            0,
+            "hash-" + chunkId,
+            ChunkExtractStatus.SUCCEEDED,
+            List.of(new DocumentGraphSnapshotStore.ExtractedEntityRecord(
+                "entity-a",
+                "person",
+                "desc",
+                List.of("alias-a")
+            )),
+            List.of(new DocumentGraphSnapshotStore.ExtractedRelationRecord(
+                "entity-a",
+                "entity-b",
+                "works_with",
+                "rel-desc",
+                1.0d
+            )),
+            now,
+            null
+        );
+    }
+
+    private static DocumentGraphJournalStore.DocumentGraphJournal documentJournal(String documentId, int version, Instant now) {
+        return new DocumentGraphJournalStore.DocumentGraphJournal(
+            documentId,
+            version,
+            GraphMaterializationStatus.MERGED,
+            GraphMaterializationMode.AUTO,
+            1,
+            1,
+            1,
+            1,
+            FailureStage.FINALIZING,
+            now.minusSeconds(1),
+            now,
+            null
+        );
+    }
+
+    private static DocumentGraphJournalStore.ChunkGraphJournal chunkJournal(
+        String documentId,
+        String chunkId,
+        int version,
+        Instant now
+    ) {
+        return new DocumentGraphJournalStore.ChunkGraphJournal(
+            documentId,
+            chunkId,
+            version,
+            ChunkMergeStatus.SUCCEEDED,
+            ChunkGraphStatus.MATERIALIZED,
+            List.of("entity-a"),
+            List.of("relation-a"),
+            List.of("entity-a"),
+            List.of("relation-a"),
+            FailureStage.ENTITY_MATERIALIZATION,
+            now,
+            null
+        );
     }
 }

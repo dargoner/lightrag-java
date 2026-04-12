@@ -2,9 +2,19 @@ package io.github.lightrag.storage.postgres;
 
 import com.pgvector.PGvector;
 import com.zaxxer.hikari.HikariDataSource;
+import io.github.lightrag.api.ChunkExtractStatus;
+import io.github.lightrag.api.ChunkGraphStatus;
+import io.github.lightrag.api.ChunkMergeStatus;
 import io.github.lightrag.api.DocumentStatus;
+import io.github.lightrag.api.FailureStage;
+import io.github.lightrag.api.GraphMaterializationMode;
+import io.github.lightrag.api.GraphMaterializationStatus;
+import io.github.lightrag.api.SnapshotSource;
+import io.github.lightrag.api.SnapshotStatus;
 import io.github.lightrag.exception.StorageException;
 import io.github.lightrag.storage.ChunkStore;
+import io.github.lightrag.storage.DocumentGraphJournalStore;
+import io.github.lightrag.storage.DocumentGraphSnapshotStore;
 import io.github.lightrag.storage.DocumentStatusStore;
 import io.github.lightrag.storage.DocumentStore;
 import io.github.lightrag.storage.GraphStore;
@@ -19,6 +29,7 @@ import java.nio.file.Path;
 import java.sql.DriverManager;
 import java.sql.SQLException;
 import java.sql.SQLTransactionRollbackException;
+import java.time.Instant;
 import java.util.Arrays;
 import java.util.ArrayList;
 import java.util.List;
@@ -1231,6 +1242,62 @@ class PostgresStorageProviderTest {
     }
 
     @Test
+    void restoreReplacesDocumentGraphStores() {
+        PostgreSQLContainer<?> container = newPostgresContainer();
+        container.start();
+
+        var config = new PostgresStorageConfig(
+            container.getJdbcUrl(),
+            container.getUsername(),
+            container.getPassword(),
+            "lightrag",
+            3,
+            "rag_"
+        );
+        var replacementSnapshot = graphSnapshot("doc-1", Instant.parse("2026-04-12T09:00:00Z"));
+        var replacementChunkSnapshot = chunkGraphSnapshot("doc-1", "doc-1:0", Instant.parse("2026-04-12T09:00:01Z"));
+        var replacementDocumentJournal = documentGraphJournal("doc-1", 2, Instant.parse("2026-04-12T09:00:02Z"));
+        var replacementChunkJournal = chunkGraphJournal("doc-1", "doc-1:0", 2, Instant.parse("2026-04-12T09:00:03Z"));
+
+        try (container; PostgresStorageProvider provider = new PostgresStorageProvider(config, new InMemorySnapshotStore())) {
+            provider.documentGraphSnapshotStore().saveDocument(graphSnapshot("doc-old", Instant.parse("2026-04-12T08:00:00Z")));
+            provider.documentGraphSnapshotStore().saveChunks(
+                "doc-old",
+                List.of(chunkGraphSnapshot("doc-old", "doc-old:0", Instant.parse("2026-04-12T08:00:01Z")))
+            );
+            provider.documentGraphJournalStore().appendDocument(
+                documentGraphJournal("doc-old", 1, Instant.parse("2026-04-12T08:00:02Z"))
+            );
+            provider.documentGraphJournalStore().appendChunks(
+                "doc-old",
+                List.of(chunkGraphJournal("doc-old", "doc-old:0", 1, Instant.parse("2026-04-12T08:00:03Z")))
+            );
+
+            provider.restore(new SnapshotStore.Snapshot(
+                List.of(),
+                List.of(),
+                List.of(),
+                List.of(),
+                Map.of(),
+                List.of(),
+                List.of(replacementSnapshot),
+                List.of(replacementChunkSnapshot),
+                List.of(replacementDocumentJournal),
+                List.of(replacementChunkJournal)
+            ));
+
+            assertThat(provider.documentGraphSnapshotStore().loadDocument("doc-old")).isEmpty();
+            assertThat(provider.documentGraphSnapshotStore().listChunks("doc-old")).isEmpty();
+            assertThat(provider.documentGraphJournalStore().listDocumentJournals("doc-old")).isEmpty();
+            assertThat(provider.documentGraphJournalStore().listChunkJournals("doc-old")).isEmpty();
+            assertThat(provider.documentGraphSnapshotStore().loadDocument("doc-1")).contains(replacementSnapshot);
+            assertThat(provider.documentGraphSnapshotStore().listChunks("doc-1")).containsExactly(replacementChunkSnapshot);
+            assertThat(provider.documentGraphJournalStore().listDocumentJournals("doc-1")).containsExactly(replacementDocumentJournal);
+            assertThat(provider.documentGraphJournalStore().listChunkJournals("doc-1")).containsExactly(replacementChunkJournal);
+        }
+    }
+
+    @Test
     void scaffoldsDependencyBackedHarness() {
         PostgreSQLContainer<?> container = null;
         HikariDataSource dataSource = null;
@@ -1504,6 +1571,87 @@ class PostgresStorageProviderTest {
     private static String withCurrentSchema(String jdbcUrl, String schema) {
         String separator = jdbcUrl.contains("?") ? "&" : "?";
         return jdbcUrl + separator + "currentSchema=" + schema;
+    }
+
+    private static DocumentGraphSnapshotStore.DocumentGraphSnapshot graphSnapshot(String documentId, Instant now) {
+        return new DocumentGraphSnapshotStore.DocumentGraphSnapshot(
+            documentId,
+            1,
+            SnapshotStatus.READY,
+            SnapshotSource.PRIMARY_EXTRACTION,
+            1,
+            now.minusSeconds(1),
+            now,
+            null
+        );
+    }
+
+    private static DocumentGraphSnapshotStore.ChunkGraphSnapshot chunkGraphSnapshot(
+        String documentId,
+        String chunkId,
+        Instant now
+    ) {
+        return new DocumentGraphSnapshotStore.ChunkGraphSnapshot(
+            documentId,
+            chunkId,
+            0,
+            "hash-" + chunkId,
+            ChunkExtractStatus.SUCCEEDED,
+            List.of(new DocumentGraphSnapshotStore.ExtractedEntityRecord(
+                "entity-a",
+                "person",
+                "desc",
+                List.of("alias-a")
+            )),
+            List.of(new DocumentGraphSnapshotStore.ExtractedRelationRecord(
+                "entity-a",
+                "entity-b",
+                "works_with",
+                "rel-desc",
+                1.0d
+            )),
+            now,
+            null
+        );
+    }
+
+    private static DocumentGraphJournalStore.DocumentGraphJournal documentGraphJournal(String documentId, int version, Instant now) {
+        return new DocumentGraphJournalStore.DocumentGraphJournal(
+            documentId,
+            version,
+            GraphMaterializationStatus.MERGED,
+            GraphMaterializationMode.AUTO,
+            1,
+            1,
+            1,
+            1,
+            FailureStage.FINALIZING,
+            now.minusSeconds(1),
+            now,
+            null
+        );
+    }
+
+    private static DocumentGraphJournalStore.ChunkGraphJournal chunkGraphJournal(
+        String documentId,
+        String chunkId,
+        int version,
+        Instant now
+    ) {
+        return new DocumentGraphJournalStore.ChunkGraphJournal(
+            documentId,
+            chunkId,
+            version,
+            ChunkMergeStatus.SUCCEEDED,
+            ChunkGraphStatus.MATERIALIZED,
+            List.of("entity-a"),
+            List.of("relation-a"),
+            List.of("entity-a"),
+            List.of("relation-a"),
+            FailureStage.ENTITY_MATERIALIZATION,
+            now,
+            null
+        );
     }
 
     private static Object readField(Object target, String fieldName) throws Exception {

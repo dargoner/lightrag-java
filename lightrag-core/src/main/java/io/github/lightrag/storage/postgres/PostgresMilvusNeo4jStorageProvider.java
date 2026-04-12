@@ -4,6 +4,8 @@ import io.github.lightrag.api.WorkspaceScope;
 import io.github.lightrag.indexing.HybridVectorPayloads;
 import io.github.lightrag.storage.AtomicStorageProvider;
 import io.github.lightrag.storage.ChunkStore;
+import io.github.lightrag.storage.DocumentGraphJournalStore;
+import io.github.lightrag.storage.DocumentGraphSnapshotStore;
 import io.github.lightrag.storage.DocumentStatusStore;
 import io.github.lightrag.storage.DocumentStore;
 import io.github.lightrag.storage.GraphStorageAdapter;
@@ -44,6 +46,8 @@ public final class PostgresMilvusNeo4jStorageProvider implements AtomicStoragePr
     private final TaskStageStore lockedTaskStageStore;
     private final VectorStore lockedVectorStore;
     private final GraphStore graphStore;
+    private final DocumentGraphSnapshotStore documentGraphSnapshotStore;
+    private final DocumentGraphJournalStore documentGraphJournalStore;
 
     public PostgresMilvusNeo4jStorageProvider(
         PostgresStorageConfig postgresConfig,
@@ -148,6 +152,8 @@ public final class PostgresMilvusNeo4jStorageProvider implements AtomicStoragePr
         this.lockedTaskStageStore = new LockedTaskStageStore(coordinator.taskStageStore());
         this.lockedVectorStore = new LockedVectorStore(coordinator.vectorStore());
         this.graphStore = new MirroringGraphStore();
+        this.documentGraphSnapshotStore = coordinator.documentGraphSnapshotStore();
+        this.documentGraphJournalStore = coordinator.documentGraphJournalStore();
     }
 
     @Override
@@ -188,6 +194,16 @@ public final class PostgresMilvusNeo4jStorageProvider implements AtomicStoragePr
     @Override
     public SnapshotStore snapshotStore() {
         return snapshotStore;
+    }
+
+    @Override
+    public DocumentGraphSnapshotStore documentGraphSnapshotStore() {
+        return documentGraphSnapshotStore;
+    }
+
+    @Override
+    public DocumentGraphJournalStore documentGraphJournalStore() {
+        return documentGraphJournalStore;
     }
 
     @Override

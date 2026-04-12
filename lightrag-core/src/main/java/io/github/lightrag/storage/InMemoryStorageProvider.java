@@ -18,6 +18,7 @@ import java.util.NoSuchElementException;
 import java.util.Objects;
 import java.util.concurrent.ConcurrentNavigableMap;
 import java.util.concurrent.ConcurrentSkipListMap;
+import java.util.concurrent.ConcurrentSkipListSet;
 import java.util.concurrent.locks.ReadWriteLock;
 import java.util.concurrent.locks.ReentrantReadWriteLock;
 
@@ -30,8 +31,9 @@ public final class InMemoryStorageProvider implements AtomicStorageProvider {
     private final InMemoryDocumentStatusStore documentStatusStore;
     private final InMemoryTaskStore taskStore;
     private final InMemoryTaskStageStore taskStageStore;
-    private final InMemoryDocumentGraphSnapshotStore documentGraphSnapshotStore;
-    private final InMemoryDocumentGraphJournalStore documentGraphJournalStore;
+    private final DocumentGraphSnapshotStore documentGraphSnapshotStore;
+    private final DocumentGraphJournalStore documentGraphJournalStore;
+    private final java.util.Set<String> trackedDocumentGraphIds;
     private final SnapshotStore snapshotStore;
 
     public InMemoryStorageProvider() {
@@ -47,8 +49,15 @@ public final class InMemoryStorageProvider implements AtomicStorageProvider {
         this.documentStatusStore = new InMemoryDocumentStatusStore(lock);
         this.taskStore = new InMemoryTaskStore(lock);
         this.taskStageStore = new InMemoryTaskStageStore(lock);
-        this.documentGraphSnapshotStore = new InMemoryDocumentGraphSnapshotStore(lock);
-        this.documentGraphJournalStore = new InMemoryDocumentGraphJournalStore(lock);
+        this.trackedDocumentGraphIds = new ConcurrentSkipListSet<>();
+        this.documentGraphSnapshotStore = DocumentGraphStateSupport.trackedSnapshotStore(
+            new InMemoryDocumentGraphSnapshotStore(lock),
+            trackedDocumentGraphIds
+        );
+        this.documentGraphJournalStore = DocumentGraphStateSupport.trackedJournalStore(
+            new InMemoryDocumentGraphJournalStore(lock),
+            trackedDocumentGraphIds
+        );
         this.snapshotStore = Objects.requireNonNull(snapshotStore, "snapshotStore");
     }
 
@@ -143,13 +152,26 @@ public final class InMemoryStorageProvider implements AtomicStorageProvider {
     }
 
     private SnapshotStore.Snapshot snapshot() {
+        var documentSnapshots = documentStore.snapshot();
+        var documentStatuses = documentStatusStore.snapshot();
+        var documentGraphState = DocumentGraphStateSupport.capture(
+            documentGraphSnapshotStore,
+            documentGraphJournalStore,
+            trackedDocumentGraphIds,
+            documentSnapshots,
+            documentStatuses
+        );
         return new SnapshotStore.Snapshot(
-            documentStore.snapshot(),
+            documentSnapshots,
             chunkStore.snapshot(),
             graphStore.snapshotEntities(),
             graphStore.snapshotRelations(),
             vectorStore.snapshot(),
-            documentStatusStore.snapshot()
+            documentStatuses,
+            documentGraphState.documentSnapshots(),
+            documentGraphState.chunkSnapshots(),
+            documentGraphState.documentJournals(),
+            documentGraphState.chunkJournals()
         );
     }
 
@@ -202,6 +224,21 @@ public final class InMemoryStorageProvider implements AtomicStorageProvider {
             }
         }
 
+        try {
+            DocumentGraphStateSupport.restore(
+                documentGraphSnapshotStore,
+                documentGraphJournalStore,
+                trackedDocumentGraphIds,
+                snapshot
+            );
+        } catch (RuntimeException exception) {
+            if (rollbackFailure == null) {
+                rollbackFailure = exception;
+            } else {
+                rollbackFailure.addSuppressed(exception);
+            }
+        }
+
         if (rollbackFailure != null) {
             failure.addSuppressed(rollbackFailure);
         }
@@ -213,6 +250,12 @@ public final class InMemoryStorageProvider implements AtomicStorageProvider {
         chunkStore.restore(snapshot.chunks());
         documentStore.restore(snapshot.documents());
         documentStatusStore.restore(snapshot.documentStatuses());
+        DocumentGraphStateSupport.restore(
+            documentGraphSnapshotStore,
+            documentGraphJournalStore,
+            trackedDocumentGraphIds,
+            snapshot
+        );
     }
 
     private record AtomicView(
@@ -261,7 +304,11 @@ public final class InMemoryStorageProvider implements AtomicStorageProvider {
                 source.entities(),
                 source.relations(),
                 Map.copyOf(source.vectors()),
-                source.documentStatuses()
+                source.documentStatuses(),
+                source.documentGraphSnapshots(),
+                source.chunkGraphSnapshots(),
+                source.documentGraphJournals(),
+                source.chunkGraphJournals()
             );
         }
     }

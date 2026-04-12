@@ -53,7 +53,12 @@ public final class DeletionPipeline {
                 StorageSnapshots.CHUNK_NAMESPACE, snapshot.vectors().getOrDefault(StorageSnapshots.CHUNK_NAMESPACE, List.of()),
                 StorageSnapshots.ENTITY_NAMESPACE, filterVectors(snapshot, StorageSnapshots.ENTITY_NAMESPACE, id -> !entityIds.contains(id)),
                 StorageSnapshots.RELATION_NAMESPACE, filterVectors(snapshot, StorageSnapshots.RELATION_NAMESPACE, id -> !relationsToRemove.contains(id))
-            )
+            ),
+            snapshot.documentStatuses(),
+            snapshot.documentGraphSnapshots(),
+            snapshot.chunkGraphSnapshots(),
+            snapshot.documentGraphJournals(),
+            snapshot.chunkGraphJournals()
         ));
         StorageSnapshots.persistIfConfigured(storageProvider, snapshotPath);
     }
@@ -83,7 +88,12 @@ public final class DeletionPipeline {
                 StorageSnapshots.CHUNK_NAMESPACE, snapshot.vectors().getOrDefault(StorageSnapshots.CHUNK_NAMESPACE, List.of()),
                 StorageSnapshots.ENTITY_NAMESPACE, snapshot.vectors().getOrDefault(StorageSnapshots.ENTITY_NAMESPACE, List.of()),
                 StorageSnapshots.RELATION_NAMESPACE, filterVectors(snapshot, StorageSnapshots.RELATION_NAMESPACE, id -> !relationsToRemove.contains(id))
-            )
+            ),
+            snapshot.documentStatuses(),
+            snapshot.documentGraphSnapshots(),
+            snapshot.chunkGraphSnapshots(),
+            snapshot.documentGraphJournals(),
+            snapshot.chunkGraphJournals()
         ));
         StorageSnapshots.persistIfConfigured(storageProvider, snapshotPath);
     }

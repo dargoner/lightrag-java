@@ -145,7 +145,12 @@ public final class GraphManagementPipeline {
             snapshot.chunks(),
             replaceEntity(snapshot.entities(), existing.id(), updatedEntity),
             updatedRelations,
-            Map.copyOf(updatedVectors)
+            Map.copyOf(updatedVectors),
+            snapshot.documentStatuses(),
+            snapshot.documentGraphSnapshots(),
+            snapshot.chunkGraphSnapshots(),
+            snapshot.documentGraphJournals(),
+            snapshot.chunkGraphJournals()
         ));
         StorageSnapshots.persistIfConfigured(storageProvider, snapshotPath);
         return toGraphEntity(updatedEntity);
@@ -192,7 +197,12 @@ public final class GraphManagementPipeline {
             snapshot.chunks(),
             snapshot.entities(),
             replaceRelation(snapshot.relations(), existing.id(), updatedRelation),
-            Map.copyOf(updatedVectors)
+            Map.copyOf(updatedVectors),
+            snapshot.documentStatuses(),
+            snapshot.documentGraphSnapshots(),
+            snapshot.chunkGraphSnapshots(),
+            snapshot.documentGraphJournals(),
+            snapshot.chunkGraphJournals()
         ));
         StorageSnapshots.persistIfConfigured(storageProvider, snapshotPath);
         return toGraphRelation(updatedRelation);
@@ -246,7 +256,12 @@ public final class GraphManagementPipeline {
             snapshot.chunks(),
             updatedEntities,
             updatedRelations,
-            Map.copyOf(updatedVectors)
+            Map.copyOf(updatedVectors),
+            snapshot.documentStatuses(),
+            snapshot.documentGraphSnapshots(),
+            snapshot.chunkGraphSnapshots(),
+            snapshot.documentGraphJournals(),
+            snapshot.chunkGraphJournals()
         ));
         StorageSnapshots.persistIfConfigured(storageProvider, snapshotPath);
         return toGraphEntity(mergedTarget);
