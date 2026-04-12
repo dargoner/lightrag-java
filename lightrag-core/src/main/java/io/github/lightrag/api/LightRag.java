@@ -246,6 +246,74 @@ public final class LightRag implements AutoCloseable {
             .toList();
     }
 
+    public DocumentGraphInspection inspectDocumentGraph(String workspaceId, String documentId) {
+        Objects.requireNonNull(workspaceId, "workspaceId");
+        Objects.requireNonNull(documentId, "documentId");
+        throw unsupportedGraphMaterializationApi();
+    }
+
+    public DocumentGraphMaterializationResult materializeDocumentGraph(
+        String workspaceId,
+        String documentId,
+        GraphMaterializationMode mode
+    ) {
+        Objects.requireNonNull(workspaceId, "workspaceId");
+        Objects.requireNonNull(documentId, "documentId");
+        Objects.requireNonNull(mode, "mode");
+        throw unsupportedGraphMaterializationApi();
+    }
+
+    public DocumentChunkGraphStatus getDocumentChunkGraphStatus(String workspaceId, String documentId, String chunkId) {
+        Objects.requireNonNull(workspaceId, "workspaceId");
+        Objects.requireNonNull(documentId, "documentId");
+        Objects.requireNonNull(chunkId, "chunkId");
+        throw unsupportedGraphMaterializationApi();
+    }
+
+    public List<DocumentChunkGraphStatus> listDocumentChunkGraphStatuses(String workspaceId, String documentId) {
+        Objects.requireNonNull(workspaceId, "workspaceId");
+        Objects.requireNonNull(documentId, "documentId");
+        throw unsupportedGraphMaterializationApi();
+    }
+
+    public ChunkGraphMaterializationResult resumeChunkGraph(String workspaceId, String documentId, String chunkId) {
+        Objects.requireNonNull(workspaceId, "workspaceId");
+        Objects.requireNonNull(documentId, "documentId");
+        Objects.requireNonNull(chunkId, "chunkId");
+        throw unsupportedGraphMaterializationApi();
+    }
+
+    public ChunkGraphMaterializationResult repairChunkGraph(String workspaceId, String documentId, String chunkId) {
+        Objects.requireNonNull(workspaceId, "workspaceId");
+        Objects.requireNonNull(documentId, "documentId");
+        Objects.requireNonNull(chunkId, "chunkId");
+        throw unsupportedGraphMaterializationApi();
+    }
+
+    public String submitDocumentGraphMaterialization(
+        String workspaceId,
+        String documentId,
+        GraphMaterializationMode mode
+    ) {
+        Objects.requireNonNull(workspaceId, "workspaceId");
+        Objects.requireNonNull(documentId, "documentId");
+        Objects.requireNonNull(mode, "mode");
+        throw unsupportedGraphMaterializationApi();
+    }
+
+    public String submitChunkGraphMaterialization(
+        String workspaceId,
+        String documentId,
+        String chunkId,
+        GraphChunkAction action
+    ) {
+        Objects.requireNonNull(workspaceId, "workspaceId");
+        Objects.requireNonNull(documentId, "documentId");
+        Objects.requireNonNull(chunkId, "chunkId");
+        Objects.requireNonNull(action, "action");
+        throw unsupportedGraphMaterializationApi();
+    }
+
     public void saveSnapshot(String workspaceId, Path path) {
         var scope = resolveScope(workspaceId);
         var snapshotPath = Objects.requireNonNull(path, "path");
@@ -416,5 +484,9 @@ public final class LightRag implements AutoCloseable {
             statusRecord.summary(),
             statusRecord.errorMessage()
         );
+    }
+
+    private static UnsupportedOperationException unsupportedGraphMaterializationApi() {
+        return new UnsupportedOperationException("graph materialization behavior is not implemented yet");
     }
 }

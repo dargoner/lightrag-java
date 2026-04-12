@@ -76,6 +76,20 @@ class LightRagTaskApiTest {
             .containsExactly("entity:alice", "entity:bob");
     }
 
+    @Test
+    void taskEnumsIncludeGraphMaterializationValues() {
+        assertThat(TaskType.values()).contains(TaskType.MATERIALIZE_DOCUMENT_GRAPH, TaskType.MATERIALIZE_CHUNK_GRAPH);
+        assertThat(TaskStage.values()).contains(
+            TaskStage.SNAPSHOT_LOADING,
+            TaskStage.SNAPSHOT_RECOVERY,
+            TaskStage.GRAPH_INSPECTION,
+            TaskStage.ENTITY_MATERIALIZATION,
+            TaskStage.RELATION_MATERIALIZATION,
+            TaskStage.VECTOR_REPAIR,
+            TaskStage.FINALIZING
+        );
+    }
+
     private static TaskSnapshot awaitTerminalTask(LightRag rag, String taskId) {
         var deadline = Instant.now().plus(Duration.ofSeconds(5));
         TaskSnapshot snapshot = rag.getTask(WORKSPACE, taskId);
