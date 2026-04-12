@@ -71,6 +71,12 @@ class LightRagDocumentGraphApiTest {
 
     @Test
     void graphMaterializationEnumsMatchSpec() {
+        assertThat(GraphMaterializationMode.values()).containsExactly(
+            GraphMaterializationMode.AUTO,
+            GraphMaterializationMode.RESUME,
+            GraphMaterializationMode.REPAIR,
+            GraphMaterializationMode.REBUILD
+        );
         assertThat(GraphMaterializationStatus.values()).containsExactly(
             GraphMaterializationStatus.NOT_STARTED,
             GraphMaterializationStatus.MERGING,
@@ -115,10 +121,58 @@ class LightRagDocumentGraphApiTest {
             GraphChunkAction.RESUME,
             GraphChunkAction.REPAIR
         );
+        assertThat(FailureStage.values()).containsExactly(
+            FailureStage.SNAPSHOT_LOADING,
+            FailureStage.SNAPSHOT_RECOVERY,
+            FailureStage.GRAPH_INSPECTION,
+            FailureStage.ENTITY_MATERIALIZATION,
+            FailureStage.RELATION_MATERIALIZATION,
+            FailureStage.VECTOR_REPAIR,
+            FailureStage.FINALIZING
+        );
     }
 
     @Test
     void materializationRecordShapesMatchSpec() {
+        assertRecord(
+            DocumentGraphInspection.class,
+            new String[] {
+                "documentId",
+                "documentStatus",
+                "graphStatus",
+                "snapshotStatus",
+                "snapshotVersion",
+                "expectedEntityCount",
+                "expectedRelationCount",
+                "materializedEntityCount",
+                "materializedRelationCount",
+                "missingEntityKeys",
+                "missingRelationKeys",
+                "orphanEntityKeys",
+                "orphanRelationKeys",
+                "recommendedMode",
+                "repairable",
+                "summary"
+            },
+            new Class<?>[] {
+                String.class,
+                DocumentStatus.class,
+                GraphMaterializationStatus.class,
+                SnapshotStatus.class,
+                int.class,
+                int.class,
+                int.class,
+                int.class,
+                int.class,
+                java.util.List.class,
+                java.util.List.class,
+                java.util.List.class,
+                java.util.List.class,
+                GraphMaterializationMode.class,
+                boolean.class,
+                String.class
+            }
+        );
         assertRecord(
             DocumentGraphMaterializationResult.class,
             new String[] {
