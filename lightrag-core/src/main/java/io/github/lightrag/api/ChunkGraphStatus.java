@@ -1,9 +1,10 @@
 package io.github.lightrag.api;
 
 public enum ChunkGraphStatus {
-    NOT_STARTED,
-    IN_PROGRESS,
-    READY,
-    REPAIR_REQUIRED,
-    FAILED
+    NOT_MATERIALIZED,
+    MATERIALIZED,
+    PARTIAL,
+    FAILED,
+    STALE,
+    MISSING
 }

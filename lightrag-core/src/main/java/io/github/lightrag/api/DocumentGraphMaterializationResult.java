@@ -4,21 +4,24 @@ import java.util.Objects;
 
 public record DocumentGraphMaterializationResult(
     String documentId,
-    GraphMaterializationMode mode,
-    GraphMaterializationStatus status,
-    SnapshotStatus snapshotStatus,
+    GraphMaterializationMode requestedMode,
+    GraphMaterializationMode executedMode,
+    GraphMaterializationStatus finalStatus,
     int snapshotVersion,
-    int materializedEntityCount,
-    int materializedRelationCount,
-    FailureStage failureStage,
+    int entitiesExpected,
+    int relationsExpected,
+    int entitiesMaterialized,
+    int relationsMaterialized,
+    boolean snapshotReused,
+    boolean snapshotRecoveredFromStorage,
     String summary,
     String errorMessage
 ) {
     public DocumentGraphMaterializationResult {
         documentId = requireNonBlank(documentId, "documentId");
-        mode = Objects.requireNonNull(mode, "mode");
-        status = Objects.requireNonNull(status, "status");
-        snapshotStatus = Objects.requireNonNull(snapshotStatus, "snapshotStatus");
+        requestedMode = Objects.requireNonNull(requestedMode, "requestedMode");
+        executedMode = Objects.requireNonNull(executedMode, "executedMode");
+        finalStatus = Objects.requireNonNull(finalStatus, "finalStatus");
         summary = summary == null ? "" : summary.strip();
         errorMessage = errorMessage == null ? null : errorMessage.strip();
     }

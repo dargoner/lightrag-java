@@ -5,17 +5,20 @@ import java.util.Objects;
 public record ChunkGraphMaterializationResult(
     String documentId,
     String chunkId,
-    GraphChunkAction action,
-    ChunkGraphStatus status,
-    FailureStage failureStage,
+    GraphChunkAction executedAction,
+    ChunkGraphStatus finalStatus,
+    int expectedEntityCount,
+    int expectedRelationCount,
+    int materializedEntityCount,
+    int materializedRelationCount,
     String summary,
     String errorMessage
 ) {
     public ChunkGraphMaterializationResult {
         documentId = requireNonBlank(documentId, "documentId");
         chunkId = requireNonBlank(chunkId, "chunkId");
-        action = Objects.requireNonNull(action, "action");
-        status = Objects.requireNonNull(status, "status");
+        executedAction = Objects.requireNonNull(executedAction, "executedAction");
+        finalStatus = Objects.requireNonNull(finalStatus, "finalStatus");
         summary = summary == null ? "" : summary.strip();
         errorMessage = errorMessage == null ? null : errorMessage.strip();
     }

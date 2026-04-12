@@ -8,6 +8,7 @@ import org.junit.jupiter.api.Test;
 
 import java.time.Duration;
 import java.time.Instant;
+import java.util.EnumSet;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
@@ -78,8 +79,30 @@ class LightRagTaskApiTest {
 
     @Test
     void taskEnumsIncludeGraphMaterializationValues() {
-        assertThat(TaskType.values()).contains(TaskType.MATERIALIZE_DOCUMENT_GRAPH, TaskType.MATERIALIZE_CHUNK_GRAPH);
-        assertThat(TaskStage.values()).contains(
+        var newlyAddedTaskTypes = EnumSet.allOf(TaskType.class);
+        newlyAddedTaskTypes.removeAll(EnumSet.of(
+            TaskType.INGEST_DOCUMENTS,
+            TaskType.INGEST_SOURCES,
+            TaskType.REBUILD_GRAPH
+        ));
+        assertThat(newlyAddedTaskTypes).containsExactlyInAnyOrder(
+            TaskType.MATERIALIZE_DOCUMENT_GRAPH,
+            TaskType.MATERIALIZE_CHUNK_GRAPH
+        );
+
+        var newlyAddedTaskStages = EnumSet.allOf(TaskStage.class);
+        newlyAddedTaskStages.removeAll(EnumSet.of(
+            TaskStage.PREPARING,
+            TaskStage.PARSING,
+            TaskStage.CHUNKING,
+            TaskStage.PRIMARY_EXTRACTION,
+            TaskStage.REFINEMENT_EXTRACTION,
+            TaskStage.GRAPH_ASSEMBLY,
+            TaskStage.VECTOR_INDEXING,
+            TaskStage.COMMITTING,
+            TaskStage.COMPLETED
+        ));
+        assertThat(newlyAddedTaskStages).containsExactlyInAnyOrder(
             TaskStage.SNAPSHOT_LOADING,
             TaskStage.SNAPSHOT_RECOVERY,
             TaskStage.GRAPH_INSPECTION,

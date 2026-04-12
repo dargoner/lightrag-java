@@ -2,8 +2,10 @@ package io.github.lightrag.api;
 
 public enum GraphMaterializationStatus {
     NOT_STARTED,
-    IN_PROGRESS,
-    SUCCEEDED,
+    MERGING,
+    PARTIAL,
+    MERGED,
     FAILED,
-    PARTIALLY_MATERIALIZED
+    STALE,
+    MISSING
 }

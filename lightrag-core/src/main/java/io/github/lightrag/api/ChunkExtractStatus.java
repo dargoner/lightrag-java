@@ -2,8 +2,7 @@ package io.github.lightrag.api;
 
 public enum ChunkExtractStatus {
     NOT_STARTED,
-    IN_PROGRESS,
+    RUNNING,
     SUCCEEDED,
-    FAILED,
-    SKIPPED
+    FAILED
 }

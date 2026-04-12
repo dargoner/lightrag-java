@@ -2,8 +2,7 @@ package io.github.lightrag.api;
 
 public enum ChunkMergeStatus {
     NOT_STARTED,
-    IN_PROGRESS,
+    RUNNING,
     SUCCEEDED,
-    FAILED,
-    SKIPPED
+    FAILED
 }
