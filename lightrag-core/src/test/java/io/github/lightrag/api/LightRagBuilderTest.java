@@ -631,6 +631,17 @@ class LightRagBuilderTest {
     }
 
     @Test
+    void builderDoesNotRewriteUnexpectedUnsupportedOperationExceptionsFromGraphStores() {
+        assertThatThrownBy(() -> LightRag.builder()
+            .chatModel(new FakeChatModel())
+            .embeddingModel(new FakeEmbeddingModel())
+            .storage(new ProviderWithBrokenGraphStores())
+            .build())
+            .isInstanceOf(UnsupportedOperationException.class)
+            .hasMessage("unexpected graph store failure");
+    }
+
+    @Test
     void rejectsNullChatModel() {
         assertThatThrownBy(() -> LightRag.builder().chatModel(null))
             .isInstanceOf(NullPointerException.class)
@@ -1598,6 +1609,65 @@ class LightRagBuilderTest {
         @Override
         public SnapshotStore snapshotStore() {
             return delegate.snapshotStore();
+        }
+
+        @Override
+        public <T> T writeAtomically(AtomicOperation<T> operation) {
+            return delegate.writeAtomically(operation);
+        }
+
+        @Override
+        public void restore(SnapshotStore.Snapshot snapshot) {
+            delegate.restore(snapshot);
+        }
+    }
+
+    private static final class ProviderWithBrokenGraphStores implements AtomicStorageProvider {
+        private final FakeStorageProvider delegate = new FakeStorageProvider();
+
+        @Override
+        public DocumentStore documentStore() {
+            return delegate.documentStore();
+        }
+
+        @Override
+        public ChunkStore chunkStore() {
+            return delegate.chunkStore();
+        }
+
+        @Override
+        public GraphStore graphStore() {
+            return delegate.graphStore();
+        }
+
+        @Override
+        public VectorStore vectorStore() {
+            return delegate.vectorStore();
+        }
+
+        @Override
+        public DocumentStatusStore documentStatusStore() {
+            return delegate.documentStatusStore();
+        }
+
+        @Override
+        public TaskStore taskStore() {
+            return delegate.taskStore();
+        }
+
+        @Override
+        public TaskStageStore taskStageStore() {
+            return delegate.taskStageStore();
+        }
+
+        @Override
+        public SnapshotStore snapshotStore() {
+            return delegate.snapshotStore();
+        }
+
+        @Override
+        public DocumentGraphSnapshotStore documentGraphSnapshotStore() {
+            throw new UnsupportedOperationException("unexpected graph store failure");
         }
 
         @Override

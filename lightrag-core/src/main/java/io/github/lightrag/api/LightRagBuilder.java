@@ -253,8 +253,10 @@ public final class LightRagBuilder {
             requireStore("vectorStore", storageProvider.vectorStore(), VectorStore.class);
             requireStore("documentStatusStore", storageProvider.documentStatusStore(), DocumentStatusStore.class);
             requireStore("snapshotStore", storageProvider.snapshotStore(), SnapshotStore.class);
-            requireSupportedStore("documentGraphSnapshotStore", storageProvider::documentGraphSnapshotStore, DocumentGraphSnapshotStore.class);
-            requireSupportedStore("documentGraphJournalStore", storageProvider::documentGraphJournalStore, DocumentGraphJournalStore.class);
+            requireSupportedStore("documentGraphSnapshotStore", storageProvider::documentGraphSnapshotStore,
+                DocumentGraphSnapshotStore.class, StorageProvider.DOCUMENT_GRAPH_SNAPSHOT_STORE_UNSUPPORTED_MESSAGE);
+            requireSupportedStore("documentGraphJournalStore", storageProvider::documentGraphJournalStore,
+                DocumentGraphJournalStore.class, StorageProvider.DOCUMENT_GRAPH_JOURNAL_STORE_UNSUPPORTED_MESSAGE);
             if (!(storageProvider instanceof AtomicStorageProvider configuredAtomicStorageProvider)) {
                 throw new IllegalStateException("storageProvider must implement AtomicStorageProvider");
             }
@@ -274,8 +276,10 @@ public final class LightRagBuilder {
                 requireStore("vectorStore", validatedStorageProvider.vectorStore(), VectorStore.class);
                 requireStore("documentStatusStore", validatedStorageProvider.documentStatusStore(), DocumentStatusStore.class);
                 requireStore("snapshotStore", validatedStorageProvider.snapshotStore(), SnapshotStore.class);
-                requireSupportedStore("documentGraphSnapshotStore", validatedStorageProvider::documentGraphSnapshotStore, DocumentGraphSnapshotStore.class);
-                requireSupportedStore("documentGraphJournalStore", validatedStorageProvider::documentGraphJournalStore, DocumentGraphJournalStore.class);
+                requireSupportedStore("documentGraphSnapshotStore", validatedStorageProvider::documentGraphSnapshotStore,
+                    DocumentGraphSnapshotStore.class, StorageProvider.DOCUMENT_GRAPH_SNAPSHOT_STORE_UNSUPPORTED_MESSAGE);
+                requireSupportedStore("documentGraphJournalStore", validatedStorageProvider::documentGraphJournalStore,
+                    DocumentGraphJournalStore.class, StorageProvider.DOCUMENT_GRAPH_JOURNAL_STORE_UNSUPPORTED_MESSAGE);
                 resolvedWorkspaceStorageProvider = workspaceStorageProvider;
             } catch (RuntimeException exception) {
                 try {
@@ -320,12 +324,20 @@ public final class LightRagBuilder {
         return storeType.cast(store);
     }
 
-    private static <T> T requireSupportedStore(String componentName, Supplier<? extends T> storeSupplier, Class<T> storeType) {
+    private static <T> T requireSupportedStore(
+        String componentName,
+        Supplier<? extends T> storeSupplier,
+        Class<T> storeType,
+        String unsupportedMessage
+    ) {
         Objects.requireNonNull(storeSupplier, "storeSupplier");
         try {
             return requireStore(componentName, storeSupplier.get(), storeType);
         } catch (UnsupportedOperationException exception) {
-            throw new IllegalStateException(componentName + " is required", exception);
+            if (Objects.equals(exception.getMessage(), unsupportedMessage)) {
+                throw new IllegalStateException(componentName + " is required", exception);
+            }
+            throw exception;
         }
     }
 
