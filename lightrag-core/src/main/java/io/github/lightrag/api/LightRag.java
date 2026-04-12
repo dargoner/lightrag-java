@@ -247,7 +247,7 @@ public final class LightRag implements AutoCloseable {
     }
 
     public DocumentGraphInspection inspectDocumentGraph(String workspaceId, String documentId) {
-        Objects.requireNonNull(workspaceId, "workspaceId");
+        resolveScope(workspaceId);
         Objects.requireNonNull(documentId, "documentId");
         throw unsupportedGraphMaterializationApi();
     }
@@ -257,34 +257,34 @@ public final class LightRag implements AutoCloseable {
         String documentId,
         GraphMaterializationMode mode
     ) {
-        Objects.requireNonNull(workspaceId, "workspaceId");
+        resolveScope(workspaceId);
         Objects.requireNonNull(documentId, "documentId");
         Objects.requireNonNull(mode, "mode");
         throw unsupportedGraphMaterializationApi();
     }
 
     public DocumentChunkGraphStatus getDocumentChunkGraphStatus(String workspaceId, String documentId, String chunkId) {
-        Objects.requireNonNull(workspaceId, "workspaceId");
+        resolveScope(workspaceId);
         Objects.requireNonNull(documentId, "documentId");
         Objects.requireNonNull(chunkId, "chunkId");
         throw unsupportedGraphMaterializationApi();
     }
 
     public List<DocumentChunkGraphStatus> listDocumentChunkGraphStatuses(String workspaceId, String documentId) {
-        Objects.requireNonNull(workspaceId, "workspaceId");
+        resolveScope(workspaceId);
         Objects.requireNonNull(documentId, "documentId");
         throw unsupportedGraphMaterializationApi();
     }
 
     public ChunkGraphMaterializationResult resumeChunkGraph(String workspaceId, String documentId, String chunkId) {
-        Objects.requireNonNull(workspaceId, "workspaceId");
+        resolveScope(workspaceId);
         Objects.requireNonNull(documentId, "documentId");
         Objects.requireNonNull(chunkId, "chunkId");
         throw unsupportedGraphMaterializationApi();
     }
 
     public ChunkGraphMaterializationResult repairChunkGraph(String workspaceId, String documentId, String chunkId) {
-        Objects.requireNonNull(workspaceId, "workspaceId");
+        resolveScope(workspaceId);
         Objects.requireNonNull(documentId, "documentId");
         Objects.requireNonNull(chunkId, "chunkId");
         throw unsupportedGraphMaterializationApi();
@@ -295,7 +295,7 @@ public final class LightRag implements AutoCloseable {
         String documentId,
         GraphMaterializationMode mode
     ) {
-        Objects.requireNonNull(workspaceId, "workspaceId");
+        resolveScope(workspaceId);
         Objects.requireNonNull(documentId, "documentId");
         Objects.requireNonNull(mode, "mode");
         throw unsupportedGraphMaterializationApi();
@@ -307,7 +307,7 @@ public final class LightRag implements AutoCloseable {
         String chunkId,
         GraphChunkAction action
     ) {
-        Objects.requireNonNull(workspaceId, "workspaceId");
+        resolveScope(workspaceId);
         Objects.requireNonNull(documentId, "documentId");
         Objects.requireNonNull(chunkId, "chunkId");
         Objects.requireNonNull(action, "action");

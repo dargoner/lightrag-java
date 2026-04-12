@@ -3,8 +3,12 @@ package io.github.lightrag.api;
 import org.junit.jupiter.api.Test;
 
 import java.lang.reflect.Method;
+import java.lang.reflect.Modifier;
+import java.lang.reflect.ParameterizedType;
 import java.lang.reflect.RecordComponent;
+import java.lang.reflect.Type;
 import java.util.Arrays;
+import java.util.List;
 import java.util.stream.Collectors;
 
 import static org.assertj.core.api.Assertions.assertThat;
@@ -35,6 +39,12 @@ class LightRagDocumentGraphApiTest {
         assertMethod(
             "listDocumentChunkGraphStatuses",
             java.util.List.class,
+            String.class,
+            String.class
+        );
+        assertGenericListReturnType(
+            "listDocumentChunkGraphStatuses",
+            DocumentChunkGraphStatus.class,
             String.class,
             String.class
         );
@@ -171,7 +181,11 @@ class LightRagDocumentGraphApiTest {
                 GraphMaterializationMode.class,
                 boolean.class,
                 String.class
-            }
+            },
+            "missingEntityKeys",
+            "missingRelationKeys",
+            "orphanEntityKeys",
+            "orphanRelationKeys"
         );
         assertRecord(
             DocumentGraphMaterializationResult.class,
@@ -204,7 +218,8 @@ class LightRagDocumentGraphApiTest {
                 boolean.class,
                 String.class,
                 String.class
-            }
+            },
+            new String[0]
         );
         assertRecord(
             DocumentChunkGraphStatus.class,
@@ -241,7 +256,9 @@ class LightRagDocumentGraphApiTest {
                 boolean.class,
                 GraphChunkAction.class,
                 String.class
-            }
+            },
+            "missingEntityKeys",
+            "missingRelationKeys"
         );
         assertRecord(
             ChunkGraphMaterializationResult.class,
@@ -268,21 +285,56 @@ class LightRagDocumentGraphApiTest {
                 int.class,
                 String.class,
                 String.class
-            }
+            },
+            new String[0]
         );
     }
 
     private static void assertMethod(String name, Class<?> returnType, Class<?>... parameterTypes) throws Exception {
         Method method = LightRag.class.getDeclaredMethod(name, parameterTypes);
+        assertThat(Modifier.isPublic(method.getModifiers())).isTrue();
         assertThat(method.getReturnType()).isEqualTo(returnType);
     }
 
-    private static void assertRecord(Class<?> recordType, String[] names, Class<?>[] types) {
+    private static void assertGenericListReturnType(
+        String methodName,
+        Class<?> elementType,
+        Class<?>... parameterTypes
+    ) throws Exception {
+        Method method = LightRag.class.getDeclaredMethod(methodName, parameterTypes);
+        Type genericReturnType = method.getGenericReturnType();
+        assertThat(genericReturnType).isInstanceOf(ParameterizedType.class);
+        ParameterizedType parameterizedType = (ParameterizedType) genericReturnType;
+        assertThat(parameterizedType.getRawType()).isEqualTo(List.class);
+        assertThat(parameterizedType.getActualTypeArguments()).containsExactly(elementType);
+    }
+
+    private static void assertRecord(
+        Class<?> recordType,
+        String[] names,
+        Class<?>[] types,
+        String... listStringFields
+    ) {
         assertThat(recordType.isRecord()).isTrue();
         RecordComponent[] components = recordType.getRecordComponents();
         assertThat(Arrays.stream(components).map(RecordComponent::getName).collect(Collectors.toList()))
             .containsExactly(names);
         assertThat(Arrays.stream(components).map(RecordComponent::getType).collect(Collectors.toList()))
             .containsExactly(types);
+        assertThat(Arrays.stream(components)
+            .filter(component -> component.getType().equals(List.class))
+            .map(RecordComponent::getName)
+            .collect(Collectors.toSet()))
+            .containsExactlyInAnyOrder(listStringFields);
+        for (String fieldName : listStringFields) {
+            RecordComponent component = Arrays.stream(components)
+                .filter(candidate -> candidate.getName().equals(fieldName))
+                .findFirst()
+                .orElseThrow();
+            assertThat(component.getGenericType()).isInstanceOf(ParameterizedType.class);
+            ParameterizedType parameterizedType = (ParameterizedType) component.getGenericType();
+            assertThat(parameterizedType.getRawType()).isEqualTo(List.class);
+            assertThat(parameterizedType.getActualTypeArguments()).containsExactly(String.class);
+        }
     }
 }
