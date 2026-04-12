@@ -168,13 +168,13 @@ class LightRagBuilderTest {
             .vectorAdapter(new StorageAssemblyTestDoubles.FakeVectorStorageAdapter())
             .build();
 
-        var rag = LightRag.builder()
+        assertThatThrownBy(() -> LightRag.builder()
             .chatModel(new FakeChatModel())
             .embeddingModel(new FakeEmbeddingModel())
             .storageAssembly(assembly)
-            .build();
-
-        assertThat(rag.config().storageProvider()).isInstanceOf(AtomicStorageProvider.class);
+            .build())
+            .isInstanceOf(IllegalStateException.class)
+            .hasMessageContaining("documentGraphSnapshotStore");
     }
 
     @Test
@@ -613,7 +613,7 @@ class LightRagBuilderTest {
         assertThatThrownBy(() -> LightRag.builder()
             .chatModel(new FakeChatModel())
             .embeddingModel(new FakeEmbeddingModel())
-            .storage(new FakeStorageProviderWithoutGraphStores())
+            .storage(new ProviderWithoutGraphStores())
             .build())
             .isInstanceOf(IllegalStateException.class)
             .hasMessageContaining("documentGraphSnapshotStore");
@@ -624,7 +624,7 @@ class LightRagBuilderTest {
         assertThatThrownBy(() -> LightRag.builder()
             .chatModel(new FakeChatModel())
             .embeddingModel(new FakeEmbeddingModel())
-            .workspaceStorage(new TestWorkspaceStorageProvider(new FakeStorageProviderWithoutGraphStores()))
+            .workspaceStorage(new TestWorkspaceStorageProvider(new ProviderWithoutGraphStores()))
             .build())
             .isInstanceOf(IllegalStateException.class)
             .hasMessageContaining("documentGraphSnapshotStore");
@@ -1538,6 +1538,16 @@ class LightRagBuilderTest {
         public SnapshotStore snapshotStore() {
             return delegate.snapshotStore();
         }
+
+        @Override
+        public DocumentGraphSnapshotStore documentGraphSnapshotStore() {
+            return delegate.documentGraphSnapshotStore();
+        }
+
+        @Override
+        public DocumentGraphJournalStore documentGraphJournalStore() {
+            return delegate.documentGraphJournalStore();
+        }
     }
 
     private static final class MalformedStorageProvider extends FakeStorageProvider {
@@ -1547,15 +1557,57 @@ class LightRagBuilderTest {
         }
     }
 
-    private static final class FakeStorageProviderWithoutGraphStores extends FakeStorageProvider {
+    private static final class ProviderWithoutGraphStores implements AtomicStorageProvider {
+        private final FakeStorageProvider delegate = new FakeStorageProvider();
+
         @Override
-        public DocumentGraphSnapshotStore documentGraphSnapshotStore() {
-            return null;
+        public DocumentStore documentStore() {
+            return delegate.documentStore();
         }
 
         @Override
-        public DocumentGraphJournalStore documentGraphJournalStore() {
-            return null;
+        public ChunkStore chunkStore() {
+            return delegate.chunkStore();
+        }
+
+        @Override
+        public GraphStore graphStore() {
+            return delegate.graphStore();
+        }
+
+        @Override
+        public VectorStore vectorStore() {
+            return delegate.vectorStore();
+        }
+
+        @Override
+        public DocumentStatusStore documentStatusStore() {
+            return delegate.documentStatusStore();
+        }
+
+        @Override
+        public TaskStore taskStore() {
+            return delegate.taskStore();
+        }
+
+        @Override
+        public TaskStageStore taskStageStore() {
+            return delegate.taskStageStore();
+        }
+
+        @Override
+        public SnapshotStore snapshotStore() {
+            return delegate.snapshotStore();
+        }
+
+        @Override
+        public <T> T writeAtomically(AtomicOperation<T> operation) {
+            return delegate.writeAtomically(operation);
+        }
+
+        @Override
+        public void restore(SnapshotStore.Snapshot snapshot) {
+            delegate.restore(snapshot);
         }
     }
 

@@ -18,10 +18,10 @@ public interface StorageProvider {
     SnapshotStore snapshotStore();
 
     default DocumentGraphSnapshotStore documentGraphSnapshotStore() {
-        return new io.github.lightrag.storage.memory.InMemoryDocumentGraphSnapshotStore();
+        throw new UnsupportedOperationException("documentGraphSnapshotStore is not supported");
     }
 
     default DocumentGraphJournalStore documentGraphJournalStore() {
-        return new io.github.lightrag.storage.memory.InMemoryDocumentGraphJournalStore();
+        throw new UnsupportedOperationException("documentGraphJournalStore is not supported");
     }
 }

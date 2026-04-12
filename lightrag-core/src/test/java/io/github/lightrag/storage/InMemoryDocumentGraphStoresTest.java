@@ -1,6 +1,10 @@
 package io.github.lightrag.storage;
 
 import io.github.lightrag.api.ChunkExtractStatus;
+import io.github.lightrag.api.ChunkGraphStatus;
+import io.github.lightrag.api.ChunkMergeStatus;
+import io.github.lightrag.api.GraphMaterializationMode;
+import io.github.lightrag.api.GraphMaterializationStatus;
 import io.github.lightrag.api.SnapshotSource;
 import io.github.lightrag.api.SnapshotStatus;
 import org.junit.jupiter.api.Test;
@@ -53,9 +57,15 @@ class InMemoryDocumentGraphStoresTest {
 
         journals.appendDocument(new DocumentGraphJournalStore.DocumentGraphJournal(
             "doc-1",
-            1L,
-            SnapshotStatus.BUILDING,
-            SnapshotSource.PRIMARY_EXTRACTION,
+            1,
+            GraphMaterializationStatus.MERGED,
+            GraphMaterializationMode.AUTO,
+            3,
+            2,
+            3,
+            2,
+            null,
+            now,
             now,
             null
         ));
@@ -63,9 +73,14 @@ class InMemoryDocumentGraphStoresTest {
             new DocumentGraphJournalStore.ChunkGraphJournal(
                 "doc-1",
                 "chunk-1",
-                0,
-                "hash-1",
-                ChunkExtractStatus.RUNNING,
+                1,
+                ChunkMergeStatus.SUCCEEDED,
+                ChunkGraphStatus.MATERIALIZED,
+                List.of("entity-a"),
+                List.of("relation-a"),
+                List.of("entity-a"),
+                List.of("relation-a"),
+                null,
                 now,
                 null
             )

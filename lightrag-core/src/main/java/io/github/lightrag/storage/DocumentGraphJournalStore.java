@@ -1,8 +1,9 @@
 package io.github.lightrag.storage;
 
-import io.github.lightrag.api.ChunkExtractStatus;
-import io.github.lightrag.api.SnapshotSource;
-import io.github.lightrag.api.SnapshotStatus;
+import io.github.lightrag.api.ChunkGraphStatus;
+import io.github.lightrag.api.ChunkMergeStatus;
+import io.github.lightrag.api.GraphMaterializationMode;
+import io.github.lightrag.api.GraphMaterializationStatus;
 
 import java.time.Instant;
 import java.util.List;
@@ -21,20 +22,32 @@ public interface DocumentGraphJournalStore {
 
     record DocumentGraphJournal(
         String documentId,
-        long sequence,
-        SnapshotStatus snapshotStatus,
-        SnapshotSource snapshotSource,
+        int snapshotVersion,
+        GraphMaterializationStatus status,
+        GraphMaterializationMode lastMode,
+        int expectedEntityCount,
+        int expectedRelationCount,
+        int materializedEntityCount,
+        int materializedRelationCount,
+        String lastFailureStage,
         Instant createdAt,
+        Instant updatedAt,
         String errorMessage
     ) {
         public DocumentGraphJournal {
             documentId = requireNonBlank(documentId, "documentId");
-            if (sequence < 0L) {
-                throw new IllegalArgumentException("sequence must not be negative");
+            if (snapshotVersion < 0) {
+                throw new IllegalArgumentException("snapshotVersion must not be negative");
             }
-            snapshotStatus = Objects.requireNonNull(snapshotStatus, "snapshotStatus");
-            snapshotSource = Objects.requireNonNull(snapshotSource, "snapshotSource");
+            status = Objects.requireNonNull(status, "status");
+            lastMode = Objects.requireNonNull(lastMode, "lastMode");
+            expectedEntityCount = requireNonNegative(expectedEntityCount, "expectedEntityCount");
+            expectedRelationCount = requireNonNegative(expectedRelationCount, "expectedRelationCount");
+            materializedEntityCount = requireNonNegative(materializedEntityCount, "materializedEntityCount");
+            materializedRelationCount = requireNonNegative(materializedRelationCount, "materializedRelationCount");
+            lastFailureStage = normalizeNullable(lastFailureStage);
             createdAt = Objects.requireNonNull(createdAt, "createdAt");
+            updatedAt = Objects.requireNonNull(updatedAt, "updatedAt");
             errorMessage = normalizeNullable(errorMessage);
         }
     }
@@ -42,21 +55,31 @@ public interface DocumentGraphJournalStore {
     record ChunkGraphJournal(
         String documentId,
         String chunkId,
-        int chunkOrder,
-        String chunkHash,
-        ChunkExtractStatus extractStatus,
-        Instant createdAt,
+        int snapshotVersion,
+        ChunkMergeStatus mergeStatus,
+        ChunkGraphStatus graphStatus,
+        List<String> expectedEntityKeys,
+        List<String> expectedRelationKeys,
+        List<String> materializedEntityKeys,
+        List<String> materializedRelationKeys,
+        String lastFailureStage,
+        Instant updatedAt,
         String errorMessage
     ) {
         public ChunkGraphJournal {
             documentId = requireNonBlank(documentId, "documentId");
             chunkId = requireNonBlank(chunkId, "chunkId");
-            if (chunkOrder < 0) {
-                throw new IllegalArgumentException("chunkOrder must not be negative");
+            if (snapshotVersion < 0) {
+                throw new IllegalArgumentException("snapshotVersion must not be negative");
             }
-            chunkHash = requireNonBlank(chunkHash, "chunkHash");
-            extractStatus = Objects.requireNonNull(extractStatus, "extractStatus");
-            createdAt = Objects.requireNonNull(createdAt, "createdAt");
+            mergeStatus = Objects.requireNonNull(mergeStatus, "mergeStatus");
+            graphStatus = Objects.requireNonNull(graphStatus, "graphStatus");
+            expectedEntityKeys = List.copyOf(Objects.requireNonNull(expectedEntityKeys, "expectedEntityKeys"));
+            expectedRelationKeys = List.copyOf(Objects.requireNonNull(expectedRelationKeys, "expectedRelationKeys"));
+            materializedEntityKeys = List.copyOf(Objects.requireNonNull(materializedEntityKeys, "materializedEntityKeys"));
+            materializedRelationKeys = List.copyOf(Objects.requireNonNull(materializedRelationKeys, "materializedRelationKeys"));
+            lastFailureStage = normalizeNullable(lastFailureStage);
+            updatedAt = Objects.requireNonNull(updatedAt, "updatedAt");
             errorMessage = normalizeNullable(errorMessage);
         }
     }
@@ -76,5 +99,12 @@ public interface DocumentGraphJournalStore {
         }
         var normalized = value.strip();
         return normalized.isEmpty() ? null : normalized;
+    }
+
+    private static int requireNonNegative(int value, String fieldName) {
+        if (value < 0) {
+            throw new IllegalArgumentException(fieldName + " must not be negative");
+        }
+        return value;
     }
 }

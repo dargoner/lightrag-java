@@ -22,9 +22,9 @@ public interface DocumentGraphSnapshotStore {
 
     record DocumentGraphSnapshot(
         String documentId,
-        int snapshotVersion,
-        SnapshotStatus snapshotStatus,
-        SnapshotSource snapshotSource,
+        int version,
+        SnapshotStatus status,
+        SnapshotSource source,
         int chunkCount,
         Instant createdAt,
         Instant updatedAt,
@@ -32,11 +32,11 @@ public interface DocumentGraphSnapshotStore {
     ) {
         public DocumentGraphSnapshot {
             documentId = requireNonBlank(documentId, "documentId");
-            if (snapshotVersion < 0) {
-                throw new IllegalArgumentException("snapshotVersion must not be negative");
+            if (version < 0) {
+                throw new IllegalArgumentException("version must not be negative");
             }
-            snapshotStatus = Objects.requireNonNull(snapshotStatus, "snapshotStatus");
-            snapshotSource = Objects.requireNonNull(snapshotSource, "snapshotSource");
+            status = Objects.requireNonNull(status, "status");
+            source = Objects.requireNonNull(source, "source");
             if (chunkCount < 0) {
                 throw new IllegalArgumentException("chunkCount must not be negative");
             }
@@ -50,10 +50,10 @@ public interface DocumentGraphSnapshotStore {
         String documentId,
         String chunkId,
         int chunkOrder,
-        String chunkHash,
+        String contentHash,
         ChunkExtractStatus extractStatus,
-        List<String> extractedEntityKeys,
-        List<String> extractedRelationKeys,
+        List<String> entities,
+        List<String> relations,
         Instant updatedAt,
         String errorMessage
     ) {
@@ -63,10 +63,10 @@ public interface DocumentGraphSnapshotStore {
             if (chunkOrder < 0) {
                 throw new IllegalArgumentException("chunkOrder must not be negative");
             }
-            chunkHash = requireNonBlank(chunkHash, "chunkHash");
+            contentHash = requireNonBlank(contentHash, "contentHash");
             extractStatus = Objects.requireNonNull(extractStatus, "extractStatus");
-            extractedEntityKeys = List.copyOf(Objects.requireNonNull(extractedEntityKeys, "extractedEntityKeys"));
-            extractedRelationKeys = List.copyOf(Objects.requireNonNull(extractedRelationKeys, "extractedRelationKeys"));
+            entities = List.copyOf(Objects.requireNonNull(entities, "entities"));
+            relations = List.copyOf(Objects.requireNonNull(relations, "relations"));
             updatedAt = Objects.requireNonNull(updatedAt, "updatedAt");
             errorMessage = normalizeNullable(errorMessage);
         }

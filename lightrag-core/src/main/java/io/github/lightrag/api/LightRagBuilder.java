@@ -27,6 +27,7 @@ import java.nio.file.Path;
 import java.util.List;
 import java.util.NoSuchElementException;
 import java.util.Objects;
+import java.util.function.Supplier;
 
 public final class LightRagBuilder {
     private static final int DEFAULT_CHUNK_WINDOW = 1_000;
@@ -252,8 +253,8 @@ public final class LightRagBuilder {
             requireStore("vectorStore", storageProvider.vectorStore(), VectorStore.class);
             requireStore("documentStatusStore", storageProvider.documentStatusStore(), DocumentStatusStore.class);
             requireStore("snapshotStore", storageProvider.snapshotStore(), SnapshotStore.class);
-            requireStore("documentGraphSnapshotStore", storageProvider.documentGraphSnapshotStore(), DocumentGraphSnapshotStore.class);
-            requireStore("documentGraphJournalStore", storageProvider.documentGraphJournalStore(), DocumentGraphJournalStore.class);
+            requireSupportedStore("documentGraphSnapshotStore", storageProvider::documentGraphSnapshotStore, DocumentGraphSnapshotStore.class);
+            requireSupportedStore("documentGraphJournalStore", storageProvider::documentGraphJournalStore, DocumentGraphJournalStore.class);
             if (!(storageProvider instanceof AtomicStorageProvider configuredAtomicStorageProvider)) {
                 throw new IllegalStateException("storageProvider must implement AtomicStorageProvider");
             }
@@ -273,8 +274,8 @@ public final class LightRagBuilder {
                 requireStore("vectorStore", validatedStorageProvider.vectorStore(), VectorStore.class);
                 requireStore("documentStatusStore", validatedStorageProvider.documentStatusStore(), DocumentStatusStore.class);
                 requireStore("snapshotStore", validatedStorageProvider.snapshotStore(), SnapshotStore.class);
-                requireStore("documentGraphSnapshotStore", validatedStorageProvider.documentGraphSnapshotStore(), DocumentGraphSnapshotStore.class);
-                requireStore("documentGraphJournalStore", validatedStorageProvider.documentGraphJournalStore(), DocumentGraphJournalStore.class);
+                requireSupportedStore("documentGraphSnapshotStore", validatedStorageProvider::documentGraphSnapshotStore, DocumentGraphSnapshotStore.class);
+                requireSupportedStore("documentGraphJournalStore", validatedStorageProvider::documentGraphJournalStore, DocumentGraphJournalStore.class);
                 resolvedWorkspaceStorageProvider = workspaceStorageProvider;
             } catch (RuntimeException exception) {
                 try {
@@ -317,6 +318,15 @@ public final class LightRagBuilder {
             throw new IllegalStateException(componentName + " is required");
         }
         return storeType.cast(store);
+    }
+
+    private static <T> T requireSupportedStore(String componentName, Supplier<? extends T> storeSupplier, Class<T> storeType) {
+        Objects.requireNonNull(storeSupplier, "storeSupplier");
+        try {
+            return requireStore(componentName, storeSupplier.get(), storeType);
+        } catch (UnsupportedOperationException exception) {
+            throw new IllegalStateException(componentName + " is required", exception);
+        }
     }
 
     private void restoreSnapshotIfPresent(AtomicStorageProvider storageProvider, Path path) {
