@@ -3,6 +3,7 @@ package io.github.lightrag.api;
 import io.github.lightrag.model.ChatModel;
 import io.github.lightrag.model.EmbeddingModel;
 import io.github.lightrag.storage.InMemoryStorageProvider;
+import io.github.lightrag.storage.memory.InMemoryGraphStore;
 import io.github.lightrag.types.Document;
 import org.junit.jupiter.api.Test;
 
@@ -111,6 +112,142 @@ class LightRagTaskApiTest {
             TaskStage.VECTOR_REPAIR,
             TaskStage.FINALIZING
         );
+    }
+
+    @Test
+    void submitDocumentGraphMaterializationPersistsTaskMetadataAndStages() {
+        var storage = InMemoryStorageProvider.create();
+        var rag = LightRag.builder()
+            .chatModel(new FakeChatModel())
+            .embeddingModel(new FakeEmbeddingModel())
+            .storage(storage)
+            .build();
+        rag.ingest(WORKSPACE, List.of(new Document("doc-1", "Title", "Alice works with Bob", Map.of())));
+        storage.documentGraphJournalStore().appendDocument(new io.github.lightrag.storage.DocumentGraphJournalStore.DocumentGraphJournal(
+            "doc-1",
+            1,
+            GraphMaterializationStatus.PARTIAL,
+            GraphMaterializationMode.AUTO,
+            2,
+            1,
+            1,
+            0,
+            FailureStage.RELATION_MATERIALIZATION,
+            Instant.now(),
+            Instant.now(),
+            "relation missing"
+        ));
+        storage.documentGraphJournalStore().appendChunks("doc-1", List.of(
+            new io.github.lightrag.storage.DocumentGraphJournalStore.ChunkGraphJournal(
+                "doc-1",
+                "doc-1:0",
+                1,
+                ChunkMergeStatus.FAILED,
+                ChunkGraphStatus.PARTIAL,
+                List.of("entity:alice", "entity:bob"),
+                List.of("relation:entity:alice|works_with|entity:bob"),
+                List.of("entity:alice"),
+                List.of(),
+                FailureStage.RELATION_MATERIALIZATION,
+                Instant.now(),
+                "relation missing"
+            )
+        ));
+        ((InMemoryGraphStore) storage.graphStore()).restore(
+            List.of(
+                ((InMemoryGraphStore) storage.graphStore()).loadEntity("entity:alice").orElseThrow(),
+                ((InMemoryGraphStore) storage.graphStore()).loadEntity("entity:bob").orElseThrow()
+            ),
+            List.of()
+        );
+
+        var taskId = rag.submitDocumentGraphMaterialization(WORKSPACE, "doc-1", GraphMaterializationMode.REPAIR);
+        var task = awaitTerminalTask(rag, taskId);
+
+        assertThat(task.taskType()).isEqualTo(TaskType.MATERIALIZE_DOCUMENT_GRAPH);
+        assertThat(task.status()).isEqualTo(TaskStatus.SUCCEEDED);
+        assertThat(task.metadata()).containsEntry("documentId", "doc-1");
+        assertThat(task.metadata()).containsEntry("requestedMode", "REPAIR");
+        assertThat(task.metadata()).containsEntry("executedMode", "REPAIR");
+        assertThat(task.metadata()).containsEntry("finalStatus", "MERGED");
+        assertThat(task.stages())
+            .extracting(TaskStageSnapshot::stage)
+            .contains(
+                TaskStage.SNAPSHOT_LOADING,
+                TaskStage.GRAPH_INSPECTION,
+                TaskStage.ENTITY_MATERIALIZATION,
+                TaskStage.RELATION_MATERIALIZATION,
+                TaskStage.FINALIZING,
+                TaskStage.COMPLETED
+            );
+    }
+
+    @Test
+    void submitChunkGraphMaterializationPersistsChunkMetadataAndStages() {
+        var storage = InMemoryStorageProvider.create();
+        var rag = LightRag.builder()
+            .chatModel(new FakeChatModel())
+            .embeddingModel(new FakeEmbeddingModel())
+            .storage(storage)
+            .build();
+        rag.ingest(WORKSPACE, List.of(new Document("doc-1", "Title", "Alice works with Bob", Map.of())));
+        storage.documentGraphJournalStore().appendDocument(new io.github.lightrag.storage.DocumentGraphJournalStore.DocumentGraphJournal(
+            "doc-1",
+            1,
+            GraphMaterializationStatus.PARTIAL,
+            GraphMaterializationMode.AUTO,
+            2,
+            1,
+            1,
+            0,
+            FailureStage.RELATION_MATERIALIZATION,
+            Instant.now(),
+            Instant.now(),
+            "relation missing"
+        ));
+        storage.documentGraphJournalStore().appendChunks("doc-1", List.of(
+            new io.github.lightrag.storage.DocumentGraphJournalStore.ChunkGraphJournal(
+                "doc-1",
+                "doc-1:0",
+                1,
+                ChunkMergeStatus.FAILED,
+                ChunkGraphStatus.PARTIAL,
+                List.of("entity:alice", "entity:bob"),
+                List.of("relation:entity:alice|works_with|entity:bob"),
+                List.of("entity:alice"),
+                List.of(),
+                FailureStage.RELATION_MATERIALIZATION,
+                Instant.now(),
+                "relation missing"
+            )
+        ));
+        ((InMemoryGraphStore) storage.graphStore()).restore(
+            List.of(
+                ((InMemoryGraphStore) storage.graphStore()).loadEntity("entity:alice").orElseThrow(),
+                ((InMemoryGraphStore) storage.graphStore()).loadEntity("entity:bob").orElseThrow()
+            ),
+            List.of()
+        );
+
+        var taskId = rag.submitChunkGraphMaterialization(WORKSPACE, "doc-1", "doc-1:0", GraphChunkAction.REPAIR);
+        var task = awaitTerminalTask(rag, taskId);
+
+        assertThat(task.taskType()).isEqualTo(TaskType.MATERIALIZE_CHUNK_GRAPH);
+        assertThat(task.status()).isEqualTo(TaskStatus.SUCCEEDED);
+        assertThat(task.metadata()).containsEntry("documentId", "doc-1");
+        assertThat(task.metadata()).containsEntry("chunkId", "doc-1:0");
+        assertThat(task.metadata()).containsEntry("requestedAction", "REPAIR");
+        assertThat(task.metadata()).containsEntry("finalStatus", "MATERIALIZED");
+        assertThat(task.stages())
+            .extracting(TaskStageSnapshot::stage)
+            .contains(
+                TaskStage.SNAPSHOT_LOADING,
+                TaskStage.GRAPH_INSPECTION,
+                TaskStage.ENTITY_MATERIALIZATION,
+                TaskStage.RELATION_MATERIALIZATION,
+                TaskStage.FINALIZING,
+                TaskStage.COMPLETED
+            );
     }
 
     private static TaskSnapshot awaitTerminalTask(LightRag rag, String taskId) {

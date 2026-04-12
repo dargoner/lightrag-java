@@ -4,6 +4,7 @@ import io.github.lightrag.config.LightRagConfig;
 import io.github.lightrag.indexing.Chunker;
 import io.github.lightrag.indexing.DeletionPipeline;
 import io.github.lightrag.indexing.DocumentParsingOrchestrator;
+import io.github.lightrag.indexing.GraphMaterializationPipeline;
 import io.github.lightrag.indexing.GraphManagementPipeline;
 import io.github.lightrag.indexing.IndexingProgressListener;
 import io.github.lightrag.indexing.IndexingPipeline;
@@ -24,6 +25,7 @@ import io.github.lightrag.query.RuleBasedQueryIntentClassifier;
 import io.github.lightrag.synthesis.PathAwareAnswerSynthesizer;
 import io.github.lightrag.storage.AtomicStorageProvider;
 import io.github.lightrag.task.TaskExecutionService;
+import io.github.lightrag.task.TaskMetadataReporter;
 import io.github.lightrag.types.Document;
 import io.github.lightrag.types.RawDocumentSource;
 
@@ -247,9 +249,8 @@ public final class LightRag implements AutoCloseable {
     }
 
     public DocumentGraphInspection inspectDocumentGraph(String workspaceId, String documentId) {
-        resolveScope(workspaceId);
-        Objects.requireNonNull(documentId, "documentId");
-        throw unsupportedGraphMaterializationApi();
+        var scope = resolveScope(workspaceId);
+        return newGraphMaterializationPipeline(resolveProvider(scope)).inspect(documentId);
     }
 
     public DocumentGraphMaterializationResult materializeDocumentGraph(
@@ -257,37 +258,28 @@ public final class LightRag implements AutoCloseable {
         String documentId,
         GraphMaterializationMode mode
     ) {
-        resolveScope(workspaceId);
-        Objects.requireNonNull(documentId, "documentId");
-        Objects.requireNonNull(mode, "mode");
-        throw unsupportedGraphMaterializationApi();
+        var scope = resolveScope(workspaceId);
+        return newGraphMaterializationPipeline(resolveProvider(scope)).materialize(documentId, mode);
     }
 
     public DocumentChunkGraphStatus getDocumentChunkGraphStatus(String workspaceId, String documentId, String chunkId) {
-        resolveScope(workspaceId);
-        Objects.requireNonNull(documentId, "documentId");
-        Objects.requireNonNull(chunkId, "chunkId");
-        throw unsupportedGraphMaterializationApi();
+        var scope = resolveScope(workspaceId);
+        return newGraphMaterializationPipeline(resolveProvider(scope)).getChunkStatus(documentId, chunkId);
     }
 
     public List<DocumentChunkGraphStatus> listDocumentChunkGraphStatuses(String workspaceId, String documentId) {
-        resolveScope(workspaceId);
-        Objects.requireNonNull(documentId, "documentId");
-        throw unsupportedGraphMaterializationApi();
+        var scope = resolveScope(workspaceId);
+        return newGraphMaterializationPipeline(resolveProvider(scope)).listChunkStatuses(documentId);
     }
 
     public ChunkGraphMaterializationResult resumeChunkGraph(String workspaceId, String documentId, String chunkId) {
-        resolveScope(workspaceId);
-        Objects.requireNonNull(documentId, "documentId");
-        Objects.requireNonNull(chunkId, "chunkId");
-        throw unsupportedGraphMaterializationApi();
+        var scope = resolveScope(workspaceId);
+        return newGraphMaterializationPipeline(resolveProvider(scope)).resumeChunk(documentId, chunkId);
     }
 
     public ChunkGraphMaterializationResult repairChunkGraph(String workspaceId, String documentId, String chunkId) {
-        resolveScope(workspaceId);
-        Objects.requireNonNull(documentId, "documentId");
-        Objects.requireNonNull(chunkId, "chunkId");
-        throw unsupportedGraphMaterializationApi();
+        var scope = resolveScope(workspaceId);
+        return newGraphMaterializationPipeline(resolveProvider(scope)).repairChunk(documentId, chunkId);
     }
 
     public String submitDocumentGraphMaterialization(
@@ -296,9 +288,23 @@ public final class LightRag implements AutoCloseable {
         GraphMaterializationMode mode
     ) {
         resolveScope(workspaceId);
-        Objects.requireNonNull(documentId, "documentId");
-        Objects.requireNonNull(mode, "mode");
-        throw unsupportedGraphMaterializationApi();
+        var normalizedDocumentId = Objects.requireNonNull(documentId, "documentId");
+        var requestedMode = Objects.requireNonNull(mode, "mode");
+        return taskExecutionService.submit(
+            workspaceId,
+            TaskType.MATERIALIZE_DOCUMENT_GRAPH,
+            Map.of(
+                "documentId", normalizedDocumentId,
+                "requestedMode", requestedMode.name()
+            ),
+            progressListener -> newGraphMaterializationPipeline(
+                resolveProvider(resolveScope(workspaceId)),
+                progressListener,
+                progressListener instanceof TaskMetadataReporter metadataReporter
+                    ? metadataReporter
+                    : TaskMetadataReporter.noop()
+            ).materialize(normalizedDocumentId, requestedMode)
+        );
     }
 
     public String submitChunkGraphMaterialization(
@@ -308,10 +314,34 @@ public final class LightRag implements AutoCloseable {
         GraphChunkAction action
     ) {
         resolveScope(workspaceId);
-        Objects.requireNonNull(documentId, "documentId");
-        Objects.requireNonNull(chunkId, "chunkId");
-        Objects.requireNonNull(action, "action");
-        throw unsupportedGraphMaterializationApi();
+        var normalizedDocumentId = Objects.requireNonNull(documentId, "documentId");
+        var normalizedChunkId = Objects.requireNonNull(chunkId, "chunkId");
+        var requestedAction = Objects.requireNonNull(action, "action");
+        return taskExecutionService.submit(
+            workspaceId,
+            TaskType.MATERIALIZE_CHUNK_GRAPH,
+            Map.of(
+                "documentId", normalizedDocumentId,
+                "chunkId", normalizedChunkId,
+                "requestedAction", requestedAction.name()
+            ),
+            progressListener -> {
+                var pipeline = newGraphMaterializationPipeline(
+                    resolveProvider(resolveScope(workspaceId)),
+                    progressListener,
+                    progressListener instanceof TaskMetadataReporter metadataReporter
+                        ? metadataReporter
+                        : TaskMetadataReporter.noop()
+                );
+                if (requestedAction == GraphChunkAction.REPAIR) {
+                    pipeline.repairChunk(normalizedDocumentId, normalizedChunkId);
+                } else if (requestedAction == GraphChunkAction.RESUME) {
+                    pipeline.resumeChunk(normalizedDocumentId, normalizedChunkId);
+                } else {
+                    throw new IllegalArgumentException("GraphChunkAction.NONE cannot be submitted");
+                }
+            }
+        );
     }
 
     public void saveSnapshot(String workspaceId, Path path) {
@@ -443,6 +473,30 @@ public final class LightRag implements AutoCloseable {
         return new GraphManagementPipeline(storageProvider, newIndexingPipeline(storageProvider), config.snapshotPath());
     }
 
+    private GraphMaterializationPipeline newGraphMaterializationPipeline(AtomicStorageProvider storageProvider) {
+        return newGraphMaterializationPipeline(storageProvider, IndexingProgressListener.noop(), TaskMetadataReporter.noop());
+    }
+
+    private GraphMaterializationPipeline newGraphMaterializationPipeline(
+        AtomicStorageProvider storageProvider,
+        IndexingProgressListener progressListener,
+        TaskMetadataReporter metadataReporter
+    ) {
+        return new GraphMaterializationPipeline(
+            config.extractionModel(),
+            config.embeddingModel(),
+            storageProvider,
+            extractionRefinementOptions,
+            config.snapshotPath(),
+            metadataReporter,
+            progressListener,
+            entityExtractMaxGleaning,
+            maxExtractInputTokens,
+            entityExtractionLanguage,
+            entityTypes
+        );
+    }
+
     private QueryEngine newQueryEngine(AtomicStorageProvider storageProvider) {
         var contextAssembler = new ContextAssembler();
         var naive = new NaiveQueryStrategy(config.embeddingModel(), storageProvider, contextAssembler);
@@ -484,9 +538,5 @@ public final class LightRag implements AutoCloseable {
             statusRecord.summary(),
             statusRecord.errorMessage()
         );
-    }
-
-    private static UnsupportedOperationException unsupportedGraphMaterializationApi() {
-        return new UnsupportedOperationException("graph materialization behavior is not implemented yet");
     }
 }

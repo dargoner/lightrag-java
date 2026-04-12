@@ -257,7 +257,7 @@ public final class TaskExecutionService implements AutoCloseable {
         void run(IndexingProgressListener progressListener);
     }
 
-    private static final class TaskReporter implements IndexingProgressListener {
+    private static final class TaskReporter implements IndexingProgressListener, TaskMetadataReporter {
         private final AtomicStorageProvider provider;
         private final String workspaceId;
         private final String taskId;
@@ -319,6 +319,30 @@ public final class TaskExecutionService implements AutoCloseable {
         private void markRunning(String summary) {
             var current = loadTask();
             provider.taskStore().save(copyTask(current, TaskStatus.RUNNING, Instant.now(), null, summary, null, current.cancelRequested()));
+        }
+
+        @Override
+        public void updateMetadata(Map<String, String> metadata) {
+            var additions = Map.copyOf(Objects.requireNonNull(metadata, "metadata"));
+            if (additions.isEmpty()) {
+                return;
+            }
+            var current = loadTask();
+            var merged = new java.util.LinkedHashMap<String, String>(current.metadata());
+            merged.putAll(additions);
+            provider.taskStore().save(new TaskStore.TaskRecord(
+                current.taskId(),
+                current.workspaceId(),
+                current.taskType(),
+                current.status(),
+                current.requestedAt(),
+                current.startedAt(),
+                current.finishedAt(),
+                current.summary(),
+                current.errorMessage(),
+                current.cancelRequested(),
+                Map.copyOf(merged)
+            ));
         }
 
         private void complete(String summary) {
