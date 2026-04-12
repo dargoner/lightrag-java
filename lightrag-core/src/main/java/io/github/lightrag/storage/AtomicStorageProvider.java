@@ -1,6 +1,16 @@
 package io.github.lightrag.storage;
 
 public interface AtomicStorageProvider extends StorageProvider {
+    @Override
+    default DocumentGraphSnapshotStore documentGraphSnapshotStore() {
+        return StorageProvider.super.documentGraphSnapshotStore();
+    }
+
+    @Override
+    default DocumentGraphJournalStore documentGraphJournalStore() {
+        return StorageProvider.super.documentGraphJournalStore();
+    }
+
     <T> T writeAtomically(AtomicOperation<T> operation);
 
     void restore(SnapshotStore.Snapshot snapshot);

@@ -11,6 +11,8 @@ import io.github.lightrag.model.EmbeddingModel;
 import io.github.lightrag.model.RerankModel;
 import io.github.lightrag.storage.AtomicStorageProvider;
 import io.github.lightrag.storage.ChunkStore;
+import io.github.lightrag.storage.DocumentGraphJournalStore;
+import io.github.lightrag.storage.DocumentGraphSnapshotStore;
 import io.github.lightrag.storage.DocumentStatusStore;
 import io.github.lightrag.storage.DocumentStore;
 import io.github.lightrag.storage.FixedWorkspaceStorageProvider;
@@ -250,6 +252,8 @@ public final class LightRagBuilder {
             requireStore("vectorStore", storageProvider.vectorStore(), VectorStore.class);
             requireStore("documentStatusStore", storageProvider.documentStatusStore(), DocumentStatusStore.class);
             requireStore("snapshotStore", storageProvider.snapshotStore(), SnapshotStore.class);
+            requireStore("documentGraphSnapshotStore", storageProvider.documentGraphSnapshotStore(), DocumentGraphSnapshotStore.class);
+            requireStore("documentGraphJournalStore", storageProvider.documentGraphJournalStore(), DocumentGraphJournalStore.class);
             if (!(storageProvider instanceof AtomicStorageProvider configuredAtomicStorageProvider)) {
                 throw new IllegalStateException("storageProvider must implement AtomicStorageProvider");
             }
@@ -269,6 +273,8 @@ public final class LightRagBuilder {
                 requireStore("vectorStore", validatedStorageProvider.vectorStore(), VectorStore.class);
                 requireStore("documentStatusStore", validatedStorageProvider.documentStatusStore(), DocumentStatusStore.class);
                 requireStore("snapshotStore", validatedStorageProvider.snapshotStore(), SnapshotStore.class);
+                requireStore("documentGraphSnapshotStore", validatedStorageProvider.documentGraphSnapshotStore(), DocumentGraphSnapshotStore.class);
+                requireStore("documentGraphJournalStore", validatedStorageProvider.documentGraphJournalStore(), DocumentGraphJournalStore.class);
                 resolvedWorkspaceStorageProvider = workspaceStorageProvider;
             } catch (RuntimeException exception) {
                 try {

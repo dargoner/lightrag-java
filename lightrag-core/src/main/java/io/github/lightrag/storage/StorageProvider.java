@@ -16,4 +16,12 @@ public interface StorageProvider {
     TaskStageStore taskStageStore();
 
     SnapshotStore snapshotStore();
+
+    default DocumentGraphSnapshotStore documentGraphSnapshotStore() {
+        return new io.github.lightrag.storage.memory.InMemoryDocumentGraphSnapshotStore();
+    }
+
+    default DocumentGraphJournalStore documentGraphJournalStore() {
+        return new io.github.lightrag.storage.memory.InMemoryDocumentGraphJournalStore();
+    }
 }

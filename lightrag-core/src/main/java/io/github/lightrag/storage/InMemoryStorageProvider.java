@@ -1,6 +1,8 @@
 package io.github.lightrag.storage;
 
 import io.github.lightrag.storage.memory.InMemoryChunkStore;
+import io.github.lightrag.storage.memory.InMemoryDocumentGraphJournalStore;
+import io.github.lightrag.storage.memory.InMemoryDocumentGraphSnapshotStore;
 import io.github.lightrag.storage.memory.InMemoryDocumentStore;
 import io.github.lightrag.storage.memory.InMemoryDocumentStatusStore;
 import io.github.lightrag.storage.memory.InMemoryGraphStore;
@@ -28,6 +30,8 @@ public final class InMemoryStorageProvider implements AtomicStorageProvider {
     private final InMemoryDocumentStatusStore documentStatusStore;
     private final InMemoryTaskStore taskStore;
     private final InMemoryTaskStageStore taskStageStore;
+    private final InMemoryDocumentGraphSnapshotStore documentGraphSnapshotStore;
+    private final InMemoryDocumentGraphJournalStore documentGraphJournalStore;
     private final SnapshotStore snapshotStore;
 
     public InMemoryStorageProvider() {
@@ -43,6 +47,8 @@ public final class InMemoryStorageProvider implements AtomicStorageProvider {
         this.documentStatusStore = new InMemoryDocumentStatusStore(lock);
         this.taskStore = new InMemoryTaskStore(lock);
         this.taskStageStore = new InMemoryTaskStageStore(lock);
+        this.documentGraphSnapshotStore = new InMemoryDocumentGraphSnapshotStore(lock);
+        this.documentGraphJournalStore = new InMemoryDocumentGraphJournalStore(lock);
         this.snapshotStore = Objects.requireNonNull(snapshotStore, "snapshotStore");
     }
 
@@ -92,6 +98,16 @@ public final class InMemoryStorageProvider implements AtomicStorageProvider {
     @Override
     public SnapshotStore snapshotStore() {
         return snapshotStore;
+    }
+
+    @Override
+    public DocumentGraphSnapshotStore documentGraphSnapshotStore() {
+        return documentGraphSnapshotStore;
+    }
+
+    @Override
+    public DocumentGraphJournalStore documentGraphJournalStore() {
+        return documentGraphJournalStore;
     }
 
     @Override

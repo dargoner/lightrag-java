@@ -11,6 +11,8 @@ import io.github.lightrag.model.EmbeddingModel;
 import io.github.lightrag.model.RerankModel;
 import io.github.lightrag.storage.AtomicStorageProvider;
 import io.github.lightrag.storage.ChunkStore;
+import io.github.lightrag.storage.DocumentGraphJournalStore;
+import io.github.lightrag.storage.DocumentGraphSnapshotStore;
 import io.github.lightrag.storage.DocumentStore;
 import io.github.lightrag.storage.DocumentStatusStore;
 import io.github.lightrag.storage.GraphStore;
@@ -24,6 +26,8 @@ import io.github.lightrag.storage.TaskStore;
 import io.github.lightrag.storage.VectorStore;
 import io.github.lightrag.storage.FixedWorkspaceStorageProvider;
 import io.github.lightrag.storage.WorkspaceStorageProvider;
+import io.github.lightrag.storage.memory.InMemoryDocumentGraphJournalStore;
+import io.github.lightrag.storage.memory.InMemoryDocumentGraphSnapshotStore;
 import io.github.lightrag.storage.memory.InMemoryDocumentStatusStore;
 import io.github.lightrag.storage.memory.InMemoryTaskStageStore;
 import io.github.lightrag.storage.memory.InMemoryTaskStore;
@@ -602,6 +606,28 @@ class LightRagBuilderTest {
             .build())
             .isInstanceOf(IllegalStateException.class)
             .hasMessageContaining("documentStore");
+    }
+
+    @Test
+    void builderRejectsStorageMissingGraphMaterializationStores() {
+        assertThatThrownBy(() -> LightRag.builder()
+            .chatModel(new FakeChatModel())
+            .embeddingModel(new FakeEmbeddingModel())
+            .storage(new FakeStorageProviderWithoutGraphStores())
+            .build())
+            .isInstanceOf(IllegalStateException.class)
+            .hasMessageContaining("documentGraphSnapshotStore");
+    }
+
+    @Test
+    void builderRejectsWorkspaceStorageMissingGraphMaterializationStores() {
+        assertThatThrownBy(() -> LightRag.builder()
+            .chatModel(new FakeChatModel())
+            .embeddingModel(new FakeEmbeddingModel())
+            .workspaceStorage(new TestWorkspaceStorageProvider(new FakeStorageProviderWithoutGraphStores()))
+            .build())
+            .isInstanceOf(IllegalStateException.class)
+            .hasMessageContaining("documentGraphSnapshotStore");
     }
 
     @Test
@@ -1352,6 +1378,8 @@ class LightRagBuilderTest {
         private final TaskStore taskStore = new InMemoryTaskStore();
         private final TaskStageStore taskStageStore = new InMemoryTaskStageStore();
         private final SnapshotStore snapshotStore = new FakeSnapshotStore();
+        private final DocumentGraphSnapshotStore documentGraphSnapshotStore = new InMemoryDocumentGraphSnapshotStore();
+        private final DocumentGraphJournalStore documentGraphJournalStore = new InMemoryDocumentGraphJournalStore();
 
         @Override
         public DocumentStore documentStore() {
@@ -1391,6 +1419,16 @@ class LightRagBuilderTest {
         @Override
         public SnapshotStore snapshotStore() {
             return snapshotStore;
+        }
+
+        @Override
+        public DocumentGraphSnapshotStore documentGraphSnapshotStore() {
+            return documentGraphSnapshotStore;
+        }
+
+        @Override
+        public DocumentGraphJournalStore documentGraphJournalStore() {
+            return documentGraphJournalStore;
         }
 
         @Override
@@ -1505,6 +1543,18 @@ class LightRagBuilderTest {
     private static final class MalformedStorageProvider extends FakeStorageProvider {
         @Override
         public DocumentStore documentStore() {
+            return null;
+        }
+    }
+
+    private static final class FakeStorageProviderWithoutGraphStores extends FakeStorageProvider {
+        @Override
+        public DocumentGraphSnapshotStore documentGraphSnapshotStore() {
+            return null;
+        }
+
+        @Override
+        public DocumentGraphJournalStore documentGraphJournalStore() {
             return null;
         }
     }
