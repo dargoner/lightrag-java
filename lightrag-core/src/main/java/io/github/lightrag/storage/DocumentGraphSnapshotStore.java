@@ -52,8 +52,8 @@ public interface DocumentGraphSnapshotStore {
         int chunkOrder,
         String contentHash,
         ChunkExtractStatus extractStatus,
-        List<String> entities,
-        List<String> relations,
+        List<ExtractedEntityRecord> entities,
+        List<ExtractedRelationRecord> relations,
         Instant updatedAt,
         String errorMessage
     ) {
@@ -69,6 +69,38 @@ public interface DocumentGraphSnapshotStore {
             relations = List.copyOf(Objects.requireNonNull(relations, "relations"));
             updatedAt = Objects.requireNonNull(updatedAt, "updatedAt");
             errorMessage = normalizeNullable(errorMessage);
+        }
+    }
+
+    record ExtractedEntityRecord(
+        String name,
+        String type,
+        String description,
+        List<String> aliases
+    ) {
+        public ExtractedEntityRecord {
+            name = requireNonBlank(name, "name");
+            type = requireNonBlank(type, "type");
+            description = normalizeNullable(description);
+            aliases = List.copyOf(Objects.requireNonNull(aliases, "aliases"));
+        }
+    }
+
+    record ExtractedRelationRecord(
+        String sourceEntityName,
+        String targetEntityName,
+        String type,
+        String description,
+        double weight
+    ) {
+        public ExtractedRelationRecord {
+            sourceEntityName = requireNonBlank(sourceEntityName, "sourceEntityName");
+            targetEntityName = requireNonBlank(targetEntityName, "targetEntityName");
+            type = requireNonBlank(type, "type");
+            description = normalizeNullable(description);
+            if (!Double.isFinite(weight)) {
+                throw new IllegalArgumentException("weight must be finite");
+            }
         }
     }
 

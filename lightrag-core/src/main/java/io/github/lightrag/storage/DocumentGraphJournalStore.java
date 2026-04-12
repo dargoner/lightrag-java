@@ -2,6 +2,7 @@ package io.github.lightrag.storage;
 
 import io.github.lightrag.api.ChunkGraphStatus;
 import io.github.lightrag.api.ChunkMergeStatus;
+import io.github.lightrag.api.FailureStage;
 import io.github.lightrag.api.GraphMaterializationMode;
 import io.github.lightrag.api.GraphMaterializationStatus;
 
@@ -29,7 +30,7 @@ public interface DocumentGraphJournalStore {
         int expectedRelationCount,
         int materializedEntityCount,
         int materializedRelationCount,
-        String lastFailureStage,
+        FailureStage lastFailureStage,
         Instant createdAt,
         Instant updatedAt,
         String errorMessage
@@ -45,7 +46,6 @@ public interface DocumentGraphJournalStore {
             expectedRelationCount = requireNonNegative(expectedRelationCount, "expectedRelationCount");
             materializedEntityCount = requireNonNegative(materializedEntityCount, "materializedEntityCount");
             materializedRelationCount = requireNonNegative(materializedRelationCount, "materializedRelationCount");
-            lastFailureStage = normalizeNullable(lastFailureStage);
             createdAt = Objects.requireNonNull(createdAt, "createdAt");
             updatedAt = Objects.requireNonNull(updatedAt, "updatedAt");
             errorMessage = normalizeNullable(errorMessage);
@@ -62,7 +62,7 @@ public interface DocumentGraphJournalStore {
         List<String> expectedRelationKeys,
         List<String> materializedEntityKeys,
         List<String> materializedRelationKeys,
-        String lastFailureStage,
+        FailureStage lastFailureStage,
         Instant updatedAt,
         String errorMessage
     ) {
@@ -78,7 +78,6 @@ public interface DocumentGraphJournalStore {
             expectedRelationKeys = List.copyOf(Objects.requireNonNull(expectedRelationKeys, "expectedRelationKeys"));
             materializedEntityKeys = List.copyOf(Objects.requireNonNull(materializedEntityKeys, "materializedEntityKeys"));
             materializedRelationKeys = List.copyOf(Objects.requireNonNull(materializedRelationKeys, "materializedRelationKeys"));
-            lastFailureStage = normalizeNullable(lastFailureStage);
             updatedAt = Objects.requireNonNull(updatedAt, "updatedAt");
             errorMessage = normalizeNullable(errorMessage);
         }

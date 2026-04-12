@@ -3,6 +3,7 @@ package io.github.lightrag.storage;
 import io.github.lightrag.api.ChunkExtractStatus;
 import io.github.lightrag.api.ChunkGraphStatus;
 import io.github.lightrag.api.ChunkMergeStatus;
+import io.github.lightrag.api.FailureStage;
 import io.github.lightrag.api.GraphMaterializationMode;
 import io.github.lightrag.api.GraphMaterializationStatus;
 import io.github.lightrag.api.SnapshotSource;
@@ -38,8 +39,19 @@ class InMemoryDocumentGraphStoresTest {
                 0,
                 "hash-1",
                 ChunkExtractStatus.SUCCEEDED,
-                List.of(),
-                List.of(),
+                List.of(new DocumentGraphSnapshotStore.ExtractedEntityRecord(
+                    "entity-a",
+                    "person",
+                    "desc",
+                    List.of("alias-a")
+                )),
+                List.of(new DocumentGraphSnapshotStore.ExtractedRelationRecord(
+                    "entity-a",
+                    "entity-b",
+                    "works_with",
+                    "rel-desc",
+                    1.0d
+                )),
                 now,
                 null
             )
@@ -64,7 +76,7 @@ class InMemoryDocumentGraphStoresTest {
             2,
             3,
             2,
-            null,
+            FailureStage.FINALIZING,
             now,
             now,
             null
@@ -80,7 +92,7 @@ class InMemoryDocumentGraphStoresTest {
                 List.of("relation-a"),
                 List.of("entity-a"),
                 List.of("relation-a"),
-                null,
+                FailureStage.ENTITY_MATERIALIZATION,
                 now,
                 null
             )
