@@ -403,6 +403,10 @@ class DocumentIngestorTest {
         private final DocumentStatusStore documentStatusStore = new InMemoryDocumentStatusStore();
         private final TaskStore taskStore = new InMemoryTaskStore();
         private final TaskStageStore taskStageStore = new InMemoryTaskStageStore();
+        private final io.github.lightrag.storage.DocumentGraphSnapshotStore documentGraphSnapshotStore =
+            new io.github.lightrag.storage.memory.InMemoryDocumentGraphSnapshotStore();
+        private final io.github.lightrag.storage.DocumentGraphJournalStore documentGraphJournalStore =
+            new io.github.lightrag.storage.memory.InMemoryDocumentGraphJournalStore();
         private DocumentStore.DocumentRecord documentToInsertBeforeWrite;
 
         @Override
@@ -446,6 +450,16 @@ class DocumentIngestorTest {
         }
 
         @Override
+        public io.github.lightrag.storage.DocumentGraphSnapshotStore documentGraphSnapshotStore() {
+            return documentGraphSnapshotStore;
+        }
+
+        @Override
+        public io.github.lightrag.storage.DocumentGraphJournalStore documentGraphJournalStore() {
+            return documentGraphJournalStore;
+        }
+
+        @Override
         public <T> T writeAtomically(AtomicOperation<T> operation) {
             if (documentToInsertBeforeWrite != null) {
                 documentStore.save(documentToInsertBeforeWrite);
@@ -463,6 +477,16 @@ class DocumentIngestorTest {
                     @Override
                     public ChunkStore chunkStore() {
                         return chunkStore;
+                    }
+
+                    @Override
+                    public io.github.lightrag.storage.DocumentGraphSnapshotStore documentGraphSnapshotStore() {
+                        return documentGraphSnapshotStore;
+                    }
+
+                    @Override
+                    public io.github.lightrag.storage.DocumentGraphJournalStore documentGraphJournalStore() {
+                        return documentGraphJournalStore;
                     }
 
                     @Override

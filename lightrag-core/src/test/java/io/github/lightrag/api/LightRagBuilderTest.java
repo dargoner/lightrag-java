@@ -1456,6 +1456,16 @@ class LightRagBuilderTest {
                 }
 
                 @Override
+                public DocumentGraphSnapshotStore documentGraphSnapshotStore() {
+                    return documentGraphSnapshotStore;
+                }
+
+                @Override
+                public DocumentGraphJournalStore documentGraphJournalStore() {
+                    return documentGraphJournalStore;
+                }
+
+                @Override
                 public GraphStore graphStore() {
                     return graphStore;
                 }

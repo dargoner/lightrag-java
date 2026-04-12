@@ -45,6 +45,8 @@ public final class MySqlSchemaManager {
                                 + " but this SDK supports up to "
                                 + latestSchemaVersion()
                         );
+                    } else if (currentVersion.get() < latestSchemaVersion()) {
+                        applyMissingMigrations(statement, currentVersion.get());
                     } else {
                         replayAppliedMigrations(statement, currentVersion.get());
                     }
@@ -91,7 +93,8 @@ public final class MySqlSchemaManager {
     private List<Migration> migrations() {
         return List.of(
             new Migration(1, versionOneStatements()),
-            new Migration(2, versionTwoStatements())
+            new Migration(2, versionTwoStatements()),
+            new Migration(3, versionThreeStatements())
         );
     }
 
@@ -178,6 +181,84 @@ public final class MySqlSchemaManager {
         );
     }
 
+    private List<String> versionThreeStatements() {
+        return List.of(
+            """
+                CREATE TABLE IF NOT EXISTS %s (
+                    workspace_id VARCHAR(191) NOT NULL,
+                    document_id VARCHAR(191) NOT NULL,
+                    version INT NOT NULL,
+                    status VARCHAR(64) NOT NULL,
+                    source VARCHAR(64) NOT NULL,
+                    chunk_count INT NOT NULL,
+                    created_at TIMESTAMP NOT NULL,
+                    updated_at TIMESTAMP NOT NULL,
+                    error_message TEXT NULL,
+                    PRIMARY KEY (workspace_id, document_id)
+                )
+                """.formatted(config.qualifiedTableName("document_graph_snapshots")),
+            """
+                CREATE TABLE IF NOT EXISTS %s (
+                    workspace_id VARCHAR(191) NOT NULL,
+                    document_id VARCHAR(191) NOT NULL,
+                    chunk_id VARCHAR(191) NOT NULL,
+                    chunk_order INT NOT NULL,
+                    content_hash VARCHAR(255) NOT NULL,
+                    extract_status VARCHAR(64) NOT NULL,
+                    entities LONGTEXT NOT NULL,
+                    relations LONGTEXT NOT NULL,
+                    updated_at TIMESTAMP NOT NULL,
+                    error_message TEXT NULL,
+                    PRIMARY KEY (workspace_id, document_id, chunk_id),
+                    KEY %s (workspace_id, document_id, chunk_order, chunk_id)
+                )
+                """.formatted(
+                config.qualifiedTableName("chunk_graph_snapshots"),
+                config.tableName("chunk_graph_snapshots") + "_document_order_idx"
+            ),
+            """
+                CREATE TABLE IF NOT EXISTS %s (
+                    workspace_id VARCHAR(191) NOT NULL,
+                    document_id VARCHAR(191) NOT NULL,
+                    snapshot_version INT NOT NULL,
+                    status VARCHAR(64) NOT NULL,
+                    last_mode VARCHAR(64) NOT NULL,
+                    expected_entity_count INT NOT NULL,
+                    expected_relation_count INT NOT NULL,
+                    materialized_entity_count INT NOT NULL,
+                    materialized_relation_count INT NOT NULL,
+                    last_failure_stage VARCHAR(64) NULL,
+                    created_at TIMESTAMP NOT NULL,
+                    updated_at TIMESTAMP NOT NULL,
+                    error_message TEXT NULL,
+                    PRIMARY KEY (workspace_id, document_id)
+                )
+                """.formatted(config.qualifiedTableName("document_graph_journals")),
+            """
+                CREATE TABLE IF NOT EXISTS %s (
+                    workspace_id VARCHAR(191) NOT NULL,
+                    document_id VARCHAR(191) NOT NULL,
+                    chunk_id VARCHAR(191) NOT NULL,
+                    snapshot_version INT NOT NULL,
+                    merge_status VARCHAR(64) NOT NULL,
+                    graph_status VARCHAR(64) NOT NULL,
+                    expected_entity_keys LONGTEXT NOT NULL,
+                    expected_relation_keys LONGTEXT NOT NULL,
+                    materialized_entity_keys LONGTEXT NOT NULL,
+                    materialized_relation_keys LONGTEXT NOT NULL,
+                    last_failure_stage VARCHAR(64) NULL,
+                    updated_at TIMESTAMP NOT NULL,
+                    error_message TEXT NULL,
+                    PRIMARY KEY (workspace_id, document_id, chunk_id),
+                    KEY %s (workspace_id, document_id, chunk_id)
+                )
+                """.formatted(
+                config.qualifiedTableName("chunk_graph_journals"),
+                config.tableName("chunk_graph_journals") + "_document_chunk_idx"
+            )
+        );
+    }
+
     private void ensureSchemaVersionTable(Statement statement) throws SQLException {
         statement.execute(
             """
@@ -237,7 +318,15 @@ public final class MySqlSchemaManager {
         if (bootstrapStatements != null) {
             return;
         }
-        for (var tableName : List.of("documents", "chunks", "document_status")) {
+        for (var tableName : List.of(
+            "documents",
+            "chunks",
+            "document_status",
+            "document_graph_snapshots",
+            "chunk_graph_snapshots",
+            "document_graph_journals",
+            "chunk_graph_journals"
+        )) {
             if (!columnExists(connection, tableName, "workspace_id")) {
                 throw new IllegalStateException("MySQL shared workspace table is missing workspace_id: " + tableName);
             }

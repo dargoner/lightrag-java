@@ -136,11 +136,11 @@ public final class PostgresStorageProvider implements AtomicStorageProvider, Aut
             this.taskStore = new PostgresTaskStore(jdbcDataSource, resolvedConfig, this.workspaceId);
             this.taskStageStore = new PostgresTaskStageStore(jdbcDataSource, resolvedConfig, this.workspaceId);
             this.documentGraphSnapshotStore = DocumentGraphStateSupport.trackedSnapshotStore(
-                new io.github.lightrag.storage.memory.InMemoryDocumentGraphSnapshotStore(lock),
+                new PostgresDocumentGraphSnapshotStore(jdbcDataSource, resolvedConfig, this.workspaceId),
                 trackedDocumentGraphIds
             );
             this.documentGraphJournalStore = DocumentGraphStateSupport.trackedJournalStore(
-                new io.github.lightrag.storage.memory.InMemoryDocumentGraphJournalStore(lock),
+                new PostgresDocumentGraphJournalStore(jdbcDataSource, resolvedConfig, this.workspaceId),
                 trackedDocumentGraphIds
             );
             this.lockedDocumentStatusStore = new LockedDocumentStatusStore(documentStatusStore);
@@ -256,15 +256,15 @@ public final class PostgresStorageProvider implements AtomicStorageProvider, Aut
                         for (var statusRecord : source.documentStatuses()) {
                             stores.documentStatusStore().save(statusRecord);
                         }
+                        DocumentGraphStateSupport.restore(
+                            stores.documentGraphSnapshotStore(),
+                            stores.documentGraphJournalStore(),
+                            java.util.Set.of(),
+                            source
+                        );
                         return null;
                     });
                 }
-                DocumentGraphStateSupport.restore(
-                    documentGraphSnapshotStore,
-                    documentGraphJournalStore,
-                    trackedDocumentGraphIds,
-                    source
-                );
             } catch (SQLException exception) {
                 restoreDocumentGraphState(previousDocumentGraphState, exception);
                 throw new StorageException("Failed to open PostgreSQL transaction for restore", exception);
@@ -296,6 +296,8 @@ public final class PostgresStorageProvider implements AtomicStorageProvider, Aut
         return new AtomicView(
             new PostgresDocumentStore(connectionAccess, config, workspaceId),
             new PostgresChunkStore(connectionAccess, config, workspaceId),
+            new PostgresDocumentGraphSnapshotStore(connectionAccess, config, workspaceId),
+            new PostgresDocumentGraphJournalStore(connectionAccess, config, workspaceId),
             new PostgresGraphStore(connectionAccess, config, workspaceId),
             new PostgresVectorStore(connectionAccess, config, workspaceId),
             new PostgresDocumentStatusStore(connectionAccess, config, workspaceId)
@@ -388,6 +390,10 @@ public final class PostgresStorageProvider implements AtomicStorageProvider, Aut
         deleteWorkspaceRows(connection, "relations");
         deleteWorkspaceRows(connection, "entities");
         deleteWorkspaceRows(connection, "vectors");
+        deleteWorkspaceRows(connection, "chunk_graph_journals");
+        deleteWorkspaceRows(connection, "document_graph_journals");
+        deleteWorkspaceRows(connection, "chunk_graph_snapshots");
+        deleteWorkspaceRows(connection, "document_graph_snapshots");
         deleteWorkspaceRows(connection, "chunks");
         deleteWorkspaceRows(connection, "document_status");
         deleteWorkspaceRows(connection, "documents");
@@ -439,6 +445,8 @@ public final class PostgresStorageProvider implements AtomicStorageProvider, Aut
     private record AtomicView(
         DocumentStore documentStore,
         ChunkStore chunkStore,
+        DocumentGraphSnapshotStore documentGraphSnapshotStore,
+        DocumentGraphJournalStore documentGraphJournalStore,
         GraphStore graphStore,
         VectorStore vectorStore,
         DocumentStatusStore documentStatusStore

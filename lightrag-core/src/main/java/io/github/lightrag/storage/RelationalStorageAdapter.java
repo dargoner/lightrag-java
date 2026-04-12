@@ -51,6 +51,14 @@ public interface RelationalStorageAdapter extends AutoCloseable {
 
         DocumentStatusStore documentStatusStore();
 
+        default DocumentGraphSnapshotStore documentGraphSnapshotStore() {
+            throw new UnsupportedOperationException("documentGraphSnapshotStore is not available in relational transaction view");
+        }
+
+        default DocumentGraphJournalStore documentGraphJournalStore() {
+            throw new UnsupportedOperationException("documentGraphJournalStore is not available in relational transaction view");
+        }
+
         default TaskStore taskStore() {
             throw new UnsupportedOperationException("taskStore is not available in relational transaction view");
         }

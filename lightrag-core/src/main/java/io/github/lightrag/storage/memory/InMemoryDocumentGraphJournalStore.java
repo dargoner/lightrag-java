@@ -2,7 +2,6 @@ package io.github.lightrag.storage.memory;
 
 import io.github.lightrag.storage.DocumentGraphJournalStore;
 
-import java.util.ArrayList;
 import java.util.List;
 import java.util.Objects;
 import java.util.concurrent.ConcurrentNavigableMap;
@@ -11,8 +10,8 @@ import java.util.concurrent.locks.ReadWriteLock;
 import java.util.concurrent.locks.ReentrantReadWriteLock;
 
 public final class InMemoryDocumentGraphJournalStore implements DocumentGraphJournalStore {
-    private final ConcurrentNavigableMap<String, List<DocumentGraphJournal>> documentJournals = new ConcurrentSkipListMap<>();
-    private final ConcurrentNavigableMap<String, List<ChunkGraphJournal>> chunkJournals = new ConcurrentSkipListMap<>();
+    private final ConcurrentNavigableMap<String, DocumentGraphJournal> documentJournals = new ConcurrentSkipListMap<>();
+    private final ConcurrentNavigableMap<String, ConcurrentNavigableMap<String, ChunkGraphJournal>> chunkJournals = new ConcurrentSkipListMap<>();
     private final ReadWriteLock lock;
 
     public InMemoryDocumentGraphJournalStore() {
@@ -26,10 +25,11 @@ public final class InMemoryDocumentGraphJournalStore implements DocumentGraphJou
     @Override
     public void appendDocument(DocumentGraphJournal journal) {
         var entry = Objects.requireNonNull(journal, "journal");
+        var normalizedDocumentId = normalizeDocumentId(entry.documentId());
         var writeLock = lock.writeLock();
         writeLock.lock();
         try {
-            documentJournals.put(entry.documentId(), append(documentJournals.get(entry.documentId()), entry));
+            documentJournals.put(normalizedDocumentId, entry);
         } finally {
             writeLock.unlock();
         }
@@ -40,11 +40,11 @@ public final class InMemoryDocumentGraphJournalStore implements DocumentGraphJou
         var readLock = lock.readLock();
         readLock.lock();
         try {
-            var journals = documentJournals.get(normalizeDocumentId(documentId));
-            if (journals == null) {
+            var journal = documentJournals.get(normalizeDocumentId(documentId));
+            if (journal == null) {
                 return List.of();
             }
-            return List.copyOf(journals);
+            return List.of(journal);
         } finally {
             readLock.unlock();
         }
@@ -63,7 +63,13 @@ public final class InMemoryDocumentGraphJournalStore implements DocumentGraphJou
         var writeLock = lock.writeLock();
         writeLock.lock();
         try {
-            chunkJournals.put(normalizedDocumentId, append(chunkJournals.get(normalizedDocumentId), additions));
+            var perDocument = chunkJournals.computeIfAbsent(
+                normalizedDocumentId,
+                id -> new ConcurrentSkipListMap<>()
+            );
+            for (var journal : additions) {
+                perDocument.put(journal.chunkId(), journal);
+            }
         } finally {
             writeLock.unlock();
         }
@@ -74,11 +80,11 @@ public final class InMemoryDocumentGraphJournalStore implements DocumentGraphJou
         var readLock = lock.readLock();
         readLock.lock();
         try {
-            var journals = chunkJournals.get(normalizeDocumentId(documentId));
-            if (journals == null) {
+            var perDocument = chunkJournals.get(normalizeDocumentId(documentId));
+            if (perDocument == null) {
                 return List.of();
             }
-            return List.copyOf(journals);
+            return List.copyOf(perDocument.values());
         } finally {
             readLock.unlock();
         }
@@ -95,18 +101,6 @@ public final class InMemoryDocumentGraphJournalStore implements DocumentGraphJou
         } finally {
             writeLock.unlock();
         }
-    }
-
-    private static List<DocumentGraphJournal> append(List<DocumentGraphJournal> existing, DocumentGraphJournal addition) {
-        var combined = existing == null ? new ArrayList<DocumentGraphJournal>(1) : new ArrayList<>(existing);
-        combined.add(addition);
-        return List.copyOf(combined);
-    }
-
-    private static List<ChunkGraphJournal> append(List<ChunkGraphJournal> existing, List<ChunkGraphJournal> additions) {
-        var combined = existing == null ? new ArrayList<ChunkGraphJournal>(additions.size()) : new ArrayList<>(existing);
-        combined.addAll(additions);
-        return List.copyOf(combined);
     }
 
     private static String normalizeDocumentId(String documentId) {

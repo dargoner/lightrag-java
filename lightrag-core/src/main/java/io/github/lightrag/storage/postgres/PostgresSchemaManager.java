@@ -242,7 +242,72 @@ public final class PostgresSchemaManager {
                     error_message TEXT NULL,
                     PRIMARY KEY (workspace_id, task_id, stage)
                 )
-                """.formatted(config.qualifiedTableName("task_stage"))
+                """.formatted(config.qualifiedTableName("task_stage")),
+            """
+                CREATE TABLE IF NOT EXISTS %s (
+                    workspace_id TEXT NOT NULL,
+                    document_id TEXT NOT NULL,
+                    version INTEGER NOT NULL,
+                    status TEXT NOT NULL,
+                    source TEXT NOT NULL,
+                    chunk_count INTEGER NOT NULL,
+                    created_at TIMESTAMPTZ NOT NULL,
+                    updated_at TIMESTAMPTZ NOT NULL,
+                    error_message TEXT NULL,
+                    PRIMARY KEY (workspace_id, document_id)
+                )
+                """.formatted(config.qualifiedTableName("document_graph_snapshots")),
+            """
+                CREATE TABLE IF NOT EXISTS %s (
+                    workspace_id TEXT NOT NULL,
+                    document_id TEXT NOT NULL,
+                    chunk_id TEXT NOT NULL,
+                    chunk_order INTEGER NOT NULL,
+                    content_hash TEXT NOT NULL,
+                    extract_status TEXT NOT NULL,
+                    entities JSONB NOT NULL DEFAULT '[]'::jsonb,
+                    relations JSONB NOT NULL DEFAULT '[]'::jsonb,
+                    updated_at TIMESTAMPTZ NOT NULL,
+                    error_message TEXT NULL,
+                    PRIMARY KEY (workspace_id, document_id, chunk_id)
+                )
+                """.formatted(config.qualifiedTableName("chunk_graph_snapshots")),
+            """
+                CREATE TABLE IF NOT EXISTS %s (
+                    workspace_id TEXT NOT NULL,
+                    document_id TEXT NOT NULL,
+                    snapshot_version INTEGER NOT NULL,
+                    status TEXT NOT NULL,
+                    last_mode TEXT NOT NULL,
+                    expected_entity_count INTEGER NOT NULL,
+                    expected_relation_count INTEGER NOT NULL,
+                    materialized_entity_count INTEGER NOT NULL,
+                    materialized_relation_count INTEGER NOT NULL,
+                    last_failure_stage TEXT NULL,
+                    created_at TIMESTAMPTZ NOT NULL,
+                    updated_at TIMESTAMPTZ NOT NULL,
+                    error_message TEXT NULL,
+                    PRIMARY KEY (workspace_id, document_id)
+                )
+                """.formatted(config.qualifiedTableName("document_graph_journals")),
+            """
+                CREATE TABLE IF NOT EXISTS %s (
+                    workspace_id TEXT NOT NULL,
+                    document_id TEXT NOT NULL,
+                    chunk_id TEXT NOT NULL,
+                    snapshot_version INTEGER NOT NULL,
+                    merge_status TEXT NOT NULL,
+                    graph_status TEXT NOT NULL,
+                    expected_entity_keys JSONB NOT NULL DEFAULT '[]'::jsonb,
+                    expected_relation_keys JSONB NOT NULL DEFAULT '[]'::jsonb,
+                    materialized_entity_keys JSONB NOT NULL DEFAULT '[]'::jsonb,
+                    materialized_relation_keys JSONB NOT NULL DEFAULT '[]'::jsonb,
+                    last_failure_stage TEXT NULL,
+                    updated_at TIMESTAMPTZ NOT NULL,
+                    error_message TEXT NULL,
+                    PRIMARY KEY (workspace_id, document_id, chunk_id)
+                )
+                """.formatted(config.qualifiedTableName("chunk_graph_journals"))
         );
     }
 
@@ -315,7 +380,11 @@ public final class PostgresSchemaManager {
             "relations",
             "relation_chunks",
             "vectors",
-            "document_status"
+            "document_status",
+            "document_graph_snapshots",
+            "chunk_graph_snapshots",
+            "document_graph_journals",
+            "chunk_graph_journals"
         )) {
             if (!columnExists(connection, tableName, "workspace_id")) {
                 throw new IllegalStateException("PostgreSQL shared workspace table is missing workspace_id: " + tableName);

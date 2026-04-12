@@ -13,9 +13,11 @@ import io.github.lightrag.model.EmbeddingModel;
 import io.github.lightrag.storage.DocumentGraphJournalStore;
 import io.github.lightrag.storage.DocumentGraphSnapshotStore;
 import io.github.lightrag.storage.InMemoryStorageProvider;
+import io.github.lightrag.storage.ChunkStore;
 import io.github.lightrag.task.TaskMetadataReporter;
 import io.github.lightrag.storage.memory.InMemoryGraphStore;
 import io.github.lightrag.storage.memory.InMemoryVectorStore;
+import io.github.lightrag.types.Chunk;
 import io.github.lightrag.types.Document;
 import org.junit.jupiter.api.Test;
 
@@ -51,6 +53,41 @@ class GraphMaterializationPipelineTest {
             assertThat(chunk.mergeStatus()).isEqualTo(ChunkMergeStatus.SUCCEEDED);
             assertThat(chunk.graphStatus()).isEqualTo(ChunkGraphStatus.MATERIALIZED);
         });
+    }
+
+    @Test
+    void reingestReplacesChunkJournalSetWhenDocumentChunkTopologyChanges() {
+        var storage = InMemoryStorageProvider.create();
+        Chunker chunker = document -> {
+            if (document.content().contains("single chunk")) {
+                return List.of(chunk(document.id(), document.id() + ":0", 0, "Alice works with Bob"));
+            }
+            return List.of(
+                chunk(document.id(), document.id() + ":0", 0, "Alice works with Bob"),
+                chunk(document.id(), document.id() + ":1", 1, "Bob works with Carol")
+            );
+        };
+
+        try (var rag = LightRag.builder()
+            .chatModel(new FakeChatModel())
+            .embeddingModel(new FakeEmbeddingModel())
+            .storage(storage)
+            .chunker(chunker)
+            .build()) {
+            rag.ingest(WORKSPACE, List.of(new Document("doc-1", "Title", "two chunks", Map.of())));
+            assertThat(storage.documentGraphJournalStore().listChunkJournals("doc-1"))
+                .extracting(DocumentGraphJournalStore.ChunkGraphJournal::chunkId)
+                .containsExactly("doc-1:0", "doc-1:1");
+
+            rag.ingest(WORKSPACE, List.of(new Document("doc-1", "Title", "single chunk", Map.of())));
+        }
+
+        assertThat(storage.documentGraphSnapshotStore().listChunks("doc-1"))
+            .extracting(DocumentGraphSnapshotStore.ChunkGraphSnapshot::chunkId)
+            .containsExactly("doc-1:0");
+        assertThat(storage.documentGraphJournalStore().listChunkJournals("doc-1"))
+            .extracting(DocumentGraphJournalStore.ChunkGraphJournal::chunkId)
+            .containsExactly("doc-1:0");
     }
 
     @Test
@@ -133,12 +170,51 @@ class GraphMaterializationPipelineTest {
             .containsExactly(ChunkGraphStatus.MATERIALIZED, ChunkGraphStatus.PARTIAL);
     }
 
+    @Test
+    void rebuildRemovesChunkJournalsForChunksMissingFromRecoveredSnapshot() {
+        var storage = InMemoryStorageProvider.create();
+        seedDocumentGraphState(storage, "doc-1", Instant.parse("2026-04-12T00:00:00Z"), List.of(
+            chunkSnapshot("doc-1", "doc-1:0", 0, "Alice works with Bob"),
+            chunkSnapshot("doc-1", "doc-1:1", 1, "Bob works with Carol")
+        ));
+        storage.documentGraphJournalStore().appendDocument(documentJournal("doc-1", GraphMaterializationStatus.PARTIAL, 4, 2, 2, 1));
+        storage.documentGraphJournalStore().appendChunks("doc-1", List.of(
+            chunkJournal("doc-1", "doc-1:0", 0, ChunkGraphStatus.MATERIALIZED, List.of(entityKey("Alice"), entityKey("Bob")), List.of(relationKey("Alice", "works_with", "Bob"))),
+            chunkJournal("doc-1", "doc-1:1", 1, ChunkGraphStatus.PARTIAL, List.of(entityKey("Bob"), entityKey("Carol")), List.of())
+        ));
+        storage.chunkStore().save(new ChunkStore.ChunkRecord("doc-1:0", "doc-1", "Alice works with Bob", 4, 0, Map.of()));
+
+        var pipeline = new GraphMaterializationPipeline(
+            new FakeChatModel(),
+            new FakeEmbeddingModel(),
+            storage,
+            io.github.lightrag.indexing.refinement.ExtractionRefinementOptions.disabled(),
+            null,
+            TaskMetadataReporter.noop(),
+            IndexingProgressListener.noop()
+        );
+
+        var result = pipeline.materialize("doc-1", GraphMaterializationMode.REBUILD);
+
+        assertThat(result.executedMode()).isEqualTo(GraphMaterializationMode.REBUILD);
+        assertThat(storage.documentGraphSnapshotStore().listChunks("doc-1"))
+            .extracting(DocumentGraphSnapshotStore.ChunkGraphSnapshot::chunkId)
+            .containsExactly("doc-1:0");
+        assertThat(storage.documentGraphJournalStore().listChunkJournals("doc-1"))
+            .extracting(DocumentGraphJournalStore.ChunkGraphJournal::chunkId)
+            .containsExactly("doc-1:0");
+    }
+
     private static LightRag newLightRag(InMemoryStorageProvider storage) {
         return LightRag.builder()
             .chatModel(new FakeChatModel())
             .embeddingModel(new FakeEmbeddingModel())
             .storage(storage)
             .build();
+    }
+
+    private static Chunk chunk(String documentId, String chunkId, int order, String text) {
+        return new Chunk(chunkId, documentId, text, text.length(), order, Map.of());
     }
 
     private static void degradeOnlyChunkMaterialization(InMemoryStorageProvider storage, String documentId, String chunkId) {

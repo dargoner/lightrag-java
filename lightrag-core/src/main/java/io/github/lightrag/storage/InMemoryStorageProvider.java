@@ -128,6 +128,8 @@ public final class InMemoryStorageProvider implements AtomicStorageProvider {
             return Objects.requireNonNull(operation, "operation").execute(new AtomicView(
                 documentStore,
                 chunkStore,
+                documentGraphSnapshotStore,
+                documentGraphJournalStore,
                 graphStore,
                 vectorStore,
                 documentStatusStore
@@ -261,6 +263,8 @@ public final class InMemoryStorageProvider implements AtomicStorageProvider {
     private record AtomicView(
         DocumentStore documentStore,
         ChunkStore chunkStore,
+        DocumentGraphSnapshotStore documentGraphSnapshotStore,
+        DocumentGraphJournalStore documentGraphJournalStore,
         GraphStore graphStore,
         VectorStore vectorStore,
         DocumentStatusStore documentStatusStore

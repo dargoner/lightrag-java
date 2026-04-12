@@ -15,9 +15,6 @@ import io.github.lightrag.storage.RelationalStorageAdapter;
 import io.github.lightrag.storage.SnapshotStore;
 import io.github.lightrag.storage.TaskStageStore;
 import io.github.lightrag.storage.TaskStore;
-import io.github.lightrag.storage.memory.InMemoryDocumentGraphJournalStore;
-import io.github.lightrag.storage.memory.InMemoryDocumentGraphSnapshotStore;
-
 import javax.sql.DataSource;
 import java.sql.Connection;
 import java.sql.PreparedStatement;
@@ -118,11 +115,11 @@ public final class PostgresRelationalStorageAdapter implements RelationalStorage
         this.taskStageStore = new PostgresTaskStageStore(this.dataSource, this.config, this.workspaceId);
         this.trackedDocumentGraphIds = new ConcurrentSkipListSet<>();
         this.documentGraphSnapshotStore = DocumentGraphStateSupport.trackedSnapshotStore(
-            new InMemoryDocumentGraphSnapshotStore(),
+            new PostgresDocumentGraphSnapshotStore(this.dataSource, this.config, this.workspaceId),
             trackedDocumentGraphIds
         );
         this.documentGraphJournalStore = DocumentGraphStateSupport.trackedJournalStore(
-            new InMemoryDocumentGraphJournalStore(),
+            new PostgresDocumentGraphJournalStore(this.dataSource, this.config, this.workspaceId),
             trackedDocumentGraphIds
         );
     }
@@ -223,6 +220,8 @@ public final class PostgresRelationalStorageAdapter implements RelationalStorage
                         var transactionalChunkStore = new PostgresChunkStore(connectionAccess, config, workspaceId);
                         var transactionalGraphStore = new PostgresGraphStore(connectionAccess, config, workspaceId);
                         var transactionalStatusStore = new PostgresDocumentStatusStore(connectionAccess, config, workspaceId);
+                        var transactionalSnapshotStore = new PostgresDocumentGraphSnapshotStore(connectionAccess, config, workspaceId);
+                        var transactionalJournalStore = new PostgresDocumentGraphJournalStore(connectionAccess, config, workspaceId);
                         for (var document : source.documents()) {
                             transactionalDocumentStore.save(document);
                         }
@@ -238,14 +237,14 @@ public final class PostgresRelationalStorageAdapter implements RelationalStorage
                         for (var status : source.documentStatuses()) {
                             transactionalStatusStore.save(status);
                         }
+                        DocumentGraphStateSupport.restore(
+                            transactionalSnapshotStore,
+                            transactionalJournalStore,
+                            java.util.Set.of(),
+                            source
+                        );
                         return null;
                     });
-                    DocumentGraphStateSupport.restore(
-                        documentGraphSnapshotStore,
-                        documentGraphJournalStore,
-                        trackedDocumentGraphIds,
-                        source
-                    );
                     return null;
                 } catch (SQLException exception) {
                     throw new StorageException("Failed to open PostgreSQL transaction for restore", exception);
@@ -276,6 +275,16 @@ public final class PostgresRelationalStorageAdapter implements RelationalStorage
                         @Override
                         public DocumentStatusStore documentStatusStore() {
                             return new PostgresDocumentStatusStore(connectionAccess, config, workspaceId);
+                        }
+
+                        @Override
+                        public DocumentGraphSnapshotStore documentGraphSnapshotStore() {
+                            return new PostgresDocumentGraphSnapshotStore(connectionAccess, config, workspaceId);
+                        }
+
+                        @Override
+                        public DocumentGraphJournalStore documentGraphJournalStore() {
+                            return new PostgresDocumentGraphJournalStore(connectionAccess, config, workspaceId);
                         }
 
                         @Override
@@ -362,6 +371,10 @@ public final class PostgresRelationalStorageAdapter implements RelationalStorage
         deleteWorkspaceRows(connection, "entity_aliases");
         deleteWorkspaceRows(connection, "relations");
         deleteWorkspaceRows(connection, "entities");
+        deleteWorkspaceRows(connection, "chunk_graph_journals");
+        deleteWorkspaceRows(connection, "document_graph_journals");
+        deleteWorkspaceRows(connection, "chunk_graph_snapshots");
+        deleteWorkspaceRows(connection, "document_graph_snapshots");
         deleteWorkspaceRows(connection, "chunks");
         deleteWorkspaceRows(connection, "document_status");
         deleteWorkspaceRows(connection, "documents");
@@ -548,7 +561,72 @@ public final class PostgresRelationalStorageAdapter implements RelationalStorage
                         error_message TEXT NULL,
                         PRIMARY KEY (workspace_id, task_id, stage)
                     )
-                    """.formatted(config.qualifiedTableName("task_stage"))
+                    """.formatted(config.qualifiedTableName("task_stage")),
+                """
+                    CREATE TABLE IF NOT EXISTS %s (
+                        workspace_id TEXT NOT NULL,
+                        document_id TEXT NOT NULL,
+                        version INTEGER NOT NULL,
+                        status TEXT NOT NULL,
+                        source TEXT NOT NULL,
+                        chunk_count INTEGER NOT NULL,
+                        created_at TIMESTAMPTZ NOT NULL,
+                        updated_at TIMESTAMPTZ NOT NULL,
+                        error_message TEXT NULL,
+                        PRIMARY KEY (workspace_id, document_id)
+                    )
+                    """.formatted(config.qualifiedTableName("document_graph_snapshots")),
+                """
+                    CREATE TABLE IF NOT EXISTS %s (
+                        workspace_id TEXT NOT NULL,
+                        document_id TEXT NOT NULL,
+                        chunk_id TEXT NOT NULL,
+                        chunk_order INTEGER NOT NULL,
+                        content_hash TEXT NOT NULL,
+                        extract_status TEXT NOT NULL,
+                        entities JSONB NOT NULL DEFAULT '[]'::jsonb,
+                        relations JSONB NOT NULL DEFAULT '[]'::jsonb,
+                        updated_at TIMESTAMPTZ NOT NULL,
+                        error_message TEXT NULL,
+                        PRIMARY KEY (workspace_id, document_id, chunk_id)
+                    )
+                    """.formatted(config.qualifiedTableName("chunk_graph_snapshots")),
+                """
+                    CREATE TABLE IF NOT EXISTS %s (
+                        workspace_id TEXT NOT NULL,
+                        document_id TEXT NOT NULL,
+                        snapshot_version INTEGER NOT NULL,
+                        status TEXT NOT NULL,
+                        last_mode TEXT NOT NULL,
+                        expected_entity_count INTEGER NOT NULL,
+                        expected_relation_count INTEGER NOT NULL,
+                        materialized_entity_count INTEGER NOT NULL,
+                        materialized_relation_count INTEGER NOT NULL,
+                        last_failure_stage TEXT NULL,
+                        created_at TIMESTAMPTZ NOT NULL,
+                        updated_at TIMESTAMPTZ NOT NULL,
+                        error_message TEXT NULL,
+                        PRIMARY KEY (workspace_id, document_id)
+                    )
+                    """.formatted(config.qualifiedTableName("document_graph_journals")),
+                """
+                    CREATE TABLE IF NOT EXISTS %s (
+                        workspace_id TEXT NOT NULL,
+                        document_id TEXT NOT NULL,
+                        chunk_id TEXT NOT NULL,
+                        snapshot_version INTEGER NOT NULL,
+                        merge_status TEXT NOT NULL,
+                        graph_status TEXT NOT NULL,
+                        expected_entity_keys JSONB NOT NULL DEFAULT '[]'::jsonb,
+                        expected_relation_keys JSONB NOT NULL DEFAULT '[]'::jsonb,
+                        materialized_entity_keys JSONB NOT NULL DEFAULT '[]'::jsonb,
+                        materialized_relation_keys JSONB NOT NULL DEFAULT '[]'::jsonb,
+                        last_failure_stage TEXT NULL,
+                        updated_at TIMESTAMPTZ NOT NULL,
+                        error_message TEXT NULL,
+                        PRIMARY KEY (workspace_id, document_id, chunk_id)
+                    )
+                    """.formatted(config.qualifiedTableName("chunk_graph_journals"))
             );
         }
 

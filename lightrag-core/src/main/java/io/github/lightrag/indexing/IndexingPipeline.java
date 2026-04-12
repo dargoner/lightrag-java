@@ -532,7 +532,7 @@ public final class IndexingPipeline {
                     saveGraph(computed.graph().entities(), computed.graph().relations(), storage);
                     saveEntityVectors(computed.graph().entities(), computed.entityVectors(), storage.vectorStore());
                     saveRelationVectors(computed.graph().relations(), computed.relationVectors(), storage.vectorStore());
-                    persistDocumentGraphState(computed);
+                    persistDocumentGraphState(computed, storage);
                     storage.documentStatusStore().save(new DocumentStatusStore.StatusRecord(
                         computed.source().id(),
                         DocumentStatus.PROCESSED,
@@ -800,13 +800,16 @@ public final class IndexingPipeline {
         return type.strip();
     }
 
-    private void persistDocumentGraphState(ComputedIngest computed) {
+    private void persistDocumentGraphState(
+        ComputedIngest computed,
+        AtomicStorageProvider.AtomicStorageView storage
+    ) {
         var documentId = computed.source().id();
         var now = Instant.now();
-        var snapshotVersion = storageProvider.documentGraphSnapshotStore().loadDocument(documentId)
+        var snapshotVersion = storage.documentGraphSnapshotStore().loadDocument(documentId)
             .map(DocumentGraphSnapshotStore.DocumentGraphSnapshot::version)
             .orElse(0) + 1;
-        storageProvider.documentGraphSnapshotStore().saveDocument(new DocumentGraphSnapshotStore.DocumentGraphSnapshot(
+        var documentSnapshot = new DocumentGraphSnapshotStore.DocumentGraphSnapshot(
             documentId,
             snapshotVersion,
             SnapshotStatus.READY,
@@ -815,12 +818,9 @@ public final class IndexingPipeline {
             now,
             now,
             null
-        ));
-        storageProvider.documentGraphSnapshotStore().saveChunks(
-            documentId,
-            toChunkGraphSnapshots(documentId, computed.prepared().chunks(), computed.extractions(), now)
         );
-        storageProvider.documentGraphJournalStore().appendDocument(new DocumentGraphJournalStore.DocumentGraphJournal(
+        var chunkSnapshots = toChunkGraphSnapshots(documentId, computed.prepared().chunks(), computed.extractions(), now);
+        var documentJournal = new DocumentGraphJournalStore.DocumentGraphJournal(
             documentId,
             snapshotVersion,
             GraphMaterializationStatus.MERGED,
@@ -833,11 +833,13 @@ public final class IndexingPipeline {
             now,
             now,
             null
-        ));
-        storageProvider.documentGraphJournalStore().appendChunks(
-            documentId,
-            toChunkGraphJournals(documentId, snapshotVersion, computed.extractions(), now)
         );
+        var chunkJournals = toChunkGraphJournals(documentId, snapshotVersion, computed.extractions(), now);
+        storage.documentGraphSnapshotStore().saveDocument(documentSnapshot);
+        storage.documentGraphSnapshotStore().saveChunks(documentId, chunkSnapshots);
+        storage.documentGraphJournalStore().delete(documentId);
+        storage.documentGraphJournalStore().appendDocument(documentJournal);
+        storage.documentGraphJournalStore().appendChunks(documentId, chunkJournals);
     }
 
     private List<DocumentGraphSnapshotStore.ChunkGraphSnapshot> toChunkGraphSnapshots(

@@ -13,6 +13,8 @@ import org.junit.jupiter.api.Test;
 import java.time.Instant;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.function.Function;
+import java.util.stream.Collectors;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
@@ -71,6 +73,19 @@ class InMemoryDocumentGraphStoresTest {
     }
 
     @Test
+    void snapshotStoreReplacesChunks() {
+        var snapshots = InMemoryStorageProvider.create().documentGraphSnapshotStore();
+        var now = Instant.now();
+
+        snapshots.saveChunks("doc-1", List.of(chunkSnapshot("doc-1", "chunk-1", now)));
+        snapshots.saveChunks("doc-1", List.of(chunkSnapshot("doc-1", "chunk-2", now)));
+
+        assertThat(snapshots.listChunks("doc-1"))
+            .extracting(DocumentGraphSnapshotStore.ChunkGraphSnapshot::chunkId)
+            .containsExactly("chunk-2");
+    }
+
+    @Test
     void inMemoryJournalStorePersistsDocumentAndChunkJournals() {
         var provider = InMemoryStorageProvider.create();
         var journals = provider.documentGraphJournalStore();
@@ -84,7 +99,7 @@ class InMemoryDocumentGraphStoresTest {
     }
 
     @Test
-    void journalStoreAppendsInOrderAndReturnsImmutableLists() {
+    void journalStoreKeepsLatestDocumentAndUpsertsChunkRows() {
         var journals = InMemoryStorageProvider.create().documentGraphJournalStore();
         var now = Instant.now();
         var first = documentJournal("doc-1", 1, now.minusSeconds(2));
@@ -96,13 +111,18 @@ class InMemoryDocumentGraphStoresTest {
             chunkJournal("doc-1", "chunk-1", 1, now.minusSeconds(2)),
             chunkJournal("doc-1", "chunk-2", 1, now.minusSeconds(1))
         ));
-        journals.appendChunks("doc-1", List.of(chunkJournal("doc-1", "chunk-3", 2, now)));
+        journals.appendChunks("doc-1", List.of(chunkJournal("doc-1", "chunk-1", 2, now)));
 
         var documentList = journals.listDocumentJournals("doc-1");
         var chunkList = journals.listChunkJournals("doc-1");
-        assertThat(documentList).containsExactly(first, second);
-        assertThat(chunkList).extracting(DocumentGraphJournalStore.ChunkGraphJournal::chunkId)
-            .containsExactly("chunk-1", "chunk-2", "chunk-3");
+        assertThat(documentList).containsExactly(second);
+        assertThat(chunkList).hasSize(2);
+        var chunkById = chunkList.stream().collect(Collectors.toMap(
+            DocumentGraphJournalStore.ChunkGraphJournal::chunkId,
+            Function.identity()
+        ));
+        assertThat(chunkById.get("chunk-1").snapshotVersion()).isEqualTo(2);
+        assertThat(chunkById.get("chunk-2").snapshotVersion()).isEqualTo(1);
         assertThatThrownBy(() -> documentList.add(documentJournal("doc-1", 3, now)))
             .isInstanceOf(UnsupportedOperationException.class);
         assertThatThrownBy(() -> chunkList.add(chunkJournal("doc-1", "chunk-4", 3, now)))

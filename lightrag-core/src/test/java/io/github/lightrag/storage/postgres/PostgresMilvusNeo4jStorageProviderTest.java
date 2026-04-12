@@ -2,13 +2,23 @@ package io.github.lightrag.storage.postgres;
 
 import com.zaxxer.hikari.HikariConfig;
 import com.zaxxer.hikari.HikariDataSource;
+import io.github.lightrag.api.ChunkExtractStatus;
+import io.github.lightrag.api.ChunkGraphStatus;
+import io.github.lightrag.api.ChunkMergeStatus;
 import io.github.lightrag.api.DocumentStatus;
+import io.github.lightrag.api.FailureStage;
+import io.github.lightrag.api.GraphMaterializationMode;
+import io.github.lightrag.api.GraphMaterializationStatus;
+import io.github.lightrag.api.SnapshotSource;
+import io.github.lightrag.api.SnapshotStatus;
 import io.github.lightrag.api.TaskStage;
 import io.github.lightrag.api.TaskStageStatus;
 import io.github.lightrag.api.TaskStatus;
 import io.github.lightrag.api.TaskType;
 import io.github.lightrag.api.WorkspaceScope;
 import io.github.lightrag.storage.ChunkStore;
+import io.github.lightrag.storage.DocumentGraphJournalStore;
+import io.github.lightrag.storage.DocumentGraphSnapshotStore;
 import io.github.lightrag.storage.DocumentStatusStore;
 import io.github.lightrag.storage.DocumentStore;
 import io.github.lightrag.storage.GraphStorageAdapter;
@@ -20,6 +30,7 @@ import io.github.lightrag.storage.VectorStore;
 import io.github.lightrag.storage.neo4j.Neo4jGraphSnapshot;
 import java.nio.file.Path;
 import java.sql.SQLException;
+import java.time.Instant;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
@@ -128,6 +139,95 @@ class PostgresMilvusNeo4jStorageProviderTest {
                 if (providerLock.isWriteLockedByCurrentThread()) {
                     providerLock.writeLock().unlock();
                 }
+            }
+        }
+    }
+
+    @Test
+    void persistsDocumentGraphStateAcrossProviderRestart() {
+        try (
+            var container = newPostgresContainer();
+            var dataSource = newDataSource(startedConfig(container))
+        ) {
+            PostgresStorageConfig config = startedConfig(container);
+            var graphAdapter = new RecordingGraphStorageAdapter();
+            var vectorAdapter = new RecordingVectorStorageAdapter();
+            var snapshot = new DocumentGraphSnapshotStore.DocumentGraphSnapshot(
+                "doc-1",
+                1,
+                SnapshotStatus.READY,
+                SnapshotSource.PRIMARY_EXTRACTION,
+                1,
+                Instant.parse("2026-04-12T10:00:00Z"),
+                Instant.parse("2026-04-12T10:00:01Z"),
+                null
+            );
+            var chunkSnapshot = new DocumentGraphSnapshotStore.ChunkGraphSnapshot(
+                "doc-1",
+                "doc-1:0",
+                0,
+                "hash-doc-1:0",
+                ChunkExtractStatus.SUCCEEDED,
+                List.of(new DocumentGraphSnapshotStore.ExtractedEntityRecord("Alice", "person", "Alice", List.of())),
+                List.of(new DocumentGraphSnapshotStore.ExtractedRelationRecord("Alice", "Bob", "works_with", "works with", 1.0d)),
+                Instant.parse("2026-04-12T10:00:02Z"),
+                null
+            );
+            var documentJournal = new DocumentGraphJournalStore.DocumentGraphJournal(
+                "doc-1",
+                1,
+                GraphMaterializationStatus.MERGED,
+                GraphMaterializationMode.AUTO,
+                1,
+                1,
+                1,
+                1,
+                FailureStage.FINALIZING,
+                Instant.parse("2026-04-12T10:00:03Z"),
+                Instant.parse("2026-04-12T10:00:04Z"),
+                null
+            );
+            var chunkJournal = new DocumentGraphJournalStore.ChunkGraphJournal(
+                "doc-1",
+                "doc-1:0",
+                1,
+                ChunkMergeStatus.SUCCEEDED,
+                ChunkGraphStatus.MATERIALIZED,
+                List.of("entity:alice"),
+                List.of("relation:entity:alice|works_with|entity:bob"),
+                List.of("entity:alice"),
+                List.of("relation:entity:alice|works_with|entity:bob"),
+                FailureStage.FINALIZING,
+                Instant.parse("2026-04-12T10:00:05Z"),
+                null
+            );
+
+            try (var provider = new PostgresMilvusNeo4jStorageProvider(
+                dataSource,
+                config,
+                new InMemorySnapshotStore(),
+                new WorkspaceScope("default"),
+                graphAdapter,
+                vectorAdapter
+            )) {
+                provider.documentGraphSnapshotStore().saveDocument(snapshot);
+                provider.documentGraphSnapshotStore().saveChunks("doc-1", List.of(chunkSnapshot));
+                provider.documentGraphJournalStore().appendDocument(documentJournal);
+                provider.documentGraphJournalStore().appendChunks("doc-1", List.of(chunkJournal));
+            }
+
+            try (var reopened = new PostgresMilvusNeo4jStorageProvider(
+                dataSource,
+                config,
+                new InMemorySnapshotStore(),
+                new WorkspaceScope("default"),
+                graphAdapter,
+                vectorAdapter
+            )) {
+                assertThat(reopened.documentGraphSnapshotStore().loadDocument("doc-1")).contains(snapshot);
+                assertThat(reopened.documentGraphSnapshotStore().listChunks("doc-1")).containsExactly(chunkSnapshot);
+                assertThat(reopened.documentGraphJournalStore().listDocumentJournals("doc-1")).containsExactly(documentJournal);
+                assertThat(reopened.documentGraphJournalStore().listChunkJournals("doc-1")).containsExactly(chunkJournal);
             }
         }
     }

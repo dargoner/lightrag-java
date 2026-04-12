@@ -315,8 +315,9 @@ public final class GraphMaterializationPipeline {
         );
         var chunkSnapshots = toChunkSnapshots(documentId, rebuiltExtractions, storedChunks, now);
         storageProvider.writeAtomically(storage -> {
-            storageProvider.documentGraphSnapshotStore().saveDocument(documentSnapshot);
-            storageProvider.documentGraphSnapshotStore().saveChunks(documentId, chunkSnapshots);
+            storage.documentGraphSnapshotStore().saveDocument(documentSnapshot);
+            storage.documentGraphSnapshotStore().saveChunks(documentId, chunkSnapshots);
+            storage.documentGraphJournalStore().delete(documentId);
             return null;
         });
         return loadState(documentId);

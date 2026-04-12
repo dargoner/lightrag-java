@@ -10,6 +10,10 @@ public interface AtomicStorageProvider extends StorageProvider {
 
         ChunkStore chunkStore();
 
+        DocumentGraphSnapshotStore documentGraphSnapshotStore();
+
+        DocumentGraphJournalStore documentGraphJournalStore();
+
         GraphStore graphStore();
 
         VectorStore vectorStore();

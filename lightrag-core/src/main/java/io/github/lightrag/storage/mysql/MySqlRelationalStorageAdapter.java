@@ -14,9 +14,6 @@ import io.github.lightrag.storage.RelationalStorageAdapter;
 import io.github.lightrag.storage.SnapshotStore;
 import io.github.lightrag.storage.TaskStageStore;
 import io.github.lightrag.storage.TaskStore;
-import io.github.lightrag.storage.memory.InMemoryDocumentGraphJournalStore;
-import io.github.lightrag.storage.memory.InMemoryDocumentGraphSnapshotStore;
-
 import javax.sql.DataSource;
 import java.sql.Connection;
 import java.sql.PreparedStatement;
@@ -94,11 +91,11 @@ public final class MySqlRelationalStorageAdapter implements RelationalStorageAda
         this.taskStageStore = new MySqlTaskStageStore(this.dataSource, this.config, this.workspaceId);
         this.trackedDocumentGraphIds = new ConcurrentSkipListSet<>();
         this.documentGraphSnapshotStore = DocumentGraphStateSupport.trackedSnapshotStore(
-            new InMemoryDocumentGraphSnapshotStore(),
+            new MySqlDocumentGraphSnapshotStore(this.dataSource, this.config, this.workspaceId),
             trackedDocumentGraphIds
         );
         this.documentGraphJournalStore = DocumentGraphStateSupport.trackedJournalStore(
-            new InMemoryDocumentGraphJournalStore(),
+            new MySqlDocumentGraphJournalStore(this.dataSource, this.config, this.workspaceId),
             trackedDocumentGraphIds
         );
     }
@@ -173,6 +170,10 @@ public final class MySqlRelationalStorageAdapter implements RelationalStorageAda
         var source = toRelationalRestoreSnapshot(Objects.requireNonNull(snapshot, "snapshot"));
         try (var connection = dataSource.getConnection()) {
             withTransaction(connection, () -> {
+                deleteWorkspaceRows(connection, "chunk_graph_journals");
+                deleteWorkspaceRows(connection, "document_graph_journals");
+                deleteWorkspaceRows(connection, "chunk_graph_snapshots");
+                deleteWorkspaceRows(connection, "document_graph_snapshots");
                 deleteWorkspaceRows(connection, "document_status");
                 deleteWorkspaceRows(connection, "chunks");
                 deleteWorkspaceRows(connection, "documents");
@@ -181,6 +182,8 @@ public final class MySqlRelationalStorageAdapter implements RelationalStorageAda
                 var transactionalDocumentStore = new MySqlDocumentStore(connectionAccess, config, workspaceId);
                 var transactionalChunkStore = new MySqlChunkStore(connectionAccess, config, workspaceId);
                 var transactionalStatusStore = new MySqlDocumentStatusStore(connectionAccess, config, workspaceId);
+                var transactionalSnapshotStore = new MySqlDocumentGraphSnapshotStore(connectionAccess, config, workspaceId);
+                var transactionalJournalStore = new MySqlDocumentGraphJournalStore(connectionAccess, config, workspaceId);
                 for (var document : source.documents()) {
                     transactionalDocumentStore.save(document);
                 }
@@ -190,14 +193,14 @@ public final class MySqlRelationalStorageAdapter implements RelationalStorageAda
                 for (var status : source.documentStatuses()) {
                     transactionalStatusStore.save(status);
                 }
+                DocumentGraphStateSupport.restore(
+                    transactionalSnapshotStore,
+                    transactionalJournalStore,
+                    java.util.Set.of(),
+                    source
+                );
                 return null;
             });
-            DocumentGraphStateSupport.restore(
-                documentGraphSnapshotStore,
-                documentGraphJournalStore,
-                trackedDocumentGraphIds,
-                source
-            );
         } catch (SQLException exception) {
             throw new StorageException("Failed to open MySQL transaction for restore", exception);
         }
@@ -222,6 +225,16 @@ public final class MySqlRelationalStorageAdapter implements RelationalStorageAda
                 @Override
                 public DocumentStatusStore documentStatusStore() {
                     return new MySqlDocumentStatusStore(connectionAccess, config, workspaceId);
+                }
+
+                @Override
+                public DocumentGraphSnapshotStore documentGraphSnapshotStore() {
+                    return new MySqlDocumentGraphSnapshotStore(connectionAccess, config, workspaceId);
+                }
+
+                @Override
+                public DocumentGraphJournalStore documentGraphJournalStore() {
+                    return new MySqlDocumentGraphJournalStore(connectionAccess, config, workspaceId);
                 }
 
                 @Override

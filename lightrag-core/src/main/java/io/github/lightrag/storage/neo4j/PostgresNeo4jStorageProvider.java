@@ -561,6 +561,16 @@ public final class PostgresNeo4jStorageProvider implements AtomicStorageProvider
                 }
 
                 @Override
+                public DocumentGraphSnapshotStore documentGraphSnapshotStore() {
+                    return storage.documentGraphSnapshotStore();
+                }
+
+                @Override
+                public DocumentGraphJournalStore documentGraphJournalStore() {
+                    return storage.documentGraphJournalStore();
+                }
+
+                @Override
                 public TaskStore taskStore() {
                     return postgresProvider.taskStore();
                 }

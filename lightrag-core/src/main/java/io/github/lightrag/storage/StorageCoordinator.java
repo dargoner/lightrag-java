@@ -96,6 +96,8 @@ public final class StorageCoordinator implements AtomicStorageProvider, AutoClos
                 var result = operation.execute(new AtomicView(
                     storage.documentStore(),
                     storage.chunkStore(),
+                    storage.documentGraphSnapshotStore(),
+                    storage.documentGraphJournalStore(),
                     stagedGraphStore,
                     stagedVectorStore,
                     storage.documentStatusStore()
@@ -182,6 +184,8 @@ public final class StorageCoordinator implements AtomicStorageProvider, AutoClos
     private record AtomicView(
         DocumentStore documentStore,
         ChunkStore chunkStore,
+        DocumentGraphSnapshotStore documentGraphSnapshotStore,
+        DocumentGraphJournalStore documentGraphJournalStore,
         GraphStore graphStore,
         VectorStore vectorStore,
         DocumentStatusStore documentStatusStore

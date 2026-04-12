@@ -77,6 +77,10 @@ class PostgresStorageProviderTest {
                     "rag_documents",
                     "rag_chunks",
                     "rag_document_status",
+                    "rag_document_graph_snapshots",
+                    "rag_chunk_graph_snapshots",
+                    "rag_document_graph_journals",
+                    "rag_chunk_graph_journals",
                     "rag_entities",
                     "rag_entity_aliases",
                     "rag_entity_chunks",
@@ -1294,6 +1298,41 @@ class PostgresStorageProviderTest {
             assertThat(provider.documentGraphSnapshotStore().listChunks("doc-1")).containsExactly(replacementChunkSnapshot);
             assertThat(provider.documentGraphJournalStore().listDocumentJournals("doc-1")).containsExactly(replacementDocumentJournal);
             assertThat(provider.documentGraphJournalStore().listChunkJournals("doc-1")).containsExactly(replacementChunkJournal);
+        }
+    }
+
+    @Test
+    void persistsDocumentGraphStateAcrossProviderRestart() {
+        PostgreSQLContainer<?> container = newPostgresContainer();
+        container.start();
+
+        var config = new PostgresStorageConfig(
+            container.getJdbcUrl(),
+            container.getUsername(),
+            container.getPassword(),
+            "lightrag",
+            3,
+            "rag_"
+        );
+        var snapshot = graphSnapshot("doc-1", Instant.parse("2026-04-12T10:00:00Z"));
+        var chunkSnapshot = chunkGraphSnapshot("doc-1", "doc-1:0", Instant.parse("2026-04-12T10:00:01Z"));
+        var documentJournal = documentGraphJournal("doc-1", 2, Instant.parse("2026-04-12T10:00:02Z"));
+        var chunkJournal = chunkGraphJournal("doc-1", "doc-1:0", 2, Instant.parse("2026-04-12T10:00:03Z"));
+
+        try (container) {
+            try (var provider = new PostgresStorageProvider(config, new InMemorySnapshotStore())) {
+                provider.documentGraphSnapshotStore().saveDocument(snapshot);
+                provider.documentGraphSnapshotStore().saveChunks("doc-1", List.of(chunkSnapshot));
+                provider.documentGraphJournalStore().appendDocument(documentJournal);
+                provider.documentGraphJournalStore().appendChunks("doc-1", List.of(chunkJournal));
+            }
+
+            try (var reopened = new PostgresStorageProvider(config, new InMemorySnapshotStore())) {
+                assertThat(reopened.documentGraphSnapshotStore().loadDocument("doc-1")).contains(snapshot);
+                assertThat(reopened.documentGraphSnapshotStore().listChunks("doc-1")).containsExactly(chunkSnapshot);
+                assertThat(reopened.documentGraphJournalStore().listDocumentJournals("doc-1")).containsExactly(documentJournal);
+                assertThat(reopened.documentGraphJournalStore().listChunkJournals("doc-1")).containsExactly(chunkJournal);
+            }
         }
     }
 

@@ -3,6 +3,7 @@ package io.github.lightrag.storage.postgres;
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import io.github.lightrag.storage.DocumentGraphSnapshotStore;
 
 import java.io.IOException;
 import java.util.List;
@@ -15,6 +16,12 @@ public final class JdbcJsonCodec {
     };
     private static final TypeReference<List<String>> STRING_LIST = new TypeReference<>() {
     };
+    private static final TypeReference<List<DocumentGraphSnapshotStore.ExtractedEntityRecord>> EXTRACTED_ENTITY_LIST =
+        new TypeReference<>() {
+        };
+    private static final TypeReference<List<DocumentGraphSnapshotStore.ExtractedRelationRecord>> EXTRACTED_RELATION_LIST =
+        new TypeReference<>() {
+        };
 
     private JdbcJsonCodec() {
     }
@@ -33,6 +40,22 @@ public final class JdbcJsonCodec {
 
     public static List<String> readStringList(String value) {
         return readJson(value, STRING_LIST);
+    }
+
+    public static String writeExtractedEntityRecordList(List<DocumentGraphSnapshotStore.ExtractedEntityRecord> value) {
+        return writeJson(Objects.requireNonNull(value, "value"));
+    }
+
+    public static List<DocumentGraphSnapshotStore.ExtractedEntityRecord> readExtractedEntityRecordList(String value) {
+        return readJson(value, EXTRACTED_ENTITY_LIST);
+    }
+
+    public static String writeExtractedRelationRecordList(List<DocumentGraphSnapshotStore.ExtractedRelationRecord> value) {
+        return writeJson(Objects.requireNonNull(value, "value"));
+    }
+
+    public static List<DocumentGraphSnapshotStore.ExtractedRelationRecord> readExtractedRelationRecordList(String value) {
+        return readJson(value, EXTRACTED_RELATION_LIST);
     }
 
     private static String writeJson(Object value) {
