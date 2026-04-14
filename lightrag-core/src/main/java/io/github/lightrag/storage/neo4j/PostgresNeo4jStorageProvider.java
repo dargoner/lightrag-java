@@ -258,9 +258,33 @@ public final class PostgresNeo4jStorageProvider implements AtomicStorageProvider
         }
 
         @Override
+        public void saveEntities(List<EntityRecord> entities) {
+            var records = List.copyOf(Objects.requireNonNull(entities, "entities"));
+            if (records.isEmpty()) {
+                return;
+            }
+            writeAtomically(storage -> {
+                storage.graphStore().saveEntities(records);
+                return null;
+            });
+        }
+
+        @Override
         public void saveRelation(RelationRecord relation) {
             writeAtomically(storage -> {
                 storage.graphStore().saveRelation(relation);
+                return null;
+            });
+        }
+
+        @Override
+        public void saveRelations(List<RelationRecord> relations) {
+            var records = List.copyOf(Objects.requireNonNull(relations, "relations"));
+            if (records.isEmpty()) {
+                return;
+            }
+            writeAtomically(storage -> {
+                storage.graphStore().saveRelations(records);
                 return null;
             });
         }
@@ -271,8 +295,18 @@ public final class PostgresNeo4jStorageProvider implements AtomicStorageProvider
         }
 
         @Override
+        public List<EntityRecord> loadEntities(List<String> entityIds) {
+            return withReadLock(() -> coordinator.graphStore().loadEntities(entityIds));
+        }
+
+        @Override
         public Optional<RelationRecord> loadRelation(String relationId) {
             return withReadLock(() -> coordinator.graphStore().loadRelation(relationId));
+        }
+
+        @Override
+        public List<RelationRecord> loadRelations(List<String> relationIds) {
+            return withReadLock(() -> coordinator.graphStore().loadRelations(relationIds));
         }
 
         @Override

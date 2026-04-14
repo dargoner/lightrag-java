@@ -569,18 +569,43 @@ public final class IndexingPipeline {
 
     private void saveGraph(List<Entity> entities, List<Relation> relations, AtomicStorageProvider.AtomicStorageView storage) {
         long startedAtNanos = System.nanoTime();
-        for (var entity : entities) {
-            var mergedEntity = storage.graphStore().loadEntity(entity.id())
-                .map(existing -> mergeEntity(existing, entity))
-                .orElseGet(() -> toEntityRecord(entity));
-            storage.graphStore().saveEntity(mergedEntity);
+        var graphStore = storage.graphStore();
+        if (!entities.isEmpty()) {
+            var existingEntitiesById = new LinkedHashMap<String, GraphStore.EntityRecord>();
+            for (var entity : graphStore.loadEntities(distinctIds(entities.stream().map(Entity::id).toList()))) {
+                existingEntitiesById.put(entity.id(), entity);
+            }
+            var mergedEntities = new LinkedHashMap<String, GraphStore.EntityRecord>();
+            for (var entity : entities) {
+                var current = mergedEntities.get(entity.id());
+                var mergedEntity = current != null
+                    ? mergeEntity(current, entity)
+                    : existingEntitiesById.containsKey(entity.id())
+                        ? mergeEntity(existingEntitiesById.get(entity.id()), entity)
+                        : toEntityRecord(entity);
+                mergedEntities.remove(entity.id());
+                mergedEntities.put(entity.id(), mergedEntity);
+            }
+            graphStore.saveEntities(List.copyOf(mergedEntities.values()));
         }
 
-        for (var relation : relations) {
-            var mergedRelation = storage.graphStore().loadRelation(relation.id())
-                .map(existing -> mergeRelation(existing, relation))
-                .orElseGet(() -> toRelationRecord(relation));
-            storage.graphStore().saveRelation(mergedRelation);
+        if (!relations.isEmpty()) {
+            var existingRelationsById = new LinkedHashMap<String, GraphStore.RelationRecord>();
+            for (var relation : graphStore.loadRelations(distinctIds(relations.stream().map(Relation::id).toList()))) {
+                existingRelationsById.put(relation.id(), relation);
+            }
+            var mergedRelations = new LinkedHashMap<String, GraphStore.RelationRecord>();
+            for (var relation : relations) {
+                var current = mergedRelations.get(relation.id());
+                var mergedRelation = current != null
+                    ? mergeRelation(current, relation)
+                    : existingRelationsById.containsKey(relation.id())
+                        ? mergeRelation(existingRelationsById.get(relation.id()), relation)
+                        : toRelationRecord(relation);
+                mergedRelations.remove(relation.id());
+                mergedRelations.put(relation.id(), mergedRelation);
+            }
+            graphStore.saveRelations(List.copyOf(mergedRelations.values()));
         }
         if (log.isDebugEnabled()) {
             log.debug(
@@ -590,6 +615,10 @@ public final class IndexingPipeline {
                 TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - startedAtNanos)
             );
         }
+    }
+
+    private static List<String> distinctIds(List<String> ids) {
+        return new java.util.ArrayList<>(new LinkedHashSet<>(ids));
     }
 
     private void saveVectors(String namespace, List<VectorStore.VectorRecord> vectors, VectorStore vectorStore) {

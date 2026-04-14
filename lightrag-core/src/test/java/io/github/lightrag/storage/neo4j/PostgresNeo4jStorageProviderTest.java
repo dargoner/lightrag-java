@@ -167,6 +167,51 @@ class PostgresNeo4jStorageProviderTest {
     }
 
     @Test
+    void topLevelBatchGraphWritesUseSingleProjectionApplyPerRecordType() {
+        var snapshotStore = new FileSnapshotStore();
+        var tablePrefix = nextPrefix();
+        var graphAdapter = new RecordingGraphStorageAdapter();
+
+        try (var postgresProvider = new PostgresStorageProvider(newPostgresConfig(tablePrefix), snapshotStore);
+             var provider = new PostgresNeo4jStorageProvider(postgresProvider, graphAdapter)) {
+            var alice = new GraphStore.EntityRecord(
+                "entity-1",
+                "Alice",
+                "person",
+                "Researcher",
+                List.of("A"),
+                List.of("chunk-1")
+            );
+            var bob = new GraphStore.EntityRecord(
+                "entity-2",
+                "Bob",
+                "person",
+                "Engineer",
+                List.of("B"),
+                List.of("chunk-2")
+            );
+            var relation = new GraphStore.RelationRecord(
+                "relation-1",
+                "entity-1",
+                "entity-2",
+                "works_with",
+                "Alice works with Bob",
+                0.9d,
+                List.of("chunk-1")
+            );
+
+            provider.graphStore().saveEntities(List.of(alice, bob));
+            provider.graphStore().saveRelations(List.of(relation));
+
+            assertThat(graphAdapter.applyCount()).isEqualTo(2);
+            assertThat(provider.graphStore().loadEntities(List.of("entity-2", "missing", "entity-1")))
+                .containsExactly(bob, alice);
+            assertThat(provider.graphStore().loadRelations(List.of("relation-1", "missing")))
+                .containsExactly(relation);
+        }
+    }
+
+    @Test
     void commitsAcrossPostgresAndNeo4jStores() {
         try (var provider = newProvider(new FileSnapshotStore())) {
             provider.writeAtomically(storage -> {

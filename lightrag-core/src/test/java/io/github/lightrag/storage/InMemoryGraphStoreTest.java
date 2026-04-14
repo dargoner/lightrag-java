@@ -50,6 +50,78 @@ class InMemoryGraphStoreTest {
     }
 
     @Test
+    void defaultBatchOperationsHonorSequentialSemantics() {
+        var store = new InMemoryGraphStore();
+
+        var entityInitial = new GraphStore.EntityRecord(
+            "entity-1",
+            "Alice v1",
+            "person",
+            "Initial version",
+            List.of("A"),
+            List.of("chunk-1")
+        );
+        var entityUpdated = new GraphStore.EntityRecord(
+            "entity-1",
+            "Alice v2",
+            "person",
+            "Updated version",
+            List.of("A", "A2"),
+            List.of("chunk-2")
+        );
+        var entitySecond = new GraphStore.EntityRecord(
+            "entity-2",
+            "Bob",
+            "person",
+            "Second entity",
+            List.of("B"),
+            List.of("chunk-3")
+        );
+
+        store.saveEntities(List.of(entityInitial, entitySecond, entityUpdated));
+
+        assertThat(store.loadEntity("entity-1")).contains(entityUpdated);
+
+        var loadedEntities = store.loadEntities(List.of("entity-1", "missing", "entity-2", "entity-1"));
+        assertThat(loadedEntities).containsExactly(entityUpdated, entitySecond, entityUpdated);
+
+        var relationInitial = new GraphStore.RelationRecord(
+            "relation-1",
+            "entity-1",
+            "entity-2",
+            "mentors",
+            "Alice mentors Bob",
+            0.5d,
+            List.of("chunk-1")
+        );
+        var relationUpdated = new GraphStore.RelationRecord(
+            "relation-1",
+            "entity-2",
+            "entity-3",
+            "manages",
+            "Bob now manages Carol",
+            0.8d,
+            List.of("chunk-4")
+        );
+        var relationExtra = new GraphStore.RelationRecord(
+            "relation-2",
+            "entity-3",
+            "entity-4",
+            "reports_to",
+            "Carol reports to Dave",
+            0.7d,
+            List.of("chunk-5")
+        );
+
+        store.saveRelations(List.of(relationInitial, relationExtra, relationUpdated));
+
+        assertThat(store.loadRelation("relation-1")).contains(relationUpdated);
+
+        var loadedRelations = store.loadRelations(List.of("relation-1", "missing", "relation-1", "relation-2"));
+        assertThat(loadedRelations).containsExactly(relationUpdated, relationUpdated, relationExtra);
+    }
+
+    @Test
     void overwritingRelationReindexesEndpoints() {
         var store = new InMemoryGraphStore();
         var original = new GraphStore.RelationRecord(

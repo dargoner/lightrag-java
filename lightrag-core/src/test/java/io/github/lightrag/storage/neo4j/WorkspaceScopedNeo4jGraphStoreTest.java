@@ -11,6 +11,7 @@ import org.testcontainers.containers.Neo4jContainer;
 import org.testcontainers.junit.jupiter.Container;
 import org.testcontainers.junit.jupiter.Testcontainers;
 
+import java.lang.reflect.Method;
 import java.util.List;
 
 import static org.assertj.core.api.Assertions.assertThat;
@@ -153,6 +154,54 @@ class WorkspaceScopedNeo4jGraphStoreTest {
         }
     }
 
+    @Test
+    void batchEntityApisKeepOrderSkipMissingRepeatDuplicatesAndRespectWorkspace() {
+        try (var alpha = newStore("alpha");
+             var beta = newStore("beta")) {
+            var alphaFirst = entity("entity-1", "Alice-v1");
+            var alphaLast = entity("entity-1", "Alice-v2");
+            var alphaSecond = entity("entity-2", "Adam");
+            var betaEntity = entity("entity-1", "Bob");
+
+            alpha.saveEntities(List.of(alphaFirst, alphaSecond, alphaLast));
+            beta.saveEntities(List.of(betaEntity));
+            alpha.saveEntities(List.of());
+
+            assertThat(alpha.allEntities()).containsExactly(alphaLast, alphaSecond);
+            assertThat(beta.allEntities()).containsExactly(betaEntity);
+            assertThat(alpha.loadEntities(List.of("entity-2", "missing", "entity-1", "entity-2")))
+                .containsExactly(alphaSecond, alphaLast, alphaSecond);
+        }
+    }
+
+    @Test
+    void batchRelationApisKeepOrderSkipMissingRepeatDuplicatesAndRespectWorkspace() {
+        try (var alpha = newStore("alpha");
+             var beta = newStore("beta")) {
+            var alphaFirst = relation("relation-1", "entity-1", "entity-2", "alpha-v1");
+            var alphaLast = relation("relation-1", "entity-3", "entity-4", "alpha-v2");
+            var alphaSecond = relation("relation-2", "entity-3", "entity-1", "alpha-second");
+            var betaRelation = relation("relation-1", "entity-7", "entity-8", "beta");
+
+            alpha.saveRelations(List.of(alphaFirst, alphaSecond, alphaLast));
+            beta.saveRelations(List.of(betaRelation));
+            alpha.saveRelations(List.of());
+
+            assertThat(alpha.allRelations()).containsExactly(alphaLast, alphaSecond);
+            assertThat(beta.allRelations()).containsExactly(betaRelation);
+            assertThat(alpha.loadRelations(List.of("relation-2", "missing", "relation-1", "relation-2")))
+                .containsExactly(alphaSecond, alphaLast, alphaSecond);
+        }
+    }
+
+    @Test
+    void workspaceScopedNeo4jGraphStoreProvidesNativeBatchOverrides() throws NoSuchMethodException {
+        assertOverrides("saveEntities", List.class);
+        assertOverrides("saveRelations", List.class);
+        assertOverrides("loadEntities", List.class);
+        assertOverrides("loadRelations", List.class);
+    }
+
     private static WorkspaceScopedNeo4jGraphStore newStore(String workspaceId) {
         return new WorkspaceScopedNeo4jGraphStore(newNeo4jConfig(), new WorkspaceScope(workspaceId));
     }
@@ -216,5 +265,10 @@ class WorkspaceScopedNeo4jGraphStoreTest {
                 return null;
             });
         }
+    }
+
+    private static void assertOverrides(String methodName, Class<?>... parameterTypes) throws NoSuchMethodException {
+        Method method = WorkspaceScopedNeo4jGraphStore.class.getMethod(methodName, parameterTypes);
+        assertThat(method.getDeclaringClass()).isEqualTo(WorkspaceScopedNeo4jGraphStore.class);
     }
 }

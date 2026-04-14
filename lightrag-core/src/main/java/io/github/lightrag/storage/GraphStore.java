@@ -1,5 +1,6 @@
 package io.github.lightrag.storage;
 
+import java.util.ArrayList;
 import java.util.List;
 import java.util.Objects;
 import java.util.Optional;
@@ -9,9 +10,41 @@ public interface GraphStore {
 
     void saveRelation(RelationRecord relation);
 
+    default void saveEntities(List<EntityRecord> entities) {
+        Objects.requireNonNull(entities, "entities");
+        for (var entity : entities) {
+            saveEntity(entity);
+        }
+    }
+
+    default void saveRelations(List<RelationRecord> relations) {
+        Objects.requireNonNull(relations, "relations");
+        for (var relation : relations) {
+            saveRelation(relation);
+        }
+    }
+
     Optional<EntityRecord> loadEntity(String entityId);
 
     Optional<RelationRecord> loadRelation(String relationId);
+
+    default List<EntityRecord> loadEntities(List<String> entityIds) {
+        Objects.requireNonNull(entityIds, "entityIds");
+        var entities = new ArrayList<EntityRecord>(entityIds.size());
+        for (var entityId : entityIds) {
+            loadEntity(entityId).ifPresent(entities::add);
+        }
+        return entities;
+    }
+
+    default List<RelationRecord> loadRelations(List<String> relationIds) {
+        Objects.requireNonNull(relationIds, "relationIds");
+        var relations = new ArrayList<RelationRecord>(relationIds.size());
+        for (var relationId : relationIds) {
+            loadRelation(relationId).ifPresent(relations::add);
+        }
+        return relations;
+    }
 
     List<EntityRecord> allEntities();
 

@@ -238,7 +238,7 @@ public final class StorageCoordinator implements AtomicStorageProvider, AutoClos
             if (transactionalBase != null) {
                 transactionalBase.saveEntity(record);
             }
-            stagedEntities.put(record.id(), record);
+            stageEntity(record);
         }
 
         @Override
@@ -247,7 +247,35 @@ public final class StorageCoordinator implements AtomicStorageProvider, AutoClos
             if (transactionalBase != null) {
                 transactionalBase.saveRelation(record);
             }
-            stagedRelations.put(record.id(), record);
+            stageRelation(record);
+        }
+
+        @Override
+        public void saveEntities(List<EntityRecord> entities) {
+            var records = List.copyOf(Objects.requireNonNull(entities, "entities"));
+            if (records.isEmpty()) {
+                return;
+            }
+            if (transactionalBase != null) {
+                transactionalBase.saveEntities(records);
+            }
+            for (var record : records) {
+                stageEntity(record);
+            }
+        }
+
+        @Override
+        public void saveRelations(List<RelationRecord> relations) {
+            var records = List.copyOf(Objects.requireNonNull(relations, "relations"));
+            if (records.isEmpty()) {
+                return;
+            }
+            if (transactionalBase != null) {
+                transactionalBase.saveRelations(records);
+            }
+            for (var record : records) {
+                stageRelation(record);
+            }
         }
 
         @Override
@@ -266,6 +294,64 @@ public final class StorageCoordinator implements AtomicStorageProvider, AutoClos
                 return Optional.ofNullable(stagedRelations.get(id));
             }
             return baseStore().loadRelation(id);
+        }
+
+        @Override
+        public List<EntityRecord> loadEntities(List<String> entityIds) {
+            var ids = List.copyOf(Objects.requireNonNull(entityIds, "entityIds"));
+            if (ids.isEmpty()) {
+                return List.of();
+            }
+            var baseIds = new ArrayList<String>();
+            for (var id : ids) {
+                if (!stagedEntities.containsKey(id)) {
+                    baseIds.add(id);
+                }
+            }
+            var baseIterator = baseIds.isEmpty()
+                ? List.<EntityRecord>of().iterator()
+                : baseStore().loadEntities(baseIds).iterator();
+            var loaded = new ArrayList<EntityRecord>(ids.size());
+            for (var id : ids) {
+                var staged = stagedEntities.get(id);
+                if (staged != null) {
+                    loaded.add(staged);
+                    continue;
+                }
+                if (baseIterator.hasNext()) {
+                    loaded.add(baseIterator.next());
+                }
+            }
+            return List.copyOf(loaded);
+        }
+
+        @Override
+        public List<RelationRecord> loadRelations(List<String> relationIds) {
+            var ids = List.copyOf(Objects.requireNonNull(relationIds, "relationIds"));
+            if (ids.isEmpty()) {
+                return List.of();
+            }
+            var baseIds = new ArrayList<String>();
+            for (var id : ids) {
+                if (!stagedRelations.containsKey(id)) {
+                    baseIds.add(id);
+                }
+            }
+            var baseIterator = baseIds.isEmpty()
+                ? List.<RelationRecord>of().iterator()
+                : baseStore().loadRelations(baseIds).iterator();
+            var loaded = new ArrayList<RelationRecord>(ids.size());
+            for (var id : ids) {
+                var staged = stagedRelations.get(id);
+                if (staged != null) {
+                    loaded.add(staged);
+                    continue;
+                }
+                if (baseIterator.hasNext()) {
+                    loaded.add(baseIterator.next());
+                }
+            }
+            return List.copyOf(loaded);
         }
 
         @Override
@@ -308,6 +394,16 @@ public final class StorageCoordinator implements AtomicStorageProvider, AutoClos
 
         private GraphStore baseStore() {
             return transactionalBase != null ? transactionalBase : delegate;
+        }
+
+        private void stageEntity(EntityRecord record) {
+            stagedEntities.remove(record.id());
+            stagedEntities.put(record.id(), record);
+        }
+
+        private void stageRelation(RelationRecord record) {
+            stagedRelations.remove(record.id());
+            stagedRelations.put(record.id(), record);
         }
     }
 

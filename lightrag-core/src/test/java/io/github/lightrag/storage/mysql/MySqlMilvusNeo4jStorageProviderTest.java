@@ -100,6 +100,67 @@ class MySqlMilvusNeo4jStorageProviderTest {
     }
 
     @Test
+    void topLevelBatchGraphWritesUseSingleAdapterApplyPerRecordType() throws Exception {
+        try (
+            var container = newMySqlContainer();
+            var dataSource = newDataSource(startedConfig(container))
+        ) {
+            var config = startedConfig(container);
+            new MySqlSchemaManager(dataSource, config).bootstrap();
+
+            var graphAdapter = new RecordingGraphStorageAdapter();
+            var vectorAdapter = new RecordingVectorStorageAdapter();
+
+            try (var provider = new MySqlMilvusNeo4jStorageProvider(
+                dataSource,
+                config,
+                new InMemorySnapshotStore(),
+                new WorkspaceScope("default"),
+                graphAdapter,
+                vectorAdapter
+            )) {
+                var alice = new GraphStore.EntityRecord(
+                    "entity-1",
+                    "Alice",
+                    "person",
+                    "Researcher",
+                    List.of("A"),
+                    List.of("chunk-1")
+                );
+                var bob = new GraphStore.EntityRecord(
+                    "entity-2",
+                    "Bob",
+                    "person",
+                    "Engineer",
+                    List.of("B"),
+                    List.of("chunk-2")
+                );
+                var relation = new GraphStore.RelationRecord(
+                    "relation-1",
+                    "entity-1",
+                    "entity-2",
+                    "works_with",
+                    "Alice works with Bob",
+                    0.9d,
+                    List.of("chunk-1")
+                );
+
+                provider.graphStore().saveEntities(List.of(alice, bob));
+                provider.graphStore().saveRelations(List.of(relation));
+
+                assertThat(graphAdapter.savedEntityBatches())
+                    .containsExactly(List.of(alice, bob));
+                assertThat(graphAdapter.savedRelationBatches())
+                    .containsExactly(List.of(relation));
+                assertThat(provider.graphStore().loadEntities(List.of("entity-2", "missing", "entity-1")))
+                    .containsExactly(bob, alice);
+                assertThat(provider.graphStore().loadRelations(List.of("relation-1", "missing")))
+                    .containsExactly(relation);
+            }
+        }
+    }
+
+    @Test
     void rollsBackMySqlRowsWhenProjectionFailsAfterCommit() {
         try (
             var container = newMySqlContainer();
@@ -389,6 +450,25 @@ class MySqlMilvusNeo4jStorageProviderTest {
                         0.9d,
                         List.of("doc-1:0")
                     ));
+                assertThat(graphProjection.savedEntityBatchesSinceReset)
+                    .containsExactly(List.of(new GraphStore.EntityRecord(
+                        "entity-1",
+                        "Incoming",
+                        "person",
+                        "Incoming entity",
+                        List.of(),
+                        List.of("doc-1:0")
+                    )));
+                assertThat(graphProjection.savedRelationBatchesSinceReset)
+                    .containsExactly(List.of(new GraphStore.RelationRecord(
+                        "relation-1",
+                        "entity-0",
+                        "entity-1",
+                        "handoff_to",
+                        "Seed hands off to incoming",
+                        0.9d,
+                        List.of("doc-1:0")
+                    )));
                 assertThat(milvusProjection.deletedNamespaces).isEmpty();
                 assertThat(milvusProjection.savedNamespacesSinceReset).containsExactly("chunks");
                 assertThat(milvusProjection.flushedNamespacesSinceReset).containsExactly(List.of("chunks"));
@@ -671,6 +751,8 @@ class MySqlMilvusNeo4jStorageProviderTest {
         private final Map<String, GraphStore.RelationRecord> relations = new LinkedHashMap<>();
         private final List<GraphStore.EntityRecord> savedEntitiesSinceReset = new java.util.ArrayList<>();
         private final List<GraphStore.RelationRecord> savedRelationsSinceReset = new java.util.ArrayList<>();
+        private final List<List<GraphStore.EntityRecord>> savedEntityBatchesSinceReset = new java.util.ArrayList<>();
+        private final List<List<GraphStore.RelationRecord>> savedRelationBatchesSinceReset = new java.util.ArrayList<>();
         private int restoreCount;
         private RuntimeException failureOnSaveEntity;
         private RuntimeException failureOnSaveRelation;
@@ -696,6 +778,18 @@ class MySqlMilvusNeo4jStorageProviderTest {
             }
             relations.put(relation.id(), relation);
             savedRelationsSinceReset.add(relation);
+        }
+
+        @Override
+        public void saveEntities(List<GraphStore.EntityRecord> entities) {
+            savedEntityBatchesSinceReset.add(List.copyOf(entities));
+            MySqlMilvusNeo4jStorageProvider.GraphProjection.super.saveEntities(entities);
+        }
+
+        @Override
+        public void saveRelations(List<GraphStore.RelationRecord> relations) {
+            savedRelationBatchesSinceReset.add(List.copyOf(relations));
+            MySqlMilvusNeo4jStorageProvider.GraphProjection.super.saveRelations(relations);
         }
 
         @Override
@@ -761,6 +855,8 @@ class MySqlMilvusNeo4jStorageProviderTest {
         void resetMetrics() {
             savedEntitiesSinceReset.clear();
             savedRelationsSinceReset.clear();
+            savedEntityBatchesSinceReset.clear();
+            savedRelationBatchesSinceReset.clear();
             restoreCount = 0;
         }
     }
@@ -768,6 +864,8 @@ class MySqlMilvusNeo4jStorageProviderTest {
     private static final class RecordingGraphStorageAdapter implements GraphStorageAdapter {
         private final LinkedHashMap<String, GraphStore.EntityRecord> entities = new LinkedHashMap<>();
         private final LinkedHashMap<String, GraphStore.RelationRecord> relations = new LinkedHashMap<>();
+        private final List<List<GraphStore.EntityRecord>> savedEntityBatches = new java.util.ArrayList<>();
+        private final List<List<GraphStore.RelationRecord>> savedRelationBatches = new java.util.ArrayList<>();
         private int applyCount;
 
         @Override
@@ -781,6 +879,18 @@ class MySqlMilvusNeo4jStorageProviderTest {
                 @Override
                 public void saveRelation(RelationRecord relation) {
                     relations.put(relation.id(), relation);
+                }
+
+                @Override
+                public void saveEntities(List<EntityRecord> entities) {
+                    savedEntityBatches.add(List.copyOf(entities));
+                    GraphStore.super.saveEntities(entities);
+                }
+
+                @Override
+                public void saveRelations(List<RelationRecord> relations) {
+                    savedRelationBatches.add(List.copyOf(relations));
+                    GraphStore.super.saveRelations(relations);
                 }
 
                 @Override
@@ -834,6 +944,14 @@ class MySqlMilvusNeo4jStorageProviderTest {
 
         int applyCount() {
             return applyCount;
+        }
+
+        List<List<GraphStore.EntityRecord>> savedEntityBatches() {
+            return List.copyOf(savedEntityBatches);
+        }
+
+        List<List<GraphStore.RelationRecord>> savedRelationBatches() {
+            return List.copyOf(savedRelationBatches);
         }
     }
 

@@ -38,11 +38,11 @@ public final class Neo4jGraphStorageAdapter implements GraphStorageAdapter {
     @Override
     public void apply(StagedGraphWrites writes) {
         var source = Objects.requireNonNull(writes, "writes");
-        for (var entity : source.entities()) {
-            projection.saveEntity(entity);
+        if (!source.entities().isEmpty()) {
+            projection.saveEntities(source.entities());
         }
-        for (var relation : source.relations()) {
-            projection.saveRelation(relation);
+        if (!source.relations().isEmpty()) {
+            projection.saveRelations(source.relations());
         }
     }
 
@@ -79,8 +79,18 @@ public final class Neo4jGraphStorageAdapter implements GraphStorageAdapter {
         }
 
         @Override
+        public void saveEntities(java.util.List<EntityRecord> entities) {
+            delegate.saveEntities(entities);
+        }
+
+        @Override
         public void saveRelation(RelationRecord relation) {
             delegate.saveRelation(relation);
+        }
+
+        @Override
+        public void saveRelations(java.util.List<RelationRecord> relations) {
+            delegate.saveRelations(relations);
         }
 
         @Override
@@ -89,8 +99,18 @@ public final class Neo4jGraphStorageAdapter implements GraphStorageAdapter {
         }
 
         @Override
+        public java.util.List<EntityRecord> loadEntities(java.util.List<String> entityIds) {
+            return delegate.loadEntities(entityIds);
+        }
+
+        @Override
         public java.util.Optional<RelationRecord> loadRelation(String relationId) {
             return delegate.loadRelation(relationId);
+        }
+
+        @Override
+        public java.util.List<RelationRecord> loadRelations(java.util.List<String> relationIds) {
+            return delegate.loadRelations(relationIds);
         }
 
         @Override

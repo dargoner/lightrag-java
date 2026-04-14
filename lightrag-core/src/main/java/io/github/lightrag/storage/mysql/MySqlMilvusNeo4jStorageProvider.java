@@ -580,8 +580,26 @@ public final class MySqlMilvusNeo4jStorageProvider implements AtomicStorageProvi
         }
 
         @Override
+        public void saveEntities(List<EntityRecord> entities) {
+            var records = List.copyOf(Objects.requireNonNull(entities, "entities"));
+            if (records.isEmpty()) {
+                return;
+            }
+            withWriteLock(() -> delegate.saveEntities(records));
+        }
+
+        @Override
         public void saveRelation(RelationRecord relation) {
             withWriteLock(() -> delegate.saveRelation(relation));
+        }
+
+        @Override
+        public void saveRelations(List<RelationRecord> relations) {
+            var records = List.copyOf(Objects.requireNonNull(relations, "relations"));
+            if (records.isEmpty()) {
+                return;
+            }
+            withWriteLock(() -> delegate.saveRelations(records));
         }
 
         @Override
@@ -590,8 +608,18 @@ public final class MySqlMilvusNeo4jStorageProvider implements AtomicStorageProvi
         }
 
         @Override
+        public List<EntityRecord> loadEntities(List<String> entityIds) {
+            return withReadLock(() -> delegate.loadEntities(entityIds));
+        }
+
+        @Override
         public Optional<RelationRecord> loadRelation(String relationId) {
             return withReadLock(() -> delegate.loadRelation(relationId));
+        }
+
+        @Override
+        public List<RelationRecord> loadRelations(List<String> relationIds) {
+            return withReadLock(() -> delegate.loadRelations(relationIds));
         }
 
         @Override
@@ -688,8 +716,12 @@ public final class MySqlMilvusNeo4jStorageProvider implements AtomicStorageProvi
 
         @Override
         public void apply(StagedGraphWrites writes) {
-            writes.entities().forEach(projection::saveEntity);
-            writes.relations().forEach(projection::saveRelation);
+            if (!writes.entities().isEmpty()) {
+                projection.saveEntities(writes.entities());
+            }
+            if (!writes.relations().isEmpty()) {
+                projection.saveRelations(writes.relations());
+            }
         }
 
         @Override
