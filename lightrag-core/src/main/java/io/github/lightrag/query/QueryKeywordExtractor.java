@@ -140,7 +140,9 @@ final class QueryKeywordExtractor {
             request.userPrompt(),
             hlKeywords,
             llKeywords,
-            request.conversationHistory()
+            request.conversationHistory(),
+            request.metadataFilters(),
+            request.metadataConditions()
         );
     }
 

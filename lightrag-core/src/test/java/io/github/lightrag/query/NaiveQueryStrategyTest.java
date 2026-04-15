@@ -89,6 +89,31 @@ class NaiveQueryStrategyTest {
     }
 
     @Test
+    void naiveAppliesMetadataFiltersBeforeParentExpansion() {
+        var storage = InMemoryStorageProvider.create();
+        LocalQueryStrategyTest.seedGraph(storage);
+        LocalQueryStrategyTest.seedVectors(storage);
+        var strategy = new NaiveQueryStrategy(
+            new FakeEmbeddingModel(Map.of("naive question", List.of(1.0d, 0.0d))),
+            storage,
+            new ContextAssembler()
+        );
+
+        var context = strategy.retrieve(QueryRequest.builder()
+            .query("naive question")
+            .mode(QueryMode.NAIVE)
+            .chunkTopK(2)
+            .metadataFilters(Map.of("region", List.of("shanghai")))
+            .build());
+
+        assertThat(context.matchedChunks())
+            .extracting(match -> match.chunkId())
+            .containsExactly("chunk-1");
+        assertThat(context.matchedChunks())
+            .allSatisfy(match -> assertThat(match.chunk().metadata()).containsEntry("region", "shanghai"));
+    }
+
+    @Test
     void naiveBreaksScoreTiesByChunkId() {
         var storage = InMemoryStorageProvider.create();
         storage.chunkStore().save(new io.github.lightrag.storage.ChunkStore.ChunkRecord(
@@ -248,6 +273,49 @@ class NaiveQueryStrategyTest {
             .extracting(match -> match.chunkId())
             .containsExactly("chunk-parent-a", "chunk-parent-b");
         assertThat(context.matchedChunks().get(0).score()).isGreaterThan(context.matchedChunks().get(1).score());
+    }
+
+    @Test
+    void naiveDropsExpandedParentWhenParentMetadataDoesNotMatch() {
+        var storage = InMemoryStorageProvider.create();
+        storage.chunkStore().save(new io.github.lightrag.storage.ChunkStore.ChunkRecord(
+            "chunk-parent",
+            "doc-1",
+            "Parent context",
+            4,
+            0,
+            Map.of("region", "beijing")
+        ));
+        storage.chunkStore().save(new io.github.lightrag.storage.ChunkStore.ChunkRecord(
+            "chunk-parent#child:0",
+            "doc-1",
+            "Child context",
+            2,
+            1,
+            Map.of(
+                "region", "shanghai",
+                ParentChildChunkBuilder.METADATA_CHUNK_LEVEL, ParentChildChunkBuilder.CHUNK_LEVEL_CHILD,
+                ParentChildChunkBuilder.METADATA_PARENT_CHUNK_ID, "chunk-parent"
+            )
+        ));
+        storage.vectorStore().saveAll("chunks", List.of(
+            new io.github.lightrag.storage.VectorStore.VectorRecord("chunk-parent#child:0", List.of(1.0d, 0.0d))
+        ));
+
+        var strategy = new NaiveQueryStrategy(
+            new FakeEmbeddingModel(Map.of("parent filter question", List.of(1.0d, 0.0d))),
+            storage,
+            new ContextAssembler()
+        );
+
+        var context = strategy.retrieve(QueryRequest.builder()
+            .query("parent filter question")
+            .mode(QueryMode.NAIVE)
+            .chunkTopK(1)
+            .metadataFilters(Map.of("region", List.of("shanghai")))
+            .build());
+
+        assertThat(context.matchedChunks()).isEmpty();
     }
 
     @Test

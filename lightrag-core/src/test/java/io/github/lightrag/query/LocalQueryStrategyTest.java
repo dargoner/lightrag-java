@@ -1,5 +1,7 @@
 package io.github.lightrag.query;
 
+import io.github.lightrag.api.MetadataCondition;
+import io.github.lightrag.api.MetadataOperator;
 import io.github.lightrag.api.QueryMode;
 import io.github.lightrag.api.QueryRequest;
 import io.github.lightrag.indexing.ParentChildChunkBuilder;
@@ -116,6 +118,28 @@ class LocalQueryStrategyTest {
     }
 
     @Test
+    void localAppliesMetadataConditionsToCollectedChunks() {
+        var storage = InMemoryStorageProvider.create();
+        seedGraph(storage);
+        seedVectors(storage);
+        var strategy = new LocalQueryStrategy(new FakeEmbeddingModel(Map.of("alice question", List.of(1.0d, 0.0d))), storage, new ContextAssembler());
+
+        var context = strategy.retrieve(QueryRequest.builder()
+            .query("alice question")
+            .mode(QueryMode.LOCAL)
+            .topK(1)
+            .chunkTopK(3)
+            .metadataConditions(List.of(new MetadataCondition("score", MetadataOperator.GTE, "90")))
+            .build());
+
+        assertThat(context.matchedChunks())
+            .extracting(match -> match.chunkId())
+            .containsExactly("chunk-1");
+        assertThat(context.matchedChunks())
+            .allSatisfy(match -> assertThat(match.chunk().metadata()).containsEntry("score", "95"));
+    }
+
+    @Test
     void localReturnsParentContextForChildChunkEntityReferences() {
         var storage = InMemoryStorageProvider.create();
         storage.chunkStore().save(new ChunkStore.ChunkRecord(
@@ -200,10 +224,86 @@ class LocalQueryStrategyTest {
             .containsExactly("entity:alice", "entity:bob");
     }
 
+    @Test
+    void localDropsExpandedParentWhenParentMetadataDoesNotMatch() {
+        var storage = InMemoryStorageProvider.create();
+        storage.chunkStore().save(new ChunkStore.ChunkRecord(
+            "chunk-parent",
+            "doc-1",
+            "Parent context",
+            4,
+            0,
+            Map.of("region", "beijing")
+        ));
+        storage.chunkStore().save(new ChunkStore.ChunkRecord(
+            "chunk-parent#child:0",
+            "doc-1",
+            "Child context",
+            2,
+            1,
+            Map.of(
+                "region", "shanghai",
+                ParentChildChunkBuilder.METADATA_CHUNK_LEVEL, ParentChildChunkBuilder.CHUNK_LEVEL_CHILD,
+                ParentChildChunkBuilder.METADATA_PARENT_CHUNK_ID, "chunk-parent"
+            )
+        ));
+        storage.graphStore().saveEntity(new GraphStore.EntityRecord(
+            "entity:alpha",
+            "Alpha",
+            "concept",
+            "Metadata filter test",
+            List.of(),
+            List.of("chunk-parent#child:0")
+        ));
+        storage.vectorStore().saveAll("entities", List.of(
+            new VectorStore.VectorRecord("entity:alpha", List.of(1.0d, 0.0d))
+        ));
+
+        var strategy = new LocalQueryStrategy(
+            new FakeEmbeddingModel(Map.of("alpha metadata question", List.of(1.0d, 0.0d))),
+            storage,
+            new ContextAssembler()
+        );
+
+        var context = strategy.retrieve(QueryRequest.builder()
+            .query("alpha metadata question")
+            .mode(QueryMode.LOCAL)
+            .topK(1)
+            .chunkTopK(1)
+            .metadataFilters(Map.of("region", List.of("shanghai")))
+            .build());
+
+        assertThat(context.matchedEntities())
+            .extracting(match -> match.entityId())
+            .containsExactly("entity:alpha");
+        assertThat(context.matchedChunks()).isEmpty();
+    }
+
     static void seedGraph(InMemoryStorageProvider storage) {
-        storage.chunkStore().save(new ChunkStore.ChunkRecord("chunk-1", "doc-1", "Alice works with Bob", 4, 0, Map.of()));
-        storage.chunkStore().save(new ChunkStore.ChunkRecord("chunk-2", "doc-1", "Bob supports Alice", 4, 1, Map.of()));
-        storage.chunkStore().save(new ChunkStore.ChunkRecord("chunk-3", "doc-2", "Bob reports to Carol", 4, 0, Map.of()));
+        storage.chunkStore().save(new ChunkStore.ChunkRecord(
+            "chunk-1",
+            "doc-1",
+            "Alice works with Bob",
+            4,
+            0,
+            Map.of("region", "shanghai", "score", "95")
+        ));
+        storage.chunkStore().save(new ChunkStore.ChunkRecord(
+            "chunk-2",
+            "doc-1",
+            "Bob supports Alice",
+            4,
+            1,
+            Map.of("region", "beijing", "score", "82")
+        ));
+        storage.chunkStore().save(new ChunkStore.ChunkRecord(
+            "chunk-3",
+            "doc-2",
+            "Bob reports to Carol",
+            4,
+            0,
+            Map.of("region", "shanghai", "score", "88")
+        ));
 
         storage.graphStore().saveEntity(new GraphStore.EntityRecord(
             "entity:alice",

@@ -114,6 +114,36 @@ class GlobalQueryStrategyTest {
     }
 
     @Test
+    void globalAppliesMetadataFiltersWithoutChangingRelationRetrieval() {
+        var storage = InMemoryStorageProvider.create();
+        LocalQueryStrategyTest.seedGraph(storage);
+        LocalQueryStrategyTest.seedVectors(storage);
+        var strategy = new GlobalQueryStrategy(new FakeEmbeddingModel(Map.of(
+            "broad org question", List.of(0.8d, 0.6d)
+        )), storage, new ContextAssembler());
+
+        var context = strategy.retrieve(QueryRequest.builder()
+            .query("broad org question")
+            .mode(QueryMode.GLOBAL)
+            .topK(2)
+            .chunkTopK(3)
+            .metadataFilters(Map.of("region", List.of("shanghai")))
+            .build());
+
+        assertThat(context.matchedRelations())
+            .extracting(match -> match.relationId())
+            .containsExactly(
+                "relation:entity:alice|works_with|entity:bob",
+                "relation:entity:bob|reports_to|entity:carol"
+            );
+        assertThat(context.matchedChunks())
+            .extracting(match -> match.chunkId())
+            .containsExactly("chunk-1", "chunk-3");
+        assertThat(context.matchedChunks())
+            .allSatisfy(match -> assertThat(match.chunk().metadata()).containsEntry("region", "shanghai"));
+    }
+
+    @Test
     void fallsBackToSingleLevelChunksBeforeV3ConfigIsEnabled() {
         var storage = InMemoryStorageProvider.create();
         storage.chunkStore().save(new io.github.lightrag.storage.ChunkStore.ChunkRecord(
@@ -202,6 +232,78 @@ class GlobalQueryStrategyTest {
         assertThat(context.matchedRelations())
             .extracting(match -> match.relationId())
             .containsExactly("relation:entity:bob|reports_to|entity:carol");
+    }
+
+    @Test
+    void globalDropsExpandedParentWhenParentMetadataDoesNotMatch() {
+        var storage = InMemoryStorageProvider.create();
+        storage.chunkStore().save(new io.github.lightrag.storage.ChunkStore.ChunkRecord(
+            "chunk-parent",
+            "doc-1",
+            "Parent context",
+            4,
+            0,
+            Map.of("region", "beijing")
+        ));
+        storage.chunkStore().save(new io.github.lightrag.storage.ChunkStore.ChunkRecord(
+            "chunk-parent#child:0",
+            "doc-1",
+            "Child context",
+            2,
+            1,
+            Map.of(
+                "region", "shanghai",
+                ParentChildChunkBuilder.METADATA_CHUNK_LEVEL, ParentChildChunkBuilder.CHUNK_LEVEL_CHILD,
+                ParentChildChunkBuilder.METADATA_PARENT_CHUNK_ID, "chunk-parent"
+            )
+        ));
+        storage.graphStore().saveRelation(new io.github.lightrag.storage.GraphStore.RelationRecord(
+            "relation:alpha",
+            "entity:a",
+            "entity:b",
+            "rel",
+            "Metadata filter test",
+            0.8d,
+            List.of("chunk-parent#child:0")
+        ));
+        storage.graphStore().saveEntity(new io.github.lightrag.storage.GraphStore.EntityRecord(
+            "entity:a",
+            "A",
+            "type",
+            "A desc",
+            List.of(),
+            List.of("chunk-parent#child:0")
+        ));
+        storage.graphStore().saveEntity(new io.github.lightrag.storage.GraphStore.EntityRecord(
+            "entity:b",
+            "B",
+            "type",
+            "B desc",
+            List.of(),
+            List.of("chunk-parent#child:0")
+        ));
+        storage.vectorStore().saveAll("relations", List.of(
+            new io.github.lightrag.storage.VectorStore.VectorRecord("relation:alpha", List.of(1.0d, 0.0d))
+        ));
+
+        var strategy = new GlobalQueryStrategy(
+            new FakeEmbeddingModel(Map.of("global metadata question", List.of(1.0d, 0.0d))),
+            storage,
+            new ContextAssembler()
+        );
+
+        var context = strategy.retrieve(QueryRequest.builder()
+            .query("global metadata question")
+            .mode(QueryMode.GLOBAL)
+            .topK(1)
+            .chunkTopK(1)
+            .metadataFilters(Map.of("region", List.of("shanghai")))
+            .build());
+
+        assertThat(context.matchedRelations())
+            .extracting(match -> match.relationId())
+            .containsExactly("relation:alpha");
+        assertThat(context.matchedChunks()).isEmpty();
     }
 
     private record FakeEmbeddingModel(Map<String, List<Double>> vectorsByText) implements EmbeddingModel {

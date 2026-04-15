@@ -34,6 +34,7 @@ public final class NaiveQueryStrategy implements QueryStrategy {
     @Override
     public QueryContext retrieve(QueryRequest request) {
         var query = Objects.requireNonNull(request, "request");
+        var metadataPlan = QueryMetadataFilterSupport.buildPlan(query);
         var queryVector = embeddingModel.embedAll(List.of(query.query())).get(0);
         var matchedChunks = VectorSearches.search(
                 storageProvider.vectorStore(),
@@ -49,7 +50,12 @@ public final class NaiveQueryStrategy implements QueryStrategy {
             .filter(Objects::nonNull)
             .sorted(scoreOrder())
             .toList();
-        var expandedChunks = parentChunkExpander.expand(matchedChunks, query.chunkTopK());
+        var expandedChunks = QueryMetadataFilterSupport.expandAndFilter(
+            metadataPlan,
+            matchedChunks,
+            parentChunkExpander,
+            query.chunkTopK()
+        );
         var context = new QueryContext(List.of(), List.of(), expandedChunks, "");
         return new QueryContext(
             context.matchedEntities(),

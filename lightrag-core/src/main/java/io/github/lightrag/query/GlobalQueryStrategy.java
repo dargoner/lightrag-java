@@ -36,6 +36,7 @@ public final class GlobalQueryStrategy implements QueryStrategy {
     @Override
     public QueryContext retrieve(QueryRequest request) {
         var query = Objects.requireNonNull(request, "request");
+        var metadataPlan = QueryMetadataFilterSupport.buildPlan(query);
         var embeddingText = embeddingText(query);
         if (embeddingText == null) {
             return emptyContext();
@@ -78,14 +79,16 @@ public final class GlobalQueryStrategy implements QueryStrategy {
             .filter(Objects::nonNull)
             .sorted(scoreOrder(ScoredEntity::score, ScoredEntity::entityId))
             .toList(), query.maxEntityTokens());
-        var matchedChunks = parentChunkExpander.expand(chunkScores.entrySet().stream()
+        var matchedChunks = QueryMetadataFilterSupport.expandAndFilter(metadataPlan, chunkScores.entrySet().stream()
             .map(entry -> storageProvider.chunkStore().load(entry.getKey())
                 .map(chunk -> new ScoredChunk(entry.getKey(), toChunk(chunk), entry.getValue()))
                 .orElse(null))
             .filter(Objects::nonNull)
             .sorted(scoreOrder(ScoredChunk::score, ScoredChunk::chunkId))
-            .limit(query.chunkTopK())
-            .toList(), query.chunkTopK());
+            .toList(),
+            parentChunkExpander,
+            query.chunkTopK()
+        );
 
         var context = new QueryContext(
             matchedEntities,

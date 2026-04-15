@@ -129,6 +129,175 @@ class MixQueryStrategyTest {
             .containsExactly("chunk-1", "chunk-3");
     }
 
+    @Test
+    void mixAppliesFinalMetadataSafeguardAfterHybridAndDirectChunkMerge() {
+        var delegate = InMemoryStorageProvider.create();
+        delegate.chunkStore().save(new io.github.lightrag.storage.ChunkStore.ChunkRecord(
+            "chunk-2",
+            "doc-2",
+            "Direct chunk in Shanghai",
+            4,
+            0,
+            Map.of("region", "shanghai")
+        ));
+        delegate.chunkStore().save(new io.github.lightrag.storage.ChunkStore.ChunkRecord(
+            "chunk-3",
+            "doc-3",
+            "Direct chunk in Beijing",
+            4,
+            0,
+            Map.of("region", "beijing")
+        ));
+        var vectorStore = new RecordingHybridVectorStore(List.of(
+            new VectorStore.VectorMatch("chunk-2", 0.92d),
+            new VectorStore.VectorMatch("chunk-3", 0.91d)
+        ));
+        var strategy = new MixQueryStrategy(
+            new FakeEmbeddingModel(Map.of("mix metadata question", List.of(1.0d, 0.0d))),
+            new TestStorageProvider(delegate, vectorStore),
+            request -> new QueryContext(
+                List.of(),
+                List.of(),
+                List.of(
+                    new ScoredChunk(
+                        "chunk-1",
+                        new Chunk("chunk-1", "doc-1", "Hybrid chunk in Shanghai", 4, 0, Map.of("region", "shanghai")),
+                        0.95d
+                    ),
+                    new ScoredChunk(
+                        "chunk-4",
+                        new Chunk("chunk-4", "doc-4", "Hybrid chunk in Beijing", 4, 0, Map.of("region", "beijing")),
+                        0.99d
+                    )
+                ),
+                ""
+            ),
+            new ContextAssembler()
+        );
+
+        var context = strategy.retrieve(QueryRequest.builder()
+            .query("mix metadata question")
+            .mode(QueryMode.MIX)
+            .chunkTopK(5)
+            .metadataFilters(Map.of("region", List.of("shanghai")))
+            .build());
+
+        assertThat(context.matchedChunks())
+            .extracting(ScoredChunk::chunkId)
+            .containsExactly("chunk-1", "chunk-2");
+    }
+
+    @Test
+    void mixFiltersBeforeApplyingChunkTopKSoDirectBackfillStillWorks() {
+        var delegate = InMemoryStorageProvider.create();
+        delegate.chunkStore().save(new io.github.lightrag.storage.ChunkStore.ChunkRecord(
+            "chunk-3",
+            "doc-3",
+            "Allowed lower score",
+            4,
+            0,
+            Map.of("region", "shanghai")
+        ));
+        var vectorStore = new RecordingHybridVectorStore(List.of(
+            new VectorStore.VectorMatch("chunk-3", 0.90d)
+        ));
+        var strategy = new MixQueryStrategy(
+            new FakeEmbeddingModel(Map.of("mix backfill question", List.of(1.0d, 0.0d))),
+            new TestStorageProvider(delegate, vectorStore),
+            request -> new QueryContext(
+                List.of(),
+                List.of(),
+                List.of(
+                    new ScoredChunk(
+                        "chunk-1",
+                        new Chunk("chunk-1", "doc-1", "Filtered high score", 4, 0, Map.of("region", "beijing")),
+                        0.99d
+                    ),
+                    new ScoredChunk(
+                        "chunk-2",
+                        new Chunk("chunk-2", "doc-2", "Allowed second score", 4, 0, Map.of("region", "shanghai")),
+                        0.95d
+                    )
+                ),
+                ""
+            ),
+            new ContextAssembler()
+        );
+
+        var context = strategy.retrieve(QueryRequest.builder()
+            .query("mix backfill question")
+            .mode(QueryMode.MIX)
+            .chunkTopK(2)
+            .metadataFilters(Map.of("region", List.of("shanghai")))
+            .build());
+
+        assertThat(context.matchedChunks())
+            .extracting(ScoredChunk::chunkId)
+            .containsExactly("chunk-2", "chunk-3");
+    }
+
+    @Test
+    void mixOverfetchesDirectChunkMatchesWhenMetadataFilteringRemovesInitialVectorHits() {
+        var delegate = InMemoryStorageProvider.create();
+        delegate.chunkStore().save(new io.github.lightrag.storage.ChunkStore.ChunkRecord(
+            "chunk-2",
+            "doc-2",
+            "Filtered direct hit one",
+            4,
+            0,
+            Map.of("region", "beijing")
+        ));
+        delegate.chunkStore().save(new io.github.lightrag.storage.ChunkStore.ChunkRecord(
+            "chunk-3",
+            "doc-3",
+            "Filtered direct hit two",
+            4,
+            0,
+            Map.of("region", "beijing")
+        ));
+        delegate.chunkStore().save(new io.github.lightrag.storage.ChunkStore.ChunkRecord(
+            "chunk-4",
+            "doc-4",
+            "Allowed lower ranked direct hit",
+            4,
+            0,
+            Map.of("region", "shanghai")
+        ));
+        var vectorStore = new RecordingHybridVectorStore(List.of(
+            new VectorStore.VectorMatch("chunk-2", 0.94d),
+            new VectorStore.VectorMatch("chunk-3", 0.93d),
+            new VectorStore.VectorMatch("chunk-4", 0.92d)
+        ));
+        var strategy = new MixQueryStrategy(
+            new FakeEmbeddingModel(Map.of("mix metadata overfetch question", List.of(1.0d, 0.0d))),
+            new TestStorageProvider(delegate, vectorStore),
+            request -> new QueryContext(
+                List.of(),
+                List.of(),
+                List.of(new ScoredChunk(
+                    "chunk-1",
+                    new Chunk("chunk-1", "doc-1", "Hybrid allowed hit", 4, 0, Map.of("region", "shanghai")),
+                    0.95d
+                )),
+                ""
+            ),
+            new ContextAssembler()
+        );
+
+        var context = strategy.retrieve(QueryRequest.builder()
+            .query("mix metadata overfetch question")
+            .mode(QueryMode.MIX)
+            .chunkTopK(2)
+            .metadataFilters(Map.of("region", List.of("shanghai")))
+            .build());
+
+        assertThat(context.matchedChunks())
+            .extracting(ScoredChunk::chunkId)
+            .containsExactly("chunk-1", "chunk-4");
+        assertThat(vectorStore.recordedRequest).isNotNull();
+        assertThat(vectorStore.recordedRequest.topK()).isGreaterThan(2);
+    }
+
     private record FakeEmbeddingModel(Map<String, List<Double>> vectorsByText) implements EmbeddingModel {
         @Override
         public List<List<Double>> embedAll(List<String> texts) {
@@ -212,7 +381,7 @@ class MixQueryStrategyTest {
         @Override
         public List<VectorMatch> search(String namespace, SearchRequest request) {
             this.recordedRequest = request;
-            return matches;
+            return matches.stream().limit(request.topK()).toList();
         }
 
         @Override

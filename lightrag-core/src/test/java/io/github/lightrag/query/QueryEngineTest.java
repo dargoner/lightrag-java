@@ -99,6 +99,56 @@ class QueryEngineTest {
     }
 
     @Test
+    void includeReferencesAppliesMetadataFilteringBeforeBuildingContextsAndReferences() {
+        var chatModel = new RecordingChatModel();
+        var strategy = new RecordingQueryStrategy(new QueryContext(
+            List.of(),
+            List.of(),
+            List.of(
+                scoredChunk("chunk-1", "Alpha chunk", 0.90d, "doc-a", Map.of("source", "alpha.txt", "score", "90")),
+                scoredChunk("chunk-2", "Beta chunk", 0.80d, "doc-b", Map.of("source", "alpha.txt", "score", "70")),
+                scoredChunk("chunk-3", "Gamma chunk", 0.70d, "doc-c", Map.of("file_path", "beta.txt", "score", "95"))
+            ),
+            "stale assembled context"
+        ));
+        var engine = new QueryEngine(
+            chatModel,
+            new ContextAssembler(),
+            strategiesReturning(strategy),
+            null
+        );
+
+        var result = engine.query(QueryRequest.builder()
+            .query("which chunk?")
+            .mode(QueryMode.LOCAL)
+            .chunkTopK(3)
+            .includeReferences(true)
+            .metadataFilters(Map.of("source", List.of("alpha.txt")))
+            .metadataConditions(List.of(
+                new io.github.lightrag.api.MetadataCondition(
+                    "score",
+                    io.github.lightrag.api.MetadataOperator.GTE,
+                    "80"
+                )
+            ))
+            .build());
+
+        assertThat(strategy.lastRequest().metadataFilters()).containsEntry("source", List.of("alpha.txt"));
+        assertThat(result.contexts())
+            .extracting(context -> context.sourceId())
+            .containsExactly("chunk-1");
+        assertThat(result.contexts())
+            .extracting(context -> context.referenceId())
+            .containsExactly("1");
+        assertThat(result.references())
+            .containsExactly(new io.github.lightrag.api.QueryResult.Reference("1", "alpha.txt"));
+        assertThat(chatModel.lastRequest().systemPrompt())
+            .contains("Alpha chunk")
+            .doesNotContain("Beta chunk")
+            .doesNotContain("Gamma chunk");
+    }
+
+    @Test
     void movesAdditionalInstructionsIntoSystemPromptAndKeepsRawQueryAsUserPrompt() {
         var chatModel = new RecordingChatModel();
         var engine = new QueryEngine(
@@ -554,6 +604,9 @@ class QueryEngineTest {
             new ChatModel.ChatRequest.ConversationMessage("user", "Earlier question"),
             new ChatModel.ChatRequest.ConversationMessage("assistant", "Earlier answer")
         );
+        var metadataConditions = List.of(
+            new io.github.lightrag.api.MetadataCondition("score", io.github.lightrag.api.MetadataOperator.GTE, "80")
+        );
         var overrideModel = new RecordingChatModel("override answer");
         var strategy = new RecordingQueryStrategy(baseContext());
         var engine = new QueryEngine(
@@ -583,6 +636,8 @@ class QueryEngineTest {
             .hlKeywords(List.of("high level"))
             .llKeywords(List.of("low level"))
             .conversationHistory(history)
+            .metadataFilters(Map.of("source", List.of("doc-a")))
+            .metadataConditions(metadataConditions)
             .build());
 
         assertThat(strategy.lastRequest()).isNotNull();
@@ -598,6 +653,8 @@ class QueryEngineTest {
         assertThat(strategy.lastRequest().hlKeywords()).containsExactly("high level");
         assertThat(strategy.lastRequest().llKeywords()).containsExactly("low level");
         assertThat(strategy.lastRequest().conversationHistory()).containsExactlyElementsOf(history);
+        assertThat(strategy.lastRequest().metadataFilters()).containsEntry("source", List.of("doc-a"));
+        assertThat(strategy.lastRequest().metadataConditions()).containsExactlyElementsOf(metadataConditions);
     }
 
     @Test
@@ -966,15 +1023,21 @@ class QueryEngineTest {
     }
 
     @Test
-    void countsReasoningContextTowardChunkBudgetForMultiHopQueries() {
+    void multiHopOnlyNeedContextFallsBackWhenMetadataFilteringChangesReturnedChunks() {
         var chatModel = new RecordingChatModel();
         var defaultStrategy = new RecordingQueryStrategy(baseContext());
-        var reasoningContext = ("Reasoning Path 1 " + "hop ".repeat(80)).trim();
         var multiHopStrategy = new RecordingQueryStrategy(new QueryContext(
             List.of(),
             List.of(),
-            List.of(new ScoredChunk("chunk-1", new Chunk("chunk-1", "doc-1", "Alpha chunk", 2, 0, Map.of()), 0.9d)),
-            reasoningContext
+            List.of(
+                scoredChunk("chunk-1", "Allowed evidence", 0.95d, "doc-a", Map.of("region", "shanghai", "source", "alpha.txt")),
+                scoredChunk("chunk-2", "Filtered evidence", 0.90d, "doc-b", Map.of("region", "beijing", "source", "beta.txt"))
+            ),
+            """
+            Reasoning Path 1
+            Evidence [chunk-1]: Allowed evidence
+            Evidence [chunk-2]: Filtered evidence
+            """
         ));
         var engine = new QueryEngine(
             chatModel,
@@ -988,22 +1051,91 @@ class QueryEngineTest {
             new io.github.lightrag.synthesis.PathAwareAnswerSynthesizer()
         );
 
-        var promptResult = engine.query(QueryRequest.builder()
+        var result = engine.query(QueryRequest.builder()
+            .query("Atlas 通过谁影响知识图谱组？")
+            .mode(QueryMode.LOCAL)
+            .onlyNeedContext(true)
+            .includeReferences(true)
+            .metadataFilters(Map.of("region", List.of("shanghai")))
+            .build());
+
+        assertThat(result.answer())
+            .contains("Allowed evidence")
+            .doesNotContain("Filtered evidence")
+            .doesNotContain("Reasoning Path 1");
+        assertThat(result.contexts())
+            .extracting(context -> context.sourceId())
+            .containsExactly("chunk-1");
+        assertThat(result.references())
+            .containsExactly(new io.github.lightrag.api.QueryResult.Reference("1", "alpha.txt"));
+    }
+
+    @Test
+    void recalculatesMultiHopChunkBudgetWithoutReasoningContextWhenTrimmedChunksPreventReuse() {
+        var chatModel = new RecordingChatModel();
+        var defaultStrategy = new RecordingQueryStrategy(baseContext());
+        var reasoningContext = ("Reasoning Path 1 " + "hop ".repeat(80)).trim();
+        var retrievedContext = new QueryContext(
+            List.of(),
+            List.of(),
+            List.of(new ScoredChunk("chunk-1", new Chunk("chunk-1", "doc-1", "Alpha chunk", 20, 0, Map.of()), 0.9d)),
+            reasoningContext
+        );
+        var reasoningMultiHopStrategy = new RecordingQueryStrategy(retrievedContext);
+        var engine = new QueryEngine(
+            chatModel,
+            new ContextAssembler(),
+            strategiesReturning(defaultStrategy),
+            null,
+            false,
+            2,
+            new RuleBasedQueryIntentClassifier(),
+            reasoningMultiHopStrategy,
+            new io.github.lightrag.synthesis.PathAwareAnswerSynthesizer()
+        );
+
+        var probeRequest = QueryRequest.builder()
             .query("Atlas 通过谁影响知识图谱组？")
             .mode(QueryMode.LOCAL)
             .maxTotalTokens(10_000)
-            .onlyNeedPrompt(true)
-            .build());
-        var promptTokenCost = QueryBudgeting.approximateTokenCount(promptResult.answer());
+            .build();
+        var reasoningBudget = invokeRemainingChunkBudget(engine, probeRequest, retrievedContext, reasoningContext);
+        var fallbackBudget = invokeRemainingChunkBudget(engine, probeRequest, retrievedContext, null);
+        assertThat(fallbackBudget).isGreaterThan(reasoningBudget);
+        var fallbackOverhead = probeRequest.maxTotalTokens() - fallbackBudget;
+        var targetMaxTotalTokens = fallbackOverhead + retrievedContext.matchedChunks().get(0).chunk().tokenCount();
 
         var result = engine.query(QueryRequest.builder()
             .query("Atlas 通过谁影响知识图谱组？")
             .mode(QueryMode.LOCAL)
-            .maxTotalTokens(promptTokenCost + 1)
+            .maxTotalTokens(targetMaxTotalTokens)
             .build());
 
-        assertThat(result.contexts()).isEmpty();
-        assertThat(chatModel.lastRequest().systemPrompt()).contains(reasoningContext);
+        assertThat(result.contexts())
+            .extracting(context -> context.sourceId())
+            .containsExactly("chunk-1");
+        assertThat(chatModel.lastRequest().systemPrompt()).doesNotContain(reasoningContext);
+        assertThat(chatModel.lastRequest().systemPrompt()).contains("Alpha chunk");
+    }
+
+    private static int invokeRemainingChunkBudget(
+        QueryEngine engine,
+        QueryRequest request,
+        QueryContext context,
+        String assembledContextOverride
+    ) {
+        try {
+            var method = QueryEngine.class.getDeclaredMethod(
+                "remainingChunkBudget",
+                QueryRequest.class,
+                QueryContext.class,
+                String.class
+            );
+            method.setAccessible(true);
+            return (int) method.invoke(engine, request, context, assembledContextOverride);
+        } catch (ReflectiveOperationException exception) {
+            throw new AssertionError("Unable to inspect remainingChunkBudget", exception);
+        }
     }
 
     @Test

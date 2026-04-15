@@ -23,8 +23,9 @@ public final class HybridQueryStrategy implements QueryStrategy {
 
     @Override
     public QueryContext retrieve(QueryRequest request) {
-        var local = localStrategy.retrieve(request);
-        var global = globalStrategy.retrieve(request);
+        var query = Objects.requireNonNull(request, "request");
+        var local = localStrategy.retrieve(query);
+        var global = globalStrategy.retrieve(query);
 
         var mergedEntities = new LinkedHashMap<String, ScoredEntity>();
         for (var entity : local.matchedEntities()) {
@@ -50,17 +51,19 @@ public final class HybridQueryStrategy implements QueryStrategy {
             mergedChunks.merge(chunk.chunkId(), chunk, HybridQueryStrategy::pickChunk);
         }
 
+        var matchedChunks = QueryMetadataFilterSupport.filterChunks(query, mergedChunks.values().stream()
+            .sorted(scoreOrder(ScoredChunk::score, ScoredChunk::chunkId))
+            .toList()).stream()
+            .limit(query.chunkTopK())
+            .toList();
         var context = new QueryContext(
             QueryBudgeting.limitEntities(mergedEntities.values().stream()
                 .sorted(scoreOrder(ScoredEntity::score, ScoredEntity::entityId))
-                .toList(), request.maxEntityTokens()),
+                .toList(), query.maxEntityTokens()),
             QueryBudgeting.limitRelations(mergedRelations.values().stream()
                 .sorted(scoreOrder(ScoredRelation::score, ScoredRelation::relationId))
-                .toList(), request.maxRelationTokens()),
-            mergedChunks.values().stream()
-                .sorted(scoreOrder(ScoredChunk::score, ScoredChunk::chunkId))
-                .limit(request.chunkTopK())
-                .toList(),
+                .toList(), query.maxRelationTokens()),
+            matchedChunks,
             ""
         );
         return new QueryContext(

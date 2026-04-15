@@ -231,12 +231,125 @@ class MultiHopQueryStrategyTest {
         assertThat(context.assembledContext()).isBlank();
     }
 
+    @Test
+    void clearsAssembledContextWhenMetadataFilteringChangesSupportingChunks() {
+        var atlas = new Entity("entity:atlas", "Atlas", "Component", "", List.of(), List.of("chunk-seed"));
+        var graphStore = new Entity("entity:graphstore", "GraphStore", "Service", "", List.of(), List.of("chunk-hop-1", "chunk-hop-2"));
+        var team = new Entity("entity:team", "KnowledgeGraphTeam", "Team", "", List.of(), List.of("chunk-hop-2"));
+        var dependsOn = new Relation("relation:1", atlas.id(), graphStore.id(), "depends_on", "", 0.9d, List.of("chunk-hop-1"));
+        var ownedBy = new Relation("relation:2", graphStore.id(), team.id(), "owned_by", "", 0.85d, List.of("chunk-hop-2"));
+        var seedContext = new QueryContext(
+            List.of(new ScoredEntity(atlas.id(), atlas, 0.95d)),
+            List.of(),
+            List.of(scoredChunk("chunk-seed", "Seed fallback chunk.")),
+            ""
+        );
+        var strategy = new MultiHopQueryStrategy(
+            new StaticSeedContextRetriever(seedContext),
+            new StaticPathRetriever(new PathRetrievalResult(
+                seedContext.matchedEntities(),
+                List.of(
+                    new ScoredRelation(dependsOn.id(), dependsOn, 0.88d),
+                    new ScoredRelation(ownedBy.id(), ownedBy, 0.84d)
+                ),
+                List.of(new ReasoningPath(
+                    List.of(atlas.id(), graphStore.id(), team.id()),
+                    List.of(dependsOn.id(), ownedBy.id()),
+                    List.of("chunk-hop-1", "chunk-hop-2"),
+                    2,
+                    0.0d
+                ))
+            )),
+            new DefaultPathScorer(),
+            new ReasoningContextAssembler(
+                new FakeGraphStore(List.of(atlas, graphStore, team), List.of(dependsOn, ownedBy)),
+                new FakeChunkStore(Map.of(
+                    "chunk-seed", chunkRecord("chunk-seed", "Seed fallback chunk.", Map.of("region", "beijing")),
+                    "chunk-hop-1", chunkRecord("chunk-hop-1", "Hop one evidence.", Map.of("region", "shanghai")),
+                    "chunk-hop-2", chunkRecord("chunk-hop-2", "Hop two evidence.", Map.of("region", "beijing"))
+                ))
+            )
+        );
+
+        var context = strategy.retrieve(QueryRequest.builder()
+            .query("Atlas 通过谁影响知识图谱组？")
+            .pathTopK(1)
+            .metadataFilters(Map.of("region", List.of("shanghai")))
+            .build());
+
+        assertThat(context.matchedChunks())
+            .extracting(ScoredChunk::chunkId)
+            .containsExactly("chunk-hop-1");
+        assertThat(context.assembledContext()).isBlank();
+    }
+
+    @Test
+    void clearsAssembledContextWhenMetadataConditionsChangeSupportingChunks() {
+        var atlas = new Entity("entity:atlas", "Atlas", "Component", "", List.of(), List.of("chunk-hop-1"));
+        var graphStore = new Entity("entity:graphstore", "GraphStore", "Service", "", List.of(), List.of("chunk-hop-1", "chunk-hop-2"));
+        var team = new Entity("entity:team", "KnowledgeGraphTeam", "Team", "", List.of(), List.of("chunk-hop-2"));
+        var dependsOn = new Relation("relation:1", atlas.id(), graphStore.id(), "depends_on", "", 0.9d, List.of("chunk-hop-1"));
+        var ownedBy = new Relation("relation:2", graphStore.id(), team.id(), "owned_by", "", 0.85d, List.of("chunk-hop-2"));
+        var seedContext = new QueryContext(
+            List.of(new ScoredEntity(atlas.id(), atlas, 0.95d)),
+            List.of(),
+            List.of(),
+            ""
+        );
+        var strategy = new MultiHopQueryStrategy(
+            new StaticSeedContextRetriever(seedContext),
+            new StaticPathRetriever(new PathRetrievalResult(
+                seedContext.matchedEntities(),
+                List.of(
+                    new ScoredRelation(dependsOn.id(), dependsOn, 0.88d),
+                    new ScoredRelation(ownedBy.id(), ownedBy, 0.84d)
+                ),
+                List.of(new ReasoningPath(
+                    List.of(atlas.id(), graphStore.id(), team.id()),
+                    List.of(dependsOn.id(), ownedBy.id()),
+                    List.of("chunk-hop-1", "chunk-hop-2"),
+                    2,
+                    0.0d
+                ))
+            )),
+            new DefaultPathScorer(),
+            new ReasoningContextAssembler(
+                new FakeGraphStore(List.of(atlas, graphStore, team), List.of(dependsOn, ownedBy)),
+                new FakeChunkStore(Map.of(
+                    "chunk-hop-1", chunkRecord("chunk-hop-1", "Hop one evidence.", Map.of("score", "95")),
+                    "chunk-hop-2", chunkRecord("chunk-hop-2", "Hop two evidence.", Map.of("score", "70"))
+                ))
+            )
+        );
+
+        var context = strategy.retrieve(QueryRequest.builder()
+            .query("Atlas 通过谁影响知识图谱组？")
+            .pathTopK(1)
+            .metadataConditions(List.of(
+                new io.github.lightrag.api.MetadataCondition(
+                    "score",
+                    io.github.lightrag.api.MetadataOperator.GTE,
+                    "80"
+                )
+            ))
+            .build());
+
+        assertThat(context.matchedChunks())
+            .extracting(ScoredChunk::chunkId)
+            .containsExactly("chunk-hop-1");
+        assertThat(context.assembledContext()).isBlank();
+    }
+
     private static ScoredChunk scoredChunk(String chunkId, String text) {
         return new ScoredChunk(chunkId, new Chunk(chunkId, "doc-1", text, 4, 0, Map.of()), 0.9d);
     }
 
     private static ChunkStore.ChunkRecord chunkRecord(String chunkId, String text) {
         return new ChunkStore.ChunkRecord(chunkId, "doc-1", text, 4, 0, Map.of());
+    }
+
+    private static ChunkStore.ChunkRecord chunkRecord(String chunkId, String text, Map<String, String> metadata) {
+        return new ChunkStore.ChunkRecord(chunkId, "doc-1", text, 4, 0, metadata);
     }
 
     private record StaticSeedContextRetriever(QueryContext seedContext) implements SeedContextRetriever {

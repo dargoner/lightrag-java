@@ -37,6 +37,7 @@ public final class LocalQueryStrategy implements QueryStrategy {
     @Override
     public QueryContext retrieve(QueryRequest request) {
         var query = Objects.requireNonNull(request, "request");
+        var metadataPlan = QueryMetadataFilterSupport.buildPlan(query);
         var embeddingText = embeddingText(query);
         if (embeddingText == null) {
             return emptyContext();
@@ -81,8 +82,10 @@ public final class LocalQueryStrategy implements QueryStrategy {
             .toList();
         var limitedEntities = QueryBudgeting.limitEntities(matchedEntities, query.maxEntityTokens());
         var limitedRelations = QueryBudgeting.limitRelations(matchedRelations, query.maxRelationTokens());
-        var matchedChunks = parentChunkExpander.expand(
-            collectChunks(limitedEntities, limitedRelations, query.chunkTopK()),
+        var matchedChunks = QueryMetadataFilterSupport.expandAndFilter(
+            metadataPlan,
+            collectChunks(limitedEntities, limitedRelations),
+            parentChunkExpander,
             query.chunkTopK()
         );
 
@@ -102,8 +105,7 @@ public final class LocalQueryStrategy implements QueryStrategy {
 
     private List<ScoredChunk> collectChunks(
         List<ScoredEntity> matchedEntities,
-        List<ScoredRelation> matchedRelations,
-        int chunkTopK
+        List<ScoredRelation> matchedRelations
     ) {
         var chunkScores = new LinkedHashMap<String, Double>();
         for (var entity : matchedEntities) {
@@ -123,7 +125,6 @@ public final class LocalQueryStrategy implements QueryStrategy {
                 .orElse(null))
             .filter(Objects::nonNull)
             .sorted(scoreOrder(ScoredChunk::score, ScoredChunk::chunkId))
-            .limit(chunkTopK)
             .toList();
     }
 

@@ -6,6 +6,7 @@ import io.github.lightrag.model.ChatModel;
 import org.junit.jupiter.api.Test;
 
 import java.util.List;
+import java.util.Map;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
@@ -132,6 +133,25 @@ class QueryKeywordExtractorTest {
         assertThat(hybrid.llKeywords()).containsExactly("Who works with Bob?");
         assertThat(hybrid.hlKeywords()).isEmpty();
         assertThat(hybrid.pathTopK()).isEqualTo(8);
+    }
+
+    @Test
+    void fallbackCopyPreservesMetadataFiltersAndConditions() {
+        var extractor = new QueryKeywordExtractor();
+        var metadataConditions = List.of(
+            new io.github.lightrag.api.MetadataCondition("score", io.github.lightrag.api.MetadataOperator.GTE, "80")
+        );
+        var request = QueryRequest.builder()
+            .query("Who works with Bob?")
+            .mode(QueryMode.LOCAL)
+            .metadataFilters(Map.of("source", List.of("doc-a")))
+            .metadataConditions(metadataConditions)
+            .build();
+
+        var resolved = extractor.resolve(request, new CountingKeywordChatModel("{}"));
+
+        assertThat(resolved.metadataFilters()).containsEntry("source", List.of("doc-a"));
+        assertThat(resolved.metadataConditions()).containsExactlyElementsOf(metadataConditions);
     }
 
     private static final class CountingKeywordChatModel implements ChatModel {

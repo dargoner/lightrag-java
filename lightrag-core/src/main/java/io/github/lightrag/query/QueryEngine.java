@@ -183,20 +183,36 @@ public final class QueryEngine {
         var rerankedChunks = rerankEnabled(resolvedQuery) && !useMultiHop
             ? rerankChunks(resolvedQuery, retrievedContext.matchedChunks())
             : retrievedContext.matchedChunks();
-        var assembledContextForBudget = useMultiHop && !retrievedContext.assembledContext().isBlank()
-            ? retrievedContext.assembledContext()
-            : null;
+        var filteredChunks = QueryMetadataFilterSupport.filterChunks(resolvedQuery, rerankedChunks);
+        var reusableMultiHopContext = useMultiHop
+            && !retrievedContext.assembledContext().isBlank()
+            && sameChunkIds(retrievedContext.matchedChunks(), filteredChunks);
         var finalChunks = QueryBudgeting.limitChunks(
-            rerankedChunks,
-            remainingChunkBudget(resolvedQuery, retrievedContext, assembledContextForBudget)
+            filteredChunks,
+            remainingChunkBudget(
+                resolvedQuery,
+                retrievedContext,
+                reusableMultiHopContext ? retrievedContext.assembledContext() : null
+            )
         );
+        var recalculatedWithoutReasoningContext = false;
+        if (reusableMultiHopContext && !sameChunkIds(filteredChunks, finalChunks)) {
+            finalChunks = QueryBudgeting.limitChunks(
+                filteredChunks,
+                remainingChunkBudget(resolvedQuery, retrievedContext, null)
+            );
+            recalculatedWithoutReasoningContext = true;
+        }
+        var finalMultiHopContextReusable = reusableMultiHopContext
+            && !recalculatedWithoutReasoningContext
+            && sameChunkIds(filteredChunks, finalChunks);
         var finalContext = new QueryContext(
             retrievedContext.matchedEntities(),
             retrievedContext.matchedRelations(),
             finalChunks,
             ""
         );
-        var assembledContext = useMultiHop && !retrievedContext.assembledContext().isBlank()
+        var assembledContext = finalMultiHopContextReusable
             ? retrievedContext.assembledContext()
             : contextAssembler.assemble(finalContext);
         var assembledQueryContext = new QueryContext(
@@ -266,7 +282,9 @@ public final class QueryEngine {
             request.userPrompt(),
             request.hlKeywords(),
             request.llKeywords(),
-            request.conversationHistory()
+            request.conversationHistory(),
+            request.metadataFilters(),
+            request.metadataConditions()
         );
     }
 
@@ -406,5 +424,17 @@ public final class QueryEngine {
         return ordered.stream()
             .limit(request.chunkTopK())
             .toList();
+    }
+
+    private static boolean sameChunkIds(List<ScoredChunk> left, List<ScoredChunk> right) {
+        if (left.size() != right.size()) {
+            return false;
+        }
+        for (int i = 0; i < left.size(); i++) {
+            if (!left.get(i).chunkId().equals(right.get(i).chunkId())) {
+                return false;
+            }
+        }
+        return true;
     }
 }
