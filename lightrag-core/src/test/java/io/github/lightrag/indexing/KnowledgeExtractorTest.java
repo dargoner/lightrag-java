@@ -190,7 +190,7 @@ class KnowledgeExtractorTest {
         var result = extractor.extract(chunk("Alice works with Bob"));
 
         assertThat(result.relations()).containsExactly(
-            new ExtractedRelation("Alice", "Bob", "works_with", "collaboration", 1.0d)
+            new ExtractedRelation("Alice", "Bob", "works with", "collaboration", 1.0d)
         );
     }
 
@@ -302,7 +302,7 @@ class KnowledgeExtractorTest {
         var result = extractor.extract(chunk("Alice works with Bob and Charlie"));
 
         assertThat(result.relations()).containsExactly(
-            new ExtractedRelation("Alice", "Bob", "works_with", "collaboration", 1.0d),
+            new ExtractedRelation("Alice", "Bob", "works with", "collaboration", 1.0d),
             new ExtractedRelation("Alice", "Charlie", "reviews", "review chain", 0.4d)
         );
     }
@@ -347,7 +347,169 @@ class KnowledgeExtractorTest {
         var result = extractor.extract(chunk("Alice works with Bob"));
 
         assertThat(result.relations()).containsExactly(
-            new ExtractedRelation("Alice", "Bob", "works_with", "longer collaboration description", 0.9d)
+            new ExtractedRelation("Alice", "Bob", "works with", "longer collaboration description", 0.9d)
+        );
+    }
+
+    @Test
+    void mergesUndirectedRelationsAcrossGleaning() {
+        var chatModel = new RecordingChatModel(
+            """
+            {
+              "entities": [
+                {"name": "Alice", "type": "person", "description": "Researcher", "aliases": []},
+                {"name": "Bob", "type": "person", "description": "Engineer", "aliases": []}
+              ],
+              "relations": [
+                {
+                  "sourceEntityName": "Alice",
+                  "targetEntityName": "Bob",
+                  "type": "collaboration, research",
+                  "description": "short",
+                  "weight": 0.6
+                }
+              ]
+            }
+            """,
+            """
+            {
+              "entities": [],
+              "relations": [
+                {
+                  "sourceEntityName": "Bob",
+                  "targetEntityName": "Alice",
+                  "type": "research, collaboration",
+                  "description": "longer collaboration description",
+                  "weight": 0.9
+                }
+              ]
+            }
+            """
+        );
+        var extractor = new KnowledgeExtractor(chatModel, 1, 10_000);
+
+        var result = extractor.extract(chunk("Alice works with Bob on retrieval systems"));
+
+        assertThat(result.relations()).containsExactly(
+            new ExtractedRelation("Alice", "Bob", "collaboration, research", "longer collaboration description", 0.9d)
+        );
+    }
+
+    @Test
+    void mergesKeywordOrderVariantsAcrossGleaning() {
+        var chatModel = new RecordingChatModel(
+            """
+            {
+              "entities": [
+                {"name": "Alice", "type": "person", "description": "Researcher", "aliases": []},
+                {"name": "Bob", "type": "person", "description": "Engineer", "aliases": []}
+              ],
+              "relations": [
+                {
+                  "sourceEntityName": "Alice",
+                  "targetEntityName": "Bob",
+                  "type": "architecture, dependency",
+                  "description": "short",
+                  "weight": 0.5
+                }
+              ]
+            }
+            """,
+            """
+            {
+              "entities": [],
+              "relations": [
+                {
+                  "sourceEntityName": "Alice",
+                  "targetEntityName": "Bob",
+                  "type": "dependency, architecture",
+                  "description": "longer dependency description",
+                  "weight": 0.8
+                }
+              ]
+            }
+            """
+        );
+        var extractor = new KnowledgeExtractor(chatModel, 1, 10_000);
+
+        var result = extractor.extract(chunk("Alice depends on Bob's architecture guidance"));
+
+        assertThat(result.relations()).containsExactly(
+            new ExtractedRelation("Alice", "Bob", "architecture, dependency", "longer dependency description", 0.8d)
+        );
+    }
+
+    @Test
+    void promptIncludesUndirectedAndIncrementalExtractionRules() {
+        var chatModel = new RecordingChatModel(
+            """
+            {
+              "entities": [],
+              "relations": []
+            }
+            """,
+            """
+            {
+              "entities": [],
+              "relations": []
+            }
+            """
+        );
+        var extractor = new KnowledgeExtractor(chatModel, 1, 10_000, "Chinese", List.of("Person", "Organization"));
+
+        extractor.extract(chunk("Alice works at OpenAI with Bob"));
+
+        assertThat(chatModel.requests()).hasSize(2);
+        assertThat(chatModel.requests().get(0).systemPrompt())
+            .contains("Treat relationships as undirected unless direction is explicitly stated.")
+            .contains("Do not output duplicate relationships.")
+            .contains("If none of the provided entity types apply, use \"Other\".");
+        assertThat(chatModel.requests().get(1).userPrompt())
+            .contains("Do not repeat entities or relationships that were already extracted correctly.")
+            .contains("Return only incremental JSON using the same schema as before.");
+    }
+
+    @Test
+    void stabilizesRelationEndpointsAndKeywordsAfterUndirectedMerge() {
+        var chatModel = new RecordingChatModel(
+            """
+            {
+              "entities": [
+                {"name": "Alice", "type": "person", "description": "Researcher", "aliases": []},
+                {"name": "Bob", "type": "person", "description": "Engineer", "aliases": []}
+              ],
+              "relations": [
+                {
+                  "sourceEntityName": "Bob",
+                  "targetEntityName": "Alice",
+                  "type": "research, collaboration",
+                  "description": "short",
+                  "weight": 0.6
+                }
+              ]
+            }
+            """,
+            """
+            {
+              "entities": [],
+              "relations": [
+                {
+                  "sourceEntityName": "Alice",
+                  "targetEntityName": "Bob",
+                  "type": "collaboration, research",
+                  "description": "longer collaboration description",
+                  "weight": 0.9
+                }
+              ]
+            }
+            """
+        );
+        var extractor = new KnowledgeExtractor(chatModel, 1, 10_000);
+
+        var result = extractor.extract(chunk("Alice works with Bob on retrieval systems"));
+
+        assertThat(result.relations()).containsExactly(
+            new ExtractedRelation("Alice", "Bob", "collaboration, research", "longer collaboration description", 0.9d)
         );
     }
 
@@ -470,6 +632,48 @@ class KnowledgeExtractorTest {
         assertThat(chatModel.requests()).hasSize(1);
         assertThat(chatModel.requests().get(0).systemPrompt())
             .contains("you may return the candidate with an empty supportingChunkIndexes array");
+    }
+
+    @Test
+    void normalizesWindowRelationKeywords() {
+        var extractor = new KnowledgeExtractor(new StubChatModel("""
+            {
+              "entities": [],
+              "relations": [
+                {
+                  "sourceEntityName": "Alice",
+                  "targetEntityName": "Bob",
+                  "type": "research, collaboration",
+                  "description": "Alice and Bob collaborate on retrieval systems",
+                  "weight": 0.9,
+                  "supportingChunkIndexes": [0]
+                }
+              ],
+              "warnings": []
+            }
+            """));
+        var window = new RefinementWindow(
+            "doc-1",
+            List.of(chunk("chunk-1", "Alice and Bob collaborate on retrieval systems")),
+            0,
+            RefinementScope.ADJACENT,
+            16
+        );
+
+        var result = extractor.extractWindow(window);
+
+        assertThat(result.relationPatches()).containsExactly(
+            new RefinedRelationPatch(
+                new ExtractedRelation(
+                    "Alice",
+                    "Bob",
+                    "collaboration, research",
+                    "Alice and Bob collaborate on retrieval systems",
+                    0.9d
+                ),
+                List.of("chunk-1")
+            )
+        );
     }
 
     private static Chunk chunk(String text) {

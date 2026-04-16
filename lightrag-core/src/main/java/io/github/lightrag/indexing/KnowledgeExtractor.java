@@ -37,38 +37,87 @@ public final class KnowledgeExtractor {
     );
 
     private static final String SYSTEM_PROMPT_TEMPLATE = """
-        Extract entities and relations from the provided text.
-        Write all entity types and descriptions in %s.
-        Use one of these entity types whenever possible: %s.
-        Return JSON with this shape:
-        {
-          "entities": [
-            {
-              "name": "Entity name",
-              "type": "entity type",
-              "description": "brief description",
-              "aliases": ["alias"]
-            }
-          ],
-          "relations": [
-            {
-              "sourceEntityName": "source entity",
-              "targetEntityName": "target entity",
-              "type": "relation type",
-              "description": "brief description",
-              "weight": 1.0
-            }
-          ]
-        }
-        Use empty arrays when nothing is found.
+        ---Role---
+        You are a Knowledge Graph Specialist responsible for extracting entities and relationships from the input text.
+
+        ---Instructions---
+        1. Entity Extraction:
+           - Identify clearly defined and meaningful entities in the input text.
+           - For each entity, return:
+             - "name": entity name
+             - "type": one of these entity types whenever possible: %s
+             - "description": concise but informative description based only on the input text
+             - "aliases": optional list of aliases, abbreviations, or alternate names only when explicitly supported by the text
+           - If none of the provided entity types apply, use "Other".
+           - Ensure consistent naming across the entire extraction.
+           - If the entity name is case-insensitive, normalize it in title case.
+
+        2. Relationship Extraction:
+           - Identify direct, clearly stated, and meaningful relationships between previously extracted entities.
+           - Treat relationships as undirected unless direction is explicitly stated.
+           - Do not output duplicate relationships.
+           - If a statement implies an n-ary relationship, decompose it into the most reasonable binary relationships.
+           - For each relationship, return:
+             - "sourceEntityName": source entity name
+             - "targetEntityName": target entity name
+             - "type": one or more high-level relationship keywords, separated by comma and space
+             - "description": concise explanation of the relationship
+             - "weight": optional confidence or importance score; omit it if uncertain
+           - The "type" field must act like high-level relationship keywords, not a database-specific edge label.
+
+        3. Output Rules:
+           - Return JSON only.
+           - Return a single JSON object with this exact top-level shape:
+             {
+               "entities": [
+                 {
+                   "name": "Entity name",
+                   "type": "Entity type",
+                   "description": "Entity description",
+                   "aliases": ["Alias if explicitly stated"]
+                 }
+               ],
+               "relations": [
+                 {
+                   "sourceEntityName": "Source entity",
+                   "targetEntityName": "Target entity",
+                   "type": "keyword1, keyword2",
+                   "description": "Relationship description",
+                   "weight": 1.0
+                 }
+               ]
+             }
+           - Use empty arrays when nothing is found.
+           - Output all entity and relation text in %s.
+           - Proper nouns should remain in their original language when translation would be ambiguous or unnatural.
+           - Write descriptions in the third person.
+           - Avoid vague pronouns such as "this article", "this paper", "it", "they", "he", or "she" when the concrete entity can be named explicitly.
+
+        4. Quality Rules:
+           - Prioritize the entities and relationships most central to the meaning of the text.
+           - Prefer complete, well-formed JSON over partial or malformed output.
+           - Do not include explanation, markdown, or code fences.
         """;
     private static final String CONTINUE_USER_PROMPT = """
-        Continue extracting any missing entities or relations from the same chunk.
-        Return only incremental JSON using the same schema as before.
+        ---Task---
+        Based on the last extraction task, identify and extract any missed or incorrectly formatted entities and relationships from the same chunk.
+
+        ---Instructions---
+        - Do not repeat entities or relationships that were already extracted correctly.
+        - If an entity or relationship was missed, output it now.
+        - If an entity or relationship was malformed, incomplete, or inconsistent, output the corrected full JSON item.
+        - Return only incremental JSON using the same schema as before.
+        - Keep entity naming consistent with the previous extraction.
+        - Preserve the same language and JSON-only output rules.
+
+        ---Data to be Processed---
         Chunk ID: %s
         Document ID: %s
-        Text:
+
+        <Input Text>
         %s
+
+        <Output JSON>
         """;
     private static final String WINDOW_SYSTEM_PROMPT_SUFFIX = """
 
@@ -551,10 +600,17 @@ public final class KnowledgeExtractor {
 
     private static String buildUserPrompt(Chunk chunk) {
         return """
+            ---Task---
+            Extract entities and relationships from the input text below.
+
+            ---Data to be Processed---
             Chunk ID: %s
             Document ID: %s
-            Text:
+
+            <Input Text>
             %s
+
+            <Output JSON>
             """.formatted(chunk.id(), chunk.documentId(), chunk.text());
     }
 
@@ -563,7 +619,7 @@ public final class KnowledgeExtractor {
     }
 
     private String buildSystemPrompt() {
-        return SYSTEM_PROMPT_TEMPLATE.formatted(language, String.join(", ", entityTypes));
+        return SYSTEM_PROMPT_TEMPLATE.formatted(String.join(", ", entityTypes), language);
     }
 
     private String buildWindowSystemPrompt() {
@@ -646,7 +702,7 @@ public final class KnowledgeExtractor {
                 new ExtractedRelation(
                     candidate.sourceEntityName(),
                     candidate.targetEntityName(),
-                    candidate.type(),
+                    canonicalRelationType(candidate.type()),
                     candidate.description(),
                     candidate.weight()
                 ),
@@ -704,19 +760,30 @@ public final class KnowledgeExtractor {
     }
 
     private static ExtractedRelation mergeRelation(ExtractedRelation left, ExtractedRelation right) {
+        var leftSource = normalizeRelationEndpoint(left.sourceEntityName());
+        var leftTarget = normalizeRelationEndpoint(left.targetEntityName());
+        var canonicalSourceKey = leftSource.compareTo(leftTarget) <= 0 ? leftSource : leftTarget;
+        var canonicalTargetKey = leftSource.compareTo(leftTarget) <= 0 ? leftTarget : leftSource;
+        var canonicalSource = preferredEndpointForKey(canonicalSourceKey, left, right);
+        var canonicalTarget = preferredEndpointForKey(canonicalTargetKey, left, right);
+
         return new ExtractedRelation(
-            left.sourceEntityName(),
-            left.targetEntityName(),
-            left.type(),
+            canonicalSource,
+            canonicalTarget,
+            canonicalRelationType(preferredText(left.type(), right.type())),
             longerText(left.description(), right.description()),
             Math.max(left.weight(), right.weight())
         );
     }
 
     private static String relationKey(ExtractedRelation relation) {
-        return normalizeRelationEndpoint(relation.sourceEntityName())
+        var left = normalizeRelationEndpoint(relation.sourceEntityName());
+        var right = normalizeRelationEndpoint(relation.targetEntityName());
+        var first = left.compareTo(right) <= 0 ? left : right;
+        var second = left.compareTo(right) <= 0 ? right : left;
+        return first
             + "\u0000"
-            + normalizeRelationEndpoint(relation.targetEntityName())
+            + second
             + "\u0000"
             + canonicalRelationType(relation.type());
     }
@@ -730,7 +797,45 @@ public final class KnowledgeExtractor {
         if (normalized.isEmpty()) {
             return normalized;
         }
-        return normalized.replaceAll("[\\s_-]+", "_");
+        var keywords = new java.util.TreeSet<String>();
+        for (var rawKeyword : normalized.split(",")) {
+            var keyword = rawKeyword.strip().replaceAll("[\\s_-]+", " ");
+            if (!keyword.isEmpty()) {
+                keywords.add(keyword);
+            }
+        }
+        return String.join(", ", keywords);
+    }
+
+    private static String preferredEndpoint(String left, String right) {
+        var normalizedLeft = left == null ? "" : left.strip();
+        var normalizedRight = right == null ? "" : right.strip();
+        if (normalizedLeft.isEmpty()) {
+            return normalizedRight;
+        }
+        if (normalizedRight.isEmpty()) {
+            return normalizedLeft;
+        }
+        return normalizedRight.length() > normalizedLeft.length() ? normalizedRight : normalizedLeft;
+    }
+
+    private static String preferredEndpointForKey(String normalizedEndpoint, ExtractedRelation left, ExtractedRelation right) {
+        var preferred = "";
+        preferred = preferredMatchingEndpoint(preferred, left.sourceEntityName(), normalizedEndpoint);
+        preferred = preferredMatchingEndpoint(preferred, left.targetEntityName(), normalizedEndpoint);
+        preferred = preferredMatchingEndpoint(preferred, right.sourceEntityName(), normalizedEndpoint);
+        preferred = preferredMatchingEndpoint(preferred, right.targetEntityName(), normalizedEndpoint);
+        return preferred;
+    }
+
+    private static String preferredMatchingEndpoint(String current, String candidate, String normalizedEndpoint) {
+        if (candidate == null || candidate.isBlank()) {
+            return current;
+        }
+        if (!normalizeRelationEndpoint(candidate).equals(normalizedEndpoint)) {
+            return current;
+        }
+        return preferredEndpoint(current, candidate);
     }
 
     private static String preferredText(String left, String right) {
