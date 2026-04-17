@@ -12,6 +12,9 @@ import javax.sql.DataSource;
 
 public final class MySqlSchemaManager {
     private static final String STORAGE_SCHEMA_KEY = "storage";
+    private static final String CHUNKS_DOCUMENT_ORDER_INDEX = "doc_order_idx";
+    private static final String CHUNK_GRAPH_SNAPSHOTS_DOCUMENT_ORDER_INDEX = "doc_order_idx";
+    private static final String CHUNK_GRAPH_JOURNALS_DOCUMENT_CHUNK_INDEX = "doc_chunk_idx";
 
     private final DataSource dataSource;
     private final MySqlStorageConfig config;
@@ -131,7 +134,7 @@ public final class MySqlSchemaManager {
                 )
                 """.formatted(
                 config.qualifiedTableName("chunks"),
-                config.tableName("chunks") + "_document_order_idx"
+                CHUNKS_DOCUMENT_ORDER_INDEX
             ),
             """
                 CREATE TABLE IF NOT EXISTS %s (
@@ -214,7 +217,7 @@ public final class MySqlSchemaManager {
                 )
                 """.formatted(
                 config.qualifiedTableName("chunk_graph_snapshots"),
-                config.tableName("chunk_graph_snapshots") + "_document_order_idx"
+                CHUNK_GRAPH_SNAPSHOTS_DOCUMENT_ORDER_INDEX
             ),
             """
                 CREATE TABLE IF NOT EXISTS %s (
@@ -254,7 +257,7 @@ public final class MySqlSchemaManager {
                 )
                 """.formatted(
                 config.qualifiedTableName("chunk_graph_journals"),
-                config.tableName("chunk_graph_journals") + "_document_chunk_idx"
+                CHUNK_GRAPH_JOURNALS_DOCUMENT_CHUNK_INDEX
             )
         );
     }

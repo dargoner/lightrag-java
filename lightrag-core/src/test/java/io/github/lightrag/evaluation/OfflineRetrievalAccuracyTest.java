@@ -151,7 +151,7 @@ class OfflineRetrievalAccuracyTest {
     private static final class NoOpChatModel implements ChatModel {
         @Override
         public String generate(ChatRequest request) {
-            if (request.systemPrompt().contains("---Role---") || request.systemPrompt().contains("Document Chunks")) {
+            if (request.systemPrompt().contains("Document Chunks")) {
                 return "offline retrieval evaluation";
             }
             return """

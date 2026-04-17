@@ -190,7 +190,7 @@ class KnowledgeExtractorTest {
         var result = extractor.extract(chunk("Alice works with Bob"));
 
         assertThat(result.relations()).containsExactly(
-            new ExtractedRelation("Alice", "Bob", "works with", "collaboration", 1.0d)
+            new ExtractedRelation("Alice", "Bob", "works_with", "collaboration", 1.0d)
         );
     }
 
@@ -302,7 +302,7 @@ class KnowledgeExtractorTest {
         var result = extractor.extract(chunk("Alice works with Bob and Charlie"));
 
         assertThat(result.relations()).containsExactly(
-            new ExtractedRelation("Alice", "Bob", "works with", "collaboration", 1.0d),
+            new ExtractedRelation("Alice", "Bob", "works_with", "collaboration", 1.0d),
             new ExtractedRelation("Alice", "Charlie", "reviews", "review chain", 0.4d)
         );
     }
@@ -347,7 +347,7 @@ class KnowledgeExtractorTest {
         var result = extractor.extract(chunk("Alice works with Bob"));
 
         assertThat(result.relations()).containsExactly(
-            new ExtractedRelation("Alice", "Bob", "works with", "longer collaboration description", 0.9d)
+            new ExtractedRelation("Alice", "Bob", "works_with", "longer collaboration description", 0.9d)
         );
     }
 

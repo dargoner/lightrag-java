@@ -799,7 +799,7 @@ public final class KnowledgeExtractor {
         }
         var keywords = new java.util.TreeSet<String>();
         for (var rawKeyword : normalized.split(",")) {
-            var keyword = rawKeyword.strip().replaceAll("[\\s_-]+", " ");
+            var keyword = rawKeyword.strip().replaceAll("[\\s_-]+", "_");
             if (!keyword.isEmpty()) {
                 keywords.add(keyword);
             }

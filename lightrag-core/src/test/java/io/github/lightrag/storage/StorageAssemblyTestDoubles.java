@@ -127,6 +127,16 @@ public final class StorageAssemblyTestDoubles {
                 }
 
                 @Override
+                public DocumentGraphSnapshotStore documentGraphSnapshotStore() {
+                    return documentGraphSnapshotStore;
+                }
+
+                @Override
+                public DocumentGraphJournalStore documentGraphJournalStore() {
+                    return documentGraphJournalStore;
+                }
+
+                @Override
                 public TaskStore taskStore() {
                     return taskStore;
                 }

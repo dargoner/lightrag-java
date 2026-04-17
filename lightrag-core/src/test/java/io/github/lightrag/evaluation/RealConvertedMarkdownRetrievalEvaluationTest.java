@@ -247,7 +247,7 @@ class RealConvertedMarkdownRetrievalEvaluationTest {
     private static final class NoOpChatModel implements ChatModel {
         @Override
         public String generate(ChatRequest request) {
-            if (request.systemPrompt().contains("---Role---") || request.systemPrompt().contains("Document Chunks")) {
+            if (request.systemPrompt().contains("Document Chunks")) {
                 return "real converted markdown retrieval evaluation";
             }
             return """

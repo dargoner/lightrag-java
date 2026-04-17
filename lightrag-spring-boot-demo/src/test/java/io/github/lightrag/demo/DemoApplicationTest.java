@@ -361,7 +361,7 @@ class DemoApplicationTest {
             return new ChatModel() {
                 @Override
                 public String generate(ChatRequest request) {
-                    if (request.systemPrompt().contains("---Role---")) {
+                    if (request.systemPrompt().contains("Document Chunks")) {
                         return "Alice works with Bob.";
                     }
                     return """
@@ -395,7 +395,7 @@ class DemoApplicationTest {
 
                 @Override
                 public CloseableIterator<String> stream(ChatRequest request) {
-                    if (request.systemPrompt().contains("---Role---")) {
+                    if (request.systemPrompt().contains("Document Chunks")) {
                         return CloseableIterator.of(List.of("Alice ", "works with Bob."));
                     }
                     return ChatModel.super.stream(request);

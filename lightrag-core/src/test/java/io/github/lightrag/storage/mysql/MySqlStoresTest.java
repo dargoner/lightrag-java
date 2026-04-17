@@ -131,6 +131,27 @@ class MySqlStoresTest {
         }
     }
 
+    @Test
+    void bootstrapSupportsLongTablePrefixesWithoutOverflowingIndexNames() {
+        try (var container = newMySqlContainer()) {
+            container.start();
+            var config = new MySqlStorageConfig(
+                container.getJdbcUrl(),
+                container.getUsername(),
+                container.getPassword(),
+                "rag_" + "a".repeat(32) + "_"
+            );
+
+            try (var dataSource = newDataSource(config)) {
+                new MySqlSchemaManager(dataSource, config).bootstrap();
+
+                assertThat(tableExists(dataSource, config.tableName("documents"))).isTrue();
+                assertThat(tableExists(dataSource, config.tableName("chunk_graph_snapshots"))).isTrue();
+                assertThat(tableExists(dataSource, config.tableName("chunk_graph_journals"))).isTrue();
+            }
+        }
+    }
+
     private static MySQLContainer<?> newMySqlContainer() {
         return new MySQLContainer<>(DockerImageName.parse("mysql:8.4"));
     }
@@ -161,6 +182,20 @@ class MySqlStoresTest {
         hikariConfig.setMaximumPoolSize(2);
         hikariConfig.setMinimumIdle(0);
         return new HikariDataSource(hikariConfig);
+    }
+
+    private static boolean tableExists(HikariDataSource dataSource, String tableName) {
+        try (
+            var connection = dataSource.getConnection();
+            var statement = connection.prepareStatement("SHOW TABLES LIKE ?")
+        ) {
+            statement.setString(1, tableName);
+            try (var resultSet = statement.executeQuery()) {
+                return resultSet.next();
+            }
+        } catch (SQLException exception) {
+            throw new IllegalStateException("Failed to inspect MySQL tables", exception);
+        }
     }
 
     private record StoreResources(

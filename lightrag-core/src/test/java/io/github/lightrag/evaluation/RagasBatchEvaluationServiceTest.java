@@ -178,8 +178,7 @@ class RagasBatchEvaluationServiceTest {
     private static final class FakeChatModel implements ChatModel {
         @Override
         public String generate(ChatRequest request) {
-            if (request.systemPrompt().contains("---Role---")
-                || request.systemPrompt().contains("Document Chunks")) {
+            if (request.systemPrompt().contains("Document Chunks")) {
                 if (request.userPrompt().contains("What does Alice work on?")) {
                     return "Retrieval systems.";
                 }
@@ -245,7 +244,8 @@ class RagasBatchEvaluationServiceTest {
 
         @Override
         public String generate(ChatRequest request) {
-            if (request.systemPrompt().contains("Extract entities and relations from the provided text.")) {
+            if (request.userPrompt().contains("Chunk ID:")
+                && request.userPrompt().contains("<Output JSON>")) {
                 knowledgeExtractionCalls++;
                 return """
                     {

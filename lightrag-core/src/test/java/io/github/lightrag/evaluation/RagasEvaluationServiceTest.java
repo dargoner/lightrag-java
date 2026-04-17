@@ -48,8 +48,7 @@ class RagasEvaluationServiceTest {
     private static final class FakeChatModel implements ChatModel {
         @Override
         public String generate(ChatRequest request) {
-            if (request.systemPrompt().contains("---Role---")
-                || request.systemPrompt().contains("Document Chunks")) {
+            if (request.systemPrompt().contains("Document Chunks")) {
                 return "Alice works with Bob.";
             }
             return """
