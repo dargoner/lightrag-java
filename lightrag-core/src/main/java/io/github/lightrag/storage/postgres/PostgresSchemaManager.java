@@ -246,6 +246,22 @@ public final class PostgresSchemaManager {
             """
                 CREATE TABLE IF NOT EXISTS %s (
                     workspace_id TEXT NOT NULL,
+                    task_id TEXT NOT NULL,
+                    document_id TEXT NOT NULL,
+                    status TEXT NOT NULL,
+                    chunk_count INTEGER NOT NULL,
+                    entity_count INTEGER NOT NULL,
+                    relation_count INTEGER NOT NULL,
+                    chunk_vector_count INTEGER NOT NULL,
+                    entity_vector_count INTEGER NOT NULL,
+                    relation_vector_count INTEGER NOT NULL,
+                    error_message TEXT NULL,
+                    PRIMARY KEY (workspace_id, task_id, document_id)
+                )
+                """.formatted(config.qualifiedTableName("task_document")),
+            """
+                CREATE TABLE IF NOT EXISTS %s (
+                    workspace_id TEXT NOT NULL,
                     document_id TEXT NOT NULL,
                     version INTEGER NOT NULL,
                     status TEXT NOT NULL,

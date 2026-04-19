@@ -180,7 +180,23 @@ public final class MySqlSchemaManager {
                     error_message TEXT NULL,
                     PRIMARY KEY (workspace_id, task_id, stage)
                 )
-                """.formatted(config.qualifiedTableName("task_stage"))
+                """.formatted(config.qualifiedTableName("task_stage")),
+            """
+                CREATE TABLE IF NOT EXISTS %s (
+                    workspace_id VARCHAR(191) NOT NULL,
+                    task_id VARCHAR(191) NOT NULL,
+                    document_id VARCHAR(191) NOT NULL,
+                    status VARCHAR(64) NOT NULL,
+                    chunk_count INT NOT NULL,
+                    entity_count INT NOT NULL,
+                    relation_count INT NOT NULL,
+                    chunk_vector_count INT NOT NULL,
+                    entity_vector_count INT NOT NULL,
+                    relation_vector_count INT NOT NULL,
+                    error_message TEXT NULL,
+                    PRIMARY KEY (workspace_id, task_id, document_id)
+                )
+                """.formatted(config.qualifiedTableName("task_document"))
         );
     }
 

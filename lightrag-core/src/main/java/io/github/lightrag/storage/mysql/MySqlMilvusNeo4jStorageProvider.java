@@ -13,6 +13,7 @@ import io.github.lightrag.storage.GraphStore;
 import io.github.lightrag.storage.HybridVectorStore;
 import io.github.lightrag.storage.SnapshotStore;
 import io.github.lightrag.storage.StorageCoordinator;
+import io.github.lightrag.storage.TaskDocumentStore;
 import io.github.lightrag.storage.TaskStageStore;
 import io.github.lightrag.storage.TaskStore;
 import io.github.lightrag.storage.VectorStorageAdapter;
@@ -44,6 +45,7 @@ public final class MySqlMilvusNeo4jStorageProvider implements AtomicStorageProvi
     private final DocumentStatusStore lockedDocumentStatusStore;
     private final TaskStore lockedTaskStore;
     private final TaskStageStore lockedTaskStageStore;
+    private final TaskDocumentStore lockedTaskDocumentStore;
     private final GraphStore lockedGraphStore;
     private final VectorStore lockedVectorStore;
     private final DocumentGraphSnapshotStore documentGraphSnapshotStore;
@@ -150,6 +152,7 @@ public final class MySqlMilvusNeo4jStorageProvider implements AtomicStorageProvi
         this.lockedDocumentStatusStore = new LockedDocumentStatusStore(coordinator.documentStatusStore());
         this.lockedTaskStore = new LockedTaskStore(coordinator.taskStore());
         this.lockedTaskStageStore = new LockedTaskStageStore(coordinator.taskStageStore());
+        this.lockedTaskDocumentStore = new LockedTaskDocumentStore(coordinator.taskDocumentStore());
         this.lockedGraphStore = new LockedGraphStore(coordinator.graphStore());
         this.lockedVectorStore = new LockedVectorStore(coordinator.vectorStore());
         this.documentGraphSnapshotStore = coordinator.documentGraphSnapshotStore();
@@ -189,6 +192,11 @@ public final class MySqlMilvusNeo4jStorageProvider implements AtomicStorageProvi
     @Override
     public TaskStageStore taskStageStore() {
         return lockedTaskStageStore;
+    }
+
+    @Override
+    public TaskDocumentStore taskDocumentStore() {
+        return lockedTaskDocumentStore;
     }
 
     @Override
@@ -558,6 +566,34 @@ public final class MySqlMilvusNeo4jStorageProvider implements AtomicStorageProvi
 
         @Override
         public List<TaskStageRecord> listByTask(String taskId) {
+            return withReadLock(() -> delegate.listByTask(taskId));
+        }
+
+        @Override
+        public void deleteByTask(String taskId) {
+            withWriteLock(() -> delegate.deleteByTask(taskId));
+        }
+    }
+
+    private final class LockedTaskDocumentStore implements TaskDocumentStore {
+        private final TaskDocumentStore delegate;
+
+        private LockedTaskDocumentStore(TaskDocumentStore delegate) {
+            this.delegate = Objects.requireNonNull(delegate, "delegate");
+        }
+
+        @Override
+        public void save(TaskDocumentRecord record) {
+            withWriteLock(() -> delegate.save(record));
+        }
+
+        @Override
+        public Optional<TaskDocumentRecord> load(String taskId, String documentId) {
+            return withReadLock(() -> delegate.load(taskId, documentId));
+        }
+
+        @Override
+        public List<TaskDocumentRecord> listByTask(String taskId) {
             return withReadLock(() -> delegate.listByTask(taskId));
         }
 

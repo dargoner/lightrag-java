@@ -76,6 +76,21 @@ class LightRagBuilderTest {
     }
 
     @Test
+    void registersTaskEventListeners() {
+        var listener = (TaskEventListener) event -> {
+        };
+
+        var rag = LightRag.builder()
+            .chatModel(new FakeChatModel())
+            .embeddingModel(new FakeEmbeddingModel())
+            .storage(InMemoryStorageProvider.create())
+            .taskEventListener(listener)
+            .build();
+
+        assertThat(rag.taskEventListeners()).containsExactly(listener);
+    }
+
+    @Test
     void keepsContextualExtractionRefinementDisabledByDefault() {
         var rag = LightRag.builder()
             .chatModel(new FakeChatModel())

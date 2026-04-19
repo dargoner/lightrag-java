@@ -5,6 +5,8 @@ public interface StorageProvider {
         "documentGraphSnapshotStore is not supported by this provider";
     String DOCUMENT_GRAPH_JOURNAL_STORE_UNSUPPORTED_MESSAGE =
         "documentGraphJournalStore is not supported by this provider";
+    String TASK_DOCUMENT_STORE_UNSUPPORTED_MESSAGE =
+        "taskDocumentStore is not supported by this provider";
 
     DocumentStore documentStore();
 
@@ -19,6 +21,10 @@ public interface StorageProvider {
     TaskStore taskStore();
 
     TaskStageStore taskStageStore();
+
+    default TaskDocumentStore taskDocumentStore() {
+        throw new UnsupportedOperationException(TASK_DOCUMENT_STORE_UNSUPPORTED_MESSAGE);
+    }
 
     SnapshotStore snapshotStore();
 

@@ -73,6 +73,41 @@ class LightRagRelationalDocumentGraphPersistenceTest {
     }
 
     @Test
+    void postgresTaskDocumentQueriesSurviveTaskCompletion() {
+        try (var container = newPostgresContainer()) {
+            container.start();
+            var config = new PostgresStorageConfig(
+                container.getJdbcUrl(),
+                container.getUsername(),
+                container.getPassword(),
+                "lightrag",
+                2,
+                "rag_"
+            );
+
+            try (var rag = LightRag.builder()
+                .chatModel(new FakeChatModel())
+                .embeddingModel(new FakeEmbeddingModel())
+                .storage(new PostgresStorageProvider(config, new NoopSnapshotStore()))
+                .build()) {
+                var taskId = rag.submitIngest(WORKSPACE, List.of(
+                    new Document("doc-1", "Title", "Alice works with Bob", Map.of("source", "postgres-task"))
+                ));
+
+                var task = awaitTerminalTask(rag, taskId);
+                var taskDocument = rag.getTaskDocument(WORKSPACE, taskId, "doc-1");
+
+                assertThat(task.status()).isEqualTo(TaskStatus.SUCCEEDED);
+                assertThat(taskDocument.documentId()).isEqualTo("doc-1");
+                assertThat(taskDocument.status()).isEqualTo(DocumentStatus.PROCESSED);
+                assertThat(taskDocument.chunkCount()).isGreaterThan(0);
+                assertThat(taskDocument.entityCount()).isGreaterThan(0);
+                assertThat(taskDocument.chunkVectorCount()).isGreaterThan(0);
+            }
+        }
+    }
+
+    @Test
     void mySqlInspectAndChunkStatusQueriesSurviveProviderRestart() {
         try (
             var container = newMySqlContainer();
@@ -184,6 +219,22 @@ class LightRagRelationalDocumentGraphPersistenceTest {
         public List<Path> list() {
             return List.of();
         }
+    }
+
+    private static TaskSnapshot awaitTerminalTask(LightRag rag, String taskId) {
+        var deadline = java.time.Instant.now().plusSeconds(5);
+        var snapshot = rag.getTask(WORKSPACE, taskId);
+        while (!snapshot.status().isTerminal() && java.time.Instant.now().isBefore(deadline)) {
+            try {
+                Thread.sleep(25L);
+            } catch (InterruptedException exception) {
+                Thread.currentThread().interrupt();
+                throw new AssertionError("test interrupted", exception);
+            }
+            snapshot = rag.getTask(WORKSPACE, taskId);
+        }
+        assertThat(snapshot.status().isTerminal()).isTrue();
+        return snapshot;
     }
 
     private static final class PersistentGraphStorageAdapter implements GraphStorageAdapter {

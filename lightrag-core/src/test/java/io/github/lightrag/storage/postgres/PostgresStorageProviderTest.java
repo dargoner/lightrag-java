@@ -11,6 +11,10 @@ import io.github.lightrag.api.GraphMaterializationMode;
 import io.github.lightrag.api.GraphMaterializationStatus;
 import io.github.lightrag.api.SnapshotSource;
 import io.github.lightrag.api.SnapshotStatus;
+import io.github.lightrag.api.TaskStage;
+import io.github.lightrag.api.TaskStageStatus;
+import io.github.lightrag.api.TaskStatus;
+import io.github.lightrag.api.TaskType;
 import io.github.lightrag.exception.StorageException;
 import io.github.lightrag.storage.ChunkStore;
 import io.github.lightrag.storage.DocumentGraphJournalStore;
@@ -19,6 +23,7 @@ import io.github.lightrag.storage.DocumentStatusStore;
 import io.github.lightrag.storage.DocumentStore;
 import io.github.lightrag.storage.GraphStore;
 import io.github.lightrag.storage.SnapshotStore;
+import io.github.lightrag.storage.TaskDocumentStore;
 import io.github.lightrag.storage.VectorStore;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
@@ -88,6 +93,7 @@ class PostgresStorageProviderTest {
                     "rag_relation_chunks",
                     "rag_schema_version",
                     "rag_task",
+                    "rag_task_document",
                     "rag_task_stage",
                     "rag_vectors"
                 );
@@ -98,6 +104,7 @@ class PostgresStorageProviderTest {
                 assertThat(columnNames(connection, config, "vectors")).contains("workspace_id");
                 assertThat(columnNames(connection, config, "document_status")).contains("workspace_id");
                 assertThat(columnNames(connection, config, "task")).contains("workspace_id");
+                assertThat(columnNames(connection, config, "task_document")).contains("workspace_id", "task_id", "document_id");
                 assertThat(columnNames(connection, config, "task_stage")).contains("workspace_id");
                 assertThat(primaryKeyColumns(connection, config, "documents")).containsExactly("workspace_id", "id");
                 assertThat(primaryKeyColumns(connection, config, "chunks")).containsExactly("workspace_id", "id");
@@ -109,10 +116,77 @@ class PostgresStorageProviderTest {
                     .containsExactly("workspace_id", "document_id");
                 assertThat(primaryKeyColumns(connection, config, "task"))
                     .containsExactly("workspace_id", "task_id");
+                assertThat(primaryKeyColumns(connection, config, "task_document"))
+                    .containsExactly("workspace_id", "task_id", "document_id");
                 assertThat(primaryKeyColumns(connection, config, "task_stage"))
                     .containsExactly("workspace_id", "task_id", "stage");
                 assertThat(schemaVersion(connection, config)).contains(4);
             }
+        }
+    }
+
+    @Test
+    void taskAndTaskDocumentStoresRoundTripRecords() {
+        PostgreSQLContainer<?> container = newPostgresContainer();
+        container.start();
+
+        PostgresStorageConfig config = new PostgresStorageConfig(
+            container.getJdbcUrl(),
+            container.getUsername(),
+            container.getPassword(),
+            "lightrag",
+            3,
+            "rag_"
+        );
+
+        try (
+            container;
+            PostgresStorageProvider provider = new PostgresStorageProvider(config, new InMemorySnapshotStore())
+        ) {
+            var task = new io.github.lightrag.storage.TaskStore.TaskRecord(
+                "task-1",
+                "default",
+                TaskType.INGEST_DOCUMENTS,
+                TaskStatus.RUNNING,
+                Instant.parse("2026-04-19T08:00:00Z"),
+                Instant.parse("2026-04-19T08:00:01Z"),
+                null,
+                "running",
+                null,
+                false,
+                Map.of("documentCount", "1")
+            );
+            var stage = new io.github.lightrag.storage.TaskStageStore.TaskStageRecord(
+                "task-1",
+                TaskStage.CHUNKING,
+                TaskStageStatus.RUNNING,
+                2,
+                Instant.parse("2026-04-19T08:00:02Z"),
+                null,
+                "chunking",
+                null
+            );
+            var taskDocument = new TaskDocumentStore.TaskDocumentRecord(
+                "task-1",
+                "doc-1",
+                DocumentStatus.PROCESSING,
+                3,
+                2,
+                1,
+                3,
+                2,
+                1,
+                null
+            );
+
+            provider.taskStore().save(task);
+            provider.taskStageStore().save(stage);
+            provider.taskDocumentStore().save(taskDocument);
+
+            assertThat(provider.taskStore().load("task-1")).contains(task);
+            assertThat(provider.taskStageStore().listByTask("task-1")).containsExactly(stage);
+            assertThat(provider.taskDocumentStore().load("task-1", "doc-1")).contains(taskDocument);
+            assertThat(provider.taskDocumentStore().listByTask("task-1")).containsExactly(taskDocument);
         }
     }
 

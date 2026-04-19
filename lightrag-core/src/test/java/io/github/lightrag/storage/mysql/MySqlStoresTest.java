@@ -3,15 +3,23 @@ package io.github.lightrag.storage.mysql;
 import com.zaxxer.hikari.HikariConfig;
 import com.zaxxer.hikari.HikariDataSource;
 import io.github.lightrag.api.DocumentStatus;
+import io.github.lightrag.api.TaskStage;
+import io.github.lightrag.api.TaskStageStatus;
+import io.github.lightrag.api.TaskStatus;
+import io.github.lightrag.api.TaskType;
 import io.github.lightrag.storage.ChunkStore;
 import io.github.lightrag.storage.DocumentStatusStore;
 import io.github.lightrag.storage.DocumentStore;
+import io.github.lightrag.storage.TaskDocumentStore;
+import io.github.lightrag.storage.TaskStageStore;
+import io.github.lightrag.storage.TaskStore;
 import org.junit.jupiter.api.Test;
 import org.testcontainers.containers.MySQLContainer;
 import org.testcontainers.utility.DockerImageName;
 
 import java.sql.DriverManager;
 import java.sql.SQLException;
+import java.time.Instant;
 import java.util.List;
 import java.util.Map;
 
@@ -88,6 +96,59 @@ class MySqlStoresTest {
             assertThat(beta.chunkStore().listByDocument("doc-1")).containsExactly(betaChunk);
             assertThat(alpha.statusStore().load("doc-1")).contains(alphaStatus);
             assertThat(beta.statusStore().load("doc-1")).contains(betaStatus);
+        }
+    }
+
+    @Test
+    void taskAndTaskDocumentStoresRoundTripRecords() {
+        try (
+            var container = newMySqlContainer();
+            var resources = newStoreResources(container, "default");
+        ) {
+            var task = new TaskStore.TaskRecord(
+                "task-1",
+                "default",
+                TaskType.INGEST_DOCUMENTS,
+                TaskStatus.RUNNING,
+                Instant.parse("2026-04-19T08:00:00Z"),
+                Instant.parse("2026-04-19T08:00:01Z"),
+                null,
+                "running",
+                null,
+                false,
+                Map.of("documentCount", "1")
+            );
+            var stage = new TaskStageStore.TaskStageRecord(
+                "task-1",
+                TaskStage.CHUNKING,
+                TaskStageStatus.RUNNING,
+                2,
+                Instant.parse("2026-04-19T08:00:02Z"),
+                null,
+                "chunking",
+                null
+            );
+            var taskDocument = new TaskDocumentStore.TaskDocumentRecord(
+                "task-1",
+                "doc-1",
+                DocumentStatus.PROCESSING,
+                3,
+                2,
+                1,
+                3,
+                2,
+                1,
+                null
+            );
+
+            resources.taskStore().save(task);
+            resources.taskStageStore().save(stage);
+            resources.taskDocumentStore().save(taskDocument);
+
+            assertThat(resources.taskStore().load("task-1")).contains(task);
+            assertThat(resources.taskStageStore().listByTask("task-1")).containsExactly(stage);
+            assertThat(resources.taskDocumentStore().load("task-1", "doc-1")).contains(taskDocument);
+            assertThat(resources.taskDocumentStore().listByTask("task-1")).containsExactly(taskDocument);
         }
     }
 
@@ -170,7 +231,10 @@ class MySqlStoresTest {
             dataSource,
             new MySqlDocumentStore(dataSource, config, workspaceId),
             new MySqlChunkStore(dataSource, config, workspaceId),
-            new MySqlDocumentStatusStore(dataSource, config, workspaceId)
+            new MySqlDocumentStatusStore(dataSource, config, workspaceId),
+            new MySqlTaskStore(dataSource, config, workspaceId),
+            new MySqlTaskStageStore(dataSource, config, workspaceId),
+            new MySqlTaskDocumentStore(dataSource, config, workspaceId)
         );
     }
 
@@ -202,7 +266,10 @@ class MySqlStoresTest {
         HikariDataSource dataSource,
         MySqlDocumentStore documentStore,
         MySqlChunkStore chunkStore,
-        MySqlDocumentStatusStore statusStore
+        MySqlDocumentStatusStore statusStore,
+        MySqlTaskStore taskStore,
+        MySqlTaskStageStore taskStageStore,
+        MySqlTaskDocumentStore taskDocumentStore
     ) implements AutoCloseable {
         @Override
         public void close() {

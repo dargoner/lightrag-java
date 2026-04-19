@@ -24,6 +24,7 @@ import io.github.lightrag.storage.VectorStore;
 import io.github.lightrag.storage.WorkspaceStorageProvider;
 
 import java.nio.file.Path;
+import java.util.ArrayList;
 import java.util.List;
 import java.util.NoSuchElementException;
 import java.util.Objects;
@@ -58,6 +59,7 @@ public final class LightRagBuilder {
     private boolean contextualExtractionRefinementEnabled;
     private boolean allowDeterministicAttributionFallback;
     private DocumentParsingOrchestrator documentParsingOrchestrator;
+    private final List<TaskEventListener> taskEventListeners = new ArrayList<>();
 
     public LightRagBuilder chatModel(ChatModel chatModel) {
         this.chatModel = Objects.requireNonNull(chatModel, "chatModel");
@@ -123,6 +125,11 @@ public final class LightRagBuilder {
 
     public LightRagBuilder documentParsingOrchestrator(DocumentParsingOrchestrator documentParsingOrchestrator) {
         this.documentParsingOrchestrator = Objects.requireNonNull(documentParsingOrchestrator, "documentParsingOrchestrator");
+        return this;
+    }
+
+    public LightRagBuilder taskEventListener(TaskEventListener listener) {
+        taskEventListeners.add(Objects.requireNonNull(listener, "listener"));
         return this;
     }
 
@@ -314,7 +321,7 @@ public final class LightRagBuilder {
             resolvedWorkspaceStorageProvider
         ), chunker, documentParsingOrchestrator, automaticQueryKeywordExtraction, rerankCandidateMultiplier, embeddingBatchSize, maxParallelInsert,
             entityExtractMaxGleaning, maxExtractInputTokens, entityExtractionLanguage, entityTypes,
-            embeddingSemanticMergeEnabled, embeddingSemanticMergeThreshold, extractionRefinementOptions);
+            embeddingSemanticMergeEnabled, embeddingSemanticMergeThreshold, extractionRefinementOptions, taskEventListeners);
     }
 
     private static <T> T requireStore(String componentName, T store, Class<T> storeType) {

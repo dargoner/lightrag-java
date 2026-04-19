@@ -63,6 +63,11 @@ public final class StorageCoordinator implements AtomicStorageProvider, AutoClos
     }
 
     @Override
+    public TaskDocumentStore taskDocumentStore() {
+        return relationalAdapter.taskDocumentStore();
+    }
+
+    @Override
     public SnapshotStore snapshotStore() {
         return relationalAdapter.snapshotStore();
     }

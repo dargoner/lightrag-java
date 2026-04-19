@@ -20,6 +20,82 @@ class LightRagTaskApiTest {
     private static final String WORKSPACE = "default";
 
     @Test
+    void submitIngestPublishesTaskAndStageEventsToRegisteredListener() {
+        var events = new java.util.concurrent.CopyOnWriteArrayList<TaskEvent>();
+        var rag = LightRag.builder()
+            .chatModel(new FakeChatModel())
+            .embeddingModel(new FakeEmbeddingModel())
+            .storage(InMemoryStorageProvider.create())
+            .taskEventListener(events::add)
+            .build();
+
+        var taskId = rag.submitIngest(WORKSPACE, List.of(
+            new Document("doc-1", "Title", "Alice works with Bob", Map.of("source", "task-test"))
+        ));
+
+        awaitTerminalTask(rag, taskId);
+
+        assertThat(events).extracting(TaskEvent::eventType).contains(
+            TaskEventType.TASK_SUBMITTED,
+            TaskEventType.TASK_RUNNING,
+            TaskEventType.STAGE_STARTED,
+            TaskEventType.STAGE_SUCCEEDED,
+            TaskEventType.TASK_SUCCEEDED
+        );
+    }
+
+    @Test
+    void submitIngestPublishesDocumentLifecycleEventsToRegisteredListener() {
+        var events = new java.util.concurrent.CopyOnWriteArrayList<TaskEvent>();
+        var rag = LightRag.builder()
+            .chatModel(new FakeChatModel())
+            .embeddingModel(new FakeEmbeddingModel())
+            .storage(InMemoryStorageProvider.create())
+            .taskEventListener(events::add)
+            .build();
+
+        var taskId = rag.submitIngest(WORKSPACE, List.of(
+            new Document("doc-1", "Title", "Alice works with Bob", Map.of("source", "task-test"))
+        ));
+
+        awaitTerminalTask(rag, taskId);
+
+        assertThat(events.stream()
+            .filter(event -> event.documentId() != null)
+            .map(TaskEvent::eventType)
+            .toList()).contains(
+            TaskEventType.DOCUMENT_STARTED,
+            TaskEventType.DOCUMENT_CHUNKED,
+            TaskEventType.DOCUMENT_GRAPH_READY,
+            TaskEventType.DOCUMENT_VECTORS_READY,
+            TaskEventType.DOCUMENT_COMMITTED
+        );
+    }
+
+    @Test
+    void submitIngestPublishesEventsToTaskScopedListener() {
+        var events = new java.util.concurrent.CopyOnWriteArrayList<TaskEvent>();
+        var rag = LightRag.builder()
+            .chatModel(new FakeChatModel())
+            .embeddingModel(new FakeEmbeddingModel())
+            .storage(InMemoryStorageProvider.create())
+            .build();
+
+        var taskId = rag.submitIngest(
+            WORKSPACE,
+            List.of(new Document("doc-1", "Title", "Alice works with Bob", Map.of("source", "task-test"))),
+            TaskSubmitOptions.builder().listener(events::add).build()
+        );
+
+        awaitTerminalTask(rag, taskId);
+
+        assertThat(events)
+            .extracting(TaskEvent::taskId)
+            .containsOnly(taskId);
+        assertThat(events).isNotEmpty();
+    }
+
+    @Test
     void submitIngestCreatesPersistentTaskAndStageSnapshots() {
         var rag = LightRag.builder()
             .chatModel(new FakeChatModel())
@@ -44,6 +120,96 @@ class LightRagTaskApiTest {
         assertThat(rag.listTasks(WORKSPACE))
             .extracting(TaskSnapshot::taskId)
             .contains(taskId);
+    }
+
+    @Test
+    void submitIngestStoresQueueAndTotalTimingMetadata() {
+        var rag = LightRag.builder()
+            .chatModel(new FakeChatModel())
+            .embeddingModel(new FakeEmbeddingModel())
+            .storage(InMemoryStorageProvider.create())
+            .build();
+
+        var taskId = rag.submitIngest(WORKSPACE, List.of(
+            new Document("doc-1", "Title", "Alice works with Bob", Map.of("source", "timing-test"))
+        ));
+
+        var task = awaitTerminalTask(rag, taskId);
+
+        assertThat(task.metadata()).containsKeys("queueWaitMs", "totalDurationMs");
+    }
+
+    @Test
+    void submitIngestPersistsTaskDocumentSummary() {
+        var rag = LightRag.builder()
+            .chatModel(new FakeChatModel())
+            .embeddingModel(new FakeEmbeddingModel())
+            .storage(InMemoryStorageProvider.create())
+            .build();
+
+        var taskId = rag.submitIngest(WORKSPACE, List.of(
+            new Document("doc-1", "Title", "Alice works with Bob", Map.of("source", "summary-test"))
+        ));
+
+        awaitTerminalTask(rag, taskId);
+
+        var documents = rag.listTaskDocuments(WORKSPACE, taskId);
+
+        assertThat(documents).hasSize(1);
+        assertThat(documents.get(0).documentId()).isEqualTo("doc-1");
+        assertThat(documents.get(0).status()).isEqualTo(DocumentStatus.PROCESSED);
+        assertThat(documents.get(0).chunkCount()).isGreaterThan(0);
+        assertThat(documents.get(0).entityCount()).isGreaterThan(0);
+        assertThat(documents.get(0).chunkVectorCount()).isGreaterThan(0);
+    }
+
+    @Test
+    void getTaskDocumentReturnsPersistedDocumentSummary() {
+        var rag = LightRag.builder()
+            .chatModel(new FakeChatModel())
+            .embeddingModel(new FakeEmbeddingModel())
+            .storage(InMemoryStorageProvider.create())
+            .build();
+
+        var taskId = rag.submitIngest(WORKSPACE, List.of(
+            new Document("doc-1", "Title", "Alice works with Bob", Map.of("source", "summary-test"))
+        ));
+
+        awaitTerminalTask(rag, taskId);
+
+        var document = rag.getTaskDocument(WORKSPACE, taskId, "doc-1");
+
+        assertThat(document.documentId()).isEqualTo("doc-1");
+        assertThat(document.status()).isEqualTo(DocumentStatus.PROCESSED);
+        assertThat(document.chunkCount()).isGreaterThan(0);
+        assertThat(document.entityCount()).isGreaterThan(0);
+        assertThat(document.chunkVectorCount()).isGreaterThan(0);
+    }
+
+    @Test
+    void submitIngestMarksTaskDocumentFailedWhenVectorBuildFailsBeforeCommit() {
+        var events = new java.util.concurrent.CopyOnWriteArrayList<TaskEvent>();
+        var rag = LightRag.builder()
+            .chatModel(new FakeChatModel())
+            .embeddingModel(new FailingEmbeddingModel("embedding boom"))
+            .storage(InMemoryStorageProvider.create())
+            .taskEventListener(events::add)
+            .build();
+
+        var taskId = rag.submitIngest(WORKSPACE, List.of(
+            new Document("doc-1", "Title", "Alice works with Bob", Map.of("source", "failure-test"))
+        ));
+
+        var task = awaitTerminalTask(rag, taskId);
+        var document = rag.getTaskDocument(WORKSPACE, taskId, "doc-1");
+
+        assertThat(task.status()).isEqualTo(TaskStatus.FAILED);
+        assertThat(document.status()).isEqualTo(DocumentStatus.FAILED);
+        assertThat(document.errorMessage()).contains("embedding boom");
+        assertThat(events.stream()
+            .filter(event -> "doc-1".equals(event.documentId()))
+            .map(TaskEvent::eventType)
+            .toList()).contains(TaskEventType.DOCUMENT_FAILED);
     }
 
     @Test
@@ -281,6 +447,19 @@ class LightRagTaskApiTest {
         @Override
         public List<List<Double>> embedAll(List<String> texts) {
             return texts.stream().map(text -> List.of(1.0d, 0.0d)).toList();
+        }
+    }
+
+    private static final class FailingEmbeddingModel implements EmbeddingModel {
+        private final String message;
+
+        private FailingEmbeddingModel(String message) {
+            this.message = message;
+        }
+
+        @Override
+        public List<List<Double>> embedAll(List<String> texts) {
+            throw new IllegalStateException(message);
         }
     }
 }

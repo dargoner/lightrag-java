@@ -12,6 +12,7 @@ import io.github.lightrag.storage.DocumentStatusStore;
 import io.github.lightrag.storage.DocumentStore;
 import io.github.lightrag.storage.RelationalStorageAdapter;
 import io.github.lightrag.storage.SnapshotStore;
+import io.github.lightrag.storage.TaskDocumentStore;
 import io.github.lightrag.storage.TaskStageStore;
 import io.github.lightrag.storage.TaskStore;
 import javax.sql.DataSource;
@@ -37,6 +38,7 @@ public final class MySqlRelationalStorageAdapter implements RelationalStorageAda
     private final DocumentStatusStore documentStatusStore;
     private final TaskStore taskStore;
     private final TaskStageStore taskStageStore;
+    private final TaskDocumentStore taskDocumentStore;
     private final DocumentGraphSnapshotStore documentGraphSnapshotStore;
     private final DocumentGraphJournalStore documentGraphJournalStore;
     private final java.util.Set<String> trackedDocumentGraphIds;
@@ -89,6 +91,7 @@ public final class MySqlRelationalStorageAdapter implements RelationalStorageAda
         this.documentStatusStore = new MySqlDocumentStatusStore(this.dataSource, this.config, this.workspaceId);
         this.taskStore = new MySqlTaskStore(this.dataSource, this.config, this.workspaceId);
         this.taskStageStore = new MySqlTaskStageStore(this.dataSource, this.config, this.workspaceId);
+        this.taskDocumentStore = new MySqlTaskDocumentStore(this.dataSource, this.config, this.workspaceId);
         this.trackedDocumentGraphIds = new ConcurrentSkipListSet<>();
         this.documentGraphSnapshotStore = DocumentGraphStateSupport.trackedSnapshotStore(
             new MySqlDocumentGraphSnapshotStore(this.dataSource, this.config, this.workspaceId),
@@ -123,6 +126,11 @@ public final class MySqlRelationalStorageAdapter implements RelationalStorageAda
     @Override
     public TaskStageStore taskStageStore() {
         return taskStageStore;
+    }
+
+    @Override
+    public TaskDocumentStore taskDocumentStore() {
+        return taskDocumentStore;
     }
 
     @Override
@@ -182,6 +190,7 @@ public final class MySqlRelationalStorageAdapter implements RelationalStorageAda
                 var transactionalDocumentStore = new MySqlDocumentStore(connectionAccess, config, workspaceId);
                 var transactionalChunkStore = new MySqlChunkStore(connectionAccess, config, workspaceId);
                 var transactionalStatusStore = new MySqlDocumentStatusStore(connectionAccess, config, workspaceId);
+                var transactionalTaskDocumentStore = new MySqlTaskDocumentStore(connectionAccess, config, workspaceId);
                 var transactionalSnapshotStore = new MySqlDocumentGraphSnapshotStore(connectionAccess, config, workspaceId);
                 var transactionalJournalStore = new MySqlDocumentGraphJournalStore(connectionAccess, config, workspaceId);
                 for (var document : source.documents()) {
@@ -245,6 +254,11 @@ public final class MySqlRelationalStorageAdapter implements RelationalStorageAda
                 @Override
                 public TaskStageStore taskStageStore() {
                     return new MySqlTaskStageStore(connectionAccess, config, workspaceId);
+                }
+
+                @Override
+                public TaskDocumentStore taskDocumentStore() {
+                    return new MySqlTaskDocumentStore(connectionAccess, config, workspaceId);
                 }
             }));
         } catch (SQLException exception) {

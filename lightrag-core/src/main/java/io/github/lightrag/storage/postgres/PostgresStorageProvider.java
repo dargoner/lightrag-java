@@ -13,6 +13,7 @@ import io.github.lightrag.storage.DocumentStore;
 import io.github.lightrag.storage.DocumentStatusStore;
 import io.github.lightrag.storage.GraphStore;
 import io.github.lightrag.storage.SnapshotStore;
+import io.github.lightrag.storage.TaskDocumentStore;
 import io.github.lightrag.storage.TaskStageStore;
 import io.github.lightrag.storage.TaskStore;
 import io.github.lightrag.storage.VectorStore;
@@ -47,6 +48,7 @@ public final class PostgresStorageProvider implements AtomicStorageProvider, Aut
     private final DocumentStatusStore documentStatusStore;
     private final TaskStore taskStore;
     private final TaskStageStore taskStageStore;
+    private final TaskDocumentStore taskDocumentStore;
     private final PostgresDocumentStore documentStore;
     private final PostgresChunkStore chunkStore;
     private final PostgresGraphStore graphStore;
@@ -54,6 +56,7 @@ public final class PostgresStorageProvider implements AtomicStorageProvider, Aut
     private final DocumentStatusStore lockedDocumentStatusStore;
     private final TaskStore lockedTaskStore;
     private final TaskStageStore lockedTaskStageStore;
+    private final TaskDocumentStore lockedTaskDocumentStore;
     private final DocumentStore lockedDocumentStore;
     private final ChunkStore lockedChunkStore;
     private final GraphStore lockedGraphStore;
@@ -135,6 +138,7 @@ public final class PostgresStorageProvider implements AtomicStorageProvider, Aut
             this.documentStatusStore = new PostgresDocumentStatusStore(jdbcDataSource, resolvedConfig, this.workspaceId);
             this.taskStore = new PostgresTaskStore(jdbcDataSource, resolvedConfig, this.workspaceId);
             this.taskStageStore = new PostgresTaskStageStore(jdbcDataSource, resolvedConfig, this.workspaceId);
+            this.taskDocumentStore = new PostgresTaskDocumentStore(jdbcDataSource, resolvedConfig, this.workspaceId);
             this.documentGraphSnapshotStore = DocumentGraphStateSupport.trackedSnapshotStore(
                 new PostgresDocumentGraphSnapshotStore(jdbcDataSource, resolvedConfig, this.workspaceId),
                 trackedDocumentGraphIds
@@ -146,6 +150,7 @@ public final class PostgresStorageProvider implements AtomicStorageProvider, Aut
             this.lockedDocumentStatusStore = new LockedDocumentStatusStore(documentStatusStore);
             this.lockedTaskStore = new LockedTaskStore(taskStore);
             this.lockedTaskStageStore = new LockedTaskStageStore(taskStageStore);
+            this.lockedTaskDocumentStore = new LockedTaskDocumentStore(taskDocumentStore);
             this.lockedDocumentStore = new LockedDocumentStore(documentStore);
             this.lockedChunkStore = new LockedChunkStore(chunkStore);
             this.lockedGraphStore = new LockedGraphStore(graphStore);
@@ -189,6 +194,11 @@ public final class PostgresStorageProvider implements AtomicStorageProvider, Aut
     @Override
     public TaskStageStore taskStageStore() {
         return lockedTaskStageStore;
+    }
+
+    @Override
+    public TaskDocumentStore taskDocumentStore() {
+        return lockedTaskDocumentStore;
     }
 
     @Override
@@ -645,6 +655,34 @@ public final class PostgresStorageProvider implements AtomicStorageProvider, Aut
 
         @Override
         public List<TaskStageRecord> listByTask(String taskId) {
+            return withReadLock(() -> delegate.listByTask(taskId));
+        }
+
+        @Override
+        public void deleteByTask(String taskId) {
+            withWriteLock(() -> delegate.deleteByTask(taskId));
+        }
+    }
+
+    private final class LockedTaskDocumentStore implements TaskDocumentStore {
+        private final TaskDocumentStore delegate;
+
+        private LockedTaskDocumentStore(TaskDocumentStore delegate) {
+            this.delegate = Objects.requireNonNull(delegate, "delegate");
+        }
+
+        @Override
+        public void save(TaskDocumentRecord record) {
+            withWriteLock(() -> delegate.save(record));
+        }
+
+        @Override
+        public Optional<TaskDocumentRecord> load(String taskId, String documentId) {
+            return withReadLock(() -> delegate.load(taskId, documentId));
+        }
+
+        @Override
+        public List<TaskDocumentRecord> listByTask(String taskId) {
             return withReadLock(() -> delegate.listByTask(taskId));
         }
 

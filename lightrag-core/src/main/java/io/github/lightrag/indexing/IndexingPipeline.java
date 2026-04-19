@@ -309,7 +309,7 @@ public final class IndexingPipeline {
             commitComputedIngest(computeDocument(source));
             persistSnapshotIfConfigured();
         } catch (RuntimeException | Error failure) {
-            saveFailureStatus(source.id(), failure);
+            markDocumentFailed(source.id(), failure);
             persistSnapshotIfConfigured();
             throw failure;
         }
@@ -322,7 +322,7 @@ public final class IndexingPipeline {
             commitComputedIngest(computeDocument(source, options));
             persistSnapshotIfConfigured();
         } catch (RuntimeException | Error failure) {
-            saveFailureStatus(source.documentId(), failure);
+            markDocumentFailed(source.documentId(), failure);
             persistSnapshotIfConfigured();
             throw failure;
         }
@@ -345,10 +345,16 @@ public final class IndexingPipeline {
                     persistSnapshotIfConfigured();
                 } catch (ExecutionException exception) {
                     cancelPending(pendingTasks.keySet());
-                    saveFailureStatus(source.id(), exception.getCause());
+                    markDocumentFailed(source.id(), exception.getCause());
                     markPendingDocumentsFailed(pendingTasks.values(), "ingest aborted because another document failed");
                     persistSnapshotIfConfigured();
                     rethrowTaskFailure(exception.getCause());
+                } catch (RuntimeException | Error failure) {
+                    cancelPending(pendingTasks.keySet());
+                    markDocumentFailed(source.id(), failure);
+                    markPendingDocumentsFailed(pendingTasks.values(), "ingest aborted because another document failed");
+                    persistSnapshotIfConfigured();
+                    throw failure;
                 }
             }
         } catch (InterruptedException exception) {
@@ -382,10 +388,16 @@ public final class IndexingPipeline {
                     persistSnapshotIfConfigured();
                 } catch (ExecutionException exception) {
                     cancelPending(pendingTasks.keySet());
-                    saveFailureStatus(source.documentId(), exception.getCause());
+                    markDocumentFailed(source.documentId(), exception.getCause());
                     markPendingParsedDocumentsFailed(pendingTasks.values(), "ingest aborted because another document failed");
                     persistSnapshotIfConfigured();
                     rethrowTaskFailure(exception.getCause());
+                } catch (RuntimeException | Error failure) {
+                    cancelPending(pendingTasks.keySet());
+                    markDocumentFailed(source.documentId(), failure);
+                    markPendingParsedDocumentsFailed(pendingTasks.values(), "ingest aborted because another document failed");
+                    persistSnapshotIfConfigured();
+                    throw failure;
                 }
             }
         } catch (InterruptedException exception) {
@@ -401,41 +413,32 @@ public final class IndexingPipeline {
 
     private void markPendingDocumentsFailed(Collection<Document> documents, String errorMessage) {
         for (var document : documents) {
-            saveStatus(new DocumentStatusStore.StatusRecord(
-                document.id(),
-                DocumentStatus.FAILED,
-                "",
-                errorMessage
-            ));
+            markDocumentFailed(document.id(), errorMessage);
         }
     }
 
     private void markPendingParsedDocumentsFailed(Collection<ParsedDocument> documents, String errorMessage) {
         for (var document : documents) {
-            saveStatus(new DocumentStatusStore.StatusRecord(
-                document.documentId(),
-                DocumentStatus.FAILED,
-                "",
-                errorMessage
-            ));
+            markDocumentFailed(document.documentId(), errorMessage);
         }
     }
 
     private void markPendingRawSourcesFailed(Collection<RawDocumentSource> sources, String errorMessage) {
         for (var source : sources) {
-            saveStatus(new DocumentStatusStore.StatusRecord(
-                source.sourceId(),
-                DocumentStatus.FAILED,
-                "",
-                errorMessage
-            ));
+            markDocumentFailed(source.sourceId(), errorMessage);
         }
     }
 
     private ComputedIngest computeDocument(Document document) {
         var source = Objects.requireNonNull(document, "document");
+        progressListener.onDocumentStarted(source.id(), "document processing started");
         progressListener.onStageStarted(io.github.lightrag.api.TaskStage.CHUNKING, "chunking document " + source.id());
         var prepared = documentIngestor.prepare(List.of(source));
+        progressListener.onDocumentChunked(
+            source.id(),
+            prepared.chunks().size(),
+            "chunked %d chunks for %s".formatted(prepared.chunks().size(), source.id())
+        );
         progressListener.onStageSucceeded(
             io.github.lightrag.api.TaskStage.CHUNKING,
             "chunked %d chunks for %s".formatted(prepared.chunks().size(), source.id())
@@ -447,10 +450,23 @@ public final class IndexingPipeline {
         progressListener.onStageStarted(io.github.lightrag.api.TaskStage.GRAPH_ASSEMBLY, "assembling graph for " + source.id());
         var refinedExtractions = refineExtractions(chunks);
         var graph = graphAssembler.assemble(refinedExtractions);
+        progressListener.onDocumentGraphReady(
+            source.id(),
+            graph.entities().size(),
+            graph.relations().size(),
+            "assembled graph for " + source.id()
+        );
         progressListener.onStageSucceeded(io.github.lightrag.api.TaskStage.GRAPH_ASSEMBLY, "assembled graph for " + source.id());
         progressListener.onStageStarted(io.github.lightrag.api.TaskStage.VECTOR_INDEXING, "embedding graph vectors for " + source.id());
         var entityVectors = entityVectors(graph.entities());
         var relationVectors = relationVectors(graph.relations());
+        progressListener.onDocumentVectorsReady(
+            source.id(),
+            chunkVectors.size(),
+            entityVectors.size(),
+            relationVectors.size(),
+            "embedded document vectors for " + source.id()
+        );
         progressListener.onStageSucceeded(io.github.lightrag.api.TaskStage.VECTOR_INDEXING, "embedded graph vectors for " + source.id());
         return new ComputedIngest(source, prepared, refinedExtractions, chunkVectors, graph, entityVectors, relationVectors);
     }
@@ -460,8 +476,14 @@ public final class IndexingPipeline {
         io.github.lightrag.api.DocumentIngestOptions options
     ) {
         var source = Objects.requireNonNull(parsedDocument, "parsedDocument");
+        progressListener.onDocumentStarted(source.documentId(), "document processing started");
         progressListener.onStageStarted(io.github.lightrag.api.TaskStage.CHUNKING, "chunking document " + source.documentId());
         var prepared = documentIngestor.prepareParsed(source, Objects.requireNonNull(options, "options"));
+        progressListener.onDocumentChunked(
+            source.documentId(),
+            prepared.chunks().size(),
+            "chunked %d chunks for %s".formatted(prepared.chunks().size(), source.documentId())
+        );
         progressListener.onStageSucceeded(
             io.github.lightrag.api.TaskStage.CHUNKING,
             "chunked %d chunks for %s".formatted(prepared.chunks().size(), source.documentId())
@@ -473,10 +495,23 @@ public final class IndexingPipeline {
         progressListener.onStageStarted(io.github.lightrag.api.TaskStage.GRAPH_ASSEMBLY, "assembling graph for " + source.documentId());
         var refinedExtractions = refineExtractions(chunks);
         var graph = graphAssembler.assemble(refinedExtractions);
+        progressListener.onDocumentGraphReady(
+            source.documentId(),
+            graph.entities().size(),
+            graph.relations().size(),
+            "assembled graph for " + source.documentId()
+        );
         progressListener.onStageSucceeded(io.github.lightrag.api.TaskStage.GRAPH_ASSEMBLY, "assembled graph for " + source.documentId());
         progressListener.onStageStarted(io.github.lightrag.api.TaskStage.VECTOR_INDEXING, "embedding graph vectors for " + source.documentId());
         var entityVectors = entityVectors(graph.entities());
         var relationVectors = relationVectors(graph.relations());
+        progressListener.onDocumentVectorsReady(
+            source.documentId(),
+            chunkVectors.size(),
+            entityVectors.size(),
+            relationVectors.size(),
+            "embedded document vectors for " + source.documentId()
+        );
         progressListener.onStageSucceeded(io.github.lightrag.api.TaskStage.VECTOR_INDEXING, "embedded graph vectors for " + source.documentId());
         return new ComputedIngest(toDocument(source), prepared, refinedExtractions, chunkVectors, graph, entityVectors, relationVectors);
     }
@@ -523,39 +558,44 @@ public final class IndexingPipeline {
     }
 
     private void commitComputedIngest(ComputedIngest computed) {
-        try {
-            progressListener.onStageStarted(io.github.lightrag.api.TaskStage.COMMITTING, "committing storage mutations");
-            synchronized (storageMutationMonitor) {
-                storageProvider.writeAtomically(storage -> {
-                    documentIngestor.persist(computed.prepared(), storage);
-                    saveChunkVectors(computed.prepared().chunks(), computed.chunkVectors(), storage.vectorStore());
-                    saveGraph(computed.graph().entities(), computed.graph().relations(), storage);
-                    saveEntityVectors(computed.graph().entities(), computed.entityVectors(), storage.vectorStore());
-                    saveRelationVectors(computed.graph().relations(), computed.relationVectors(), storage.vectorStore());
-                    persistDocumentGraphState(computed, storage);
-                    storage.documentStatusStore().save(new DocumentStatusStore.StatusRecord(
-                        computed.source().id(),
-                        DocumentStatus.PROCESSED,
-                        "processed %d chunks".formatted(computed.prepared().chunks().size()),
-                        null
-                    ));
-                    return null;
-                });
-            }
-            progressListener.onStageSucceeded(io.github.lightrag.api.TaskStage.COMMITTING, "committed storage mutations");
-        } catch (RuntimeException | Error failure) {
-            saveFailureStatus(computed.source().id(), failure);
-            throw failure;
+        progressListener.onStageStarted(io.github.lightrag.api.TaskStage.COMMITTING, "committing storage mutations");
+        synchronized (storageMutationMonitor) {
+            storageProvider.writeAtomically(storage -> {
+                documentIngestor.persist(computed.prepared(), storage);
+                saveChunkVectors(computed.prepared().chunks(), computed.chunkVectors(), storage.vectorStore());
+                saveGraph(computed.graph().entities(), computed.graph().relations(), storage);
+                saveEntityVectors(computed.graph().entities(), computed.entityVectors(), storage.vectorStore());
+                saveRelationVectors(computed.graph().relations(), computed.relationVectors(), storage.vectorStore());
+                persistDocumentGraphState(computed, storage);
+                storage.documentStatusStore().save(new DocumentStatusStore.StatusRecord(
+                    computed.source().id(),
+                    DocumentStatus.PROCESSED,
+                    "processed %d chunks".formatted(computed.prepared().chunks().size()),
+                    null
+                ));
+                return null;
+            });
         }
+        progressListener.onStageSucceeded(io.github.lightrag.api.TaskStage.COMMITTING, "committed storage mutations");
+        progressListener.onDocumentCommitted(computed.source().id(), "document committed");
     }
 
     private void saveFailureStatus(String documentId, Throwable failure) {
+        markDocumentFailed(documentId, failure == null ? null : failure.getMessage());
+    }
+
+    private void markDocumentFailed(String documentId, Throwable failure) {
+        markDocumentFailed(documentId, failure == null ? null : failure.getMessage());
+    }
+
+    private void markDocumentFailed(String documentId, String errorMessage) {
         saveStatus(new DocumentStatusStore.StatusRecord(
             documentId,
             DocumentStatus.FAILED,
             "",
-            failure == null ? null : failure.getMessage()
+            errorMessage
         ));
+        progressListener.onDocumentFailed(documentId, errorMessage);
     }
 
     private void saveStatus(DocumentStatusStore.StatusRecord statusRecord) {

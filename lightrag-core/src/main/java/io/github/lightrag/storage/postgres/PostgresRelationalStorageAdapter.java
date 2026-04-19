@@ -13,6 +13,7 @@ import io.github.lightrag.storage.DocumentStore;
 import io.github.lightrag.storage.GraphStore;
 import io.github.lightrag.storage.RelationalStorageAdapter;
 import io.github.lightrag.storage.SnapshotStore;
+import io.github.lightrag.storage.TaskDocumentStore;
 import io.github.lightrag.storage.TaskStageStore;
 import io.github.lightrag.storage.TaskStore;
 import javax.sql.DataSource;
@@ -40,6 +41,7 @@ public final class PostgresRelationalStorageAdapter implements RelationalStorage
     private final DocumentStatusStore documentStatusStore;
     private final TaskStore taskStore;
     private final TaskStageStore taskStageStore;
+    private final TaskDocumentStore taskDocumentStore;
     private final DocumentGraphSnapshotStore documentGraphSnapshotStore;
     private final DocumentGraphJournalStore documentGraphJournalStore;
     private final java.util.Set<String> trackedDocumentGraphIds;
@@ -113,6 +115,7 @@ public final class PostgresRelationalStorageAdapter implements RelationalStorage
         this.documentStatusStore = new PostgresDocumentStatusStore(this.dataSource, this.config, this.workspaceId);
         this.taskStore = new PostgresTaskStore(this.dataSource, this.config, this.workspaceId);
         this.taskStageStore = new PostgresTaskStageStore(this.dataSource, this.config, this.workspaceId);
+        this.taskDocumentStore = new PostgresTaskDocumentStore(this.dataSource, this.config, this.workspaceId);
         this.trackedDocumentGraphIds = new ConcurrentSkipListSet<>();
         this.documentGraphSnapshotStore = DocumentGraphStateSupport.trackedSnapshotStore(
             new PostgresDocumentGraphSnapshotStore(this.dataSource, this.config, this.workspaceId),
@@ -147,6 +150,11 @@ public final class PostgresRelationalStorageAdapter implements RelationalStorage
     @Override
     public TaskStageStore taskStageStore() {
         return taskStageStore;
+    }
+
+    @Override
+    public TaskDocumentStore taskDocumentStore() {
+        return taskDocumentStore;
     }
 
     @Override
@@ -220,6 +228,7 @@ public final class PostgresRelationalStorageAdapter implements RelationalStorage
                         var transactionalChunkStore = new PostgresChunkStore(connectionAccess, config, workspaceId);
                         var transactionalGraphStore = new PostgresGraphStore(connectionAccess, config, workspaceId);
                         var transactionalStatusStore = new PostgresDocumentStatusStore(connectionAccess, config, workspaceId);
+                        var transactionalTaskDocumentStore = new PostgresTaskDocumentStore(connectionAccess, config, workspaceId);
                         var transactionalSnapshotStore = new PostgresDocumentGraphSnapshotStore(connectionAccess, config, workspaceId);
                         var transactionalJournalStore = new PostgresDocumentGraphJournalStore(connectionAccess, config, workspaceId);
                         for (var document : source.documents()) {
@@ -295,6 +304,11 @@ public final class PostgresRelationalStorageAdapter implements RelationalStorage
                         @Override
                         public TaskStageStore taskStageStore() {
                             return new PostgresTaskStageStore(connectionAccess, config, workspaceId);
+                        }
+
+                        @Override
+                        public TaskDocumentStore taskDocumentStore() {
+                            return new PostgresTaskDocumentStore(connectionAccess, config, workspaceId);
                         }
 
                         @Override
@@ -562,6 +576,22 @@ public final class PostgresRelationalStorageAdapter implements RelationalStorage
                         PRIMARY KEY (workspace_id, task_id, stage)
                     )
                     """.formatted(config.qualifiedTableName("task_stage")),
+                """
+                    CREATE TABLE IF NOT EXISTS %s (
+                        workspace_id TEXT NOT NULL,
+                        task_id TEXT NOT NULL,
+                        document_id TEXT NOT NULL,
+                        status TEXT NOT NULL,
+                        chunk_count INTEGER NOT NULL,
+                        entity_count INTEGER NOT NULL,
+                        relation_count INTEGER NOT NULL,
+                        chunk_vector_count INTEGER NOT NULL,
+                        entity_vector_count INTEGER NOT NULL,
+                        relation_vector_count INTEGER NOT NULL,
+                        error_message TEXT NULL,
+                        PRIMARY KEY (workspace_id, task_id, document_id)
+                    )
+                    """.formatted(config.qualifiedTableName("task_document")),
                 """
                     CREATE TABLE IF NOT EXISTS %s (
                         workspace_id TEXT NOT NULL,

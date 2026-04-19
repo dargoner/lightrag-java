@@ -515,6 +515,18 @@ class MySqlMilvusNeo4jStorageProviderTest {
                         "starting",
                         null
                     ));
+                    storage.taskDocumentStore().save(new io.github.lightrag.storage.TaskDocumentStore.TaskDocumentRecord(
+                        "task-1",
+                        "doc-1",
+                        DocumentStatus.PROCESSING,
+                        3,
+                        2,
+                        1,
+                        3,
+                        2,
+                        1,
+                        null
+                    ));
                     return null;
                 });
 
@@ -522,6 +534,7 @@ class MySqlMilvusNeo4jStorageProviderTest {
                 assertThat(adapter.taskStageStore().listByTask("task-1"))
                     .extracting(io.github.lightrag.storage.TaskStageStore.TaskStageRecord::stage)
                     .containsExactly(TaskStage.PREPARING);
+                assertThat(adapter.taskDocumentStore().load("task-1", "doc-1")).isPresent();
             }
         }
     }

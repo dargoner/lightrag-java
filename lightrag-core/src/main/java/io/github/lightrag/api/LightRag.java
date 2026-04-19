@@ -24,6 +24,7 @@ import io.github.lightrag.query.ReasoningContextAssembler;
 import io.github.lightrag.query.RuleBasedQueryIntentClassifier;
 import io.github.lightrag.synthesis.PathAwareAnswerSynthesizer;
 import io.github.lightrag.storage.AtomicStorageProvider;
+import io.github.lightrag.storage.TaskDocumentStore;
 import io.github.lightrag.task.TaskExecutionService;
 import io.github.lightrag.task.TaskMetadataReporter;
 import io.github.lightrag.types.Document;
@@ -52,6 +53,7 @@ public final class LightRag implements AutoCloseable {
     private final double embeddingSemanticMergeThreshold;
     private final ExtractionRefinementOptions extractionRefinementOptions;
     private final DocumentParsingOrchestrator documentParsingOrchestrator;
+    private final List<TaskEventListener> taskEventListeners;
     private final TaskExecutionService taskExecutionService;
     private final AtomicBoolean closed = new AtomicBoolean();
 
@@ -63,7 +65,8 @@ public final class LightRag implements AutoCloseable {
             io.github.lightrag.indexing.KnowledgeExtractor.DEFAULT_ENTITY_TYPES,
             LightRagBuilder.DEFAULT_EMBEDDING_SEMANTIC_MERGE_ENABLED,
             LightRagBuilder.DEFAULT_EMBEDDING_SEMANTIC_MERGE_THRESHOLD,
-            ExtractionRefinementOptions.disabled());
+            ExtractionRefinementOptions.disabled(),
+            List.of());
     }
 
     LightRag(LightRagConfig config, Chunker chunker) {
@@ -74,7 +77,8 @@ public final class LightRag implements AutoCloseable {
             io.github.lightrag.indexing.KnowledgeExtractor.DEFAULT_ENTITY_TYPES,
             LightRagBuilder.DEFAULT_EMBEDDING_SEMANTIC_MERGE_ENABLED,
             LightRagBuilder.DEFAULT_EMBEDDING_SEMANTIC_MERGE_THRESHOLD,
-            ExtractionRefinementOptions.disabled());
+            ExtractionRefinementOptions.disabled(),
+            List.of());
     }
 
     LightRag(
@@ -91,7 +95,8 @@ public final class LightRag implements AutoCloseable {
         List<String> entityTypes,
         boolean embeddingSemanticMergeEnabled,
         double embeddingSemanticMergeThreshold,
-        ExtractionRefinementOptions extractionRefinementOptions
+        ExtractionRefinementOptions extractionRefinementOptions,
+        List<TaskEventListener> taskEventListeners
     ) {
         this.config = config;
         this.chunker = chunker;
@@ -107,7 +112,11 @@ public final class LightRag implements AutoCloseable {
         this.embeddingSemanticMergeThreshold = embeddingSemanticMergeThreshold;
         this.extractionRefinementOptions = Objects.requireNonNull(extractionRefinementOptions, "extractionRefinementOptions");
         this.documentParsingOrchestrator = documentParsingOrchestrator;
-        this.taskExecutionService = new TaskExecutionService(workspaceId -> resolveProvider(resolveScope(workspaceId)));
+        this.taskEventListeners = List.copyOf(Objects.requireNonNull(taskEventListeners, "taskEventListeners"));
+        this.taskExecutionService = new TaskExecutionService(
+            workspaceId -> resolveProvider(resolveScope(workspaceId)),
+            this.taskEventListeners
+        );
     }
 
     public static LightRagBuilder builder() {
@@ -134,32 +143,55 @@ public final class LightRag implements AutoCloseable {
     }
 
     public String submitIngest(String workspaceId, List<Document> documents) {
+        return submitIngest(workspaceId, documents, TaskSubmitOptions.defaults());
+    }
+
+    public String submitIngest(String workspaceId, List<Document> documents, TaskSubmitOptions options) {
         var normalizedDocuments = List.copyOf(Objects.requireNonNull(documents, "documents"));
+        var submitOptions = Objects.requireNonNull(options, "options");
         return taskExecutionService.submit(
             workspaceId,
             TaskType.INGEST_DOCUMENTS,
             Map.of("documentCount", Integer.toString(normalizedDocuments.size())),
+            submitOptions.listeners(),
             progressListener -> newIndexingPipeline(resolveProvider(resolveScope(workspaceId)), progressListener).ingest(normalizedDocuments)
         );
     }
 
     public String submitIngestSources(String workspaceId, List<RawDocumentSource> sources, DocumentIngestOptions options) {
+        return submitIngestSources(workspaceId, sources, options, TaskSubmitOptions.defaults());
+    }
+
+    public String submitIngestSources(
+        String workspaceId,
+        List<RawDocumentSource> sources,
+        DocumentIngestOptions options,
+        TaskSubmitOptions submitOptions
+    ) {
         var normalizedSources = List.copyOf(Objects.requireNonNull(sources, "sources"));
         var resolvedOptions = Objects.requireNonNull(options, "options");
+        var taskSubmitOptions = Objects.requireNonNull(submitOptions, "submitOptions");
         return taskExecutionService.submit(
             workspaceId,
             TaskType.INGEST_SOURCES,
             Map.of("sourceCount", Integer.toString(normalizedSources.size())),
+            taskSubmitOptions.listeners(),
             progressListener -> newIndexingPipeline(resolveProvider(resolveScope(workspaceId)), progressListener)
                 .ingestSources(normalizedSources, resolvedOptions)
         );
     }
 
     public String submitRebuild(String workspaceId) {
+        return submitRebuild(workspaceId, TaskSubmitOptions.defaults());
+    }
+
+    public String submitRebuild(String workspaceId, TaskSubmitOptions options) {
+        var submitOptions = Objects.requireNonNull(options, "options");
         return taskExecutionService.submit(
             workspaceId,
             TaskType.REBUILD_GRAPH,
             Map.of(),
+            submitOptions.listeners(),
             progressListener -> newDeletionPipeline(resolveProvider(resolveScope(workspaceId)), progressListener).rebuildAllDocuments()
         );
     }
@@ -174,6 +206,22 @@ public final class LightRag implements AutoCloseable {
 
     public TaskSnapshot cancelTask(String workspaceId, String taskId) {
         return taskExecutionService.cancel(workspaceId, taskId);
+    }
+
+    public List<TaskDocumentSnapshot> listTaskDocuments(String workspaceId, String taskId) {
+        var scope = resolveScope(workspaceId);
+        return resolveProvider(scope).taskDocumentStore()
+            .listByTask(requireNonBlank(taskId, "taskId")).stream()
+            .map(TaskDocumentStore.TaskDocumentRecord::toSnapshot)
+            .toList();
+    }
+
+    public TaskDocumentSnapshot getTaskDocument(String workspaceId, String taskId, String documentId) {
+        var scope = resolveScope(workspaceId);
+        return resolveProvider(scope).taskDocumentStore()
+            .load(requireNonBlank(taskId, "taskId"), requireNonBlank(documentId, "documentId"))
+            .map(TaskDocumentStore.TaskDocumentRecord::toSnapshot)
+            .orElseThrow(() -> new NoSuchElementException("task document does not exist: " + documentId));
     }
 
     public GraphEntity createEntity(String workspaceId, CreateEntityRequest request) {
@@ -414,6 +462,10 @@ public final class LightRag implements AutoCloseable {
         return extractionRefinementOptions.allowDeterministicAttributionFallback();
     }
 
+    List<TaskEventListener> taskEventListeners() {
+        return taskEventListeners;
+    }
+
     ExtractionRefinementOptions extractionRefinementOptions() {
         return extractionRefinementOptions;
     }
@@ -538,5 +590,14 @@ public final class LightRag implements AutoCloseable {
             statusRecord.summary(),
             statusRecord.errorMessage()
         );
+    }
+
+    private static String requireNonBlank(String value, String fieldName) {
+        Objects.requireNonNull(value, fieldName);
+        var normalized = value.strip();
+        if (normalized.isEmpty()) {
+            throw new IllegalArgumentException(fieldName + " must not be blank");
+        }
+        return normalized;
     }
 }
