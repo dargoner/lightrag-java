@@ -153,6 +153,35 @@ class KnowledgeExtractorTest {
     }
 
     @Test
+    void treatsMissingOrNullAliasesAsEmptyList() {
+        var extractor = new KnowledgeExtractor(new StubChatModel("""
+            {
+              "entities": [
+                {
+                  "name": "Alice",
+                  "type": "person",
+                  "description": "Researcher"
+                },
+                {
+                  "name": "Bob",
+                  "type": "person",
+                  "description": "Engineer",
+                  "aliases": null
+                }
+              ],
+              "relations": []
+            }
+            """));
+
+        var result = extractor.extract(chunk("Alice works with Bob"));
+
+        assertThat(result.entities()).containsExactlyInAnyOrder(
+            new ExtractedEntity("Alice", "person", "Researcher", List.of()),
+            new ExtractedEntity("Bob", "person", "Engineer", List.of())
+        );
+    }
+
+    @Test
     void dropsRelationsWithMissingEndpointsAndDefaultsWeight() {
         var extractor = new KnowledgeExtractor(new StubChatModel("""
             {

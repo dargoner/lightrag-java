@@ -429,7 +429,7 @@ public final class KnowledgeExtractor {
     }
 
     private static List<String> parseAliases(JsonNode aliasesNode) {
-        if (!aliasesNode.isArray()) {
+        if (aliasesNode == null || !aliasesNode.isArray()) {
             return List.of();
         }
 
