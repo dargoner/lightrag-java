@@ -46,6 +46,7 @@ The target direction is:
   - document vector progress
   - aggregated timing summaries
 - Add chunk-level drill-down queries for graph and vector troubleshooting.
+- If the SDK later accepts precomputed chunks as ingest input, require document identity information together with the chunk list rather than accepting bare chunks.
 - Emit structured logs for detailed slow-path diagnosis.
 
 ## Non-Goals
@@ -207,6 +208,46 @@ The design therefore uses:
 - chunk summaries only for drill-down queries and failure analysis
 
 The default task overview must not inline all chunk details.
+
+### 5. Direct chunk ingest must keep document identity
+
+This phase does not add a public direct-chunk ingest API, but the design must define the contract now because chunk-level observability depends on stable document ownership.
+
+If a future SDK API accepts precomputed chunks, it must not accept a bare `List<Chunk>` as the full ingest contract.
+
+The minimum required document information is:
+
+- `documentId`
+
+The recommended document header for a stable public API is:
+
+- `documentId`
+- `title`
+- `metadata`
+
+The ingest contract must therefore be shaped as:
+
+- `DocumentHeader + List<Chunk>`
+
+or an equivalent typed wrapper such as:
+
+- `ChunkedDocument`
+
+All supplied chunks must satisfy:
+
+- `chunk.documentId == documentId`
+- `chunk.id` is unique within the document
+- `chunk.order` is contiguous and starts at `0`
+
+This keeps the future direct-chunk ingest path aligned with existing document-scoped capabilities:
+
+- document status
+- delete-by-document
+- graph snapshot and journal state
+- task/document/chunk progress aggregation
+- query-side source attribution
+
+Rejecting bare chunks avoids an under-specified API that would weaken document-level lifecycle management and observability.
 
 ## Event Model
 
