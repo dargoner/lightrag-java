@@ -5,12 +5,15 @@ import io.github.lightrag.types.QueryContext;
 import io.github.lightrag.types.ScoredChunk;
 import io.github.lightrag.types.ScoredEntity;
 import io.github.lightrag.types.ScoredRelation;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 import java.util.Comparator;
 import java.util.LinkedHashMap;
 import java.util.Objects;
 
 public final class HybridQueryStrategy implements QueryStrategy {
+    private static final Logger log = LoggerFactory.getLogger(HybridQueryStrategy.class);
     private final QueryStrategy localStrategy;
     private final QueryStrategy globalStrategy;
     private final ContextAssembler contextAssembler;
@@ -24,8 +27,13 @@ public final class HybridQueryStrategy implements QueryStrategy {
     @Override
     public QueryContext retrieve(QueryRequest request) {
         var query = Objects.requireNonNull(request, "request");
+        var startedAt = System.nanoTime();
+        var localStartedAt = System.nanoTime();
         var local = localStrategy.retrieve(query);
+        var localMs = elapsedMillis(localStartedAt);
+        var globalStartedAt = System.nanoTime();
         var global = globalStrategy.retrieve(query);
+        var globalMs = elapsedMillis(globalStartedAt);
 
         var mergedEntities = new LinkedHashMap<String, ScoredEntity>();
         for (var entity : local.matchedEntities()) {
@@ -66,11 +74,27 @@ public final class HybridQueryStrategy implements QueryStrategy {
             matchedChunks,
             ""
         );
+        var assembleStartedAt = System.nanoTime();
+        var assembledContext = contextAssembler.assemble(context);
+        var assembleMs = elapsedMillis(assembleStartedAt);
+        var elapsedMs = elapsedMillis(startedAt);
+        log.info(
+            "LightRAG hybrid retrieve completed: mode={}, query={}, localMs={}, globalMs={}, assembleMs={}, elapsedMs={}, entityCount={}, relationCount={}, chunkCount={}",
+            query.mode(),
+            query.query(),
+            localMs,
+            globalMs,
+            assembleMs,
+            elapsedMs,
+            context.matchedEntities().size(),
+            context.matchedRelations().size(),
+            context.matchedChunks().size()
+        );
         return new QueryContext(
             context.matchedEntities(),
             context.matchedRelations(),
             context.matchedChunks(),
-            contextAssembler.assemble(context)
+            assembledContext
         );
     }
 
@@ -91,5 +115,9 @@ public final class HybridQueryStrategy implements QueryStrategy {
         java.util.function.Function<T, String> idExtractor
     ) {
         return Comparator.comparingDouble(scoreExtractor).reversed().thenComparing(idExtractor);
+    }
+
+    private static long elapsedMillis(long startedAt) {
+        return (System.nanoTime() - startedAt) / 1_000_000L;
     }
 }

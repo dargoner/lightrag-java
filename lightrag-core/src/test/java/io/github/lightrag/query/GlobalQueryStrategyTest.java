@@ -4,6 +4,8 @@ import io.github.lightrag.api.QueryMode;
 import io.github.lightrag.api.QueryRequest;
 import io.github.lightrag.indexing.ParentChildChunkBuilder;
 import io.github.lightrag.model.EmbeddingModel;
+import io.github.lightrag.storage.ChunkStore;
+import io.github.lightrag.storage.GraphStore;
 import io.github.lightrag.storage.HybridVectorStore;
 import io.github.lightrag.storage.InMemoryStorageProvider;
 import io.github.lightrag.storage.StorageProvider;
@@ -235,6 +237,56 @@ class GlobalQueryStrategyTest {
     }
 
     @Test
+    void globalBatchesEntityAndRelationLoads() {
+        var delegate = InMemoryStorageProvider.create();
+        LocalQueryStrategyTest.seedGraph(delegate);
+        LocalQueryStrategyTest.seedVectors(delegate);
+        var graphStore = new RecordingGraphStore(delegate.graphStore());
+        var storage = new GraphStoreDecoratingStorageProvider(delegate, graphStore);
+        var strategy = new GlobalQueryStrategy(
+            new FakeEmbeddingModel(Map.of("org question", List.of(0.0d, 1.0d))),
+            storage,
+            new ContextAssembler()
+        );
+
+        strategy.retrieve(QueryRequest.builder()
+            .query("org question")
+            .mode(QueryMode.GLOBAL)
+            .topK(1)
+            .chunkTopK(2)
+            .build());
+
+        assertThat(graphStore.loadEntitiesCalls).isEqualTo(1);
+        assertThat(graphStore.loadRelationsCalls).isEqualTo(1);
+        assertThat(graphStore.loadEntityCalls).isZero();
+        assertThat(graphStore.loadRelationCalls).isZero();
+    }
+
+    @Test
+    void globalBatchesChunkLoads() {
+        var delegate = InMemoryStorageProvider.create();
+        LocalQueryStrategyTest.seedGraph(delegate);
+        LocalQueryStrategyTest.seedVectors(delegate);
+        var chunkStore = new RecordingChunkStore(delegate.chunkStore());
+        var storage = new ChunkStoreDecoratingStorageProvider(delegate, chunkStore);
+        var strategy = new GlobalQueryStrategy(
+            new FakeEmbeddingModel(Map.of("org question", List.of(0.0d, 1.0d))),
+            storage,
+            new ContextAssembler()
+        );
+
+        strategy.retrieve(QueryRequest.builder()
+            .query("org question")
+            .mode(QueryMode.GLOBAL)
+            .topK(1)
+            .chunkTopK(2)
+            .build());
+
+        assertThat(chunkStore.batchLoadCalls).isEqualTo(1);
+        assertThat(chunkStore.loadCalls).isZero();
+    }
+
+    @Test
     void globalDropsExpandedParentWhenParentMetadataDoesNotMatch() {
         var storage = InMemoryStorageProvider.create();
         storage.chunkStore().save(new io.github.lightrag.storage.ChunkStore.ChunkRecord(
@@ -362,6 +414,204 @@ class GlobalQueryStrategyTest {
         @Override
         public io.github.lightrag.storage.SnapshotStore snapshotStore() {
             return delegate.snapshotStore();
+        }
+    }
+
+    private static final class GraphStoreDecoratingStorageProvider implements StorageProvider {
+        private final InMemoryStorageProvider delegate;
+        private final GraphStore graphStore;
+
+        private GraphStoreDecoratingStorageProvider(InMemoryStorageProvider delegate, GraphStore graphStore) {
+            this.delegate = delegate;
+            this.graphStore = graphStore;
+        }
+
+        @Override
+        public io.github.lightrag.storage.DocumentStore documentStore() {
+            return delegate.documentStore();
+        }
+
+        @Override
+        public ChunkStore chunkStore() {
+            return delegate.chunkStore();
+        }
+
+        @Override
+        public GraphStore graphStore() {
+            return graphStore;
+        }
+
+        @Override
+        public VectorStore vectorStore() {
+            return delegate.vectorStore();
+        }
+
+        @Override
+        public io.github.lightrag.storage.DocumentStatusStore documentStatusStore() {
+            return delegate.documentStatusStore();
+        }
+
+        @Override
+        public io.github.lightrag.storage.TaskStore taskStore() {
+            return delegate.taskStore();
+        }
+
+        @Override
+        public io.github.lightrag.storage.TaskStageStore taskStageStore() {
+            return delegate.taskStageStore();
+        }
+
+        @Override
+        public io.github.lightrag.storage.SnapshotStore snapshotStore() {
+            return delegate.snapshotStore();
+        }
+    }
+
+    private static final class ChunkStoreDecoratingStorageProvider implements StorageProvider {
+        private final InMemoryStorageProvider delegate;
+        private final ChunkStore chunkStore;
+
+        private ChunkStoreDecoratingStorageProvider(InMemoryStorageProvider delegate, ChunkStore chunkStore) {
+            this.delegate = delegate;
+            this.chunkStore = chunkStore;
+        }
+
+        @Override
+        public io.github.lightrag.storage.DocumentStore documentStore() {
+            return delegate.documentStore();
+        }
+
+        @Override
+        public ChunkStore chunkStore() {
+            return chunkStore;
+        }
+
+        @Override
+        public GraphStore graphStore() {
+            return delegate.graphStore();
+        }
+
+        @Override
+        public VectorStore vectorStore() {
+            return delegate.vectorStore();
+        }
+
+        @Override
+        public io.github.lightrag.storage.DocumentStatusStore documentStatusStore() {
+            return delegate.documentStatusStore();
+        }
+
+        @Override
+        public io.github.lightrag.storage.TaskStore taskStore() {
+            return delegate.taskStore();
+        }
+
+        @Override
+        public io.github.lightrag.storage.TaskStageStore taskStageStore() {
+            return delegate.taskStageStore();
+        }
+
+        @Override
+        public io.github.lightrag.storage.SnapshotStore snapshotStore() {
+            return delegate.snapshotStore();
+        }
+    }
+
+    private static final class RecordingGraphStore implements GraphStore {
+        private final GraphStore delegate;
+        private int loadEntityCalls;
+        private int loadRelationCalls;
+        private int loadEntitiesCalls;
+        private int loadRelationsCalls;
+
+        private RecordingGraphStore(GraphStore delegate) {
+            this.delegate = delegate;
+        }
+
+        @Override
+        public void saveEntity(EntityRecord entity) {
+            delegate.saveEntity(entity);
+        }
+
+        @Override
+        public void saveRelation(RelationRecord relation) {
+            delegate.saveRelation(relation);
+        }
+
+        @Override
+        public java.util.Optional<EntityRecord> loadEntity(String entityId) {
+            loadEntityCalls++;
+            return delegate.loadEntity(entityId);
+        }
+
+        @Override
+        public java.util.Optional<RelationRecord> loadRelation(String relationId) {
+            loadRelationCalls++;
+            return delegate.loadRelation(relationId);
+        }
+
+        @Override
+        public List<EntityRecord> loadEntities(List<String> entityIds) {
+            loadEntitiesCalls++;
+            return delegate.loadEntities(entityIds);
+        }
+
+        @Override
+        public List<RelationRecord> loadRelations(List<String> relationIds) {
+            loadRelationsCalls++;
+            return delegate.loadRelations(relationIds);
+        }
+
+        @Override
+        public List<EntityRecord> allEntities() {
+            return delegate.allEntities();
+        }
+
+        @Override
+        public List<RelationRecord> allRelations() {
+            return delegate.allRelations();
+        }
+
+        @Override
+        public List<RelationRecord> findRelations(String entityId) {
+            return delegate.findRelations(entityId);
+        }
+    }
+
+    private static final class RecordingChunkStore implements ChunkStore {
+        private final ChunkStore delegate;
+        private int loadCalls;
+        private int batchLoadCalls;
+
+        private RecordingChunkStore(ChunkStore delegate) {
+            this.delegate = delegate;
+        }
+
+        @Override
+        public void save(ChunkRecord chunk) {
+            delegate.save(chunk);
+        }
+
+        @Override
+        public java.util.Optional<ChunkRecord> load(String chunkId) {
+            loadCalls++;
+            return delegate.load(chunkId);
+        }
+
+        @Override
+        public Map<String, ChunkRecord> loadAll(List<String> chunkIds) {
+            batchLoadCalls++;
+            return delegate.loadAll(chunkIds);
+        }
+
+        @Override
+        public List<ChunkRecord> list() {
+            return delegate.list();
+        }
+
+        @Override
+        public List<ChunkRecord> listByDocument(String documentId) {
+            return delegate.listByDocument(documentId);
         }
     }
 

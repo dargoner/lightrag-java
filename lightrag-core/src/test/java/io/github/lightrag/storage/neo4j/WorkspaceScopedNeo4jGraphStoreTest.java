@@ -5,14 +5,20 @@ import io.github.lightrag.storage.GraphStore;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.neo4j.driver.AuthTokens;
+import org.neo4j.driver.Driver;
 import org.neo4j.driver.GraphDatabase;
+import org.neo4j.driver.Result;
 import org.neo4j.driver.SessionConfig;
+import org.neo4j.driver.TransactionContext;
 import org.testcontainers.containers.Neo4jContainer;
 import org.testcontainers.junit.jupiter.Container;
 import org.testcontainers.junit.jupiter.Testcontainers;
 
 import java.lang.reflect.Method;
+import java.lang.reflect.Proxy;
+import java.util.ArrayList;
 import java.util.List;
+import java.util.concurrent.CopyOnWriteArrayList;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
@@ -202,6 +208,27 @@ class WorkspaceScopedNeo4jGraphStoreTest {
         assertOverrides("loadRelations", List.class);
     }
 
+    @Test
+    void findRelationsQueriesUseScopedIdsInCypher() {
+        var queries = new CopyOnWriteArrayList<String>();
+
+        try (var store = new WorkspaceScopedNeo4jGraphStore(recordingDriver(queries), "neo4j", new WorkspaceScope("alpha"))) {
+            queries.clear();
+
+            store.findRelations("entity-1");
+            store.findRelations(List.of("entity-1", "entity-2"));
+        }
+
+        assertThat(queries).hasSize(2);
+        assertThat(queries.get(0))
+            .contains("scopedId: $scopedEntityId")
+            .doesNotContain("id: $id");
+        assertThat(queries.get(1))
+            .contains("$scopedEntityIds")
+            .contains("scopedId: scopedEntityId")
+            .doesNotContain("id: entityId");
+    }
+
     private static WorkspaceScopedNeo4jGraphStore newStore(String workspaceId) {
         return new WorkspaceScopedNeo4jGraphStore(newNeo4jConfig(), new WorkspaceScope(workspaceId));
     }
@@ -270,5 +297,63 @@ class WorkspaceScopedNeo4jGraphStoreTest {
     private static void assertOverrides(String methodName, Class<?>... parameterTypes) throws NoSuchMethodException {
         Method method = WorkspaceScopedNeo4jGraphStore.class.getMethod(methodName, parameterTypes);
         assertThat(method.getDeclaringClass()).isEqualTo(WorkspaceScopedNeo4jGraphStore.class);
+    }
+
+    private static Driver recordingDriver(List<String> queries) {
+        var emptyResult = (Result) Proxy.newProxyInstance(
+            Result.class.getClassLoader(),
+            new Class<?>[]{Result.class},
+            (proxy, method, args) -> switch (method.getName()) {
+                case "hasNext" -> false;
+                case "list" -> List.of();
+                case "close" -> null;
+                default -> unsupported(method.getName());
+            }
+        );
+        var tx = (TransactionContext) Proxy.newProxyInstance(
+            TransactionContext.class.getClassLoader(),
+            new Class<?>[]{TransactionContext.class},
+            (proxy, method, args) -> {
+                if ("run".equals(method.getName())) {
+                    queries.add((String) args[0]);
+                    return emptyResult;
+                }
+                return unsupported(method.getName());
+            }
+        );
+        var session = Proxy.newProxyInstance(
+            Driver.class.getClassLoader(),
+            new Class<?>[]{org.neo4j.driver.Session.class},
+            (proxy, method, args) -> {
+                if ("executeRead".equals(method.getName()) || "executeWrite".equals(method.getName())) {
+                    return invokeTransactionCallback(args[0], tx);
+                }
+                if ("close".equals(method.getName())) {
+                    return null;
+                }
+                return unsupported(method.getName());
+            }
+        );
+        return (Driver) Proxy.newProxyInstance(
+            Driver.class.getClassLoader(),
+            new Class<?>[]{Driver.class},
+            (proxy, method, args) -> {
+                if ("verifyConnectivity".equals(method.getName()) || "close".equals(method.getName())) {
+                    return null;
+                }
+                if ("session".equals(method.getName())) {
+                    return session;
+                }
+                return unsupported(method.getName());
+            }
+        );
+    }
+
+    private static Object invokeTransactionCallback(Object callback, TransactionContext tx) throws Exception {
+        return callback.getClass().getMethod("execute", TransactionContext.class).invoke(callback, tx);
+    }
+
+    private static Object unsupported(String methodName) {
+        throw new UnsupportedOperationException("Unsupported proxy method: " + methodName);
     }
 }

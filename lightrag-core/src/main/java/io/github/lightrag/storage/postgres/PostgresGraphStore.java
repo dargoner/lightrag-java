@@ -9,9 +9,14 @@ import javax.sql.DataSource;
 import java.sql.Connection;
 import java.sql.ResultSet;
 import java.sql.SQLException;
+import java.util.Collections;
+import java.util.LinkedHashMap;
+import java.util.LinkedHashSet;
 import java.util.List;
+import java.util.Map;
 import java.util.Objects;
 import java.util.Optional;
+import java.util.Set;
 
 public final class PostgresGraphStore implements GraphStore {
     private static final Logger log = LoggerFactory.getLogger(PostgresGraphStore.class);
@@ -177,6 +182,46 @@ public final class PostgresGraphStore implements GraphStore {
         });
     }
 
+    @Override
+    public Map<String, List<RelationRecord>> findRelations(List<String> entityIds) {
+        var ids = List.copyOf(Objects.requireNonNull(entityIds, "entityIds"));
+        if (ids.isEmpty()) {
+            return Map.of();
+        }
+        var uniqueIds = new LinkedHashSet<>(ids);
+        return connectionAccess.withConnection(connection -> {
+            try (var statement = connection.prepareStatement(
+                """
+                SELECT id, source_entity_id, target_entity_id, type, description, weight
+                FROM %s
+                WHERE workspace_id = ?
+                  AND (source_entity_id IN (%s) OR target_entity_id IN (%s))
+                ORDER BY id
+                """.formatted(relationsTable, placeholders(uniqueIds.size()), placeholders(uniqueIds.size()))
+            )) {
+                statement.setString(1, workspaceId);
+                int parameterIndex = 2;
+                for (var id : uniqueIds) {
+                    statement.setString(parameterIndex++, id);
+                }
+                for (var id : uniqueIds) {
+                    statement.setString(parameterIndex++, id);
+                }
+                try (var resultSet = statement.executeQuery()) {
+                    var relationsByEntityId = initializeRelationBuckets(uniqueIds);
+                    while (resultSet.next()) {
+                        var relation = readRelation(connection, resultSet);
+                        addRelation(relationsByEntityId, uniqueIds, relation.sourceEntityId(), relation);
+                        if (!relation.sourceEntityId().equals(relation.targetEntityId())) {
+                            addRelation(relationsByEntityId, uniqueIds, relation.targetEntityId(), relation);
+                        }
+                    }
+                    return freezeRelationBuckets(relationsByEntityId);
+                }
+            }
+        });
+    }
+
     private Optional<EntityRecord> loadEntity(Connection connection, String entityId) throws SQLException {
         try (var statement = connection.prepareStatement(
             """
@@ -268,6 +313,38 @@ public final class PostgresGraphStore implements GraphStore {
                 return List.copyOf(values);
             }
         }
+    }
+
+    private static Map<String, List<RelationRecord>> initializeRelationBuckets(Set<String> entityIds) {
+        var relationsByEntityId = new LinkedHashMap<String, List<RelationRecord>>();
+        for (var entityId : entityIds) {
+            relationsByEntityId.put(entityId, new java.util.ArrayList<>());
+        }
+        return relationsByEntityId;
+    }
+
+    private static void addRelation(
+        Map<String, List<RelationRecord>> relationsByEntityId,
+        Set<String> requestedIds,
+        String entityId,
+        RelationRecord relation
+    ) {
+        if (!requestedIds.contains(entityId)) {
+            return;
+        }
+        relationsByEntityId.get(entityId).add(relation);
+    }
+
+    private static Map<String, List<RelationRecord>> freezeRelationBuckets(Map<String, List<RelationRecord>> relationsByEntityId) {
+        var immutable = new LinkedHashMap<String, List<RelationRecord>>();
+        relationsByEntityId.forEach((entityId, relations) -> immutable.put(entityId, List.copyOf(relations)));
+        return Collections.unmodifiableMap(immutable);
+    }
+
+    private static String placeholders(int count) {
+        return java.util.stream.IntStream.range(0, count)
+            .mapToObj(index -> "?")
+            .collect(java.util.stream.Collectors.joining(", "));
     }
 
     private void upsertEntity(Connection connection, EntityRecord entity) throws SQLException {

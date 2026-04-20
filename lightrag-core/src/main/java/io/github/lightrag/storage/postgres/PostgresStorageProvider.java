@@ -509,6 +509,11 @@ public final class PostgresStorageProvider implements AtomicStorageProvider, Aut
         }
 
         @Override
+        public java.util.Map<String, ChunkRecord> loadAll(java.util.List<String> chunkIds) {
+            return withReadLock(() -> delegate.loadAll(chunkIds));
+        }
+
+        @Override
         public List<ChunkRecord> list() {
             return withReadLock(delegate::list);
         }
@@ -559,6 +564,11 @@ public final class PostgresStorageProvider implements AtomicStorageProvider, Aut
         @Override
         public List<RelationRecord> findRelations(String entityId) {
             return withReadLock(() -> delegate.findRelations(entityId));
+        }
+
+        @Override
+        public java.util.Map<String, java.util.List<RelationRecord>> findRelations(java.util.List<String> entityIds) {
+            return withReadLock(() -> delegate.findRelations(entityIds));
         }
     }
 

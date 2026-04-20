@@ -441,6 +441,16 @@ public final class PostgresMilvusNeo4jStorageProvider implements AtomicStoragePr
         }
 
         @Override
+        public List<EntityRecord> loadEntities(List<String> entityIds) {
+            return withReadLock(() -> coordinator.graphStore().loadEntities(entityIds));
+        }
+
+        @Override
+        public List<RelationRecord> loadRelations(List<String> relationIds) {
+            return withReadLock(() -> coordinator.graphStore().loadRelations(relationIds));
+        }
+
+        @Override
         public List<EntityRecord> allEntities() {
             return withReadLock(() -> coordinator.graphStore().allEntities());
         }
@@ -453,6 +463,11 @@ public final class PostgresMilvusNeo4jStorageProvider implements AtomicStoragePr
         @Override
         public List<RelationRecord> findRelations(String entityId) {
             return withReadLock(() -> coordinator.graphStore().findRelations(entityId));
+        }
+
+        @Override
+        public Map<String, List<RelationRecord>> findRelations(List<String> entityIds) {
+            return withReadLock(() -> coordinator.graphStore().findRelations(entityIds));
         }
     }
 
@@ -499,6 +514,11 @@ public final class PostgresMilvusNeo4jStorageProvider implements AtomicStoragePr
         @Override
         public Optional<ChunkRecord> load(String chunkId) {
             return withReadLock(() -> delegate.load(chunkId));
+        }
+
+        @Override
+        public Map<String, ChunkRecord> loadAll(List<String> chunkIds) {
+            return withReadLock(() -> delegate.loadAll(chunkIds));
         }
 
         @Override

@@ -1,6 +1,7 @@
 package io.github.lightrag.storage;
 
 import java.util.List;
+import java.util.LinkedHashMap;
 import java.util.Map;
 import java.util.Objects;
 import java.util.Optional;
@@ -9,6 +10,15 @@ public interface ChunkStore {
     void save(ChunkRecord chunk);
 
     Optional<ChunkRecord> load(String chunkId);
+
+    default Map<String, ChunkRecord> loadAll(List<String> chunkIds) {
+        Objects.requireNonNull(chunkIds, "chunkIds");
+        var chunksById = new LinkedHashMap<String, ChunkRecord>();
+        for (var chunkId : chunkIds) {
+            load(chunkId).ifPresent(chunk -> chunksById.put(chunkId, chunk));
+        }
+        return java.util.Collections.unmodifiableMap(chunksById);
+    }
 
     List<ChunkRecord> list();
 

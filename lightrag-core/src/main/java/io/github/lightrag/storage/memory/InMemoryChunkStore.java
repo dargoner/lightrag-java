@@ -1,7 +1,9 @@
 package io.github.lightrag.storage.memory;
 
 import io.github.lightrag.storage.ChunkStore;
+import java.util.Collections;
 import java.util.Comparator;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Objects;
 import java.util.Optional;
@@ -43,6 +45,25 @@ public final class InMemoryChunkStore implements ChunkStore {
         readLock.lock();
         try {
             return Optional.ofNullable(chunks.get(Objects.requireNonNull(chunkId, "chunkId")));
+        } finally {
+            readLock.unlock();
+        }
+    }
+
+    @Override
+    public java.util.Map<String, ChunkRecord> loadAll(List<String> chunkIds) {
+        var ids = List.copyOf(Objects.requireNonNull(chunkIds, "chunkIds"));
+        var readLock = lock.readLock();
+        readLock.lock();
+        try {
+            var chunksById = new LinkedHashMap<String, ChunkRecord>();
+            for (var chunkId : ids) {
+                var chunk = chunks.get(chunkId);
+                if (chunk != null) {
+                    chunksById.put(chunkId, chunk);
+                }
+            }
+            return Collections.unmodifiableMap(chunksById);
         } finally {
             readLock.unlock();
         }

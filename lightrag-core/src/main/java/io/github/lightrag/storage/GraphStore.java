@@ -1,7 +1,9 @@
 package io.github.lightrag.storage;
 
 import java.util.ArrayList;
+import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Map;
 import java.util.Objects;
 import java.util.Optional;
 
@@ -51,6 +53,15 @@ public interface GraphStore {
     List<RelationRecord> allRelations();
 
     List<RelationRecord> findRelations(String entityId);
+
+    default Map<String, List<RelationRecord>> findRelations(List<String> entityIds) {
+        Objects.requireNonNull(entityIds, "entityIds");
+        var relationsByEntityId = new LinkedHashMap<String, List<RelationRecord>>();
+        for (var entityId : entityIds) {
+            relationsByEntityId.put(entityId, List.copyOf(findRelations(entityId)));
+        }
+        return java.util.Collections.unmodifiableMap(relationsByEntityId);
+    }
 
     record EntityRecord(
         String id,

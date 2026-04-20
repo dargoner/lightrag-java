@@ -56,6 +56,46 @@ class QueryKeywordExtractorTest {
     }
 
     @Test
+    void usesDeterministicKeywordsForShortLiteralHybridQueriesWithoutCallingModel() {
+        var model = new CountingKeywordChatModel("""
+            {"high_level_keywords":["ignored"],"low_level_keywords":["ignored"]}
+            """);
+        var extractor = new QueryKeywordExtractor();
+
+        var resolved = extractor.resolve(QueryRequest.builder()
+            .query("执法")
+            .mode(QueryMode.HYBRID)
+            .build(), model);
+
+        assertThat(resolved.hlKeywords()).containsExactly("执法");
+        assertThat(resolved.llKeywords()).containsExactly("执法");
+        assertThat(model.keywordExtractionCallCount()).isZero();
+    }
+
+    @Test
+    void usesDeterministicKeywordsForShortLiteralQueriesByMode() {
+        var model = new CountingKeywordChatModel("""
+            {"high_level_keywords":["ignored"],"low_level_keywords":["ignored"]}
+            """);
+        var extractor = new QueryKeywordExtractor();
+
+        var local = extractor.resolve(QueryRequest.builder()
+            .query("执法")
+            .mode(QueryMode.LOCAL)
+            .build(), model);
+        var global = extractor.resolve(QueryRequest.builder()
+            .query("执法")
+            .mode(QueryMode.GLOBAL)
+            .build(), model);
+
+        assertThat(local.hlKeywords()).isEmpty();
+        assertThat(local.llKeywords()).containsExactly("执法");
+        assertThat(global.hlKeywords()).containsExactly("执法");
+        assertThat(global.llKeywords()).isEmpty();
+        assertThat(model.keywordExtractionCallCount()).isZero();
+    }
+
+    @Test
     void skipsKeywordExtractionForNaiveAndBypassModes() {
         var model = new CountingKeywordChatModel("""
             {"high_level_keywords":["ignored"],"low_level_keywords":["ignored"]}

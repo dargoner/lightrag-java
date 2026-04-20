@@ -5,7 +5,11 @@ import io.github.lightrag.storage.ChunkStore;
 import javax.sql.DataSource;
 import java.sql.ResultSet;
 import java.sql.SQLException;
+import java.util.Collections;
+import java.util.LinkedHashMap;
+import java.util.LinkedHashSet;
 import java.util.List;
+import java.util.Map;
 import java.util.Objects;
 import java.util.Optional;
 
@@ -82,6 +86,46 @@ public final class PostgresChunkStore implements ChunkStore {
     }
 
     @Override
+    public Map<String, ChunkRecord> loadAll(List<String> chunkIds) {
+        var ids = List.copyOf(Objects.requireNonNull(chunkIds, "chunkIds"));
+        if (ids.isEmpty()) {
+            return Map.of();
+        }
+        var uniqueIds = new LinkedHashSet<>(ids);
+        return connectionAccess.withConnection(connection -> {
+            try (var statement = connection.prepareStatement(
+                """
+                SELECT id, document_id, text, token_count, chunk_order, metadata
+                FROM %s
+                WHERE workspace_id = ?
+                  AND id IN (%s)
+                """.formatted(tableName, placeholders(uniqueIds.size()))
+            )) {
+                statement.setString(1, workspaceId);
+                int parameterIndex = 2;
+                for (var id : uniqueIds) {
+                    statement.setString(parameterIndex++, id);
+                }
+                try (var resultSet = statement.executeQuery()) {
+                    var loaded = new LinkedHashMap<String, ChunkRecord>();
+                    while (resultSet.next()) {
+                        var chunk = readChunk(resultSet);
+                        loaded.put(chunk.id(), chunk);
+                    }
+                    var ordered = new LinkedHashMap<String, ChunkRecord>();
+                    for (var id : uniqueIds) {
+                        var chunk = loaded.get(id);
+                        if (chunk != null) {
+                            ordered.put(id, chunk);
+                        }
+                    }
+                    return Collections.unmodifiableMap(ordered);
+                }
+            }
+        });
+    }
+
+    @Override
     public List<ChunkRecord> list() {
         return connectionAccess.withConnection(connection -> {
             try (var statement = connection.prepareStatement(
@@ -139,5 +183,11 @@ public final class PostgresChunkStore implements ChunkStore {
             resultSet.getInt("chunk_order"),
             JdbcJsonCodec.readStringMap(resultSet.getString("metadata"))
         );
+    }
+
+    private static String placeholders(int count) {
+        return java.util.stream.IntStream.range(0, count)
+            .mapToObj(index -> "?")
+            .collect(java.util.stream.Collectors.joining(", "));
     }
 }

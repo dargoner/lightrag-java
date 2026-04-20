@@ -7,7 +7,10 @@ import java.util.Map;
 import java.util.Objects;
 import java.util.Optional;
 import java.util.Set;
+import java.util.ArrayList;
+import java.util.Collections;
 import java.util.HashMap;
+import java.util.LinkedHashMap;
 import java.util.TreeMap;
 import java.util.TreeSet;
 import java.util.concurrent.locks.ReadWriteLock;
@@ -115,6 +118,34 @@ public final class InMemoryGraphStore implements GraphStore {
                 .map(relations::get)
                 .filter(Objects::nonNull)
                 .toList();
+        } finally {
+            readLock.unlock();
+        }
+    }
+
+    @Override
+    public Map<String, List<RelationRecord>> findRelations(List<String> entityIds) {
+        var ids = List.copyOf(Objects.requireNonNull(entityIds, "entityIds"));
+        var readLock = lock.readLock();
+        readLock.lock();
+        try {
+            var relationsByEntityId = new LinkedHashMap<String, List<RelationRecord>>();
+            for (var entityId : ids) {
+                var relationIds = relationIdsByEntity.get(entityId);
+                if (relationIds == null || relationIds.isEmpty()) {
+                    relationsByEntityId.put(entityId, List.of());
+                    continue;
+                }
+                var entityRelations = new ArrayList<RelationRecord>(relationIds.size());
+                for (var relationId : relationIds) {
+                    var relation = relations.get(relationId);
+                    if (relation != null) {
+                        entityRelations.add(relation);
+                    }
+                }
+                relationsByEntityId.put(entityId, List.copyOf(entityRelations));
+            }
+            return Collections.unmodifiableMap(relationsByEntityId);
         } finally {
             readLock.unlock();
         }

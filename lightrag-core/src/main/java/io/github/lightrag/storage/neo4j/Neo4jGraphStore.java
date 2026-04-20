@@ -54,6 +54,11 @@ public final class Neo4jGraphStore implements GraphStore, AutoCloseable {
         return delegate.findRelations(entityId);
     }
 
+    @Override
+    public java.util.Map<String, List<RelationRecord>> findRelations(List<String> entityIds) {
+        return delegate.findRelations(entityIds);
+    }
+
     public Neo4jGraphSnapshot captureSnapshot() {
         return delegate.captureSnapshot();
     }

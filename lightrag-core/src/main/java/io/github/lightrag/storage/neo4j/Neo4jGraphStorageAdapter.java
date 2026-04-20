@@ -129,6 +129,11 @@ public final class Neo4jGraphStorageAdapter implements GraphStorageAdapter {
         }
 
         @Override
+        public java.util.Map<String, java.util.List<RelationRecord>> findRelations(java.util.List<String> entityIds) {
+            return delegate.findRelations(entityIds);
+        }
+
+        @Override
         public Neo4jGraphSnapshot captureSnapshot() {
             return delegate.captureSnapshot();
         }

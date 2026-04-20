@@ -28,6 +28,7 @@ import io.github.lightrag.storage.SnapshotStore;
 import io.github.lightrag.storage.VectorStorageAdapter;
 import io.github.lightrag.storage.VectorStore;
 import io.github.lightrag.storage.neo4j.Neo4jGraphSnapshot;
+import java.lang.reflect.Method;
 import java.nio.file.Path;
 import java.sql.SQLException;
 import java.time.Instant;
@@ -49,6 +50,26 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 class PostgresMilvusNeo4jStorageProviderTest {
+    @Test
+    void mirroringGraphStoreOverridesBatchGraphLoads() throws Exception {
+        Class<?> mirroringGraphStoreClass = Class.forName(
+            "io.github.lightrag.storage.postgres.PostgresMilvusNeo4jStorageProvider$MirroringGraphStore"
+        );
+
+        Method loadEntities = mirroringGraphStoreClass.getDeclaredMethod("loadEntities", List.class);
+        Method loadRelations = mirroringGraphStoreClass.getDeclaredMethod("loadRelations", List.class);
+        Method findRelations = mirroringGraphStoreClass.getDeclaredMethod("findRelations", List.class);
+        Class<?> lockedChunkStoreClass = Class.forName(
+            "io.github.lightrag.storage.postgres.PostgresMilvusNeo4jStorageProvider$LockedChunkStore"
+        );
+        Method loadAllChunks = lockedChunkStoreClass.getDeclaredMethod("loadAll", List.class);
+
+        assertThat(loadEntities.getReturnType()).isEqualTo(List.class);
+        assertThat(loadRelations.getReturnType()).isEqualTo(List.class);
+        assertThat(findRelations.getReturnType()).isEqualTo(Map.class);
+        assertThat(loadAllChunks.getReturnType()).isEqualTo(Map.class);
+    }
+
     @Test
     void exposesStableTopLevelStoresAndDistinctAtomicViewStores() {
         try (

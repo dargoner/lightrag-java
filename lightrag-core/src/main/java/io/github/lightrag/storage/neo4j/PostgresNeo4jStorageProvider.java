@@ -331,6 +331,11 @@ public final class PostgresNeo4jStorageProvider implements AtomicStorageProvider
         public List<RelationRecord> findRelations(String entityId) {
             return withReadLock(() -> coordinator.graphStore().findRelations(entityId));
         }
+
+        @Override
+        public java.util.Map<String, java.util.List<RelationRecord>> findRelations(java.util.List<String> entityIds) {
+            return withReadLock(() -> coordinator.graphStore().findRelations(entityIds));
+        }
     }
 
     private final class LockedDocumentStore implements DocumentStore {
@@ -376,6 +381,11 @@ public final class PostgresNeo4jStorageProvider implements AtomicStorageProvider
         @Override
         public Optional<ChunkRecord> load(String chunkId) {
             return withReadLock(() -> delegate.load(chunkId));
+        }
+
+        @Override
+        public java.util.Map<String, ChunkRecord> loadAll(java.util.List<String> chunkIds) {
+            return withReadLock(() -> delegate.loadAll(chunkIds));
         }
 
         @Override

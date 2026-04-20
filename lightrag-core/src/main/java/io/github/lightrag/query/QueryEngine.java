@@ -8,6 +8,8 @@ import io.github.lightrag.model.RerankModel;
 import io.github.lightrag.synthesis.PathAwareAnswerSynthesizer;
 import io.github.lightrag.types.QueryContext;
 import io.github.lightrag.types.ScoredChunk;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 import java.util.EnumMap;
 import java.util.LinkedHashMap;
@@ -16,6 +18,7 @@ import java.util.Map;
 import java.util.Objects;
 
 public final class QueryEngine {
+    private static final Logger log = LoggerFactory.getLogger(QueryEngine.class);
     private static final int CHUNK_BUDGET_BUFFER_TOKENS = 16;
 
     private static final String GRAPH_SYSTEM_PROMPT_TEMPLATE = """
@@ -165,11 +168,14 @@ public final class QueryEngine {
 
     public QueryResult query(QueryRequest request) {
         var query = Objects.requireNonNull(request, "request");
+        var startedAt = System.nanoTime();
         if (query.mode() == QueryMode.BYPASS) {
             return bypassQuery(query);
         }
         var responseModel = selectChatModel(query);
+        var keywordStartedAt = System.nanoTime();
         var resolvedQuery = keywordExtractor.resolve(query, responseModel);
+        var keywordMs = elapsedMillis(keywordStartedAt);
         var useMultiHop = shouldUseMultiHop(resolvedQuery);
         var strategy = useMultiHop ? multiHopStrategy : strategies.get(resolvedQuery.mode());
         if (strategy == null) {
@@ -179,7 +185,9 @@ public final class QueryEngine {
         var retrievalRequest = rerankEnabled(resolvedQuery) && !useMultiHop
             ? expandChunkRequest(resolvedQuery, rerankCandidateMultiplier)
             : resolvedQuery;
+        var retrieveStartedAt = System.nanoTime();
         var retrievedContext = strategy.retrieve(retrievalRequest);
+        var retrieveMs = elapsedMillis(retrieveStartedAt);
         var rerankedChunks = rerankEnabled(resolvedQuery) && !useMultiHop
             ? rerankChunks(resolvedQuery, retrievedContext.matchedChunks())
             : retrievedContext.matchedChunks();
@@ -212,14 +220,31 @@ public final class QueryEngine {
             finalChunks,
             ""
         );
+        var assembleStartedAt = System.nanoTime();
         var assembledContext = finalMultiHopContextReusable
             ? retrievedContext.assembledContext()
             : contextAssembler.assemble(finalContext);
+        var assembleMs = elapsedMillis(assembleStartedAt);
         var assembledQueryContext = new QueryContext(
             finalContext.matchedEntities(),
             finalContext.matchedRelations(),
             finalContext.matchedChunks(),
             assembledContext
+        );
+        log.info(
+            "LightRAG query engine stages: mode={}, resolvedMode={}, query={}, keywordMs={}, retrieveMs={}, assembleMs={}, useMultiHop={}, rerankEnabled={}, entityCount={}, relationCount={}, chunkCount={}, elapsedMs={}",
+            query.mode(),
+            resolvedQuery.mode(),
+            query.query(),
+            keywordMs,
+            retrieveMs,
+            assembleMs,
+            useMultiHop,
+            rerankEnabled(resolvedQuery) && !useMultiHop,
+            finalContext.matchedEntities().size(),
+            finalContext.matchedRelations().size(),
+            finalContext.matchedChunks().size(),
+            elapsedMillis(startedAt)
         );
         var references = QueryReferences.fromChunks(assembledQueryContext.matchedChunks(), resolvedQuery.includeReferences());
         var chatRequest = new ChatModel.ChatRequest(
@@ -318,6 +343,10 @@ public final class QueryEngine {
 
     private ChatModel selectChatModel(QueryRequest request) {
         return request.modelFunc() != null ? request.modelFunc() : chatModel;
+    }
+
+    private static long elapsedMillis(long startedAt) {
+        return (System.nanoTime() - startedAt) / 1_000_000L;
     }
 
     private String buildSystemPrompt(QueryRequest query, String assembledContext) {

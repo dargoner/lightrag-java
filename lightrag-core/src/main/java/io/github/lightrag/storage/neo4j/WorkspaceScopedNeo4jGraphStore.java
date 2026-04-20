@@ -15,7 +15,9 @@ import org.neo4j.driver.TransactionContext;
 import org.neo4j.driver.Value;
 
 import java.util.ArrayList;
+import java.util.Collections;
 import java.util.HashMap;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
@@ -155,10 +157,11 @@ public final class WorkspaceScopedNeo4jGraphStore implements GraphStore, AutoClo
         if (ids.isEmpty()) {
             return List.of();
         }
+        var startedAt = System.nanoTime();
         var scopedIds = ids.stream()
             .map(this::scopedId)
             .toList();
-        return read(tx -> list(
+        var records = read(tx -> list(
             tx.run(
                 """
                 UNWIND range(0, size($scopedEntityIds) - 1) AS idx
@@ -176,6 +179,14 @@ public final class WorkspaceScopedNeo4jGraphStore implements GraphStore, AutoClo
             ),
             WorkspaceScopedNeo4jGraphStore::toEntity
         ));
+        log.info(
+            "Neo4j graph loadEntities completed: workspaceId={}, requestedCount={}, returnedCount={}, elapsedMs={}",
+            workspaceId,
+            ids.size(),
+            records.size(),
+            elapsedMillis(startedAt)
+        );
+        return records;
     }
 
     @Override
@@ -184,10 +195,11 @@ public final class WorkspaceScopedNeo4jGraphStore implements GraphStore, AutoClo
         if (ids.isEmpty()) {
             return List.of();
         }
+        var startedAt = System.nanoTime();
         var scopedIds = ids.stream()
             .map(this::scopedId)
             .toList();
-        return read(tx -> list(
+        var records = read(tx -> list(
             tx.run(
                 """
                 UNWIND range(0, size($scopedRelationIds) - 1) AS idx
@@ -205,6 +217,14 @@ public final class WorkspaceScopedNeo4jGraphStore implements GraphStore, AutoClo
             ),
             WorkspaceScopedNeo4jGraphStore::toRelation
         ));
+        log.info(
+            "Neo4j graph loadRelations completed: workspaceId={}, requestedCount={}, returnedCount={}, elapsedMs={}",
+            workspaceId,
+            ids.size(),
+            records.size(),
+            elapsedMillis(startedAt)
+        );
+        return records;
     }
 
     @Override
@@ -241,20 +261,79 @@ public final class WorkspaceScopedNeo4jGraphStore implements GraphStore, AutoClo
     @Override
     public List<RelationRecord> findRelations(String entityId) {
         var id = Objects.requireNonNull(entityId, "entityId");
-        return read(tx -> list(
+        var scopedEntityId = scopedId(id);
+        var startedAt = System.nanoTime();
+        var records = read(tx -> list(
             tx.run(
                 """
-                MATCH (entity:%s {workspaceId: $workspaceId, id: $id})-[relation:%s {workspaceId: $workspaceId}]-(adjacent:%s {workspaceId: $workspaceId})
+                MATCH (entity:%s {workspaceId: $workspaceId, scopedId: $scopedEntityId})-[relation:%s {workspaceId: $workspaceId}]-(adjacent:%s {workspaceId: $workspaceId})
                 RETURN startNode(relation).id AS sourceEntityId, relation, endNode(relation).id AS targetEntityId
                 ORDER BY relation.id
                 """.formatted(ENTITY_LABEL, RELATION_TYPE, ENTITY_LABEL),
                 org.neo4j.driver.Values.parameters(
                     "workspaceId", workspaceId,
-                    "id", id
+                    "scopedEntityId", scopedEntityId
                 )
             ),
             WorkspaceScopedNeo4jGraphStore::toRelation
         ));
+        log.info(
+            "Neo4j graph findRelations completed: workspaceId={}, entityId={}, relationCount={}, elapsedMs={}",
+            workspaceId,
+            id,
+            records.size(),
+            elapsedMillis(startedAt)
+        );
+        return records;
+    }
+
+    @Override
+    public Map<String, List<RelationRecord>> findRelations(List<String> entityIds) {
+        var ids = List.copyOf(Objects.requireNonNull(entityIds, "entityIds"));
+        if (ids.isEmpty()) {
+            return Map.of();
+        }
+        var startedAt = System.nanoTime();
+        var scopedIds = ids.stream()
+            .map(this::scopedId)
+            .toList();
+        var relationsMap = read(tx -> {
+            var relationsByEntityId = new LinkedHashMap<String, List<RelationRecord>>();
+            for (var entityId : ids) {
+                relationsByEntityId.put(entityId, new ArrayList<>());
+            }
+            var queryResult = tx.run(
+                """
+                UNWIND range(0, size($entityIds) - 1) AS idx
+                WITH idx, $entityIds[idx] AS entityId, $scopedEntityIds[idx] AS scopedEntityId
+                OPTIONAL MATCH (:Entity {workspaceId: $workspaceId, scopedId: scopedEntityId})-[relation:%s {workspaceId: $workspaceId}]-(adjacent:%s {workspaceId: $workspaceId})
+                WITH entityId, relation
+                WHERE relation IS NOT NULL
+                RETURN entityId, startNode(relation).id AS sourceEntityId, relation, endNode(relation).id AS targetEntityId
+                ORDER BY entityId, relation.id
+                """.formatted(RELATION_TYPE, ENTITY_LABEL),
+                org.neo4j.driver.Values.parameters(
+                    "workspaceId", workspaceId,
+                    "entityIds", ids,
+                    "scopedEntityIds", scopedIds
+                )
+            );
+            while (queryResult.hasNext()) {
+                var record = queryResult.next();
+                relationsByEntityId.get(record.get("entityId").asString()).add(toRelation(record));
+            }
+            var immutable = new LinkedHashMap<String, List<RelationRecord>>();
+            relationsByEntityId.forEach((entityId, relations) -> immutable.put(entityId, List.copyOf(relations)));
+            return Collections.unmodifiableMap(immutable);
+        });
+        log.info(
+            "Neo4j graph batch findRelations completed: workspaceId={}, requestedCount={}, totalRelationCount={}, elapsedMs={}",
+            workspaceId,
+            ids.size(),
+            relationsMap.values().stream().mapToInt(List::size).sum(),
+            elapsedMillis(startedAt)
+        );
+        return relationsMap;
     }
 
     public Neo4jGraphSnapshot captureSnapshot() {
@@ -599,5 +678,9 @@ public final class WorkspaceScopedNeo4jGraphStore implements GraphStore, AutoClo
     @FunctionalInterface
     private interface TransactionWork<T> {
         T apply(TransactionContext transaction);
+    }
+
+    private static long elapsedMillis(long startedAt) {
+        return (System.nanoTime() - startedAt) / 1_000_000L;
     }
 }

@@ -12,6 +12,8 @@ import io.github.lightrag.types.Relation;
 import io.github.lightrag.types.ScoredChunk;
 import io.github.lightrag.types.ScoredEntity;
 import io.github.lightrag.types.ScoredRelation;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 import java.util.Comparator;
 import java.util.LinkedHashMap;
@@ -19,6 +21,7 @@ import java.util.List;
 import java.util.Objects;
 
 public final class GlobalQueryStrategy implements QueryStrategy {
+    private static final Logger log = LoggerFactory.getLogger(GlobalQueryStrategy.class);
     private static final String RELATION_NAMESPACE = "relations";
 
     private final EmbeddingModel embeddingModel;
@@ -36,13 +39,17 @@ public final class GlobalQueryStrategy implements QueryStrategy {
     @Override
     public QueryContext retrieve(QueryRequest request) {
         var query = Objects.requireNonNull(request, "request");
+        var startedAt = System.nanoTime();
         var metadataPlan = QueryMetadataFilterSupport.buildPlan(query);
         var embeddingText = embeddingText(query);
         if (embeddingText == null) {
             return emptyContext();
         }
+        var embedStartedAt = System.nanoTime();
         var queryVector = embeddingModel.embedAll(List.of(embeddingText)).get(0);
+        var embedMs = elapsedMillis(embedStartedAt);
         var relationScores = new LinkedHashMap<String, Double>();
+        var vectorSearchStartedAt = System.nanoTime();
         for (var match : VectorSearches.search(
             storageProvider.vectorStore(),
             RELATION_NAMESPACE,
@@ -53,12 +60,11 @@ public final class GlobalQueryStrategy implements QueryStrategy {
         )) {
             relationScores.merge(match.id(), match.score(), Math::max);
         }
+        var vectorSearchMs = elapsedMillis(vectorSearchStartedAt);
 
-        var matchedRelations = QueryBudgeting.limitRelations(relationScores.entrySet().stream()
-            .map(entry -> storageProvider.graphStore().loadRelation(entry.getKey())
-                .map(relation -> new ScoredRelation(entry.getKey(), toRelation(relation), entry.getValue()))
-                .orElse(null))
-            .filter(Objects::nonNull)
+        var graphStartedAt = System.nanoTime();
+        var matchedRelations = QueryBudgeting.limitRelations(storageProvider.graphStore().loadRelations(List.copyOf(relationScores.keySet())).stream()
+            .map(relation -> new ScoredRelation(relation.id(), toRelation(relation), relationScores.getOrDefault(relation.id(), 0.0d)))
             .sorted(scoreOrder(ScoredRelation::score, ScoredRelation::relationId))
             .toList(), query.maxRelationTokens());
 
@@ -72,23 +78,25 @@ public final class GlobalQueryStrategy implements QueryStrategy {
             }
         }
 
-        var matchedEntities = QueryBudgeting.limitEntities(entityScores.entrySet().stream()
-            .map(entry -> storageProvider.graphStore().loadEntity(entry.getKey())
-                .map(entity -> new ScoredEntity(entry.getKey(), toEntity(entity), entry.getValue()))
-                .orElse(null))
-            .filter(Objects::nonNull)
+        var matchedEntities = QueryBudgeting.limitEntities(storageProvider.graphStore().loadEntities(List.copyOf(entityScores.keySet())).stream()
+            .map(entity -> new ScoredEntity(entity.id(), toEntity(entity), entityScores.getOrDefault(entity.id(), 0.0d)))
             .sorted(scoreOrder(ScoredEntity::score, ScoredEntity::entityId))
             .toList(), query.maxEntityTokens());
+        var graphMs = elapsedMillis(graphStartedAt);
+        var chunkStartedAt = System.nanoTime();
+        var chunksById = storageProvider.chunkStore().loadAll(List.copyOf(chunkScores.keySet()));
         var matchedChunks = QueryMetadataFilterSupport.expandAndFilter(metadataPlan, chunkScores.entrySet().stream()
-            .map(entry -> storageProvider.chunkStore().load(entry.getKey())
-                .map(chunk -> new ScoredChunk(entry.getKey(), toChunk(chunk), entry.getValue()))
-                .orElse(null))
+            .map(entry -> {
+                var chunk = chunksById.get(entry.getKey());
+                return chunk == null ? null : new ScoredChunk(entry.getKey(), toChunk(chunk), entry.getValue());
+            })
             .filter(Objects::nonNull)
             .sorted(scoreOrder(ScoredChunk::score, ScoredChunk::chunkId))
             .toList(),
             parentChunkExpander,
             query.chunkTopK()
         );
+        var chunkMs = elapsedMillis(chunkStartedAt);
 
         var context = new QueryContext(
             matchedEntities,
@@ -96,11 +104,29 @@ public final class GlobalQueryStrategy implements QueryStrategy {
             matchedChunks,
             ""
         );
+        var assembleStartedAt = System.nanoTime();
+        var assembledContext = contextAssembler.assemble(context);
+        var assembleMs = elapsedMillis(assembleStartedAt);
+        var elapsedMs = elapsedMillis(startedAt);
+        log.info(
+            "LightRAG global retrieve completed: mode={}, query={}, embedMs={}, vectorSearchMs={}, graphMs={}, chunkMs={}, assembleMs={}, elapsedMs={}, entityCount={}, relationCount={}, chunkCount={}",
+            query.mode(),
+            query.query(),
+            embedMs,
+            vectorSearchMs,
+            graphMs,
+            chunkMs,
+            assembleMs,
+            elapsedMs,
+            matchedEntities.size(),
+            matchedRelations.size(),
+            matchedChunks.size()
+        );
         return new QueryContext(
             context.matchedEntities(),
             context.matchedRelations(),
             context.matchedChunks(),
-            contextAssembler.assemble(context)
+            assembledContext
         );
     }
 
@@ -165,5 +191,9 @@ public final class GlobalQueryStrategy implements QueryStrategy {
         java.util.function.Function<T, String> idExtractor
     ) {
         return Comparator.comparingDouble(scoreExtractor).reversed().thenComparing(idExtractor);
+    }
+
+    private static long elapsedMillis(long startedAt) {
+        return (System.nanoTime() - startedAt) / 1_000_000L;
     }
 }

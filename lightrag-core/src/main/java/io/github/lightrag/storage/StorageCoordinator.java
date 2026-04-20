@@ -387,6 +387,33 @@ public final class StorageCoordinator implements AtomicStorageProvider, AutoClos
                 .toList();
         }
 
+        @Override
+        public Map<String, List<RelationRecord>> findRelations(List<String> entityIds) {
+            var ids = List.copyOf(Objects.requireNonNull(entityIds, "entityIds"));
+            if (ids.isEmpty()) {
+                return java.util.Collections.emptyMap();
+            }
+            var relationsByEntityId = new LinkedHashMap<String, List<RelationRecord>>();
+            for (var entityId : ids) {
+                relationsByEntityId.put(entityId, new ArrayList<>());
+            }
+            for (var relation : allRelations()) {
+                var sourceRelations = relationsByEntityId.get(relation.sourceEntityId());
+                if (sourceRelations != null) {
+                    sourceRelations.add(relation);
+                }
+                if (!relation.sourceEntityId().equals(relation.targetEntityId())) {
+                    var targetRelations = relationsByEntityId.get(relation.targetEntityId());
+                    if (targetRelations != null) {
+                        targetRelations.add(relation);
+                    }
+                }
+            }
+            var immutable = new LinkedHashMap<String, List<RelationRecord>>();
+            relationsByEntityId.forEach((entityId, relations) -> immutable.put(entityId, List.copyOf(relations)));
+            return java.util.Collections.unmodifiableMap(immutable);
+        }
+
         private GraphStorageAdapter.StagedGraphWrites toWrites() {
             if (stagedEntities.isEmpty() && stagedRelations.isEmpty()) {
                 return GraphStorageAdapter.StagedGraphWrites.empty();
