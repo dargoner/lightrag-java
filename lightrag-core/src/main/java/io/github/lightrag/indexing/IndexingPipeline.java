@@ -61,6 +61,7 @@ public final class IndexingPipeline {
     private final DocumentParsingOrchestrator documentParsingOrchestrator;
     private final Path snapshotPath;
     private final int maxParallelInsert;
+    private final int chunkExtractParallelism;
     private final int entityExtractMaxGleaning;
     private final int maxExtractInputTokens;
     private final String entityExtractionLanguage;
@@ -96,6 +97,7 @@ public final class IndexingPipeline {
             documentParsingOrchestrator,
             embeddingBatchSize,
             maxParallelInsert,
+            1,
             entityExtractMaxGleaning,
             maxExtractInputTokens,
             entityExtractionLanguage,
@@ -135,6 +137,7 @@ public final class IndexingPipeline {
             documentParsingOrchestrator,
             embeddingBatchSize,
             maxParallelInsert,
+            1,
             entityExtractMaxGleaning,
             maxExtractInputTokens,
             entityExtractionLanguage,
@@ -165,10 +168,134 @@ public final class IndexingPipeline {
         ExtractionRefinementOptions extractionRefinementOptions,
         IndexingProgressListener progressListener
     ) {
+        this(
+            extractionModel,
+            summaryModel,
+            embeddingModel,
+            storageProvider,
+            snapshotPath,
+            chunker,
+            documentParsingOrchestrator,
+            embeddingBatchSize,
+            maxParallelInsert,
+            1,
+            entityExtractMaxGleaning,
+            maxExtractInputTokens,
+            entityExtractionLanguage,
+            entityTypes,
+            embeddingSemanticMergeEnabled,
+            embeddingSemanticMergeThreshold,
+            extractionRefinementOptions,
+            progressListener
+        );
+    }
+
+    public IndexingPipeline(
+        ChatModel chatModel,
+        EmbeddingModel embeddingModel,
+        AtomicStorageProvider storageProvider,
+        Path snapshotPath,
+        Chunker chunker,
+        DocumentParsingOrchestrator documentParsingOrchestrator,
+        int embeddingBatchSize,
+        int maxParallelInsert,
+        int chunkExtractParallelism,
+        int entityExtractMaxGleaning,
+        int maxExtractInputTokens,
+        String entityExtractionLanguage,
+        List<String> entityTypes,
+        boolean embeddingSemanticMergeEnabled,
+        double embeddingSemanticMergeThreshold,
+        ExtractionRefinementOptions extractionRefinementOptions
+    ) {
+        this(
+            chatModel,
+            chatModel,
+            embeddingModel,
+            storageProvider,
+            snapshotPath,
+            chunker,
+            documentParsingOrchestrator,
+            embeddingBatchSize,
+            maxParallelInsert,
+            chunkExtractParallelism,
+            entityExtractMaxGleaning,
+            maxExtractInputTokens,
+            entityExtractionLanguage,
+            entityTypes,
+            embeddingSemanticMergeEnabled,
+            embeddingSemanticMergeThreshold,
+            extractionRefinementOptions,
+            IndexingProgressListener.noop()
+        );
+    }
+
+    public IndexingPipeline(
+        ChatModel extractionModel,
+        ChatModel summaryModel,
+        EmbeddingModel embeddingModel,
+        AtomicStorageProvider storageProvider,
+        Path snapshotPath,
+        Chunker chunker,
+        DocumentParsingOrchestrator documentParsingOrchestrator,
+        int embeddingBatchSize,
+        int maxParallelInsert,
+        int chunkExtractParallelism,
+        int entityExtractMaxGleaning,
+        int maxExtractInputTokens,
+        String entityExtractionLanguage,
+        List<String> entityTypes,
+        boolean embeddingSemanticMergeEnabled,
+        double embeddingSemanticMergeThreshold,
+        ExtractionRefinementOptions extractionRefinementOptions
+    ) {
+        this(
+            extractionModel,
+            summaryModel,
+            embeddingModel,
+            storageProvider,
+            snapshotPath,
+            chunker,
+            documentParsingOrchestrator,
+            embeddingBatchSize,
+            maxParallelInsert,
+            chunkExtractParallelism,
+            entityExtractMaxGleaning,
+            maxExtractInputTokens,
+            entityExtractionLanguage,
+            entityTypes,
+            embeddingSemanticMergeEnabled,
+            embeddingSemanticMergeThreshold,
+            extractionRefinementOptions,
+            IndexingProgressListener.noop()
+        );
+    }
+
+    public IndexingPipeline(
+        ChatModel extractionModel,
+        ChatModel summaryModel,
+        EmbeddingModel embeddingModel,
+        AtomicStorageProvider storageProvider,
+        Path snapshotPath,
+        Chunker chunker,
+        DocumentParsingOrchestrator documentParsingOrchestrator,
+        int embeddingBatchSize,
+        int maxParallelInsert,
+        int chunkExtractParallelism,
+        int entityExtractMaxGleaning,
+        int maxExtractInputTokens,
+        String entityExtractionLanguage,
+        List<String> entityTypes,
+        boolean embeddingSemanticMergeEnabled,
+        double embeddingSemanticMergeThreshold,
+        ExtractionRefinementOptions extractionRefinementOptions,
+        IndexingProgressListener progressListener
+    ) {
         this.storageProvider = Objects.requireNonNull(storageProvider, "storageProvider");
         this.snapshotPath = snapshotPath;
         var effectiveEmbeddingBatchSize = embeddingBatchSize <= 0 ? Integer.MAX_VALUE : embeddingBatchSize;
         this.maxParallelInsert = Math.max(1, maxParallelInsert);
+        this.chunkExtractParallelism = Math.max(1, chunkExtractParallelism);
         this.entityExtractMaxGleaning = Math.max(0, entityExtractMaxGleaning);
         this.maxExtractInputTokens = maxExtractInputTokens <= 0
             ? KnowledgeExtractor.DEFAULT_MAX_EXTRACT_INPUT_TOKENS
@@ -247,6 +374,7 @@ public final class IndexingPipeline {
             null,
             null,
             Integer.MAX_VALUE,
+            1,
             1,
             KnowledgeExtractor.DEFAULT_ENTITY_EXTRACT_MAX_GLEANING,
             KnowledgeExtractor.DEFAULT_MAX_EXTRACT_INPUT_TOKENS,
@@ -518,9 +646,9 @@ public final class IndexingPipeline {
 
     private List<GraphAssembler.ChunkExtraction> refineExtractions(List<io.github.lightrag.types.Chunk> chunks) {
         progressListener.onStageStarted(io.github.lightrag.api.TaskStage.PRIMARY_EXTRACTION, "extracting entities and relations");
-        var primaryExtractions = chunks.stream()
-            .map(chunk -> new PrimaryChunkExtraction(chunk, knowledgeExtractor.extract(chunk)))
-            .toList();
+        var primaryExtractions = chunkExtractParallelism <= 1 || chunks.size() <= 1
+            ? extractPrimarySequentially(chunks)
+            : extractPrimaryConcurrently(chunks);
         progressListener.onStageSucceeded(io.github.lightrag.api.TaskStage.PRIMARY_EXTRACTION, "primary extraction completed");
         if (!extractionRefinementOptions.enabled()) {
             progressListener.onStageSkipped(io.github.lightrag.api.TaskStage.REFINEMENT_EXTRACTION, "contextual refinement disabled");
@@ -530,6 +658,49 @@ public final class IndexingPipeline {
         var refined = extractionRefinementPipeline.refine(primaryExtractions);
         progressListener.onStageSucceeded(io.github.lightrag.api.TaskStage.REFINEMENT_EXTRACTION, "contextual refinement completed");
         return refined;
+    }
+
+    private List<PrimaryChunkExtraction> extractPrimarySequentially(List<io.github.lightrag.types.Chunk> chunks) {
+        return chunks.stream()
+            .map(chunk -> new PrimaryChunkExtraction(chunk, knowledgeExtractor.extract(chunk)))
+            .toList();
+    }
+
+    private List<PrimaryChunkExtraction> extractPrimaryConcurrently(List<io.github.lightrag.types.Chunk> chunks) {
+        ExecutorService executor = Executors.newFixedThreadPool(Math.min(chunkExtractParallelism, chunks.size()));
+        var completionService = new ExecutorCompletionService<IndexedPrimaryExtraction>(executor);
+        var pendingTasks = new LinkedHashMap<Future<IndexedPrimaryExtraction>, Integer>();
+        try {
+            var results = new PrimaryChunkExtraction[chunks.size()];
+            for (int index = 0; index < chunks.size(); index++) {
+                final int taskIndex = index;
+                var chunk = chunks.get(index);
+                pendingTasks.put(
+                    completionService.submit(() -> new IndexedPrimaryExtraction(
+                        taskIndex,
+                        new PrimaryChunkExtraction(chunk, knowledgeExtractor.extract(chunk))
+                    )),
+                    taskIndex
+                );
+            }
+            while (!pendingTasks.isEmpty()) {
+                var completed = completionService.take();
+                pendingTasks.remove(completed);
+                var extraction = completed.get();
+                results[extraction.index()] = extraction.extraction();
+            }
+            return List.of(results);
+        } catch (ExecutionException exception) {
+            cancelPending(pendingTasks.keySet());
+            rethrowTaskFailure(exception.getCause());
+            throw new IllegalStateException("chunk extraction failed", exception.getCause());
+        } catch (InterruptedException exception) {
+            cancelPending(pendingTasks.keySet());
+            Thread.currentThread().interrupt();
+            throw new RuntimeException("chunk extraction interrupted", exception);
+        } finally {
+            shutdownExecutor(executor);
+        }
     }
 
     private static void cancelPending(Collection<? extends Future<?>> futures) {
@@ -997,5 +1168,8 @@ public final class IndexingPipeline {
         List<VectorStore.VectorRecord> entityVectors,
         List<VectorStore.VectorRecord> relationVectors
     ) {
+    }
+
+    private record IndexedPrimaryExtraction(int index, PrimaryChunkExtraction extraction) {
     }
 }

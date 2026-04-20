@@ -45,6 +45,7 @@ public final class LightRag implements AutoCloseable {
     private final int rerankCandidateMultiplier;
     private final int embeddingBatchSize;
     private final int maxParallelInsert;
+    private final int chunkExtractParallelism;
     private final int entityExtractMaxGleaning;
     private final int maxExtractInputTokens;
     private final String entityExtractionLanguage;
@@ -59,6 +60,7 @@ public final class LightRag implements AutoCloseable {
 
     LightRag(LightRagConfig config) {
         this(config, null, null, true, 2, Integer.MAX_VALUE, 1,
+            1,
             io.github.lightrag.indexing.KnowledgeExtractor.DEFAULT_ENTITY_EXTRACT_MAX_GLEANING,
             io.github.lightrag.indexing.KnowledgeExtractor.DEFAULT_MAX_EXTRACT_INPUT_TOKENS,
             io.github.lightrag.indexing.KnowledgeExtractor.DEFAULT_LANGUAGE,
@@ -71,6 +73,7 @@ public final class LightRag implements AutoCloseable {
 
     LightRag(LightRagConfig config, Chunker chunker) {
         this(config, chunker, null, true, 2, Integer.MAX_VALUE, 1,
+            1,
             io.github.lightrag.indexing.KnowledgeExtractor.DEFAULT_ENTITY_EXTRACT_MAX_GLEANING,
             io.github.lightrag.indexing.KnowledgeExtractor.DEFAULT_MAX_EXTRACT_INPUT_TOKENS,
             io.github.lightrag.indexing.KnowledgeExtractor.DEFAULT_LANGUAGE,
@@ -89,6 +92,7 @@ public final class LightRag implements AutoCloseable {
         int rerankCandidateMultiplier,
         int embeddingBatchSize,
         int maxParallelInsert,
+        int chunkExtractParallelism,
         int entityExtractMaxGleaning,
         int maxExtractInputTokens,
         String entityExtractionLanguage,
@@ -104,6 +108,7 @@ public final class LightRag implements AutoCloseable {
         this.rerankCandidateMultiplier = rerankCandidateMultiplier;
         this.embeddingBatchSize = embeddingBatchSize;
         this.maxParallelInsert = maxParallelInsert;
+        this.chunkExtractParallelism = chunkExtractParallelism;
         this.entityExtractMaxGleaning = entityExtractMaxGleaning;
         this.maxExtractInputTokens = maxExtractInputTokens;
         this.entityExtractionLanguage = Objects.requireNonNull(entityExtractionLanguage, "entityExtractionLanguage");
@@ -430,6 +435,10 @@ public final class LightRag implements AutoCloseable {
         return maxParallelInsert;
     }
 
+    int chunkExtractParallelism() {
+        return chunkExtractParallelism;
+    }
+
     int entityExtractMaxGleaning() {
         return entityExtractMaxGleaning;
     }
@@ -499,6 +508,7 @@ public final class LightRag implements AutoCloseable {
             documentParsingOrchestrator,
             embeddingBatchSize,
             maxParallelInsert,
+            chunkExtractParallelism,
             entityExtractMaxGleaning,
             maxExtractInputTokens,
             entityExtractionLanguage,
