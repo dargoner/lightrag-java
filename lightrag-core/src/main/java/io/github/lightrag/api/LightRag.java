@@ -28,6 +28,7 @@ import io.github.lightrag.storage.TaskDocumentStore;
 import io.github.lightrag.task.TaskExecutionService;
 import io.github.lightrag.task.TaskMetadataReporter;
 import io.github.lightrag.types.Document;
+import io.github.lightrag.types.PreChunkedDocument;
 import io.github.lightrag.types.RawDocumentSource;
 
 import java.nio.file.Path;
@@ -147,6 +148,12 @@ public final class LightRag implements AutoCloseable {
         newIndexingPipeline(resolveProvider(scope)).ingestSources(sources, options);
     }
 
+    public void ingestPreChunked(String workspaceId, List<PreChunkedDocument> documents) {
+        Objects.requireNonNull(workspaceId, "workspaceId");
+        Objects.requireNonNull(documents, "documents");
+        throw new UnsupportedOperationException("pre-chunked ingest is not implemented yet");
+    }
+
     public String submitIngest(String workspaceId, List<Document> documents) {
         return submitIngest(workspaceId, documents, TaskSubmitOptions.defaults());
     }
@@ -161,6 +168,17 @@ public final class LightRag implements AutoCloseable {
             submitOptions.listeners(),
             progressListener -> newIndexingPipeline(resolveProvider(resolveScope(workspaceId)), progressListener).ingest(normalizedDocuments)
         );
+    }
+
+    public String submitIngestPreChunked(
+        String workspaceId,
+        List<PreChunkedDocument> documents,
+        TaskSubmitOptions options
+    ) {
+        Objects.requireNonNull(workspaceId, "workspaceId");
+        Objects.requireNonNull(documents, "documents");
+        Objects.requireNonNull(options, "options");
+        throw new UnsupportedOperationException("pre-chunked ingest is not implemented yet");
     }
 
     public String submitIngestSources(String workspaceId, List<RawDocumentSource> sources, DocumentIngestOptions options) {

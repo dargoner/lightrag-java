@@ -91,6 +91,20 @@ class LightRagBuilderTest {
     }
 
     @Test
+    void exposesPreChunkedIngestApi() throws Exception {
+        Class<?> preChunkedDocumentType = Class.forName("io.github.lightrag.types.PreChunkedDocument");
+
+        assertThat(preChunkedDocumentType).isNotNull();
+        assertThat(LightRag.class.getMethod("ingestPreChunked", String.class, List.class)).isNotNull();
+        assertThat(LightRag.class.getMethod(
+            "submitIngestPreChunked",
+            String.class,
+            List.class,
+            TaskSubmitOptions.class
+        )).isNotNull();
+    }
+
+    @Test
     void keepsContextualExtractionRefinementDisabledByDefault() {
         var rag = LightRag.builder()
             .chatModel(new FakeChatModel())
