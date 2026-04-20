@@ -50,6 +50,7 @@ public final class LightRagBuilder {
     private int rerankCandidateMultiplier = 2;
     private int embeddingBatchSize = Integer.MAX_VALUE;
     private int maxParallelInsert = 1;
+    private int chunkExtractParallelism = 1;
     private int entityExtractMaxGleaning = io.github.lightrag.indexing.KnowledgeExtractor.DEFAULT_ENTITY_EXTRACT_MAX_GLEANING;
     private int maxExtractInputTokens = io.github.lightrag.indexing.KnowledgeExtractor.DEFAULT_MAX_EXTRACT_INPUT_TOKENS;
     private String entityExtractionLanguage = io.github.lightrag.indexing.KnowledgeExtractor.DEFAULT_LANGUAGE;
@@ -172,6 +173,14 @@ public final class LightRagBuilder {
             throw new IllegalArgumentException("maxParallelInsert must be positive");
         }
         this.maxParallelInsert = maxParallelInsert;
+        return this;
+    }
+
+    public LightRagBuilder chunkExtractParallelism(int chunkExtractParallelism) {
+        if (chunkExtractParallelism <= 0) {
+            throw new IllegalArgumentException("chunkExtractParallelism must be positive");
+        }
+        this.chunkExtractParallelism = chunkExtractParallelism;
         return this;
     }
 
@@ -320,6 +329,7 @@ public final class LightRagBuilder {
             rerankModel,
             resolvedWorkspaceStorageProvider
         ), chunker, documentParsingOrchestrator, automaticQueryKeywordExtraction, rerankCandidateMultiplier, embeddingBatchSize, maxParallelInsert,
+            chunkExtractParallelism,
             entityExtractMaxGleaning, maxExtractInputTokens, entityExtractionLanguage, entityTypes,
             embeddingSemanticMergeEnabled, embeddingSemanticMergeThreshold, extractionRefinementOptions, taskEventListeners);
     }

@@ -330,6 +330,7 @@ class LightRagBuilderTest {
             .rerankCandidateMultiplier(4)
             .embeddingBatchSize(3)
             .maxParallelInsert(2)
+            .chunkExtractParallelism(4)
             .entityExtractMaxGleaning(2)
             .maxExtractInputTokens(4_096)
             .entityExtractionLanguage("Chinese")
@@ -341,6 +342,7 @@ class LightRagBuilderTest {
         assertThat(rag.rerankCandidateMultiplier()).isEqualTo(4);
         assertThat(rag.embeddingBatchSize()).isEqualTo(3);
         assertThat(rag.maxParallelInsert()).isEqualTo(2);
+        assertThat(rag.chunkExtractParallelism()).isEqualTo(4);
         assertThat(rag.entityExtractMaxGleaning()).isEqualTo(2);
         assertThat(rag.maxExtractInputTokens()).isEqualTo(4_096);
         assertThat(rag.entityExtractionLanguage()).isEqualTo("Chinese");
@@ -779,6 +781,24 @@ class LightRagBuilderTest {
         assertThatThrownBy(() -> LightRag.builder().maxParallelInsert(0))
             .isInstanceOf(IllegalArgumentException.class)
             .hasMessage("maxParallelInsert must be positive");
+    }
+
+    @Test
+    void keepsChunkExtractParallelismAtOneByDefault() {
+        var rag = LightRag.builder()
+            .chatModel(new FakeChatModel())
+            .embeddingModel(new FakeEmbeddingModel())
+            .storage(new FakeStorageProvider())
+            .build();
+
+        assertThat(rag.chunkExtractParallelism()).isEqualTo(1);
+    }
+
+    @Test
+    void rejectsNonPositiveChunkExtractParallelism() {
+        assertThatThrownBy(() -> LightRag.builder().chunkExtractParallelism(0))
+            .isInstanceOf(IllegalArgumentException.class)
+            .hasMessage("chunkExtractParallelism must be positive");
     }
 
     @Test
