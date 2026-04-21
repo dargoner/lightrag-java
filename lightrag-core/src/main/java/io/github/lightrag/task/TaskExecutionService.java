@@ -596,6 +596,74 @@ public final class TaskExecutionService implements AutoCloseable {
             eventPublisher.publish(documentEvent(documentId, TaskEventType.DOCUMENT_FAILED, message, Map.of()));
         }
 
+        @Override
+        public void onChunkStarted(String documentId, String chunkId, String message) {
+            eventPublisher.publish(chunkEvent(
+                TaskEventType.CHUNK_STARTED,
+                TaskEventScope.CHUNK,
+                documentId,
+                chunkId,
+                "running",
+                message,
+                Map.of()
+            ));
+        }
+
+        @Override
+        public void onChunkGraphReady(String documentId, String chunkId, int entityCount, int relationCount, String message) {
+            eventPublisher.publish(chunkEvent(
+                TaskEventType.CHUNK_GRAPH_READY,
+                TaskEventScope.GRAPH,
+                documentId,
+                chunkId,
+                "succeeded",
+                message,
+                Map.of(
+                    "entityCount", Integer.toString(entityCount),
+                    "relationCount", Integer.toString(relationCount)
+                )
+            ));
+        }
+
+        @Override
+        public void onChunkVectorsReady(String documentId, String chunkId, int vectorCount, String message) {
+            eventPublisher.publish(chunkEvent(
+                TaskEventType.CHUNK_VECTORS_READY,
+                TaskEventScope.VECTOR,
+                documentId,
+                chunkId,
+                "succeeded",
+                message,
+                Map.of("vectorCount", Integer.toString(vectorCount))
+            ));
+        }
+
+        @Override
+        public void onChunkSucceeded(String documentId, String chunkId, String message) {
+            eventPublisher.publish(chunkEvent(
+                TaskEventType.CHUNK_SUCCEEDED,
+                TaskEventScope.CHUNK,
+                documentId,
+                chunkId,
+                "succeeded",
+                message,
+                Map.of()
+            ));
+        }
+
+        @Override
+        public void onChunkFailed(String documentId, String chunkId, String message) {
+            eventPublisher.publish(chunkEvent(
+                TaskEventType.CHUNK_FAILED,
+                TaskEventScope.CHUNK,
+                documentId,
+                chunkId,
+                "failed",
+                message,
+                Map.of()
+            ));
+        }
+
         private void markRunning(String summary) {
             var current = loadTask();
             provider.taskStore().save(copyTask(current, TaskStatus.RUNNING, Instant.now(), null, summary, null, current.cancelRequested()));
@@ -794,6 +862,34 @@ public final class TaskExecutionService implements AutoCloseable {
                 null,
                 null,
                 "running",
+                message,
+                attributes
+            );
+        }
+
+        private TaskEvent chunkEvent(
+            TaskEventType eventType,
+            TaskEventScope scope,
+            String documentId,
+            String chunkId,
+            String status,
+            String message,
+            Map<String, String> extraAttributes
+        ) {
+            var attributes = new LinkedHashMap<String, String>(loadMetadata());
+            attributes.putAll(extraAttributes);
+            return new TaskEvent(
+                UUID.randomUUID().toString(),
+                eventType,
+                scope,
+                Instant.now(),
+                workspaceId,
+                taskId,
+                taskType,
+                documentId,
+                chunkId,
+                currentStage,
+                status,
                 message,
                 attributes
             );

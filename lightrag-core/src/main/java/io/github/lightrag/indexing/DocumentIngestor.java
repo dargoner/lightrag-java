@@ -6,6 +6,7 @@ import io.github.lightrag.storage.DocumentStore;
 import io.github.lightrag.storage.AtomicStorageProvider;
 import io.github.lightrag.types.Chunk;
 import io.github.lightrag.types.Document;
+import io.github.lightrag.types.PreChunkedDocument;
 
 import java.util.ArrayList;
 import java.util.HashSet;
@@ -144,6 +145,38 @@ public final class DocumentIngestor {
         );
     }
 
+    PreparedIngest preparePreChunked(List<PreChunkedDocument> documents) {
+        var batch = List.copyOf(Objects.requireNonNull(documents, "documents"));
+        validateUniquePreChunkedBatchIds(batch);
+        var documentRecords = new ArrayList<DocumentStore.DocumentRecord>(batch.size());
+        var chunkRecords = new ArrayList<ChunkStore.ChunkRecord>();
+        var stagedDocuments = new ArrayList<Document>(batch.size());
+        var stagedChunks = new ArrayList<Chunk>();
+
+        for (var source : batch) {
+            var document = new Document(source.documentId(), source.title(), "", source.metadata());
+            stagedDocuments.add(document);
+            documentRecords.add(new DocumentStore.DocumentRecord(
+                document.id(),
+                document.title(),
+                document.content(),
+                document.metadata()
+            ));
+
+            var chunks = source.chunks();
+            validateChunkContract(document, chunks);
+            chunkRecords.addAll(toChunkRecords(chunks));
+            stagedChunks.addAll(chunks);
+        }
+
+        return new PreparedIngest(
+            List.copyOf(stagedDocuments),
+            List.copyOf(documentRecords),
+            List.copyOf(chunkRecords),
+            List.copyOf(stagedChunks)
+        );
+    }
+
     void persist(PreparedIngest prepared, AtomicStorageProvider.AtomicStorageView storage) {
         var source = Objects.requireNonNull(prepared, "prepared");
         var storageView = Objects.requireNonNull(storage, "storage");
@@ -161,6 +194,16 @@ public final class DocumentIngestor {
             var source = Objects.requireNonNull(document, "document");
             if (!seenIds.add(source.id())) {
                 throw new IllegalArgumentException("Duplicate document id in batch: " + source.id());
+            }
+        }
+    }
+
+    private void validateUniquePreChunkedBatchIds(List<PreChunkedDocument> documents) {
+        var seenIds = new HashSet<String>();
+        for (var document : documents) {
+            var source = Objects.requireNonNull(document, "document");
+            if (!seenIds.add(source.documentId())) {
+                throw new IllegalArgumentException("Duplicate document id in batch: " + source.documentId());
             }
         }
     }

@@ -27,6 +27,7 @@ import io.github.lightrag.storage.HybridVectorStore;
 import io.github.lightrag.storage.SnapshotStore;
 import io.github.lightrag.storage.VectorStore;
 import io.github.lightrag.types.Document;
+import io.github.lightrag.types.PreChunkedDocument;
 import io.github.lightrag.types.Entity;
 import io.github.lightrag.types.RawDocumentSource;
 import io.github.lightrag.types.Relation;
@@ -397,6 +398,17 @@ public final class IndexingPipeline {
         ingestConcurrently(sources);
     }
 
+    public void ingestPreChunked(List<PreChunkedDocument> documents) {
+        var sources = List.copyOf(Objects.requireNonNull(documents, "documents"));
+        if (sources.size() <= 1 || maxParallelInsert <= 1) {
+            for (var document : sources) {
+                ingestPreChunkedSequentially(document);
+            }
+            return;
+        }
+        ingestPreChunkedConcurrently(sources);
+    }
+
     public void ingestSources(List<RawDocumentSource> sources, io.github.lightrag.api.DocumentIngestOptions options) {
         var rawSources = List.copyOf(Objects.requireNonNull(sources, "sources"));
         var resolvedOptions = Objects.requireNonNull(options, "options");
@@ -451,6 +463,19 @@ public final class IndexingPipeline {
             persistSnapshotIfConfigured();
         } catch (RuntimeException | Error failure) {
             markDocumentFailed(source.documentId(), failure);
+            persistSnapshotIfConfigured();
+            throw failure;
+        }
+    }
+
+    private void ingestPreChunkedSequentially(PreChunkedDocument document) {
+        var source = Objects.requireNonNull(document, "document");
+        saveStatus(processingStatus(source.documentId()));
+        try {
+            commitComputedIngest(computeDocument(source), true);
+            persistSnapshotIfConfigured();
+        } catch (RuntimeException | Error failure) {
+            markPreChunkedDocumentFailed(source, failure);
             persistSnapshotIfConfigured();
             throw failure;
         }
@@ -539,6 +564,52 @@ public final class IndexingPipeline {
         }
     }
 
+    private void ingestPreChunkedConcurrently(List<PreChunkedDocument> documents) {
+        ExecutorService executor = Executors.newFixedThreadPool(Math.min(maxParallelInsert, documents.size()));
+        var completionService = new ExecutorCompletionService<ComputedIngest>(executor);
+        var pendingTasks = new LinkedHashMap<Future<ComputedIngest>, PreChunkedDocument>();
+        try {
+            for (var document : documents) {
+                saveStatus(processingStatus(document.documentId()));
+                pendingTasks.put(completionService.submit(() -> computeDocument(document)), document);
+            }
+            while (!pendingTasks.isEmpty()) {
+                var completed = completionService.take();
+                var source = pendingTasks.remove(completed);
+                try {
+                    commitComputedIngest(completed.get(), true);
+                    persistSnapshotIfConfigured();
+                } catch (ExecutionException exception) {
+                    cancelPending(pendingTasks.keySet());
+                    markPreChunkedDocumentFailed(source, exception.getCause());
+                    markPendingPreChunkedDocumentsFailed(
+                        pendingTasks.values(),
+                        "ingest aborted because another document failed"
+                    );
+                    persistSnapshotIfConfigured();
+                    rethrowTaskFailure(exception.getCause());
+                } catch (RuntimeException | Error failure) {
+                    cancelPending(pendingTasks.keySet());
+                    markPreChunkedDocumentFailed(source, failure);
+                    markPendingPreChunkedDocumentsFailed(
+                        pendingTasks.values(),
+                        "ingest aborted because another document failed"
+                    );
+                    persistSnapshotIfConfigured();
+                    throw failure;
+                }
+            }
+        } catch (InterruptedException exception) {
+            cancelPending(pendingTasks.keySet());
+            Thread.currentThread().interrupt();
+            markPendingPreChunkedDocumentsFailed(pendingTasks.values(), "document ingest interrupted");
+            persistSnapshotIfConfigured();
+            throw new RuntimeException("document ingest interrupted", exception);
+        } finally {
+            shutdownExecutor(executor);
+        }
+    }
+
     private void markPendingDocumentsFailed(Collection<Document> documents, String errorMessage) {
         for (var document : documents) {
             markDocumentFailed(document.id(), errorMessage);
@@ -554,6 +625,12 @@ public final class IndexingPipeline {
     private void markPendingRawSourcesFailed(Collection<RawDocumentSource> sources, String errorMessage) {
         for (var source : sources) {
             markDocumentFailed(source.sourceId(), errorMessage);
+        }
+    }
+
+    private void markPendingPreChunkedDocumentsFailed(Collection<PreChunkedDocument> documents, String errorMessage) {
+        for (var document : documents) {
+            markPreChunkedDocumentFailed(document, errorMessage);
         }
     }
 
@@ -644,29 +721,117 @@ public final class IndexingPipeline {
         return new ComputedIngest(toDocument(source), prepared, refinedExtractions, chunkVectors, graph, entityVectors, relationVectors);
     }
 
+    private ComputedIngest computeDocument(PreChunkedDocument preChunkedDocument) {
+        var source = Objects.requireNonNull(preChunkedDocument, "preChunkedDocument");
+        progressListener.onDocumentStarted(source.documentId(), "document processing started");
+        progressListener.onStageStarted(io.github.lightrag.api.TaskStage.CHUNKING, "accepting pre-chunked document " + source.documentId());
+        var prepared = documentIngestor.preparePreChunked(List.of(source));
+        progressListener.onDocumentChunked(
+            source.documentId(),
+            prepared.chunks().size(),
+            "accepted %d pre-chunked chunks for %s".formatted(prepared.chunks().size(), source.documentId())
+        );
+        progressListener.onStageSucceeded(
+            io.github.lightrag.api.TaskStage.CHUNKING,
+            "accepted %d pre-chunked chunks for %s".formatted(prepared.chunks().size(), source.documentId())
+        );
+        var chunks = prepared.chunks();
+        progressListener.onStageStarted(io.github.lightrag.api.TaskStage.VECTOR_INDEXING, "embedding chunks for " + source.documentId());
+        var chunkVectors = chunkVectors(chunks);
+        for (var chunk : chunks) {
+            progressListener.onChunkVectorsReady(
+                source.documentId(),
+                chunk.id(),
+                1,
+                "embedded chunk vector for " + chunk.id()
+            );
+        }
+        progressListener.onStageSucceeded(io.github.lightrag.api.TaskStage.VECTOR_INDEXING, "embedded chunk vectors for " + source.documentId());
+        progressListener.onStageStarted(io.github.lightrag.api.TaskStage.GRAPH_ASSEMBLY, "assembling graph for " + source.documentId());
+        var refinedExtractions = refineExtractions(chunks, true);
+        var graph = graphAssembler.assemble(refinedExtractions);
+        progressListener.onDocumentGraphReady(
+            source.documentId(),
+            graph.entities().size(),
+            graph.relations().size(),
+            "assembled graph for " + source.documentId()
+        );
+        progressListener.onStageSucceeded(io.github.lightrag.api.TaskStage.GRAPH_ASSEMBLY, "assembled graph for " + source.documentId());
+        progressListener.onStageStarted(io.github.lightrag.api.TaskStage.VECTOR_INDEXING, "embedding graph vectors for " + source.documentId());
+        var entityVectors = entityVectors(graph.entities());
+        var relationVectors = relationVectors(graph.relations());
+        progressListener.onDocumentVectorsReady(
+            source.documentId(),
+            chunkVectors.size(),
+            entityVectors.size(),
+            relationVectors.size(),
+            "embedded document vectors for " + source.documentId()
+        );
+        progressListener.onStageSucceeded(io.github.lightrag.api.TaskStage.VECTOR_INDEXING, "embedded graph vectors for " + source.documentId());
+        return new ComputedIngest(
+            new Document(source.documentId(), source.title(), "", source.metadata()),
+            prepared,
+            refinedExtractions,
+            chunkVectors,
+            graph,
+            entityVectors,
+            relationVectors
+        );
+    }
+
     private List<GraphAssembler.ChunkExtraction> refineExtractions(List<io.github.lightrag.types.Chunk> chunks) {
+        return refineExtractions(chunks, false);
+    }
+
+    private List<GraphAssembler.ChunkExtraction> refineExtractions(List<io.github.lightrag.types.Chunk> chunks, boolean publishChunkEvents) {
         progressListener.onStageStarted(io.github.lightrag.api.TaskStage.PRIMARY_EXTRACTION, "extracting entities and relations");
+        log.info(
+            "chunk_extract_event=stage_start mode={} chunkCount={} parallelism={}",
+            chunkExtractParallelism <= 1 || chunks.size() <= 1 ? "SEQUENTIAL" : "CONCURRENT",
+            chunks.size(),
+            Math.min(chunkExtractParallelism, Math.max(1, chunks.size()))
+        );
         var primaryExtractions = chunkExtractParallelism <= 1 || chunks.size() <= 1
-            ? extractPrimarySequentially(chunks)
-            : extractPrimaryConcurrently(chunks);
+            ? extractPrimarySequentially(chunks, publishChunkEvents)
+            : extractPrimaryConcurrently(chunks, publishChunkEvents);
         progressListener.onStageSucceeded(io.github.lightrag.api.TaskStage.PRIMARY_EXTRACTION, "primary extraction completed");
+        List<GraphAssembler.ChunkExtraction> refined;
         if (!extractionRefinementOptions.enabled()) {
             progressListener.onStageSkipped(io.github.lightrag.api.TaskStage.REFINEMENT_EXTRACTION, "contextual refinement disabled");
-            return extractionRefinementPipeline.refine(primaryExtractions);
+            refined = extractionRefinementPipeline.refine(primaryExtractions);
+        } else {
+            progressListener.onStageStarted(io.github.lightrag.api.TaskStage.REFINEMENT_EXTRACTION, "running contextual refinement");
+            refined = extractionRefinementPipeline.refine(primaryExtractions);
+            progressListener.onStageSucceeded(io.github.lightrag.api.TaskStage.REFINEMENT_EXTRACTION, "contextual refinement completed");
         }
-        progressListener.onStageStarted(io.github.lightrag.api.TaskStage.REFINEMENT_EXTRACTION, "running contextual refinement");
-        var refined = extractionRefinementPipeline.refine(primaryExtractions);
-        progressListener.onStageSucceeded(io.github.lightrag.api.TaskStage.REFINEMENT_EXTRACTION, "contextual refinement completed");
+        if (publishChunkEvents) {
+            var chunksById = chunks.stream().collect(java.util.stream.Collectors.toMap(
+                io.github.lightrag.types.Chunk::id,
+                java.util.function.Function.identity(),
+                (left, right) -> left,
+                LinkedHashMap::new
+            ));
+            for (var extraction : refined) {
+                var chunk = chunksById.get(extraction.chunkId());
+                progressListener.onChunkGraphReady(
+                    chunk == null ? null : chunk.documentId(),
+                    extraction.chunkId(),
+                    extraction.extraction().entities().size(),
+                    extraction.extraction().relations().size(),
+                    "chunk graph ready for " + extraction.chunkId()
+                );
+            }
+        }
         return refined;
     }
 
-    private List<PrimaryChunkExtraction> extractPrimarySequentially(List<io.github.lightrag.types.Chunk> chunks) {
+    private List<PrimaryChunkExtraction> extractPrimarySequentially(List<io.github.lightrag.types.Chunk> chunks, boolean publishChunkEvents) {
         return chunks.stream()
-            .map(chunk -> new PrimaryChunkExtraction(chunk, knowledgeExtractor.extract(chunk)))
+            .map(chunk -> new PrimaryChunkExtraction(chunk, extractChunkWithDiagnostics(chunk, publishChunkEvents)))
             .toList();
     }
 
-    private List<PrimaryChunkExtraction> extractPrimaryConcurrently(List<io.github.lightrag.types.Chunk> chunks) {
+    private List<PrimaryChunkExtraction> extractPrimaryConcurrently(List<io.github.lightrag.types.Chunk> chunks, boolean publishChunkEvents) {
         ExecutorService executor = Executors.newFixedThreadPool(Math.min(chunkExtractParallelism, chunks.size()));
         var completionService = new ExecutorCompletionService<IndexedPrimaryExtraction>(executor);
         var pendingTasks = new LinkedHashMap<Future<IndexedPrimaryExtraction>, Integer>();
@@ -678,7 +843,7 @@ public final class IndexingPipeline {
                 pendingTasks.put(
                     completionService.submit(() -> new IndexedPrimaryExtraction(
                         taskIndex,
-                        new PrimaryChunkExtraction(chunk, knowledgeExtractor.extract(chunk))
+                        new PrimaryChunkExtraction(chunk, extractChunkWithDiagnostics(chunk, publishChunkEvents))
                     )),
                     taskIndex
                 );
@@ -701,6 +866,41 @@ public final class IndexingPipeline {
         } finally {
             shutdownExecutor(executor);
         }
+    }
+
+    private io.github.lightrag.types.ExtractionResult extractChunkWithDiagnostics(
+        io.github.lightrag.types.Chunk chunk,
+        boolean publishChunkEvents
+    ) {
+        logChunkExtractionStarted(chunk);
+        long startedAtNanos = System.nanoTime();
+        if (publishChunkEvents) {
+            progressListener.onChunkStarted(chunk.documentId(), chunk.id(), "chunk processing started");
+        }
+        try {
+            return knowledgeExtractor.extract(chunk);
+        } finally {
+            logChunkExtractionFinished(chunk, startedAtNanos);
+        }
+    }
+
+    private void logChunkExtractionStarted(io.github.lightrag.types.Chunk chunk) {
+        log.info(
+            "chunk_extract_event=start chunkId={} documentId={} thread={}",
+            chunk == null ? null : chunk.id(),
+            chunk == null ? null : chunk.documentId(),
+            Thread.currentThread().getName()
+        );
+    }
+
+    private void logChunkExtractionFinished(io.github.lightrag.types.Chunk chunk, long startedAtNanos) {
+        log.info(
+            "chunk_extract_event=finish chunkId={} documentId={} thread={} elapsedMs={}",
+            chunk == null ? null : chunk.id(),
+            chunk == null ? null : chunk.documentId(),
+            Thread.currentThread().getName(),
+            TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - startedAtNanos)
+        );
     }
 
     private static void cancelPending(Collection<? extends Future<?>> futures) {
@@ -729,6 +929,10 @@ public final class IndexingPipeline {
     }
 
     private void commitComputedIngest(ComputedIngest computed) {
+        commitComputedIngest(computed, false);
+    }
+
+    private void commitComputedIngest(ComputedIngest computed, boolean publishChunkEvents) {
         progressListener.onStageStarted(io.github.lightrag.api.TaskStage.COMMITTING, "committing storage mutations");
         synchronized (storageMutationMonitor) {
             storageProvider.writeAtomically(storage -> {
@@ -748,6 +952,15 @@ public final class IndexingPipeline {
             });
         }
         progressListener.onStageSucceeded(io.github.lightrag.api.TaskStage.COMMITTING, "committed storage mutations");
+        if (publishChunkEvents) {
+            for (var chunk : computed.prepared().chunks()) {
+                progressListener.onChunkSucceeded(
+                    computed.source().id(),
+                    chunk.id(),
+                    "chunk committed"
+                );
+            }
+        }
         progressListener.onDocumentCommitted(computed.source().id(), "document committed");
     }
 
@@ -767,6 +980,18 @@ public final class IndexingPipeline {
             errorMessage
         ));
         progressListener.onDocumentFailed(documentId, errorMessage);
+    }
+
+    private void markPreChunkedDocumentFailed(PreChunkedDocument document, Throwable failure) {
+        markPreChunkedDocumentFailed(document, failure == null ? null : failure.getMessage());
+    }
+
+    private void markPreChunkedDocumentFailed(PreChunkedDocument document, String errorMessage) {
+        var source = Objects.requireNonNull(document, "document");
+        markDocumentFailed(source.documentId(), errorMessage);
+        for (var chunk : source.chunks()) {
+            progressListener.onChunkFailed(source.documentId(), chunk.id(), errorMessage);
+        }
     }
 
     private void saveStatus(DocumentStatusStore.StatusRecord statusRecord) {

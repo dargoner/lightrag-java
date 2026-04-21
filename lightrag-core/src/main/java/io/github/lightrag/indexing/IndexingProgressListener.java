@@ -39,6 +39,21 @@ public interface IndexingProgressListener {
     default void onDocumentFailed(String documentId, String message) {
     }
 
+    default void onChunkStarted(String documentId, String chunkId, String message) {
+    }
+
+    default void onChunkGraphReady(String documentId, String chunkId, int entityCount, int relationCount, String message) {
+    }
+
+    default void onChunkVectorsReady(String documentId, String chunkId, int vectorCount, String message) {
+    }
+
+    default void onChunkSucceeded(String documentId, String chunkId, String message) {
+    }
+
+    default void onChunkFailed(String documentId, String chunkId, String message) {
+    }
+
     static IndexingProgressListener noop() {
         return NOOP;
     }

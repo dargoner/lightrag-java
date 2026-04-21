@@ -4,7 +4,9 @@ import io.github.lightrag.model.ChatModel;
 import io.github.lightrag.model.EmbeddingModel;
 import io.github.lightrag.storage.InMemoryStorageProvider;
 import io.github.lightrag.storage.memory.InMemoryGraphStore;
+import io.github.lightrag.types.Chunk;
 import io.github.lightrag.types.Document;
+import io.github.lightrag.types.PreChunkedDocument;
 import org.junit.jupiter.api.Test;
 
 import java.time.Duration;
@@ -18,6 +20,31 @@ import static org.assertj.core.api.Assertions.assertThat;
 
 class LightRagTaskApiTest {
     private static final String WORKSPACE = "default";
+
+    @Test
+    void ingestPreChunkedPersistsProvidedChunkIdsWithoutRechunking() {
+        var storage = InMemoryStorageProvider.create();
+        var rag = LightRag.builder()
+            .chatModel(new FakeChatModel())
+            .embeddingModel(new FakeEmbeddingModel())
+            .storage(storage)
+            .build();
+
+        rag.ingestPreChunked(WORKSPACE, List.of(new PreChunkedDocument(
+            "doc-1",
+            "Title",
+            List.of(
+                new Chunk("chunk-1", "doc-1", "Alice works with Bob", 4, 0, Map.of("source", "prechunked-test")),
+                new Chunk("chunk-2", "doc-1", "Bob supports Carol", 4, 1, Map.of("source", "prechunked-test"))
+            ),
+            Map.of("source", "prechunked-test")
+        )));
+
+        assertThat(storage.documentStore().load("doc-1")).isPresent();
+        assertThat(storage.chunkStore().listByDocument("doc-1"))
+            .extracting(io.github.lightrag.storage.ChunkStore.ChunkRecord::id)
+            .containsExactly("chunk-1", "chunk-2");
+    }
 
     @Test
     void submitIngestPublishesTaskAndStageEventsToRegisteredListener() {
@@ -70,6 +97,47 @@ class LightRagTaskApiTest {
             TaskEventType.DOCUMENT_VECTORS_READY,
             TaskEventType.DOCUMENT_COMMITTED
         );
+    }
+
+    @Test
+    void submitIngestPreChunkedPublishesChunkLifecycleEventsToRegisteredListener() {
+        var events = new java.util.concurrent.CopyOnWriteArrayList<TaskEvent>();
+        var rag = LightRag.builder()
+            .chatModel(new FakeChatModel())
+            .embeddingModel(new FakeEmbeddingModel())
+            .storage(InMemoryStorageProvider.create())
+            .taskEventListener(events::add)
+            .build();
+
+        var taskId = rag.submitIngestPreChunked(
+            WORKSPACE,
+            List.of(new PreChunkedDocument(
+                "doc-1",
+                "Title",
+                List.of(
+                    new Chunk("chunk-1", "doc-1", "Alice works with Bob", 4, 0, Map.of("source", "prechunked-task-test")),
+                    new Chunk("chunk-2", "doc-1", "Bob supports Carol", 4, 1, Map.of("source", "prechunked-task-test"))
+                ),
+                Map.of("source", "prechunked-task-test")
+            )),
+            TaskSubmitOptions.defaults()
+        );
+
+        awaitTerminalTask(rag, taskId);
+
+        assertThat(events.stream()
+            .filter(event -> event.chunkId() != null)
+            .map(TaskEvent::eventType)
+            .toList()).contains(
+            TaskEventType.CHUNK_STARTED,
+            TaskEventType.CHUNK_GRAPH_READY,
+            TaskEventType.CHUNK_VECTORS_READY,
+            TaskEventType.CHUNK_SUCCEEDED
+        );
+        assertThat(events.stream()
+            .filter(event -> event.chunkId() != null)
+            .map(TaskEvent::chunkId)
+            .toList()).contains("chunk-1", "chunk-2");
     }
 
     @Test

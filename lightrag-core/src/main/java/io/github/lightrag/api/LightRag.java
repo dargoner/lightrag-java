@@ -149,9 +149,8 @@ public final class LightRag implements AutoCloseable {
     }
 
     public void ingestPreChunked(String workspaceId, List<PreChunkedDocument> documents) {
-        Objects.requireNonNull(workspaceId, "workspaceId");
-        Objects.requireNonNull(documents, "documents");
-        throw new UnsupportedOperationException("pre-chunked ingest is not implemented yet");
+        var scope = resolveScope(workspaceId);
+        newIndexingPipeline(resolveProvider(scope)).ingestPreChunked(List.copyOf(Objects.requireNonNull(documents, "documents")));
     }
 
     public String submitIngest(String workspaceId, List<Document> documents) {
@@ -175,10 +174,16 @@ public final class LightRag implements AutoCloseable {
         List<PreChunkedDocument> documents,
         TaskSubmitOptions options
     ) {
-        Objects.requireNonNull(workspaceId, "workspaceId");
-        Objects.requireNonNull(documents, "documents");
-        Objects.requireNonNull(options, "options");
-        throw new UnsupportedOperationException("pre-chunked ingest is not implemented yet");
+        var normalizedDocuments = List.copyOf(Objects.requireNonNull(documents, "documents"));
+        var submitOptions = Objects.requireNonNull(options, "options");
+        return taskExecutionService.submit(
+            workspaceId,
+            TaskType.INGEST_DOCUMENTS,
+            Map.of("documentCount", Integer.toString(normalizedDocuments.size())),
+            submitOptions.listeners(),
+            progressListener -> newIndexingPipeline(resolveProvider(resolveScope(workspaceId)), progressListener)
+                .ingestPreChunked(normalizedDocuments)
+        );
     }
 
     public String submitIngestSources(String workspaceId, List<RawDocumentSource> sources, DocumentIngestOptions options) {
