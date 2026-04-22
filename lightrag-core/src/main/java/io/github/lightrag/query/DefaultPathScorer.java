@@ -27,8 +27,8 @@ public final class DefaultPathScorer implements PathScorer {
         var relationWeights = new LinkedHashMap<RelationEndpoint, Double>();
         for (var relation : result.seedRelations()) {
             var endpoint = new RelationEndpoint(
-                relation.relation().sourceEntityId(),
-                relation.relation().targetEntityId()
+                relation.relation().srcId(),
+                relation.relation().tgtId()
             );
             relationScores.put(endpoint, relation.score());
             relationWeights.put(endpoint, relation.relation().weight());

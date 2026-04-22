@@ -2,11 +2,13 @@ package io.github.lightrag.storage.neo4j;
 
 import io.github.lightrag.api.WorkspaceScope;
 import io.github.lightrag.storage.GraphStore;
+import io.github.lightrag.support.Neo4jTestContainers;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.neo4j.driver.AuthTokens;
 import org.neo4j.driver.Driver;
 import org.neo4j.driver.GraphDatabase;
+import org.neo4j.driver.Record;
 import org.neo4j.driver.Result;
 import org.neo4j.driver.SessionConfig;
 import org.neo4j.driver.TransactionContext;
@@ -25,8 +27,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 @Testcontainers
 class WorkspaceScopedNeo4jGraphStoreTest {
     @Container
-    private static final Neo4jContainer<?> NEO4J = new Neo4jContainer<>("neo4j:5-community")
-        .withAdminPassword("password");
+    private static final Neo4jContainer<?> NEO4J = Neo4jTestContainers.create();
 
     @BeforeEach
     void resetGraph() {
@@ -72,6 +73,46 @@ class WorkspaceScopedNeo4jGraphStoreTest {
             assertThat(alpha.findRelations("entity-1")).containsExactly(relation);
             assertThat(beta.findRelations("entity-1")).isEmpty();
             assertThat(beta.loadEntity("entity-1")).contains(betaEntity);
+        }
+    }
+
+    @Test
+    void savesRelationWithUpstreamPropertyNames() {
+        try (var alpha = newStore("alpha")) {
+            var relation = new GraphStore.RelationRecord(
+                "rel-1",
+                "entity-1",
+                "entity-2",
+                "depends_on, owned_by",
+                "entity one is related to entity two",
+                0.9d,
+                "chunk-1<SEP>chunk-2",
+                "/tmp/doc-a.md<SEP>/tmp/doc-b.md"
+            );
+
+            alpha.saveRelation(relation);
+
+            var properties = readSingleRelationProperties();
+
+            assertThat(properties).containsKeys(
+                "workspaceId",
+                "scopedId",
+                "relation_id",
+                "src_id",
+                "tgt_id",
+                "keywords",
+                "description",
+                "weight",
+                "source_id",
+                "file_path"
+            );
+            assertThat(properties).doesNotContainKeys("id", "sourceId", "filePath");
+            assertThat(properties).containsEntry("relation_id", "rel-1");
+            assertThat(properties).containsEntry("src_id", "entity-1");
+            assertThat(properties).containsEntry("tgt_id", "entity-2");
+            assertThat(properties).containsEntry("keywords", "depends_on, owned_by");
+            assertThat(properties).containsEntry("source_id", "chunk-1<SEP>chunk-2");
+            assertThat(properties).containsEntry("file_path", "/tmp/doc-a.md<SEP>/tmp/doc-b.md");
         }
     }
 
@@ -297,6 +338,21 @@ class WorkspaceScopedNeo4jGraphStoreTest {
     private static void assertOverrides(String methodName, Class<?>... parameterTypes) throws NoSuchMethodException {
         Method method = WorkspaceScopedNeo4jGraphStore.class.getMethod(methodName, parameterTypes);
         assertThat(method.getDeclaringClass()).isEqualTo(WorkspaceScopedNeo4jGraphStore.class);
+    }
+
+    private static java.util.Map<String, Object> readSingleRelationProperties() {
+        try (var driver = GraphDatabase.driver(
+            NEO4J.getBoltUrl(),
+            AuthTokens.basic("neo4j", NEO4J.getAdminPassword())
+        );
+             var session = driver.session(SessionConfig.forDatabase("neo4j"))) {
+            return session.executeRead(tx -> tx.run(
+                """
+                MATCH ()-[relation:RELATION]->()
+                RETURN properties(relation) AS props
+                """
+            ).single().get("props").asMap());
+        }
     }
 
     private static Driver recordingDriver(List<String> queries) {

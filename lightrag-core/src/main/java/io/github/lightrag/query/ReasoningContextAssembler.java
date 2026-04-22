@@ -43,7 +43,10 @@ public final class ReasoningContextAssembler {
                     .orElseThrow(() -> new IllegalStateException("missing entity: " + sourceEntityId));
                 var target = graphStore.loadEntity(targetEntityId)
                     .orElseThrow(() -> new IllegalStateException("missing entity: " + targetEntityId));
-                lines.add("Hop " + (hopIndex + 1) + ": " + source.name() + " --" + relation.type() + "--> " + target.name());
+                lines.add(
+                    "Hop " + (hopIndex + 1) + ": " + source.name() + " -> " + target.name()
+                        + " | keywords: " + relation.keywords()
+                );
                 if (!relation.description().isBlank()) {
                     lines.add("Relation detail: " + relation.description());
                 }

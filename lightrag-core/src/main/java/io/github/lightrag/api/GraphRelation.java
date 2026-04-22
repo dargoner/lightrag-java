@@ -53,18 +53,6 @@ public record GraphRelation(
         return relationId;
     }
 
-    public String sourceEntityId() {
-        return srcId;
-    }
-
-    public String targetEntityId() {
-        return tgtId;
-    }
-
-    public String type() {
-        return keywords;
-    }
-
     public List<String> sourceChunkIds() {
         return RelationCanonicalizer.splitValues(sourceId);
     }

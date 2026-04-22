@@ -264,7 +264,7 @@ class LightRagRelationalDocumentGraphPersistenceTest {
                 @Override
                 public List<RelationRecord> findRelations(String entityId) {
                     return relations.values().stream()
-                        .filter(relation -> relation.sourceEntityId().equals(entityId) || relation.targetEntityId().equals(entityId))
+                        .filter(relation -> relation.srcId().equals(entityId) || relation.tgtId().equals(entityId))
                         .toList();
                 }
             };

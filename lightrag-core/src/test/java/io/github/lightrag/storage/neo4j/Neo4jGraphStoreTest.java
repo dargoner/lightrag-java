@@ -2,6 +2,7 @@ package io.github.lightrag.storage.neo4j;
 
 import io.github.lightrag.api.WorkspaceScope;
 import io.github.lightrag.storage.GraphStore;
+import io.github.lightrag.support.Neo4jTestContainers;
 import org.neo4j.driver.AuthTokens;
 import org.neo4j.driver.GraphDatabase;
 import org.neo4j.driver.SessionConfig;
@@ -18,8 +19,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 @Testcontainers
 class Neo4jGraphStoreTest {
     @Container
-    private static final Neo4jContainer<?> NEO4J = new Neo4jContainer<>("neo4j:5-community")
-        .withAdminPassword("password");
+    private static final Neo4jContainer<?> NEO4J = Neo4jTestContainers.create();
 
     @BeforeEach
     void resetGraph() {

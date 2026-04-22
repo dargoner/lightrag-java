@@ -40,7 +40,7 @@ public final class DeletionPipeline {
         }
 
         var relationsToRemove = snapshot.relations().stream()
-            .filter(relation -> entityIds.contains(relation.sourceEntityId()) || entityIds.contains(relation.targetEntityId()))
+            .filter(relation -> entityIds.contains(relation.srcId()) || entityIds.contains(relation.tgtId()))
             .map(GraphStore.RelationRecord::id)
             .collect(java.util.stream.Collectors.toCollection(LinkedHashSet::new));
 
@@ -194,8 +194,8 @@ public final class DeletionPipeline {
         Set<String> sourceIds,
         Set<String> targetIds
     ) {
-        return (sourceIds.contains(relation.sourceEntityId()) && targetIds.contains(relation.targetEntityId()))
-            || (sourceIds.contains(relation.targetEntityId()) && targetIds.contains(relation.sourceEntityId()));
+        return (sourceIds.contains(relation.srcId()) && targetIds.contains(relation.tgtId()))
+            || (sourceIds.contains(relation.tgtId()) && targetIds.contains(relation.srcId()));
     }
 
     private static Document toDocument(DocumentStore.DocumentRecord record) {

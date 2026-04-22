@@ -63,10 +63,10 @@ public final class DefaultPathRetriever implements PathRetriever {
             if (expansions >= perHopExpansionLimit) {
                 break;
             }
-            String nextEntityId = currentEntityId.equals(relation.sourceEntityId())
-                ? relation.targetEntityId()
-                : relation.sourceEntityId();
-            var relationEndpoint = new RelationEndpoint(relation.sourceEntityId(), relation.targetEntityId());
+            String nextEntityId = currentEntityId.equals(relation.srcId())
+                ? relation.tgtId()
+                : relation.srcId();
+            var relationEndpoint = new RelationEndpoint(relation.srcId(), relation.tgtId());
             if (entityIds.contains(nextEntityId) || relationEndpoints.contains(relationEndpoint)) {
                 continue;
             }

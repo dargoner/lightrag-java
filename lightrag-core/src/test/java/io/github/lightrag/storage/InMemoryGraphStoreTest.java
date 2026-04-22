@@ -216,7 +216,7 @@ class InMemoryGraphStoreTest {
     }
 
     private static boolean isAdjacent(String entityId, GraphStore.RelationRecord relation) {
-        return relation.sourceEntityId().equals(entityId) || relation.targetEntityId().equals(entityId);
+        return relation.srcId().equals(entityId) || relation.tgtId().equals(entityId);
     }
 
     private static void await(CountDownLatch latch, AtomicReference<AssertionError> failure) {

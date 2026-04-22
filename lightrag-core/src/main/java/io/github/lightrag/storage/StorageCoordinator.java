@@ -383,7 +383,7 @@ public final class StorageCoordinator implements AtomicStorageProvider, AutoClos
         public List<RelationRecord> findRelations(String entityId) {
             var id = Objects.requireNonNull(entityId, "entityId");
             return allRelations().stream()
-                .filter(relation -> relation.sourceEntityId().equals(id) || relation.targetEntityId().equals(id))
+                .filter(relation -> relation.srcId().equals(id) || relation.tgtId().equals(id))
                 .toList();
         }
 
@@ -398,12 +398,12 @@ public final class StorageCoordinator implements AtomicStorageProvider, AutoClos
                 relationsByEntityId.put(entityId, new ArrayList<>());
             }
             for (var relation : allRelations()) {
-                var sourceRelations = relationsByEntityId.get(relation.sourceEntityId());
+                var sourceRelations = relationsByEntityId.get(relation.srcId());
                 if (sourceRelations != null) {
                     sourceRelations.add(relation);
                 }
-                if (!relation.sourceEntityId().equals(relation.targetEntityId())) {
-                    var targetRelations = relationsByEntityId.get(relation.targetEntityId());
+                if (!relation.srcId().equals(relation.tgtId())) {
+                    var targetRelations = relationsByEntityId.get(relation.tgtId());
                     if (targetRelations != null) {
                         targetRelations.add(relation);
                     }

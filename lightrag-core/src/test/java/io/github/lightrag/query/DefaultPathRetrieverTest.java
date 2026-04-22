@@ -103,9 +103,9 @@ class DefaultPathRetrieverTest {
             for (var relation : relations) {
                 relationsById.put(relation.id(), new RelationRecord(
                     relation.id(),
-                    relation.sourceEntityId(),
-                    relation.targetEntityId(),
-                    relation.type(),
+                    relation.srcId(),
+                    relation.tgtId(),
+                    relation.keywords(),
                     relation.description(),
                     relation.weight(),
                     relation.sourceChunkIds()
@@ -146,7 +146,7 @@ class DefaultPathRetrieverTest {
         @Override
         public List<RelationRecord> findRelations(String entityId) {
             return relationsById.values().stream()
-                .filter(relation -> relation.sourceEntityId().equals(entityId) || relation.targetEntityId().equals(entityId))
+                .filter(relation -> relation.srcId().equals(entityId) || relation.tgtId().equals(entityId))
                 .toList();
         }
     }

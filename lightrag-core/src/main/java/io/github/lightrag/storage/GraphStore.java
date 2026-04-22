@@ -36,8 +36,8 @@ public interface GraphStore {
         var canonical = RelationCanonicalizer.canonicalize(sourceEntityId, targetEntityId);
         return findRelations(canonical.srcId()).stream()
             .filter(relation ->
-                relation.sourceEntityId().equals(canonical.srcId())
-                    && relation.targetEntityId().equals(canonical.tgtId()))
+                relation.srcId().equals(canonical.srcId())
+                    && relation.tgtId().equals(canonical.tgtId()))
             .findFirst();
     }
 
@@ -135,18 +135,6 @@ public interface GraphStore {
 
         public String id() {
             return relationId;
-        }
-
-        public String sourceEntityId() {
-            return srcId;
-        }
-
-        public String targetEntityId() {
-            return tgtId;
-        }
-
-        public String type() {
-            return keywords;
         }
 
         public List<String> sourceChunkIds() {

@@ -148,6 +148,32 @@ class PostgresGraphStoreTest {
         }
     }
 
+    @Test
+    void replayingBootstrapDoesNotDeleteExistingRelations() {
+        var config = newConfig();
+        var dataSource = newDataSource(config);
+        try (dataSource) {
+            var manager = new PostgresSchemaManager(dataSource, config);
+            var relation = new GraphStore.RelationRecord(
+                "relation-1",
+                "entity-1",
+                "entity-2",
+                "knows",
+                "Alice knows Bob",
+                0.9d,
+                "chunk-1<SEP>chunk-2",
+                "/tmp/doc.md"
+            );
+
+            manager.bootstrap();
+            new PostgresGraphStore(dataSource, config).saveRelation(relation);
+
+            manager.bootstrap();
+
+            assertThat(new PostgresGraphStore(dataSource, config).loadRelation("relation-1")).contains(relation);
+        }
+    }
+
     private static PostgreSQLContainer<?> newPostgresContainer() {
         var image = DockerImageName.parse("pgvector/pgvector:pg16")
             .asCompatibleSubstituteFor("postgres");

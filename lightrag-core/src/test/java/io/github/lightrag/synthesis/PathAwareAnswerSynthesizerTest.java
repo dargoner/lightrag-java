@@ -18,8 +18,8 @@ class PathAwareAnswerSynthesizerTest {
             .query("Atlas 通过谁影响知识图谱组？")
             .build(), """
             Reasoning Path 1
-            Hop 1: Atlas --depends_on--> GraphStore
-            Hop 2: GraphStore --owned_by--> KnowledgeGraphTeam
+            Hop 1: Atlas -> GraphStore | keywords: depends_on
+            Hop 2: GraphStore -> KnowledgeGraphTeam | keywords: owned_by
             """);
 
         assertThat(prompt)
@@ -58,7 +58,7 @@ class PathAwareAnswerSynthesizerTest {
             ---Context---
 
             Reasoning Path 1
-            Hop 1: Atlas --depends_on--> GraphStore
+            Hop 1: Atlas -> GraphStore | keywords: depends_on
             """;
 
         assertThat(synthesizer.shouldUseTwoStage(QueryRequest.builder()
@@ -84,8 +84,8 @@ class PathAwareAnswerSynthesizerTest {
             ---Context---
 
             Reasoning Path 1
-            Hop 1: Atlas --depends_on--> GraphStore
-            Hop 2: GraphStore --owned_by--> KnowledgeGraphTeam
+            Hop 1: Atlas -> GraphStore | keywords: depends_on
+            Hop 2: GraphStore -> KnowledgeGraphTeam | keywords: owned_by
             """;
 
         var reasoningPrompt = synthesizer.buildReasoningStagePrompt(basePrompt);

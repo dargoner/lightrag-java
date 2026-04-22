@@ -20,10 +20,6 @@ public record ExtractedRelation(
         }
     }
 
-    public String type() {
-        return keywords;
-    }
-
     private static String requireNonBlank(String value, String fieldName) {
         Objects.requireNonNull(value, fieldName);
         var normalized = value.strip();

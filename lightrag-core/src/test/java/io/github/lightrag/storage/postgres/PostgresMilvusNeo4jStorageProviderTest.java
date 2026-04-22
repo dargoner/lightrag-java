@@ -651,7 +651,7 @@ class PostgresMilvusNeo4jStorageProviderTest {
         @Override
         public List<GraphStore.RelationRecord> findRelations(String entityId) {
             return relations.values().stream()
-                .filter(relation -> relation.sourceEntityId().equals(entityId) || relation.targetEntityId().equals(entityId))
+                .filter(relation -> relation.srcId().equals(entityId) || relation.tgtId().equals(entityId))
                 .toList();
         }
 

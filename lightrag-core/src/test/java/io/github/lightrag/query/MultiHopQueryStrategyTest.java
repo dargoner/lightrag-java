@@ -76,8 +76,8 @@ class MultiHopQueryStrategyTest {
             .contains("Reasoning Path 1")
             .contains("Hop 1")
             .contains("Hop 2")
-            .contains("Atlas --depends_on--> GraphStore")
-            .contains("GraphStore --owned_by--> KnowledgeGraphTeam")
+            .contains("Atlas -> GraphStore | keywords: depends_on")
+            .contains("GraphStore -> KnowledgeGraphTeam | keywords: owned_by")
             .contains("Relation detail: Atlas relies on GraphStore as its dependency service.")
             .contains("Relation detail: GraphStore is maintained by the knowledge graph team.")
             .contains("Evidence [chunk-1]: Atlas 组件依赖 GraphStore 服务。")
@@ -425,9 +425,9 @@ class MultiHopQueryStrategyTest {
             for (var relation : relations) {
                 this.relations.put(relation.id(), new RelationRecord(
                     relation.id(),
-                    relation.sourceEntityId(),
-                    relation.targetEntityId(),
-                    relation.type(),
+                    relation.srcId(),
+                    relation.tgtId(),
+                    relation.keywords(),
                     relation.description(),
                     relation.weight(),
                     relation.sourceChunkIds()
@@ -468,7 +468,7 @@ class MultiHopQueryStrategyTest {
         @Override
         public List<RelationRecord> findRelations(String entityId) {
             return relations.values().stream()
-                .filter(relation -> relation.sourceEntityId().equals(entityId) || relation.targetEntityId().equals(entityId))
+                .filter(relation -> relation.srcId().equals(entityId) || relation.tgtId().equals(entityId))
                 .toList();
         }
     }

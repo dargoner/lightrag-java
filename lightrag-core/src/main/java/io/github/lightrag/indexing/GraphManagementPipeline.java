@@ -126,11 +126,11 @@ public final class GraphManagementPipeline {
         );
         if (renamed) {
             var previousRelationIds = snapshot.relations().stream()
-                .filter(relation -> relation.sourceEntityId().equals(existing.id()) || relation.targetEntityId().equals(existing.id()))
+                .filter(relation -> relation.srcId().equals(existing.id()) || relation.tgtId().equals(existing.id()))
                 .map(GraphStore.RelationRecord::id)
                 .toList();
             var replacementRelations = updatedRelations.stream()
-                .filter(relation -> relation.sourceEntityId().equals(updatedEntity.id()) || relation.targetEntityId().equals(updatedEntity.id()))
+                .filter(relation -> relation.srcId().equals(updatedEntity.id()) || relation.tgtId().equals(updatedEntity.id()))
                 .map(GraphManagementPipeline::toRelation)
                 .toList();
             updatedVectors.put(

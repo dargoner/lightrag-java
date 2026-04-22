@@ -108,7 +108,7 @@ class GlobalQueryStrategyTest {
             .mode(QueryMode.GLOBAL)
             .topK(2)
             .chunkTopK(2)
-            .maxRelationTokens(6)
+            .maxRelationTokens(8)
             .build());
 
         assertThat(context.matchedRelations())

@@ -165,12 +165,14 @@ public final class PostgresSchemaManager {
             """
                 CREATE TABLE IF NOT EXISTS %s (
                     workspace_id TEXT NOT NULL,
-                    id TEXT NOT NULL,
-                    source_entity_id TEXT NOT NULL,
-                    target_entity_id TEXT NOT NULL,
-                    type TEXT NOT NULL,
+                    id VARCHAR(64) NOT NULL,
+                    src_id VARCHAR(256) NOT NULL,
+                    tgt_id VARCHAR(256) NOT NULL,
+                    keywords TEXT NOT NULL,
                     description TEXT NOT NULL,
                     weight DOUBLE PRECISION NOT NULL,
+                    source_id TEXT NOT NULL DEFAULT '',
+                    file_path VARCHAR(32768) NOT NULL DEFAULT '',
                     PRIMARY KEY (workspace_id, id)
                 )
                 """.formatted(config.qualifiedTableName("relations")),
@@ -330,22 +332,7 @@ public final class PostgresSchemaManager {
 
     private List<String> versionFiveStatements() {
         return List.of(
-            "DROP TABLE IF EXISTS %s".formatted(config.qualifiedTableName("relation_chunks")),
-            "DROP TABLE IF EXISTS %s".formatted(config.qualifiedTableName("relations")),
-            """
-                CREATE TABLE IF NOT EXISTS %s (
-                    workspace_id TEXT NOT NULL,
-                    id VARCHAR(64) NOT NULL,
-                    src_id VARCHAR(256) NOT NULL,
-                    tgt_id VARCHAR(256) NOT NULL,
-                    keywords TEXT NOT NULL,
-                    description TEXT NOT NULL,
-                    weight DOUBLE PRECISION NOT NULL,
-                    source_id TEXT NOT NULL DEFAULT '',
-                    file_path VARCHAR(32768) NOT NULL DEFAULT '',
-                    PRIMARY KEY (workspace_id, id)
-                )
-                """.formatted(config.qualifiedTableName("relations"))
+            "DROP TABLE IF EXISTS %s".formatted(config.qualifiedTableName("relation_chunks"))
         );
     }
 

@@ -28,6 +28,7 @@ import io.github.lightrag.storage.neo4j.Neo4jGraphConfig;
 import io.github.lightrag.storage.neo4j.PostgresNeo4jStorageProvider;
 import io.github.lightrag.storage.postgres.PostgresStorageConfig;
 import io.github.lightrag.storage.postgres.PostgresStorageProvider;
+import io.github.lightrag.support.Neo4jTestContainers;
 import io.github.lightrag.types.Document;
 import org.testcontainers.containers.Neo4jContainer;
 import org.junit.jupiter.api.Test;
@@ -507,7 +508,7 @@ class E2ELightRagTest {
             var postgres = new PostgreSQLContainer<>(
                 DockerImageName.parse("pgvector/pgvector:pg16").asCompatibleSubstituteFor("postgres")
             );
-            var neo4j = new Neo4jContainer<>("neo4j:5-community").withAdminPassword("password")
+            var neo4j = Neo4jTestContainers.create()
         ) {
             postgres.start();
             neo4j.start();
@@ -1528,7 +1529,7 @@ class E2ELightRagTest {
             var postgres = new PostgreSQLContainer<>(
                 DockerImageName.parse("pgvector/pgvector:pg16").asCompatibleSubstituteFor("postgres")
             );
-            var neo4j = new Neo4jContainer<>("neo4j:5-community").withAdminPassword("password")
+            var neo4j = Neo4jTestContainers.create()
         ) {
             postgres.start();
             neo4j.start();
@@ -1722,7 +1723,7 @@ class E2ELightRagTest {
             var postgres = new PostgreSQLContainer<>(
                 DockerImageName.parse("pgvector/pgvector:pg16").asCompatibleSubstituteFor("postgres")
             );
-            var neo4j = new Neo4jContainer<>("neo4j:5-community").withAdminPassword("password")
+            var neo4j = Neo4jTestContainers.create()
         ) {
             postgres.start();
             neo4j.start();
@@ -1958,8 +1959,8 @@ class E2ELightRagTest {
         assertThat(result.answer())
             .contains("Multi-Hop Reasoning Instructions")
             .contains("Reasoning Path 1")
-            .contains("Hop 1: Atlas --depends_on--> GraphStore")
-            .contains("Hop 2: GraphStore --owned_by--> KnowledgeGraphTeam")
+            .contains("Hop 1: Atlas -> GraphStore | keywords: depends_on")
+            .contains("Hop 2: GraphStore -> KnowledgeGraphTeam | keywords: owned_by")
             .contains("Relation detail: Atlas relies on GraphStore as its dependency service.")
             .contains("Relation detail: GraphStore is maintained by the knowledge graph team.")
             .contains("Evidence [doc-1:0]: Atlas 组件依赖 GraphStore 服务。")
@@ -2003,8 +2004,8 @@ class E2ELightRagTest {
             .contains("Multi-Hop Reasoning Instructions")
             .contains("Validated Reasoning Draft")
             .contains("Reasoning Path 1")
-            .contains("Hop 1: Atlas --depends_on--> GraphStore")
-            .contains("Hop 2: GraphStore --owned_by--> KnowledgeGraphTeam")
+            .contains("Hop 1: Atlas -> GraphStore | keywords: depends_on")
+            .contains("Hop 2: GraphStore -> KnowledgeGraphTeam | keywords: owned_by")
             .contains("Relation detail: Atlas relies on GraphStore as its dependency service.")
             .contains("Evidence [doc-1:0]: Atlas 组件依赖 GraphStore 服务。")
             .contains("Evidence [doc-2:0]: GraphStore 服务由 KnowledgeGraphTeam 维护。");
@@ -2751,7 +2752,7 @@ class E2ELightRagTest {
             var postgres = new PostgreSQLContainer<>(
                 DockerImageName.parse("pgvector/pgvector:pg16").asCompatibleSubstituteFor("postgres")
             );
-            var neo4j = new Neo4jContainer<>("neo4j:5-community").withAdminPassword("password")
+            var neo4j = Neo4jTestContainers.create()
         ) {
             postgres.start();
             neo4j.start();
@@ -2827,7 +2828,7 @@ class E2ELightRagTest {
             var postgres = new PostgreSQLContainer<>(
                 DockerImageName.parse("pgvector/pgvector:pg16").asCompatibleSubstituteFor("postgres")
             );
-            var neo4j = new Neo4jContainer<>("neo4j:5-community").withAdminPassword("password")
+            var neo4j = Neo4jTestContainers.create()
         ) {
             postgres.start();
             neo4j.start();
@@ -2884,8 +2885,8 @@ class E2ELightRagTest {
 
                 assertThat(result.answer())
                     .contains("Reasoning Path 1")
-                    .contains("Hop 1: Atlas --depends_on--> GraphStore")
-                    .contains("Hop 2: GraphStore --owned_by--> KnowledgeGraphTeam")
+                    .contains("Hop 1: Atlas -> GraphStore | keywords: depends_on")
+                    .contains("Hop 2: GraphStore -> KnowledgeGraphTeam | keywords: owned_by")
                     .contains("Relation detail: Atlas relies on GraphStore as its dependency service.")
                     .contains("Relation detail: GraphStore is maintained by the knowledge graph team.")
                     .contains("Evidence [doc-1:0]: Atlas 组件依赖 GraphStore 服务。")
@@ -2904,7 +2905,7 @@ class E2ELightRagTest {
             var postgres = new PostgreSQLContainer<>(
                 DockerImageName.parse("pgvector/pgvector:pg16").asCompatibleSubstituteFor("postgres")
             );
-            var neo4j = new Neo4jContainer<>("neo4j:5-community").withAdminPassword("password")
+            var neo4j = Neo4jTestContainers.create()
         ) {
             postgres.start();
             neo4j.start();

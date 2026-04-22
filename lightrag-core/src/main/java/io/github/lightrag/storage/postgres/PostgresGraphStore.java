@@ -208,9 +208,9 @@ public final class PostgresGraphStore implements GraphStore {
                     var relationsByEntityId = initializeRelationBuckets(uniqueIds);
                     while (resultSet.next()) {
                         var relation = readRelation(connection, resultSet);
-                        addRelation(relationsByEntityId, uniqueIds, relation.sourceEntityId(), relation);
-                        if (!relation.sourceEntityId().equals(relation.targetEntityId())) {
-                            addRelation(relationsByEntityId, uniqueIds, relation.targetEntityId(), relation);
+                        addRelation(relationsByEntityId, uniqueIds, relation.srcId(), relation);
+                        if (!relation.srcId().equals(relation.tgtId())) {
+                            addRelation(relationsByEntityId, uniqueIds, relation.tgtId(), relation);
                         }
                     }
                     return freezeRelationBuckets(relationsByEntityId);

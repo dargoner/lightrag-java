@@ -61,7 +61,7 @@ class IndexingPipelineRefinementIntegrationTest {
         }
 
         assertThat(storageProvider.graphStore().allRelations())
-            .extracting(GraphStore.RelationRecord::type)
+            .extracting(GraphStore.RelationRecord::keywords)
             .contains("依赖");
     }
 

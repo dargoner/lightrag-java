@@ -11,6 +11,7 @@ import io.github.lightrag.storage.SnapshotStore;
 import io.github.lightrag.storage.VectorStore;
 import io.github.lightrag.storage.milvus.MilvusVectorConfig;
 import io.github.lightrag.storage.neo4j.Neo4jGraphConfig;
+import io.github.lightrag.support.Neo4jTestContainers;
 import org.junit.jupiter.api.Test;
 import org.testcontainers.containers.GenericContainer;
 import org.testcontainers.containers.MySQLContainer;
@@ -41,8 +42,7 @@ class MySqlMilvusNeo4jStorageProviderSdkIntegrationTest {
     private static final MySQLContainer<?> MYSQL = new MySQLContainer<>(DockerImageName.parse("mysql:8.4"));
 
     @Container
-    private static final Neo4jContainer<?> NEO4J = new Neo4jContainer<>("neo4j:5-community")
-        .withAdminPassword("password");
+    private static final Neo4jContainer<?> NEO4J = Neo4jTestContainers.create();
 
     @Container
     private static final GenericContainer<?> ETCD = new GenericContainer<>(ETCD_IMAGE)

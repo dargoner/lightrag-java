@@ -12,6 +12,7 @@ import io.github.lightrag.storage.SnapshotStore;
 import io.github.lightrag.storage.VectorStore;
 import io.github.lightrag.storage.postgres.PostgresStorageConfig;
 import io.github.lightrag.storage.postgres.PostgresStorageProvider;
+import io.github.lightrag.support.Neo4jTestContainers;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.testcontainers.junit.jupiter.Container;
@@ -41,8 +42,7 @@ class PostgresNeo4jStorageProviderTest {
     );
 
     @Container
-    private static final Neo4jContainer<?> NEO4J = new Neo4jContainer<>("neo4j:5-community")
-        .withAdminPassword("password");
+    private static final Neo4jContainer<?> NEO4J = Neo4jTestContainers.create();
 
     @BeforeEach
     void resetSharedNeo4j() {
@@ -1035,7 +1035,7 @@ class PostgresNeo4jStorageProviderTest {
                 @Override
                 public java.util.List<RelationRecord> findRelations(String entityId) {
                     return relations.values().stream()
-                        .filter(relation -> relation.sourceEntityId().equals(entityId) || relation.targetEntityId().equals(entityId))
+                        .filter(relation -> relation.srcId().equals(entityId) || relation.tgtId().equals(entityId))
                         .toList();
                 }
             };

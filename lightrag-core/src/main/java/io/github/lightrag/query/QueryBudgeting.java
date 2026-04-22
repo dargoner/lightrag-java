@@ -28,9 +28,10 @@ final class QueryBudgeting {
     }
 
     static String formatRelation(ScoredRelation relation) {
-        return "- %s | %s | %.3f".formatted(
-            relation.relationId(),
-            relation.relation().type(),
+        return "- %s -> %s | %s | %.3f".formatted(
+            relation.relation().srcId(),
+            relation.relation().tgtId(),
+            relation.relation().keywords(),
             relation.score()
         );
     }

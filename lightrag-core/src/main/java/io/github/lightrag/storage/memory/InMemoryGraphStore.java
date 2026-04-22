@@ -50,11 +50,11 @@ public final class InMemoryGraphStore implements GraphStore {
         try {
             var previous = relations.put(record.id(), record);
             if (previous != null) {
-                removeRelationEndpoint(previous.sourceEntityId(), previous.id());
-                removeRelationEndpoint(previous.targetEntityId(), previous.id());
+                removeRelationEndpoint(previous.srcId(), previous.id());
+                removeRelationEndpoint(previous.tgtId(), previous.id());
             }
-            addRelationEndpoint(record.sourceEntityId(), record.id());
-            addRelationEndpoint(record.targetEntityId(), record.id());
+            addRelationEndpoint(record.srcId(), record.id());
+            addRelationEndpoint(record.tgtId(), record.id());
         } finally {
             writeLock.unlock();
         }
@@ -172,8 +172,8 @@ public final class InMemoryGraphStore implements GraphStore {
             }
             for (var relation : Objects.requireNonNull(relationSnapshot, "relationSnapshot")) {
                 relations.put(relation.id(), relation);
-                addRelationEndpoint(relation.sourceEntityId(), relation.id());
-                addRelationEndpoint(relation.targetEntityId(), relation.id());
+                addRelationEndpoint(relation.srcId(), relation.id());
+                addRelationEndpoint(relation.tgtId(), relation.id());
             }
         } finally {
             writeLock.unlock();

@@ -551,7 +551,7 @@ The current implementation is intentionally narrow:
 When a multi-hop path is selected, the assembled context includes structured sections such as:
 
 - `Reasoning Path 1`
-- `Hop 1: A --relation--> B`
+- `Hop 1: A -> B | keywords: relation`
 - `Relation detail: ...`
 - `Evidence [chunk-id]: ...`
 
