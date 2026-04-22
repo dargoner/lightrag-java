@@ -18,6 +18,7 @@ import java.util.List;
 import java.util.Map;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static io.github.lightrag.support.RelationIds.relationId;
 
 class LocalQueryStrategyTest {
     @Test
@@ -39,7 +40,7 @@ class LocalQueryStrategyTest {
             .containsExactly("entity:alice", "entity:bob");
         assertThat(context.matchedRelations())
             .extracting(match -> match.relationId())
-            .containsExactly("relation:entity:alice|works_with|entity:bob");
+            .containsExactly(relationId("entity:alice", "entity:bob"));
         assertThat(context.matchedChunks())
             .extracting(match -> match.chunkId())
             .containsExactly("chunk-1", "chunk-2");
@@ -94,7 +95,7 @@ class LocalQueryStrategyTest {
             .containsExactly("entity:alice", "entity:bob");
         assertThat(context.matchedRelations())
             .extracting(match -> match.relationId())
-            .containsExactly("relation:entity:alice|works_with|entity:bob");
+            .containsExactly(relationId("entity:alice", "entity:bob"));
     }
 
     @Test
@@ -382,7 +383,7 @@ class LocalQueryStrategyTest {
             List.of("chunk-3")
         ));
         storage.graphStore().saveRelation(new GraphStore.RelationRecord(
-            "relation:entity:alice|works_with|entity:bob",
+            relationId("entity:alice", "entity:bob"),
             "entity:alice",
             "entity:bob",
             "works_with",
@@ -391,7 +392,7 @@ class LocalQueryStrategyTest {
             List.of("chunk-1", "chunk-2")
         ));
         storage.graphStore().saveRelation(new GraphStore.RelationRecord(
-            "relation:entity:bob|reports_to|entity:carol",
+            relationId("entity:bob", "entity:carol"),
             "entity:bob",
             "entity:carol",
             "reports_to",
@@ -413,8 +414,8 @@ class LocalQueryStrategyTest {
             new VectorStore.VectorRecord("entity:carol", List.of(0.0d, 1.0d))
         ));
         storage.vectorStore().saveAll("relations", List.of(
-            new VectorStore.VectorRecord("relation:entity:alice|works_with|entity:bob", List.of(1.0d, 0.0d)),
-            new VectorStore.VectorRecord("relation:entity:bob|reports_to|entity:carol", List.of(0.0d, 1.0d))
+            new VectorStore.VectorRecord(relationId("entity:alice", "entity:bob"), List.of(1.0d, 0.0d)),
+            new VectorStore.VectorRecord(relationId("entity:bob", "entity:carol"), List.of(0.0d, 1.0d))
         ));
     }
 

@@ -128,10 +128,25 @@ public final class DefaultAttributionResolver implements AttributionResolver {
     }
 
     private static String relationKey(ExtractedRelation relation) {
-        return normalize(relation.sourceEntityName())
+        var left = normalize(relation.sourceEntityName());
+        var right = normalize(relation.targetEntityName());
+        var first = left.compareTo(right) <= 0 ? left : right;
+        var second = left.compareTo(right) <= 0 ? right : left;
+        return first
             + "\u0000"
-            + normalize(relation.type()).replaceAll("[\\s_-]+", "_")
+            + second
             + "\u0000"
-            + normalize(relation.targetEntityName());
+            + canonicalKeywords(relation.keywords());
+    }
+
+    private static String canonicalKeywords(String value) {
+        var keywords = new java.util.TreeSet<String>();
+        for (var rawKeyword : Objects.requireNonNull(value, "value").split(",")) {
+            var normalized = normalize(rawKeyword).replaceAll("[\\s_-]+", "_");
+            if (!normalized.isEmpty()) {
+                keywords.add(normalized);
+            }
+        }
+        return String.join(", ", keywords);
     }
 }

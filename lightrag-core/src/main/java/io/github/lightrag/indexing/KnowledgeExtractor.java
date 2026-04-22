@@ -58,12 +58,12 @@ public final class KnowledgeExtractor {
            - Do not output duplicate relationships.
            - If a statement implies an n-ary relationship, decompose it into the most reasonable binary relationships.
            - For each relationship, return:
-             - "sourceEntityName": source entity name
-             - "targetEntityName": target entity name
-             - "type": one or more high-level relationship keywords, separated by comma and space
-             - "description": concise explanation of the relationship
+             - "source_entity": source entity name
+             - "target_entity": target entity name
+             - "relationship_keywords": one or more high-level relationship keywords, separated by comma and space
+             - "relationship_description": concise explanation of the relationship
              - "weight": optional confidence or importance score; omit it if uncertain
-           - The "type" field must act like high-level relationship keywords, not a database-specific edge label.
+           - The "relationship_keywords" field must act like high-level relationship keywords, not a database-specific edge label.
 
         3. Output Rules:
            - Return JSON only.
@@ -79,10 +79,10 @@ public final class KnowledgeExtractor {
                ],
                "relations": [
                  {
-                   "sourceEntityName": "Source entity",
-                   "targetEntityName": "Target entity",
-                   "type": "keyword1, keyword2",
-                   "description": "Relationship description",
+                   "source_entity": "Source entity",
+                   "target_entity": "Target entity",
+                   "relationship_keywords": "keyword1, keyword2",
+                   "relationship_description": "Relationship description",
                    "weight": 1.0
                  }
                ]
@@ -450,11 +450,11 @@ public final class KnowledgeExtractor {
 
         var relations = new ArrayList<ExtractedRelation>();
         for (var relationNode : relationsNode) {
-            var sourceEntityName = normalizedText(relationNode.get("sourceEntityName"));
-            var targetEntityName = normalizedText(relationNode.get("targetEntityName"));
-            var type = normalizedText(relationNode.get("type"));
+            var sourceEntityName = normalizedText(relationNode.get("source_entity"));
+            var targetEntityName = normalizedText(relationNode.get("target_entity"));
+            var keywords = normalizedText(relationNode.get("relationship_keywords"));
 
-            if (sourceEntityName.isEmpty() || targetEntityName.isEmpty() || type.isEmpty()) {
+            if (sourceEntityName.isEmpty() || targetEntityName.isEmpty() || keywords.isEmpty()) {
                 continue;
             }
 
@@ -462,8 +462,8 @@ public final class KnowledgeExtractor {
                 relations.add(new ExtractedRelation(
                     sourceEntityName,
                     targetEntityName,
-                    type,
-                    normalizedText(relationNode.get("description")),
+                    keywords,
+                    normalizedText(relationNode.get("relationship_description")),
                     parseWeightOrConfidence(relationNode)
                 ));
             } catch (IllegalArgumentException ignored) {
@@ -503,19 +503,19 @@ public final class KnowledgeExtractor {
 
         var relations = new ArrayList<WindowRelationCandidate>();
         for (var relationNode : relationsNode) {
-            var sourceEntityName = normalizedText(relationNode.get("sourceEntityName"));
-            var targetEntityName = normalizedText(relationNode.get("targetEntityName"));
-            var type = normalizedText(relationNode.get("type"));
+            var sourceEntityName = normalizedText(relationNode.get("source_entity"));
+            var targetEntityName = normalizedText(relationNode.get("target_entity"));
+            var keywords = normalizedText(relationNode.get("relationship_keywords"));
 
-            if (sourceEntityName.isEmpty() || targetEntityName.isEmpty() || type.isEmpty()) {
+            if (sourceEntityName.isEmpty() || targetEntityName.isEmpty() || keywords.isEmpty()) {
                 continue;
             }
 
             relations.add(new WindowRelationCandidate(
                 sourceEntityName,
                 targetEntityName,
-                type,
-                normalizedText(relationNode.get("description")),
+                keywords,
+                normalizedText(relationNode.get("relationship_description")),
                 parseWeightOrConfidence(relationNode),
                 parseSupportingChunkIndexes(relationNode.get("supportingChunkIndexes"))
             ));
@@ -702,7 +702,7 @@ public final class KnowledgeExtractor {
                 new ExtractedRelation(
                     candidate.sourceEntityName(),
                     candidate.targetEntityName(),
-                    canonicalRelationType(candidate.type()),
+                    canonicalKeywords(candidate.keywords()),
                     candidate.description(),
                     candidate.weight()
                 ),
@@ -770,7 +770,7 @@ public final class KnowledgeExtractor {
         return new ExtractedRelation(
             canonicalSource,
             canonicalTarget,
-            canonicalRelationType(preferredText(left.type(), right.type())),
+            mergeKeywords(left.keywords(), right.keywords()),
             longerText(left.description(), right.description()),
             Math.max(left.weight(), right.weight())
         );
@@ -785,14 +785,14 @@ public final class KnowledgeExtractor {
             + "\u0000"
             + second
             + "\u0000"
-            + canonicalRelationType(relation.type());
+            + canonicalKeywords(relation.keywords());
     }
 
     private static String normalizeRelationEndpoint(String value) {
         return Objects.requireNonNull(value, "value").strip().toLowerCase(Locale.ROOT);
     }
 
-    private static String canonicalRelationType(String value) {
+    private static String canonicalKeywords(String value) {
         var normalized = Objects.requireNonNull(value, "value").strip().toLowerCase(Locale.ROOT);
         if (normalized.isEmpty()) {
             return normalized;
@@ -805,6 +805,25 @@ public final class KnowledgeExtractor {
             }
         }
         return String.join(", ", keywords);
+    }
+
+    private static String mergeKeywords(String left, String right) {
+        var keywords = new java.util.TreeSet<String>();
+        addKeywords(keywords, left);
+        addKeywords(keywords, right);
+        return String.join(", ", keywords);
+    }
+
+    private static void addKeywords(java.util.Set<String> keywords, String value) {
+        if (value == null || value.isBlank()) {
+            return;
+        }
+        for (var rawKeyword : value.split(",")) {
+            var keyword = rawKeyword.strip().replaceAll("[\\s_-]+", "_");
+            if (!keyword.isEmpty()) {
+                keywords.add(keyword);
+            }
+        }
     }
 
     private static String preferredEndpoint(String left, String right) {

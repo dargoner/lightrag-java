@@ -5,19 +5,24 @@ import com.zaxxer.hikari.HikariDataSource;
 import io.github.lightrag.storage.DocumentStore;
 import org.junit.jupiter.api.Test;
 import org.testcontainers.containers.PostgreSQLContainer;
+import org.testcontainers.junit.jupiter.Container;
+import org.testcontainers.junit.jupiter.Testcontainers;
 import org.testcontainers.utility.DockerImageName;
 
 import java.util.Map;
+import java.util.UUID;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
+@Testcontainers
 class PostgresDocumentStoreTest {
+    @Container
+    private static final PostgreSQLContainer<?> POSTGRES = newPostgresContainer();
+
     @Test
     void savesAndLoadsDocumentsById() {
-        try (
-            var container = newPostgresContainer();
-            var resources = newStoreResources(container);
-        ) {
+        var config = newConfig();
+        try (var resources = newStoreResources(config)) {
             var document = new DocumentStore.DocumentRecord(
                 "doc-1",
                 "Title",
@@ -33,10 +38,8 @@ class PostgresDocumentStoreTest {
 
     @Test
     void listsDocumentsInDeterministicIdOrder() {
-        try (
-            var container = newPostgresContainer();
-            var resources = newStoreResources(container);
-        ) {
+        var config = newConfig();
+        try (var resources = newStoreResources(config)) {
             var second = new DocumentStore.DocumentRecord("doc-2", "Second", "Body 2", Map.of());
             var first = new DocumentStore.DocumentRecord("doc-1", "First", "Body 1", Map.of("source", "test"));
 
@@ -49,10 +52,8 @@ class PostgresDocumentStoreTest {
 
     @Test
     void reportsContainsForStoredDocumentIds() {
-        try (
-            var container = newPostgresContainer();
-            var resources = newStoreResources(container);
-        ) {
+        var config = newConfig();
+        try (var resources = newStoreResources(config)) {
             resources.store().save(new DocumentStore.DocumentRecord("doc-1", "Title", "Body", Map.of()));
 
             assertThat(resources.store().contains("doc-1")).isTrue();
@@ -66,19 +67,21 @@ class PostgresDocumentStoreTest {
         return new PostgreSQLContainer<>(image);
     }
 
-    private static StoreResources newStoreResources(PostgreSQLContainer<?> container) {
-        container.start();
-        var config = new PostgresStorageConfig(
-            container.getJdbcUrl(),
-            container.getUsername(),
-            container.getPassword(),
-            "lightrag",
-            3,
-            "rag_"
-        );
+    private static StoreResources newStoreResources(PostgresStorageConfig config) {
         var dataSource = newDataSource(config);
         new PostgresSchemaManager(dataSource, config).bootstrap();
         return new StoreResources(dataSource, new PostgresDocumentStore(dataSource, config));
+    }
+
+    private static PostgresStorageConfig newConfig() {
+        return new PostgresStorageConfig(
+            POSTGRES.getJdbcUrl(),
+            POSTGRES.getUsername(),
+            POSTGRES.getPassword(),
+            "lightrag_" + UUID.randomUUID().toString().replace("-", ""),
+            3,
+            "rag_"
+        );
     }
 
     private static HikariDataSource newDataSource(PostgresStorageConfig config) {

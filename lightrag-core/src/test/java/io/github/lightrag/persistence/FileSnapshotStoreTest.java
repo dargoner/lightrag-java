@@ -25,6 +25,7 @@ import java.util.List;
 import java.util.Map;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static io.github.lightrag.support.RelationIds.relationId;
 
 class FileSnapshotStoreTest {
     @TempDir
@@ -94,7 +95,7 @@ class FileSnapshotStoreTest {
                 List.of("doc-1:0")
             )),
             List.of(new GraphStore.RelationRecord(
-                "relation:entity:alice|works_with|entity:bob",
+                relationId("entity:alice", "entity:bob"),
                 "entity:alice",
                 "entity:bob",
                 "works_with",

@@ -7,6 +7,35 @@ import static org.assertj.core.api.Assertions.assertThat;
 
 class MilvusSdkClientAdapterTest {
     @Test
+    void relationCollectionSchemaMatchesUpstreamLengths() {
+        var schema = MilvusSdkClientAdapter.collectionSchema(
+            new MilvusClientAdapter.CollectionDefinition("rag_default_relations", "relations", 3, "chinese")
+        );
+
+        assertThat(schema.getField("id").getMaxLength())
+            .isEqualTo(MilvusSdkClientAdapter.MILVUS_RELATION_ID_MAX_LENGTH);
+        assertThat(schema.getField("src_id").getMaxLength())
+            .isEqualTo(MilvusSdkClientAdapter.MILVUS_RELATION_ENDPOINT_MAX_LENGTH);
+        assertThat(schema.getField("tgt_id").getMaxLength())
+            .isEqualTo(MilvusSdkClientAdapter.MILVUS_RELATION_ENDPOINT_MAX_LENGTH);
+        assertThat(schema.getField("file_path").getMaxLength())
+            .isEqualTo(MilvusSdkClientAdapter.MILVUS_RELATION_FILE_PATH_MAX_LENGTH);
+    }
+
+    @Test
+    void chunkCollectionSchemaKeepsBaseHybridFieldsOnly() {
+        var schema = MilvusSdkClientAdapter.collectionSchema(
+            new MilvusClientAdapter.CollectionDefinition("rag_default_chunks", "chunks", 3, "chinese")
+        );
+
+        assertThat(schema.getField("id").getMaxLength())
+            .isEqualTo(MilvusSdkClientAdapter.MILVUS_RELATION_ID_MAX_LENGTH);
+        assertThat(schema.getField("src_id")).isNull();
+        assertThat(schema.getField("tgt_id")).isNull();
+        assertThat(schema.getField("file_path")).isNull();
+    }
+
+    @Test
     void resolvesBoundedConsistencyByDefault() {
         assertThat(MilvusSdkClientAdapter.resolveQueryConsistency(testConfig()))
             .isEqualTo(ConsistencyLevel.BOUNDED);

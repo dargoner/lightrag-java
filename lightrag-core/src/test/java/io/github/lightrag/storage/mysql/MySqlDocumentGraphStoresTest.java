@@ -13,6 +13,8 @@ import io.github.lightrag.api.SnapshotStatus;
 import io.github.lightrag.storage.DocumentGraphJournalStore;
 import io.github.lightrag.storage.DocumentGraphSnapshotStore;
 import org.junit.jupiter.api.Test;
+import org.testcontainers.junit.jupiter.Container;
+import org.testcontainers.junit.jupiter.Testcontainers;
 import org.testcontainers.containers.MySQLContainer;
 import org.testcontainers.utility.DockerImageName;
 
@@ -20,18 +22,23 @@ import java.sql.DriverManager;
 import java.time.Instant;
 import java.time.temporal.ChronoUnit;
 import java.util.List;
+import java.util.UUID;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
+@Testcontainers
 class MySqlDocumentGraphStoresTest {
+    @Container
+    private static final MySQLContainer<?> MYSQL = newMySqlContainer();
+
     @Test
     void snapshotStoreRoundTripDocumentAndChunkSnapshots() {
         var now = Instant.now().truncatedTo(ChronoUnit.SECONDS);
         var document = documentSnapshot("doc-1", 2, now);
         var chunk = chunkSnapshot("doc-1", "chunk-1", 0, now);
+        var config = newConfig();
         try (
-            var container = newMySqlContainer();
-            var resources = newStoreResources(container, "default")
+            var resources = newStoreResources(config, "default")
         ) {
             resources.snapshotStore().saveDocument(document);
             resources.snapshotStore().saveChunks("doc-1", List.of(chunk));
@@ -46,9 +53,9 @@ class MySqlDocumentGraphStoresTest {
         var now = Instant.now().truncatedTo(ChronoUnit.SECONDS);
         var document = documentJournal("doc-1", 3, now);
         var chunk = chunkJournal("doc-1", "chunk-1", 3, now);
+        var config = newConfig();
         try (
-            var container = newMySqlContainer();
-            var resources = newStoreResources(container, "default")
+            var resources = newStoreResources(config, "default")
         ) {
             resources.journalStore().appendDocument(document);
             resources.journalStore().appendChunks("doc-1", List.of(chunk));
@@ -61,10 +68,10 @@ class MySqlDocumentGraphStoresTest {
     @Test
     void storesIsolateRowsByWorkspace() {
         var now = Instant.now().truncatedTo(ChronoUnit.SECONDS);
+        var config = newConfig();
         try (
-            var container = newMySqlContainer();
-            var alpha = newStoreResources(container, "alpha");
-            var beta = newStoreResources(container, "beta")
+            var alpha = newStoreResources(config, "alpha");
+            var beta = newStoreResources(config, "beta")
         ) {
             var alphaDocument = documentSnapshot("doc-1", 1, now.minusSeconds(2));
             var betaDocument = documentSnapshot("doc-1", 4, now.minusSeconds(1));
@@ -99,9 +106,9 @@ class MySqlDocumentGraphStoresTest {
     @Test
     void saveChunksReplacesSetAndRemovesRowsNotInLatestInput() {
         var now = Instant.now().truncatedTo(ChronoUnit.SECONDS);
+        var config = newConfig();
         try (
-            var container = newMySqlContainer();
-            var resources = newStoreResources(container, "default")
+            var resources = newStoreResources(config, "default")
         ) {
             resources.snapshotStore().saveChunks("doc-1", List.of(
                 chunkSnapshot("doc-1", "chunk-1", 0, now.minusSeconds(2)),
@@ -124,9 +131,9 @@ class MySqlDocumentGraphStoresTest {
     @Test
     void appendChunksUpsertsPerChunkAndKeepsStableOrdering() {
         var now = Instant.now().truncatedTo(ChronoUnit.SECONDS);
+        var config = newConfig();
         try (
-            var container = newMySqlContainer();
-            var resources = newStoreResources(container, "default")
+            var resources = newStoreResources(config, "default")
         ) {
             resources.journalStore().appendChunks("doc-1", List.of(
                 chunkJournal("doc-1", "chunk-b", 1, now.minusSeconds(2)),
@@ -149,46 +156,38 @@ class MySqlDocumentGraphStoresTest {
 
     @Test
     void bootstrapAppliesMissingGraphStateMigrationWhenSchemaVersionIsOlderThanLatest() throws Exception {
-        try (var container = newMySqlContainer()) {
-            container.start();
-            var config = new MySqlStorageConfig(
-                container.getJdbcUrl(),
-                container.getUsername(),
-                container.getPassword(),
-                "rag_"
+        var config = newConfig();
+
+        try (var dataSource = newDataSource(config)) {
+            new MySqlSchemaManager(dataSource, config).bootstrap();
+        }
+
+        try (
+            var connection = DriverManager.getConnection(config.jdbcUrl(), config.username(), config.password());
+            var statement = connection.createStatement()
+        ) {
+            statement.execute("DROP TABLE " + config.qualifiedTableName("chunk_graph_journals"));
+            statement.execute("DROP TABLE " + config.qualifiedTableName("document_graph_journals"));
+            statement.execute("DROP TABLE " + config.qualifiedTableName("chunk_graph_snapshots"));
+            statement.execute("DROP TABLE " + config.qualifiedTableName("document_graph_snapshots"));
+            statement.executeUpdate(
+                """
+                UPDATE %s
+                SET version = 2
+                WHERE schema_key = 'storage'
+                """.formatted(config.qualifiedTableName("schema_version"))
             );
+        }
 
-            try (var dataSource = newDataSource(config)) {
-                new MySqlSchemaManager(dataSource, config).bootstrap();
-            }
+        try (var dataSource = newDataSource(config)) {
+            new MySqlSchemaManager(dataSource, config).bootstrap();
+            var snapshotStore = new MySqlDocumentGraphSnapshotStore(dataSource, config, "default");
+            var now = Instant.now().truncatedTo(ChronoUnit.SECONDS);
+            var snapshot = documentSnapshot("doc-migrated", 1, now);
 
-            try (
-                var connection = DriverManager.getConnection(config.jdbcUrl(), config.username(), config.password());
-                var statement = connection.createStatement()
-            ) {
-                statement.execute("DROP TABLE " + config.qualifiedTableName("chunk_graph_journals"));
-                statement.execute("DROP TABLE " + config.qualifiedTableName("document_graph_journals"));
-                statement.execute("DROP TABLE " + config.qualifiedTableName("chunk_graph_snapshots"));
-                statement.execute("DROP TABLE " + config.qualifiedTableName("document_graph_snapshots"));
-                statement.executeUpdate(
-                    """
-                    UPDATE %s
-                    SET version = 2
-                    WHERE schema_key = 'storage'
-                    """.formatted(config.qualifiedTableName("schema_version"))
-                );
-            }
+            snapshotStore.saveDocument(snapshot);
 
-            try (var dataSource = newDataSource(config)) {
-                new MySqlSchemaManager(dataSource, config).bootstrap();
-                var snapshotStore = new MySqlDocumentGraphSnapshotStore(dataSource, config, "default");
-                var now = Instant.now().truncatedTo(ChronoUnit.SECONDS);
-                var snapshot = documentSnapshot("doc-migrated", 1, now);
-
-                snapshotStore.saveDocument(snapshot);
-
-                assertThat(snapshotStore.loadDocument("doc-migrated")).contains(snapshot);
-            }
+            assertThat(snapshotStore.loadDocument("doc-migrated")).contains(snapshot);
         }
     }
 
@@ -196,20 +195,22 @@ class MySqlDocumentGraphStoresTest {
         return new MySQLContainer<>(DockerImageName.parse("mysql:8.4"));
     }
 
-    private static StoreResources newStoreResources(MySQLContainer<?> container, String workspaceId) {
-        container.start();
-        var config = new MySqlStorageConfig(
-            container.getJdbcUrl(),
-            container.getUsername(),
-            container.getPassword(),
-            "rag_"
-        );
+    private static StoreResources newStoreResources(MySqlStorageConfig config, String workspaceId) {
         var dataSource = newDataSource(config);
         new MySqlSchemaManager(dataSource, config).bootstrap();
         return new StoreResources(
             dataSource,
             new MySqlDocumentGraphSnapshotStore(dataSource, config, workspaceId),
             new MySqlDocumentGraphJournalStore(dataSource, config, workspaceId)
+        );
+    }
+
+    private static MySqlStorageConfig newConfig() {
+        return new MySqlStorageConfig(
+            MYSQL.getJdbcUrl(),
+            MYSQL.getUsername(),
+            MYSQL.getPassword(),
+            "rag_" + UUID.randomUUID().toString().replace("-", "").substring(0, 8) + "_"
         );
     }
 

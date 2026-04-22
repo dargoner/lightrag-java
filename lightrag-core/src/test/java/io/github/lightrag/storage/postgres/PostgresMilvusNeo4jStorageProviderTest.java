@@ -37,6 +37,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.Objects;
 import java.util.Optional;
+import java.util.UUID;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicReference;
 import java.util.concurrent.CountDownLatch;
@@ -44,12 +45,19 @@ import java.util.concurrent.TimeUnit;
 import java.util.concurrent.locks.ReentrantReadWriteLock;
 import org.junit.jupiter.api.Test;
 import org.testcontainers.containers.PostgreSQLContainer;
+import org.testcontainers.junit.jupiter.Container;
+import org.testcontainers.junit.jupiter.Testcontainers;
 import org.testcontainers.utility.DockerImageName;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
+import static io.github.lightrag.support.RelationIds.relationId;
 
+@Testcontainers
 class PostgresMilvusNeo4jStorageProviderTest {
+    @Container
+    private static final PostgreSQLContainer<?> POSTGRES = newPostgresContainer();
+
     @Test
     void mirroringGraphStoreOverridesBatchGraphLoads() throws Exception {
         Class<?> mirroringGraphStoreClass = Class.forName(
@@ -72,11 +80,8 @@ class PostgresMilvusNeo4jStorageProviderTest {
 
     @Test
     void exposesStableTopLevelStoresAndDistinctAtomicViewStores() {
-        try (
-            var container = newPostgresContainer();
-            var dataSource = newDataSource(startedConfig(container))
-        ) {
-            PostgresStorageConfig config = startedConfig(container);
+        var config = newConfig();
+        try (var dataSource = newDataSource(config)) {
             try (var provider = new PostgresMilvusNeo4jStorageProvider(
                 dataSource,
                 config,
@@ -115,11 +120,8 @@ class PostgresMilvusNeo4jStorageProviderTest {
 
     @Test
     void honorsProvidedLockForTopLevelDocumentWrites() throws Exception {
-        try (
-            var container = newPostgresContainer();
-            var dataSource = newDataSource(startedConfig(container))
-        ) {
-            PostgresStorageConfig config = startedConfig(container);
+        var config = newConfig();
+        try (var dataSource = newDataSource(config)) {
             var providerLock = new ReentrantReadWriteLock(true);
 
             try (var provider = new PostgresMilvusNeo4jStorageProvider(
@@ -166,11 +168,8 @@ class PostgresMilvusNeo4jStorageProviderTest {
 
     @Test
     void persistsDocumentGraphStateAcrossProviderRestart() {
-        try (
-            var container = newPostgresContainer();
-            var dataSource = newDataSource(startedConfig(container))
-        ) {
-            PostgresStorageConfig config = startedConfig(container);
+        var config = newConfig();
+        try (var dataSource = newDataSource(config)) {
             var graphAdapter = new RecordingGraphStorageAdapter();
             var vectorAdapter = new RecordingVectorStorageAdapter();
             var snapshot = new DocumentGraphSnapshotStore.DocumentGraphSnapshot(
@@ -215,9 +214,9 @@ class PostgresMilvusNeo4jStorageProviderTest {
                 ChunkMergeStatus.SUCCEEDED,
                 ChunkGraphStatus.MATERIALIZED,
                 List.of("entity:alice"),
-                List.of("relation:entity:alice|works_with|entity:bob"),
+                List.of(relationId("entity:alice", "entity:bob")),
                 List.of("entity:alice"),
-                List.of("relation:entity:alice|works_with|entity:bob"),
+                List.of(relationId("entity:alice", "entity:bob")),
                 FailureStage.FINALIZING,
                 Instant.parse("2026-04-12T10:00:05Z"),
                 null
@@ -255,11 +254,8 @@ class PostgresMilvusNeo4jStorageProviderTest {
 
     @Test
     void delegatesAtomicWriteToStorageCoordinatorAndPersistsPostgresGraphBaseline() {
-        try (
-            var container = newPostgresContainer();
-            var dataSource = newDataSource(startedConfig(container))
-        ) {
-            PostgresStorageConfig config = startedConfig(container);
+        var config = newConfig();
+        try (var dataSource = newDataSource(config)) {
             RecordingGraphStorageAdapter graphAdapter = new RecordingGraphStorageAdapter();
             RecordingVectorStorageAdapter vectorAdapter = new RecordingVectorStorageAdapter();
 
@@ -289,7 +285,8 @@ class PostgresMilvusNeo4jStorageProviderTest {
                 assertThat(graphAdapter.applyCount()).isEqualTo(1);
                 assertThat(vectorAdapter.applyCount()).isEqualTo(1);
                 assertThat(provider.graphStore().loadEntity("entity-1")).isPresent();
-                assertThat(countRows(dataSource, config, "entities", "entity-1")).isEqualTo(1);
+                assertThat(countRows(dataSource, config, "documents", "doc-1")).isEqualTo(1);
+                assertThat(countRows(dataSource, config, "chunks", "doc-1:0")).isEqualTo(1);
             }
         }
     }
@@ -297,11 +294,8 @@ class PostgresMilvusNeo4jStorageProviderTest {
 
     @Test
     void commitsAcrossPostgresMilvusAndNeo4jStoresWithoutPgvector() {
-        try (
-            var container = newPostgresContainer();
-            var dataSource = newDataSource(startedConfig(container))
-        ) {
-            PostgresStorageConfig config = startedConfig(container);
+        var config = newConfig();
+        try (var dataSource = newDataSource(config)) {
             RecordingGraphProjection graphProjection = new RecordingGraphProjection();
             RecordingMilvusProjection milvusProjection = new RecordingMilvusProjection();
 
@@ -349,11 +343,8 @@ class PostgresMilvusNeo4jStorageProviderTest {
 
     @Test
     void persistsTaskStoresWhenUsingPostgresMilvusNeo4jProviderBootstrap() {
-        try (
-            var container = newPostgresContainer();
-            var dataSource = newDataSource(startedConfig(container))
-        ) {
-            PostgresStorageConfig config = startedConfig(container);
+        var config = newConfig();
+        try (var dataSource = newDataSource(config)) {
             try (var provider = new PostgresMilvusNeo4jStorageProvider(
                 dataSource,
                 config,
@@ -410,11 +401,8 @@ class PostgresMilvusNeo4jStorageProviderTest {
 
     @Test
     void rollsBackPostgresRowsWhenGraphProjectionFailsAfterCommit() {
-        try (
-            var container = newPostgresContainer();
-            var dataSource = newDataSource(startedConfig(container))
-        ) {
-            PostgresStorageConfig config = startedConfig(container);
+        var config = newConfig();
+        try (var dataSource = newDataSource(config)) {
             RecordingGraphProjection graphProjection = new RecordingGraphProjection();
             graphProjection.saveEntity(new GraphStore.EntityRecord(
                 "entity-0",
@@ -497,11 +485,8 @@ class PostgresMilvusNeo4jStorageProviderTest {
 
     @Test
     void restoreRestoresPostgresRowsWhenMilvusFlushFails() {
-        try (
-            var container = newPostgresContainer();
-            var dataSource = newDataSource(startedConfig(container))
-        ) {
-            PostgresStorageConfig config = startedConfig(container);
+        var config = newConfig();
+        try (var dataSource = newDataSource(config)) {
             RecordingGraphProjection graphProjection = new RecordingGraphProjection();
             graphProjection.saveEntity(new GraphStore.EntityRecord(
                 "entity-0",
@@ -574,16 +559,21 @@ class PostgresMilvusNeo4jStorageProviderTest {
         return new PostgreSQLContainer<>(DockerImageName.parse("postgres:16"));
     }
 
-    private static PostgresStorageConfig startedConfig(PostgreSQLContainer<?> container) {
-        container.start();
+    private static PostgresStorageConfig newConfig() {
+        var schema = "lightrag_" + UUID.randomUUID().toString().replace("-", "");
         return new PostgresStorageConfig(
-            container.getJdbcUrl(),
-            container.getUsername(),
-            container.getPassword(),
-            "public",
+            withCurrentSchema(POSTGRES.getJdbcUrl(), schema),
+            POSTGRES.getUsername(),
+            POSTGRES.getPassword(),
+            schema,
             3,
             "rag_"
         );
+    }
+
+    private static String withCurrentSchema(String jdbcUrl, String schema) {
+        String separator = jdbcUrl.contains("?") ? "&" : "?";
+        return jdbcUrl + separator + "currentSchema=" + schema;
     }
 
     private static HikariDataSource newDataSource(PostgresStorageConfig config) {

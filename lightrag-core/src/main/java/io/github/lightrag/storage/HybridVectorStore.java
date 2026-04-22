@@ -18,13 +18,28 @@ public interface HybridVectorStore extends VectorStore {
         String id,
         List<Double> vector,
         String searchableText,
-        List<String> keywords
+        List<String> keywords,
+        String srcId,
+        String tgtId,
+        String filePath
     ) {
+        public EnrichedVectorRecord(
+            String id,
+            List<Double> vector,
+            String searchableText,
+            List<String> keywords
+        ) {
+            this(id, vector, searchableText, keywords, "", "", "");
+        }
+
         public EnrichedVectorRecord {
             id = Objects.requireNonNull(id, "id");
             vector = List.copyOf(Objects.requireNonNull(vector, "vector"));
             searchableText = searchableText == null ? "" : searchableText;
             keywords = List.copyOf(Objects.requireNonNull(keywords, "keywords"));
+            srcId = srcId == null ? "" : srcId;
+            tgtId = tgtId == null ? "" : tgtId;
+            filePath = filePath == null ? "" : filePath;
         }
 
         public VectorRecord toVectorRecord() {

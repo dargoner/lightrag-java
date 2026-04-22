@@ -140,7 +140,7 @@ public final class WorkspaceScopedNeo4jGraphStore implements GraphStore, AutoClo
             tx.run(
                 """
                 MATCH (source:%s {workspaceId: $workspaceId})-[relation:%s {workspaceId: $workspaceId, scopedId: $scopedRelationId}]->(target:%s {workspaceId: $workspaceId})
-                RETURN source.id AS sourceEntityId, relation, target.id AS targetEntityId
+                RETURN source.id AS srcId, relation, target.id AS tgtId
                 """.formatted(ENTITY_LABEL, RELATION_TYPE, ENTITY_LABEL),
                 org.neo4j.driver.Values.parameters(
                     "workspaceId", workspaceId,
@@ -207,7 +207,7 @@ public final class WorkspaceScopedNeo4jGraphStore implements GraphStore, AutoClo
                 OPTIONAL MATCH (source:%s {workspaceId: $workspaceId})-[relation:%s {workspaceId: $workspaceId, scopedId: scopedRelationId}]->(target:%s {workspaceId: $workspaceId})
                 WITH idx, source, relation, target
                 WHERE relation IS NOT NULL
-                RETURN idx, source.id AS sourceEntityId, relation, target.id AS targetEntityId
+                RETURN idx, source.id AS srcId, relation, target.id AS tgtId
                 ORDER BY idx
                 """.formatted(ENTITY_LABEL, RELATION_TYPE, ENTITY_LABEL),
                 org.neo4j.driver.Values.parameters(
@@ -249,7 +249,7 @@ public final class WorkspaceScopedNeo4jGraphStore implements GraphStore, AutoClo
             tx.run(
                 """
                 MATCH (source:%s {workspaceId: $workspaceId})-[relation:%s {workspaceId: $workspaceId}]->(target:%s {workspaceId: $workspaceId})
-                RETURN source.id AS sourceEntityId, relation, target.id AS targetEntityId
+                RETURN source.id AS srcId, relation, target.id AS tgtId
                 ORDER BY relation.id
                 """.formatted(ENTITY_LABEL, RELATION_TYPE, ENTITY_LABEL),
                 org.neo4j.driver.Values.parameters("workspaceId", workspaceId)
@@ -267,7 +267,7 @@ public final class WorkspaceScopedNeo4jGraphStore implements GraphStore, AutoClo
             tx.run(
                 """
                 MATCH (entity:%s {workspaceId: $workspaceId, scopedId: $scopedEntityId})-[relation:%s {workspaceId: $workspaceId}]-(adjacent:%s {workspaceId: $workspaceId})
-                RETURN startNode(relation).id AS sourceEntityId, relation, endNode(relation).id AS targetEntityId
+                RETURN startNode(relation).id AS srcId, relation, endNode(relation).id AS tgtId
                 ORDER BY relation.id
                 """.formatted(ENTITY_LABEL, RELATION_TYPE, ENTITY_LABEL),
                 org.neo4j.driver.Values.parameters(
@@ -309,7 +309,7 @@ public final class WorkspaceScopedNeo4jGraphStore implements GraphStore, AutoClo
                 OPTIONAL MATCH (:Entity {workspaceId: $workspaceId, scopedId: scopedEntityId})-[relation:%s {workspaceId: $workspaceId}]-(adjacent:%s {workspaceId: $workspaceId})
                 WITH entityId, relation
                 WHERE relation IS NOT NULL
-                RETURN entityId, startNode(relation).id AS sourceEntityId, relation, endNode(relation).id AS targetEntityId
+                RETURN entityId, startNode(relation).id AS srcId, relation, endNode(relation).id AS tgtId
                 ORDER BY entityId, relation.id
                 """.formatted(RELATION_TYPE, ENTITY_LABEL),
                 org.neo4j.driver.Values.parameters(
@@ -500,41 +500,46 @@ public final class WorkspaceScopedNeo4jGraphStore implements GraphStore, AutoClo
             MERGE (source)-[relation:%s {scopedId: $scopedRelationId}]->(target)
             SET relation.workspaceId = $workspaceId,
                 relation.id = $id,
-                relation.type = $type,
+                relation.keywords = $keywords,
                 relation.description = $description,
                 relation.weight = $weight,
-                relation.sourceChunkIds = $sourceChunkIds
+                relation.sourceId = $sourceId,
+                relation.filePath = $filePath
             """.formatted(ENTITY_LABEL, ENTITY_LABEL, RELATION_TYPE),
             org.neo4j.driver.Values.parameters(
                 "workspaceId", workspaceId,
                 "scopedRelationId", scopedId(record.id()),
                 "id", record.id(),
-                "sourceEntityId", record.sourceEntityId(),
-                "targetEntityId", record.targetEntityId(),
-                "scopedSourceEntityId", scopedId(record.sourceEntityId()),
-                "scopedTargetEntityId", scopedId(record.targetEntityId()),
-                "type", record.type(),
+                "sourceEntityId", record.srcId(),
+                "targetEntityId", record.tgtId(),
+                "scopedSourceEntityId", scopedId(record.srcId()),
+                "scopedTargetEntityId", scopedId(record.tgtId()),
+                "keywords", record.keywords(),
                 "description", record.description(),
                 "weight", record.weight(),
-                "sourceChunkIds", record.sourceChunkIds()
+                "sourceId", record.sourceId(),
+                "filePath", record.filePath()
             )
         );
     }
 
     private void saveRelations(TransactionContext tx, List<RelationRecord> records) {
         var rows = records.stream()
-            .map(record -> Map.<String, Object>of(
-                "scopedRelationId", scopedId(record.id()),
-                "id", record.id(),
-                "sourceEntityId", record.sourceEntityId(),
-                "targetEntityId", record.targetEntityId(),
-                "scopedSourceEntityId", scopedId(record.sourceEntityId()),
-                "scopedTargetEntityId", scopedId(record.targetEntityId()),
-                "type", record.type(),
-                "description", record.description(),
-                "weight", record.weight(),
-                "sourceChunkIds", record.sourceChunkIds()
-            ))
+            .map(record -> {
+                var row = new LinkedHashMap<String, Object>();
+                row.put("scopedRelationId", scopedId(record.id()));
+                row.put("id", record.id());
+                row.put("sourceEntityId", record.srcId());
+                row.put("targetEntityId", record.tgtId());
+                row.put("scopedSourceEntityId", scopedId(record.srcId()));
+                row.put("scopedTargetEntityId", scopedId(record.tgtId()));
+                row.put("keywords", record.keywords());
+                row.put("description", record.description());
+                row.put("weight", record.weight());
+                row.put("sourceId", record.sourceId());
+                row.put("filePath", record.filePath());
+                return Map.copyOf(row);
+            })
             .toList();
         var lastIndexByScopedRelationId = new HashMap<String, Integer>();
         for (int index = 0; index < rows.size(); index++) {
@@ -598,10 +603,11 @@ public final class WorkspaceScopedNeo4jGraphStore implements GraphStore, AutoClo
             MERGE (source)-[relation:%s {scopedId: row.scopedRelationId}]->(target)
             SET relation.workspaceId = $workspaceId,
                 relation.id = row.id,
-                relation.type = row.type,
+                relation.keywords = row.keywords,
                 relation.description = row.description,
                 relation.weight = row.weight,
-                relation.sourceChunkIds = row.sourceChunkIds
+                relation.sourceId = row.sourceId,
+                relation.filePath = row.filePath
             """.formatted(ENTITY_LABEL, ENTITY_LABEL, RELATION_TYPE),
             org.neo4j.driver.Values.parameters(
                 "workspaceId", workspaceId,
@@ -630,12 +636,13 @@ public final class WorkspaceScopedNeo4jGraphStore implements GraphStore, AutoClo
         var relation = record.get("relation");
         return new RelationRecord(
             relation.get("id").asString(),
-            record.get("sourceEntityId").asString(),
-            record.get("targetEntityId").asString(),
-            relation.get("type").asString(""),
+            record.get("srcId").asString(),
+            record.get("tgtId").asString(),
+            relation.get("keywords").asString(""),
             relation.get("description").asString(""),
             relation.get("weight").asDouble(0.0d),
-            stringList(relation.get("sourceChunkIds"))
+            relation.get("sourceId").asString(""),
+            relation.get("filePath").asString("")
         );
     }
 

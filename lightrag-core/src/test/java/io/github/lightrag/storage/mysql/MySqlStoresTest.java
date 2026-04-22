@@ -15,6 +15,8 @@ import io.github.lightrag.storage.TaskStageStore;
 import io.github.lightrag.storage.TaskStore;
 import org.junit.jupiter.api.Test;
 import org.testcontainers.containers.MySQLContainer;
+import org.testcontainers.junit.jupiter.Container;
+import org.testcontainers.junit.jupiter.Testcontainers;
 import org.testcontainers.utility.DockerImageName;
 
 import java.sql.DriverManager;
@@ -22,16 +24,21 @@ import java.sql.SQLException;
 import java.time.Instant;
 import java.util.List;
 import java.util.Map;
+import java.util.UUID;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
+@Testcontainers
 class MySqlStoresTest {
+    @Container
+    private static final MySQLContainer<?> MYSQL = newMySqlContainer();
+
     @Test
     void documentChunkAndStatusStoresRoundTripRecords() {
+        var config = newConfig();
         try (
-            var container = newMySqlContainer();
-            var resources = newStoreResources(container, "default");
+            var resources = newStoreResources(config, "default");
         ) {
             var document = new DocumentStore.DocumentRecord(
                 "doc-1",
@@ -71,10 +78,10 @@ class MySqlStoresTest {
 
     @Test
     void storesIsolateRowsByWorkspaceId() {
+        var config = newConfig();
         try (
-            var container = newMySqlContainer();
-            var alpha = newStoreResources(container, "alpha");
-            var beta = newStoreResources(container, "beta");
+            var alpha = newStoreResources(config, "alpha");
+            var beta = newStoreResources(config, "beta");
         ) {
             var alphaDocument = new DocumentStore.DocumentRecord("doc-1", "Alpha", "alpha", Map.of("workspace", "alpha"));
             var betaDocument = new DocumentStore.DocumentRecord("doc-1", "Beta", "beta", Map.of("workspace", "beta"));
@@ -101,9 +108,9 @@ class MySqlStoresTest {
 
     @Test
     void taskAndTaskDocumentStoresRoundTripRecords() {
+        var config = newConfig();
         try (
-            var container = newMySqlContainer();
-            var resources = newStoreResources(container, "default");
+            var resources = newStoreResources(config, "default");
         ) {
             var task = new TaskStore.TaskRecord(
                 "task-1",
@@ -154,62 +161,51 @@ class MySqlStoresTest {
 
     @Test
     void bootstrapRejectsLegacySchemaWithoutWorkspaceColumns() throws Exception {
-        try (var container = newMySqlContainer()) {
-            container.start();
-            var config = new MySqlStorageConfig(
-                container.getJdbcUrl(),
-                container.getUsername(),
-                container.getPassword(),
-                "rag_"
+        var config = newConfig();
+
+        try (
+            var connection = DriverManager.getConnection(
+                config.jdbcUrl(),
+                config.username(),
+                config.password()
             );
+            var statement = connection.createStatement()
+        ) {
+            statement.execute(
+                """
+                CREATE TABLE IF NOT EXISTS %s (
+                    id VARCHAR(255) PRIMARY KEY,
+                    title TEXT NOT NULL,
+                    content LONGTEXT NOT NULL,
+                    metadata JSON NOT NULL
+                )
+                """.formatted(config.qualifiedTableName("documents"))
+            );
+        }
 
-            try (
-                var connection = DriverManager.getConnection(
-                    config.jdbcUrl(),
-                    config.username(),
-                    config.password()
-                );
-                var statement = connection.createStatement()
-            ) {
-                statement.execute(
-                    """
-                    CREATE TABLE IF NOT EXISTS %s (
-                        id VARCHAR(255) PRIMARY KEY,
-                        title TEXT NOT NULL,
-                        content LONGTEXT NOT NULL,
-                        metadata JSON NOT NULL
-                    )
-                    """.formatted(config.qualifiedTableName("documents"))
-                );
-            }
-
-            try (var dataSource = newDataSource(config)) {
-                assertThatThrownBy(() -> new MySqlSchemaManager(dataSource, config).bootstrap())
-                    .isInstanceOf(IllegalStateException.class)
-                    .hasMessageContaining("legacy")
-                    .hasMessageContaining("workspace");
-            }
+        try (var dataSource = newDataSource(config)) {
+            assertThatThrownBy(() -> new MySqlSchemaManager(dataSource, config).bootstrap())
+                .isInstanceOf(IllegalStateException.class)
+                .hasMessageContaining("legacy")
+                .hasMessageContaining("workspace");
         }
     }
 
     @Test
     void bootstrapSupportsLongTablePrefixesWithoutOverflowingIndexNames() {
-        try (var container = newMySqlContainer()) {
-            container.start();
-            var config = new MySqlStorageConfig(
-                container.getJdbcUrl(),
-                container.getUsername(),
-                container.getPassword(),
-                "rag_" + "a".repeat(32) + "_"
-            );
+        var config = new MySqlStorageConfig(
+            MYSQL.getJdbcUrl(),
+            MYSQL.getUsername(),
+            MYSQL.getPassword(),
+            "rag_" + "a".repeat(32) + "_"
+        );
 
-            try (var dataSource = newDataSource(config)) {
-                new MySqlSchemaManager(dataSource, config).bootstrap();
+        try (var dataSource = newDataSource(config)) {
+            new MySqlSchemaManager(dataSource, config).bootstrap();
 
-                assertThat(tableExists(dataSource, config.tableName("documents"))).isTrue();
-                assertThat(tableExists(dataSource, config.tableName("chunk_graph_snapshots"))).isTrue();
-                assertThat(tableExists(dataSource, config.tableName("chunk_graph_journals"))).isTrue();
-            }
+            assertThat(tableExists(dataSource, config.tableName("documents"))).isTrue();
+            assertThat(tableExists(dataSource, config.tableName("chunk_graph_snapshots"))).isTrue();
+            assertThat(tableExists(dataSource, config.tableName("chunk_graph_journals"))).isTrue();
         }
     }
 
@@ -217,14 +213,7 @@ class MySqlStoresTest {
         return new MySQLContainer<>(DockerImageName.parse("mysql:8.4"));
     }
 
-    private static StoreResources newStoreResources(MySQLContainer<?> container, String workspaceId) {
-        container.start();
-        var config = new MySqlStorageConfig(
-            container.getJdbcUrl(),
-            container.getUsername(),
-            container.getPassword(),
-            "rag_"
-        );
+    private static StoreResources newStoreResources(MySqlStorageConfig config, String workspaceId) {
         var dataSource = newDataSource(config);
         new MySqlSchemaManager(dataSource, config).bootstrap();
         return new StoreResources(
@@ -235,6 +224,15 @@ class MySqlStoresTest {
             new MySqlTaskStore(dataSource, config, workspaceId),
             new MySqlTaskStageStore(dataSource, config, workspaceId),
             new MySqlTaskDocumentStore(dataSource, config, workspaceId)
+        );
+    }
+
+    private static MySqlStorageConfig newConfig() {
+        return new MySqlStorageConfig(
+            MYSQL.getJdbcUrl(),
+            MYSQL.getUsername(),
+            MYSQL.getPassword(),
+            "rag_" + UUID.randomUUID().toString().replace("-", "").substring(0, 8) + "_"
         );
     }
 

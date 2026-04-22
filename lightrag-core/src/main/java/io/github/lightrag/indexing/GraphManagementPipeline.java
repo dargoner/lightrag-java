@@ -2,11 +2,12 @@ package io.github.lightrag.indexing;
 
 import io.github.lightrag.api.CreateEntityRequest;
 import io.github.lightrag.api.CreateRelationRequest;
+import io.github.lightrag.api.DeleteRelationRequest;
 import io.github.lightrag.api.EditEntityRequest;
-import io.github.lightrag.api.EditRelationRequest;
 import io.github.lightrag.api.GraphEntity;
 import io.github.lightrag.api.GraphRelation;
 import io.github.lightrag.api.MergeEntitiesRequest;
+import io.github.lightrag.api.UpdateRelationRequest;
 import io.github.lightrag.storage.AtomicStorageProvider;
 import io.github.lightrag.storage.GraphStore;
 import io.github.lightrag.storage.HybridVectorStore;
@@ -65,14 +66,16 @@ public final class GraphManagementPipeline {
         var relationRecord = storageProvider.writeAtomically(storage -> {
             var sourceEntity = resolveEntity(storage.graphStore().allEntities(), createRequest.sourceEntityName(), "sourceEntityName");
             var targetEntity = resolveEntity(storage.graphStore().allEntities(), createRequest.targetEntityName(), "targetEntityName");
+            var canonical = RelationCanonicalizer.canonicalize(sourceEntity.id(), targetEntity.id());
             var created = new GraphStore.RelationRecord(
-                relationId(sourceEntity.id(), createRequest.relationType(), targetEntity.id()),
-                sourceEntity.id(),
-                targetEntity.id(),
-                createRequest.relationType(),
+                canonical.relationId(),
+                canonical.srcId(),
+                canonical.tgtId(),
+                createRequest.keywords(),
                 createRequest.description(),
                 createRequest.weight(),
-                List.of()
+                createRequest.sourceId(),
+                createRequest.filePath()
             );
             validateCreateRelation(storage.graphStore().allRelations(), created);
             storage.graphStore().saveRelation(created);
@@ -156,31 +159,28 @@ public final class GraphManagementPipeline {
         return toGraphEntity(updatedEntity);
     }
 
-    public GraphRelation editRelation(EditRelationRequest request) {
+    public GraphRelation updateRelation(UpdateRelationRequest request) {
         var editRequest = Objects.requireNonNull(request, "request");
         var snapshot = StorageSnapshots.capture(storageProvider);
         var sourceEntity = resolveEntity(snapshot.entities(), editRequest.sourceEntityName(), "sourceEntityName");
         var targetEntity = resolveEntity(snapshot.entities(), editRequest.targetEntityName(), "targetEntityName");
-        var currentRelationId = relationId(sourceEntity.id(), editRequest.currentRelationType(), targetEntity.id());
+        var canonical = RelationCanonicalizer.canonicalize(sourceEntity.id(), targetEntity.id());
+        var currentRelationId = canonical.relationId();
         var existing = snapshot.relations().stream()
             .filter(relation -> relation.id().equals(currentRelationId))
             .findFirst()
             .orElseThrow(() -> new IllegalArgumentException("relation does not exist: " + currentRelationId));
 
-        var updatedType = editRequest.newRelationType() == null ? existing.type() : editRequest.newRelationType();
         var updatedRelation = new GraphStore.RelationRecord(
-            relationId(existing.sourceEntityId(), updatedType, existing.targetEntityId()),
-            existing.sourceEntityId(),
-            existing.targetEntityId(),
-            updatedType,
+            existing.relationId(),
+            existing.srcId(),
+            existing.tgtId(),
+            editRequest.keywords() == null ? existing.keywords() : editRequest.keywords(),
             editRequest.description() == null ? existing.description() : editRequest.description(),
             editRequest.weight() == null ? existing.weight() : editRequest.weight(),
-            existing.sourceChunkIds()
+            editRequest.sourceId() == null ? existing.sourceId() : editRequest.sourceId(),
+            editRequest.filePath() == null ? existing.filePath() : editRequest.filePath()
         );
-        if (!updatedRelation.id().equals(existing.id())
-            && snapshot.relations().stream().anyMatch(relation -> relation.id().equals(updatedRelation.id()))) {
-            throw new IllegalArgumentException("relation already exists: " + updatedRelation.id());
-        }
 
         var updatedVectors = new LinkedHashMap<>(snapshot.vectors());
         updatedVectors.put(
@@ -206,6 +206,39 @@ public final class GraphManagementPipeline {
         ));
         StorageSnapshots.persistIfConfigured(storageProvider, snapshotPath);
         return toGraphRelation(updatedRelation);
+    }
+
+    public void deleteRelation(DeleteRelationRequest request) {
+        var deleteRequest = Objects.requireNonNull(request, "request");
+        var snapshot = StorageSnapshots.capture(storageProvider);
+        var sourceEntity = resolveEntity(snapshot.entities(), deleteRequest.sourceEntityName(), "sourceEntityName");
+        var targetEntity = resolveEntity(snapshot.entities(), deleteRequest.targetEntityName(), "targetEntityName");
+        var currentRelationId = RelationCanonicalizer.canonicalize(sourceEntity.id(), targetEntity.id()).relationId();
+        var remainingRelations = snapshot.relations().stream()
+            .filter(relation -> !relation.id().equals(currentRelationId))
+            .toList();
+        var updatedVectors = new LinkedHashMap<>(snapshot.vectors());
+        updatedVectors.put(
+            StorageSnapshots.RELATION_NAMESPACE,
+            replaceNamespaceVectors(
+                snapshot.vectors().getOrDefault(StorageSnapshots.RELATION_NAMESPACE, List.of()),
+                List.of(currentRelationId),
+                List.of()
+            )
+        );
+        storageProvider.restore(new SnapshotStore.Snapshot(
+            snapshot.documents(),
+            snapshot.chunks(),
+            snapshot.entities(),
+            remainingRelations,
+            Map.copyOf(updatedVectors),
+            snapshot.documentStatuses(),
+            snapshot.documentGraphSnapshots(),
+            snapshot.chunkGraphSnapshots(),
+            snapshot.documentGraphJournals(),
+            snapshot.chunkGraphJournals()
+        ));
+        StorageSnapshots.persistIfConfigured(storageProvider, snapshotPath);
     }
 
     public GraphEntity mergeEntities(MergeEntitiesRequest request) {
@@ -472,19 +505,21 @@ public final class GraphManagementPipeline {
     ) {
         var merged = new LinkedHashMap<String, GraphStore.RelationRecord>();
         for (var relation : relations) {
-            var sourceEntityId = sourceIds.contains(relation.sourceEntityId()) ? targetEntityId : relation.sourceEntityId();
-            var targetRelationEntityId = sourceIds.contains(relation.targetEntityId()) ? targetEntityId : relation.targetEntityId();
+            var sourceEntityId = sourceIds.contains(relation.srcId()) ? targetEntityId : relation.srcId();
+            var targetRelationEntityId = sourceIds.contains(relation.tgtId()) ? targetEntityId : relation.tgtId();
             if (sourceEntityId.equals(targetRelationEntityId)) {
                 continue;
             }
+            var canonical = RelationCanonicalizer.canonicalize(sourceEntityId, targetRelationEntityId);
             var rewritten = new GraphStore.RelationRecord(
-                relationId(sourceEntityId, relation.type(), targetRelationEntityId),
-                sourceEntityId,
-                targetRelationEntityId,
-                relation.type(),
+                canonical.relationId(),
+                canonical.srcId(),
+                canonical.tgtId(),
+                relation.keywords(),
                 relation.description(),
                 relation.weight(),
-                relation.sourceChunkIds()
+                relation.sourceId(),
+                relation.filePath()
             );
             merged.merge(rewritten.id(), rewritten, GraphManagementPipeline::mergeRelationRecord);
         }
@@ -496,13 +531,14 @@ public final class GraphManagementPipeline {
         GraphStore.RelationRecord incoming
     ) {
         return new GraphStore.RelationRecord(
-            current.id(),
-            current.sourceEntityId(),
-            current.targetEntityId(),
-            current.type(),
+            current.relationId(),
+            current.srcId(),
+            current.tgtId(),
+            RelationCanonicalizer.mergeCsv(current.keywords(), incoming.keywords()),
             mergeDescriptions(List.of(current.description(), incoming.description())),
             Math.max(current.weight(), incoming.weight()),
-            mergeSourceChunkIds(current.sourceChunkIds(), incoming.sourceChunkIds())
+            RelationCanonicalizer.joinValues(mergeSourceChunkIds(current.sourceChunkIds(), incoming.sourceChunkIds())),
+            RelationCanonicalizer.joinValues(mergeSourceChunkIds(current.filePaths(), incoming.filePaths()))
         );
     }
 
@@ -515,10 +551,6 @@ public final class GraphManagementPipeline {
 
     private static String entityId(String entityName) {
         return "entity:" + normalizeKey(entityName);
-    }
-
-    private static String relationId(String sourceEntityId, String relationType, String targetEntityId) {
-        return "relation:" + sourceEntityId + "|" + normalizeKey(relationType) + "|" + targetEntityId;
     }
 
     private static String normalizeKey(String value) {
@@ -547,13 +579,14 @@ public final class GraphManagementPipeline {
 
     private static Relation toRelation(GraphStore.RelationRecord relationRecord) {
         return new Relation(
-            relationRecord.id(),
-            relationRecord.sourceEntityId(),
-            relationRecord.targetEntityId(),
-            relationRecord.type(),
+            relationRecord.relationId(),
+            relationRecord.srcId(),
+            relationRecord.tgtId(),
+            relationRecord.keywords(),
             relationRecord.description(),
             relationRecord.weight(),
-            relationRecord.sourceChunkIds()
+            relationRecord.sourceId(),
+            relationRecord.filePath()
         );
     }
 
@@ -570,13 +603,14 @@ public final class GraphManagementPipeline {
 
     private static GraphRelation toGraphRelation(GraphStore.RelationRecord relationRecord) {
         return new GraphRelation(
-            relationRecord.id(),
-            relationRecord.sourceEntityId(),
-            relationRecord.targetEntityId(),
-            relationRecord.type(),
+            relationRecord.relationId(),
+            relationRecord.srcId(),
+            relationRecord.tgtId(),
+            relationRecord.keywords(),
             relationRecord.description(),
             relationRecord.weight(),
-            relationRecord.sourceChunkIds()
+            relationRecord.sourceId(),
+            relationRecord.filePath()
         );
     }
 
@@ -617,19 +651,21 @@ public final class GraphManagementPipeline {
     ) {
         return relations.stream()
             .map(relation -> {
-                if (!relation.sourceEntityId().equals(currentEntityId) && !relation.targetEntityId().equals(currentEntityId)) {
+                if (!relation.srcId().equals(currentEntityId) && !relation.tgtId().equals(currentEntityId)) {
                     return relation;
                 }
-                var sourceEntityId = relation.sourceEntityId().equals(currentEntityId) ? updatedEntityId : relation.sourceEntityId();
-                var targetEntityId = relation.targetEntityId().equals(currentEntityId) ? updatedEntityId : relation.targetEntityId();
+                var sourceEntityId = relation.srcId().equals(currentEntityId) ? updatedEntityId : relation.srcId();
+                var targetEntityId = relation.tgtId().equals(currentEntityId) ? updatedEntityId : relation.tgtId();
+                var canonical = RelationCanonicalizer.canonicalize(sourceEntityId, targetEntityId);
                 return new GraphStore.RelationRecord(
-                    relationId(sourceEntityId, relation.type(), targetEntityId),
-                    sourceEntityId,
-                    targetEntityId,
-                    relation.type(),
+                    canonical.relationId(),
+                    canonical.srcId(),
+                    canonical.tgtId(),
+                    relation.keywords(),
                     relation.description(),
                     relation.weight(),
-                    relation.sourceChunkIds()
+                    relation.sourceId(),
+                    relation.filePath()
                 );
             })
             .toList();

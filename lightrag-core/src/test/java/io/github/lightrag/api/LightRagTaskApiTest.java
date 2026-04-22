@@ -17,6 +17,7 @@ import java.util.Locale;
 import java.util.Map;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static io.github.lightrag.support.RelationIds.relationId;
 
 class LightRagTaskApiTest {
     private static final String WORKSPACE = "default";
@@ -379,7 +380,7 @@ class LightRagTaskApiTest {
                 ChunkMergeStatus.FAILED,
                 ChunkGraphStatus.PARTIAL,
                 List.of("entity:alice", "entity:bob"),
-                List.of("relation:entity:alice|works_with|entity:bob"),
+                List.of(relationId("entity:alice", "entity:bob")),
                 List.of("entity:alice"),
                 List.of(),
                 FailureStage.RELATION_MATERIALIZATION,
@@ -447,7 +448,7 @@ class LightRagTaskApiTest {
                 ChunkMergeStatus.FAILED,
                 ChunkGraphStatus.PARTIAL,
                 List.of("entity:alice", "entity:bob"),
-                List.of("relation:entity:alice|works_with|entity:bob"),
+                List.of(relationId("entity:alice", "entity:bob")),
                 List.of("entity:alice"),
                 List.of(),
                 FailureStage.RELATION_MATERIALIZATION,
@@ -475,11 +476,9 @@ class LightRagTaskApiTest {
         assertThat(task.stages())
             .extracting(TaskStageSnapshot::stage)
             .contains(
+                TaskStage.PREPARING,
                 TaskStage.SNAPSHOT_LOADING,
                 TaskStage.GRAPH_INSPECTION,
-                TaskStage.ENTITY_MATERIALIZATION,
-                TaskStage.RELATION_MATERIALIZATION,
-                TaskStage.FINALIZING,
                 TaskStage.COMPLETED
             );
     }

@@ -380,7 +380,6 @@ public final class PostgresRelationalStorageAdapter implements RelationalStorage
     }
 
     private void truncateAll(Connection connection) throws SQLException {
-        deleteWorkspaceRows(connection, "relation_chunks");
         deleteWorkspaceRows(connection, "entity_chunks");
         deleteWorkspaceRows(connection, "entity_aliases");
         deleteWorkspaceRows(connection, "relations");
@@ -511,12 +510,14 @@ public final class PostgresRelationalStorageAdapter implements RelationalStorage
                 """
                     CREATE TABLE IF NOT EXISTS %s (
                         workspace_id TEXT NOT NULL,
-                        id TEXT NOT NULL,
-                        source_entity_id TEXT NOT NULL,
-                        target_entity_id TEXT NOT NULL,
-                        type TEXT NOT NULL,
+                        id VARCHAR(64) NOT NULL,
+                        src_id VARCHAR(256) NOT NULL,
+                        tgt_id VARCHAR(256) NOT NULL,
+                        keywords TEXT NOT NULL,
                         description TEXT NOT NULL,
                         weight DOUBLE PRECISION NOT NULL,
+                        source_id TEXT NOT NULL DEFAULT '',
+                        file_path VARCHAR(32768) NOT NULL DEFAULT '',
                         PRIMARY KEY (workspace_id, id)
                     )
                     """.formatted(config.qualifiedTableName("relations")),

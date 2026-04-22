@@ -25,7 +25,6 @@ public final class PostgresGraphStore implements GraphStore {
     private final String entityAliasesTable;
     private final String entityChunksTable;
     private final String relationsTable;
-    private final String relationChunksTable;
     private final String workspaceId;
 
     public PostgresGraphStore(DataSource dataSource, PostgresStorageConfig config) {
@@ -43,7 +42,6 @@ public final class PostgresGraphStore implements GraphStore {
         this.entityAliasesTable = storageConfig.qualifiedTableName("entity_aliases");
         this.entityChunksTable = storageConfig.qualifiedTableName("entity_chunks");
         this.relationsTable = storageConfig.qualifiedTableName("relations");
-        this.relationChunksTable = storageConfig.qualifiedTableName("relation_chunks");
         this.workspaceId = Objects.requireNonNull(workspaceId, "workspaceId");
     }
 
@@ -81,15 +79,14 @@ public final class PostgresGraphStore implements GraphStore {
             connectionAccess.withConnection(connection -> {
                 inTransaction(connection, () -> {
                     upsertRelation(connection, record);
-                    replaceRelationChunkIds(connection, record);
                 });
                 return null;
             });
             if (log.isDebugEnabled()) {
                 log.debug(
-                    "Saved PostgreSQL relation '{}' with {} chunk ids in {} ms",
+                    "Saved PostgreSQL relation '{}' with sourceId length {} in {} ms",
                     record.id(),
-                    record.sourceChunkIds().size(),
+                    record.sourceId().length(),
                     elapsedMillis(startedAtNanos)
                 );
             }
@@ -137,7 +134,7 @@ public final class PostgresGraphStore implements GraphStore {
         return connectionAccess.withConnection(connection -> {
             try (var statement = connection.prepareStatement(
                 """
-                SELECT id, source_entity_id, target_entity_id, type, description, weight
+                SELECT id, src_id, tgt_id, keywords, description, weight, source_id, file_path
                 FROM %s
                 WHERE workspace_id = ?
                 ORDER BY id
@@ -161,10 +158,10 @@ public final class PostgresGraphStore implements GraphStore {
         return connectionAccess.withConnection(connection -> {
             try (var statement = connection.prepareStatement(
                 """
-                SELECT id, source_entity_id, target_entity_id, type, description, weight
+                SELECT id, src_id, tgt_id, keywords, description, weight, source_id, file_path
                 FROM %s
                 WHERE workspace_id = ?
-                  AND (source_entity_id = ? OR target_entity_id = ?)
+                  AND (src_id = ? OR tgt_id = ?)
                 ORDER BY id
                 """.formatted(relationsTable)
             )) {
@@ -192,10 +189,10 @@ public final class PostgresGraphStore implements GraphStore {
         return connectionAccess.withConnection(connection -> {
             try (var statement = connection.prepareStatement(
                 """
-                SELECT id, source_entity_id, target_entity_id, type, description, weight
+                SELECT id, src_id, tgt_id, keywords, description, weight, source_id, file_path
                 FROM %s
                 WHERE workspace_id = ?
-                  AND (source_entity_id IN (%s) OR target_entity_id IN (%s))
+                  AND (src_id IN (%s) OR tgt_id IN (%s))
                 ORDER BY id
                 """.formatted(relationsTable, placeholders(uniqueIds.size()), placeholders(uniqueIds.size()))
             )) {
@@ -245,7 +242,7 @@ public final class PostgresGraphStore implements GraphStore {
     private Optional<RelationRecord> loadRelation(Connection connection, String relationId) throws SQLException {
         try (var statement = connection.prepareStatement(
             """
-            SELECT id, source_entity_id, target_entity_id, type, description, weight
+            SELECT id, src_id, tgt_id, keywords, description, weight, source_id, file_path
             FROM %s
             WHERE workspace_id = ?
               AND id = ?
@@ -275,15 +272,15 @@ public final class PostgresGraphStore implements GraphStore {
     }
 
     private RelationRecord readRelation(Connection connection, ResultSet resultSet) throws SQLException {
-        var relationId = resultSet.getString("id");
         return new RelationRecord(
-            relationId,
-            resultSet.getString("source_entity_id"),
-            resultSet.getString("target_entity_id"),
-            resultSet.getString("type"),
+            resultSet.getString("id"),
+            resultSet.getString("src_id"),
+            resultSet.getString("tgt_id"),
+            resultSet.getString("keywords"),
             resultSet.getString("description"),
             resultSet.getDouble("weight"),
-            selectStringList(connection, relationChunksTable, "relation_id", relationId, "chunk_id")
+            resultSet.getString("source_id"),
+            resultSet.getString("file_path")
         );
     }
 
@@ -380,30 +377,29 @@ public final class PostgresGraphStore implements GraphStore {
     private void upsertRelation(Connection connection, RelationRecord relation) throws SQLException {
         try (var statement = connection.prepareStatement(
             """
-            INSERT INTO %s (workspace_id, id, source_entity_id, target_entity_id, type, description, weight)
-            VALUES (?, ?, ?, ?, ?, ?, ?)
+            INSERT INTO %s (workspace_id, id, src_id, tgt_id, keywords, description, weight, source_id, file_path)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
             ON CONFLICT (workspace_id, id) DO UPDATE
-            SET source_entity_id = EXCLUDED.source_entity_id,
-                target_entity_id = EXCLUDED.target_entity_id,
-                type = EXCLUDED.type,
+            SET src_id = EXCLUDED.src_id,
+                tgt_id = EXCLUDED.tgt_id,
+                keywords = EXCLUDED.keywords,
                 description = EXCLUDED.description,
-                weight = EXCLUDED.weight
+                weight = EXCLUDED.weight,
+                source_id = EXCLUDED.source_id,
+                file_path = EXCLUDED.file_path
             """.formatted(relationsTable)
         )) {
             statement.setString(1, workspaceId);
             statement.setString(2, relation.id());
-            statement.setString(3, relation.sourceEntityId());
-            statement.setString(4, relation.targetEntityId());
-            statement.setString(5, relation.type());
+            statement.setString(3, relation.srcId());
+            statement.setString(4, relation.tgtId());
+            statement.setString(5, relation.keywords());
             statement.setString(6, relation.description());
             statement.setDouble(7, relation.weight());
+            statement.setString(8, relation.sourceId());
+            statement.setString(9, relation.filePath());
             statement.executeUpdate();
         }
-    }
-
-    private void replaceRelationChunkIds(Connection connection, RelationRecord relation) throws SQLException {
-        deleteById(connection, relationChunksTable, "relation_id", relation.id());
-        insertStringValues(connection, relationChunksTable, "relation_id", relation.id(), "chunk_id", relation.sourceChunkIds());
     }
 
     private void deleteById(Connection connection, String tableName, String idColumn, String idValue) throws SQLException {

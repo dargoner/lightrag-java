@@ -1,5 +1,7 @@
 package io.github.lightrag.storage;
 
+import io.github.lightrag.indexing.RelationCanonicalizer;
+
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
@@ -82,21 +84,68 @@ public interface GraphStore {
     }
 
     record RelationRecord(
-        String id,
-        String sourceEntityId,
-        String targetEntityId,
-        String type,
+        String relationId,
+        String srcId,
+        String tgtId,
+        String keywords,
         String description,
         double weight,
-        List<String> sourceChunkIds
+        String sourceId,
+        String filePath
     ) {
+        public RelationRecord(
+            String relationId,
+            String srcId,
+            String tgtId,
+            String keywords,
+            String description,
+            double weight,
+            List<String> sourceChunkIds
+        ) {
+            this(
+                relationId,
+                srcId,
+                tgtId,
+                keywords,
+                description,
+                weight,
+                RelationCanonicalizer.joinValues(sourceChunkIds),
+                ""
+            );
+        }
+
         public RelationRecord {
-            id = Objects.requireNonNull(id, "id");
-            sourceEntityId = Objects.requireNonNull(sourceEntityId, "sourceEntityId");
-            targetEntityId = Objects.requireNonNull(targetEntityId, "targetEntityId");
-            type = Objects.requireNonNull(type, "type");
+            relationId = Objects.requireNonNull(relationId, "relationId");
+            srcId = Objects.requireNonNull(srcId, "srcId");
+            tgtId = Objects.requireNonNull(tgtId, "tgtId");
+            keywords = Objects.requireNonNull(keywords, "keywords");
             description = Objects.requireNonNull(description, "description");
-            sourceChunkIds = List.copyOf(Objects.requireNonNull(sourceChunkIds, "sourceChunkIds"));
+            sourceId = sourceId == null ? "" : sourceId;
+            filePath = filePath == null ? "" : filePath;
+        }
+
+        public String id() {
+            return relationId;
+        }
+
+        public String sourceEntityId() {
+            return srcId;
+        }
+
+        public String targetEntityId() {
+            return tgtId;
+        }
+
+        public String type() {
+            return keywords;
+        }
+
+        public List<String> sourceChunkIds() {
+            return RelationCanonicalizer.splitValues(sourceId);
+        }
+
+        public List<String> filePaths() {
+            return RelationCanonicalizer.splitValues(filePath);
         }
     }
 }

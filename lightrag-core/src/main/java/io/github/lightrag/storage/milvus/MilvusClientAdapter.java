@@ -27,7 +27,7 @@ public interface MilvusClientAdapter extends AutoCloseable {
     @Override
     void close();
 
-    record CollectionDefinition(String collectionName, int vectorDimensions, String analyzerType) {
+    record CollectionDefinition(String collectionName, String namespace, int vectorDimensions, String analyzerType) {
     }
 
     record StoredVectorRow(
@@ -35,8 +35,20 @@ public interface MilvusClientAdapter extends AutoCloseable {
         List<Double> denseVector,
         String searchableText,
         List<String> keywords,
-        String fullText
+        String fullText,
+        String srcId,
+        String tgtId,
+        String filePath
     ) {
+        public StoredVectorRow(
+            String id,
+            List<Double> denseVector,
+            String searchableText,
+            List<String> keywords,
+            String fullText
+        ) {
+            this(id, denseVector, searchableText, keywords, fullText, "", "", "");
+        }
     }
 
     record SemanticSearchRequest(String collectionName, List<Double> queryVector, int topK) {

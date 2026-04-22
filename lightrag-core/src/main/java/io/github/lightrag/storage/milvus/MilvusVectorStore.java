@@ -53,7 +53,7 @@ public final class MilvusVectorStore implements HybridVectorStore, AutoCloseable
             return;
         }
         var collectionName = collectionName(namespace);
-        ensureCollection(collectionName);
+        ensureCollection(namespace, collectionName);
         clientAdapter.upsert(collectionName, values.stream().map(this::toStoredRow).toList());
     }
 
@@ -137,10 +137,11 @@ public final class MilvusVectorStore implements HybridVectorStore, AutoCloseable
         clientAdapter.flush(namespaces.stream().map(this::collectionName).distinct().toList());
     }
 
-    private void ensureCollection(String collectionName) {
+    private void ensureCollection(String namespace, String collectionName) {
         if (ensuredCollections.add(collectionName)) {
             clientAdapter.ensureCollection(new MilvusClientAdapter.CollectionDefinition(
                 collectionName,
+                namespace,
                 config.vectorDimensions(),
                 config.analyzerType()
             ));
@@ -154,7 +155,10 @@ public final class MilvusVectorStore implements HybridVectorStore, AutoCloseable
             record.vector(),
             record.searchableText(),
             record.keywords(),
-            composeFullText(record.searchableText(), record.keywords())
+            composeFullText(record.searchableText(), record.keywords()),
+            record.srcId(),
+            record.tgtId(),
+            record.filePath()
         );
     }
 

@@ -16,6 +16,7 @@ import java.util.List;
 import java.util.Map;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static io.github.lightrag.support.RelationIds.relationId;
 
 class GlobalQueryStrategyTest {
     @Test
@@ -34,7 +35,7 @@ class GlobalQueryStrategyTest {
 
         assertThat(context.matchedRelations())
             .extracting(match -> match.relationId())
-            .containsExactly("relation:entity:bob|reports_to|entity:carol");
+            .containsExactly(relationId("entity:bob", "entity:carol"));
         assertThat(context.matchedEntities())
             .extracting(match -> match.entityId())
             .containsExactly("entity:bob", "entity:carol");
@@ -87,7 +88,7 @@ class GlobalQueryStrategyTest {
 
         assertThat(context.matchedRelations())
             .extracting(match -> match.relationId())
-            .containsExactly("relation:entity:bob|reports_to|entity:carol");
+            .containsExactly(relationId("entity:bob", "entity:carol"));
         assertThat(context.matchedEntities())
             .extracting(match -> match.entityId())
             .containsExactly("entity:bob", "entity:carol");
@@ -112,7 +113,7 @@ class GlobalQueryStrategyTest {
 
         assertThat(context.matchedRelations())
             .extracting(match -> match.relationId())
-            .containsExactly("relation:entity:alice|works_with|entity:bob");
+            .containsExactly(relationId("entity:alice", "entity:bob"));
     }
 
     @Test
@@ -135,8 +136,8 @@ class GlobalQueryStrategyTest {
         assertThat(context.matchedRelations())
             .extracting(match -> match.relationId())
             .containsExactly(
-                "relation:entity:alice|works_with|entity:bob",
-                "relation:entity:bob|reports_to|entity:carol"
+                relationId("entity:alice", "entity:bob"),
+                relationId("entity:bob", "entity:carol")
             );
         assertThat(context.matchedChunks())
             .extracting(match -> match.chunkId())
@@ -209,7 +210,7 @@ class GlobalQueryStrategyTest {
         var delegate = InMemoryStorageProvider.create();
         LocalQueryStrategyTest.seedGraph(delegate);
         var vectorStore = new RecordingHybridVectorStore(List.of(
-            new VectorStore.VectorMatch("relation:entity:bob|reports_to|entity:carol", 1.0d)
+            new VectorStore.VectorMatch(relationId("entity:bob", "entity:carol"), 1.0d)
         ));
         var storage = new TestStorageProvider(delegate, vectorStore);
         var strategy = new GlobalQueryStrategy(
@@ -233,7 +234,7 @@ class GlobalQueryStrategyTest {
         assertThat(vectorStore.recordedRequest.keywords()).containsExactly("org", "focus");
         assertThat(context.matchedRelations())
             .extracting(match -> match.relationId())
-            .containsExactly("relation:entity:bob|reports_to|entity:carol");
+            .containsExactly(relationId("entity:bob", "entity:carol"));
     }
 
     @Test

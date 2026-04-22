@@ -3,7 +3,8 @@ package io.github.lightrag.demo;
 import io.github.lightrag.api.CreateEntityRequest;
 import io.github.lightrag.api.CreateRelationRequest;
 import io.github.lightrag.api.EditEntityRequest;
-import io.github.lightrag.api.EditRelationRequest;
+import io.github.lightrag.api.DeleteRelationRequest;
+import io.github.lightrag.api.UpdateRelationRequest;
 import io.github.lightrag.api.GraphEntity;
 import io.github.lightrag.api.GraphRelation;
 import io.github.lightrag.api.LightRag;
@@ -80,20 +81,19 @@ class GraphController {
         return lightRag.createRelation(workspaceId, CreateRelationRequest.builder()
             .sourceEntityName(payload.sourceEntityName())
             .targetEntityName(payload.targetEntityName())
-            .relationType(payload.relationType())
+            .keywords(payload.keywords())
             .description(payload.description())
             .weight(payload.weight() == null ? CreateRelationRequest.DEFAULT_WEIGHT : payload.weight())
             .build());
     }
 
     @PutMapping("/relations")
-    GraphRelation editRelation(@RequestBody RelationEditPayload payload, HttpServletRequest request) {
+    GraphRelation updateRelation(@RequestBody RelationUpdatePayload payload, HttpServletRequest request) {
         var workspaceId = workspaceResolver.resolve(request);
-        return lightRag.editRelation(workspaceId, EditRelationRequest.builder()
+        return lightRag.updateRelation(workspaceId, UpdateRelationRequest.builder()
             .sourceEntityName(payload.sourceEntityName())
             .targetEntityName(payload.targetEntityName())
-            .currentRelationType(payload.currentRelationType())
-            .newRelationType(payload.newRelationType())
+            .keywords(payload.keywords())
             .description(payload.description())
             .weight(payload.weight())
             .build());
@@ -106,7 +106,7 @@ class GraphController {
         HttpServletRequest request
     ) {
         var workspaceId = workspaceResolver.resolve(request);
-        lightRag.deleteByRelation(workspaceId, sourceEntityName, targetEntityName);
+        lightRag.deleteRelation(workspaceId, new DeleteRelationRequest(sourceEntityName, targetEntityName));
         return ResponseEntity.noContent().build();
     }
 
@@ -132,17 +132,16 @@ class GraphController {
     record RelationCreatePayload(
         String sourceEntityName,
         String targetEntityName,
-        String relationType,
+        String keywords,
         String description,
         Double weight
     ) {
     }
 
-    record RelationEditPayload(
+    record RelationUpdatePayload(
         String sourceEntityName,
         String targetEntityName,
-        String currentRelationType,
-        String newRelationType,
+        String keywords,
         String description,
         Double weight
     ) {

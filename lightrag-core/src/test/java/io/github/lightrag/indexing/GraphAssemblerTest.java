@@ -10,6 +10,7 @@ import org.junit.jupiter.api.Test;
 import java.util.List;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static io.github.lightrag.support.RelationIds.relationId;
 
 class GraphAssemblerTest {
     @Test
@@ -42,7 +43,7 @@ class GraphAssemblerTest {
     }
 
     @Test
-    void mergesRelationsByNormalizedEndpointsAndType() {
+    void mergesRelationsByCanonicalEndpoints() {
         var assembler = new GraphAssembler();
 
         var graph = assembler.assemble(List.of(
@@ -70,7 +71,7 @@ class GraphAssemblerTest {
         );
         assertThat(graph.relations()).containsExactly(
             new Relation(
-                "relation:entity:alice|works_with|entity:bob",
+                relationId("entity:alice", "entity:bob"),
                 "entity:alice",
                 "entity:bob",
                 "works_with",
@@ -82,7 +83,7 @@ class GraphAssemblerTest {
     }
 
     @Test
-    void mergesRelationTypeVariantsWithoutChangingFirstRelationId() {
+    void mergesRelationKeywordVariantsIntoSingleCanonicalEdge() {
         var assembler = new GraphAssembler();
 
         var graph = assembler.assemble(List.of(
@@ -103,7 +104,7 @@ class GraphAssemblerTest {
 
         assertThat(graph.relations()).containsExactly(
             new Relation(
-                "relation:entity:alice|works_with|entity:bob",
+                relationId("entity:alice", "entity:bob"),
                 "entity:alice",
                 "entity:bob",
                 "works_with",
@@ -115,7 +116,7 @@ class GraphAssemblerTest {
     }
 
     @Test
-    void foldsSymmetricRelationsIntoFirstSeenDirection() {
+    void foldsSymmetricRelationsIntoSingleCanonicalEdge() {
         var assembler = new GraphAssembler();
 
         var graph = assembler.assemble(List.of(
@@ -136,7 +137,7 @@ class GraphAssemblerTest {
 
         assertThat(graph.relations()).containsExactly(
             new Relation(
-                "relation:entity:alice|related_to|entity:bob",
+                relationId("entity:alice", "entity:bob"),
                 "entity:alice",
                 "entity:bob",
                 "related_to",
@@ -148,7 +149,7 @@ class GraphAssemblerTest {
     }
 
     @Test
-    void keepsAsymmetricRelationsDirectional() {
+    void mergesRepeatedEndpointsEvenWhenRelationKeywordsSuggestDirection() {
         var assembler = new GraphAssembler();
 
         var graph = assembler.assemble(List.of(
@@ -169,22 +170,13 @@ class GraphAssemblerTest {
 
         assertThat(graph.relations()).containsExactly(
             new Relation(
-                "relation:entity:alice|reports_to|entity:bob",
+                relationId("entity:alice", "entity:bob"),
                 "entity:alice",
                 "entity:bob",
                 "reports_to",
                 "forward",
-                0.6d,
-                List.of("chunk-1")
-            ),
-            new Relation(
-                "relation:entity:bob|reports_to|entity:alice",
-                "entity:bob",
-                "entity:alice",
-                "reports_to",
-                "reverse",
                 0.8d,
-                List.of("chunk-2")
+                List.of("chunk-1", "chunk-2")
             )
         );
     }

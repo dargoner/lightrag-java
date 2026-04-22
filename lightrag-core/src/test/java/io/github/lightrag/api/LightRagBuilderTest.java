@@ -1179,7 +1179,7 @@ class LightRagBuilderTest {
             {
               "sourceEntityName": "Alice",
               "targetEntityName": "Bob",
-              "type": "works_with",
+              "keywords": "works_with",
               "description": "collaboration"
             }
             """, ExtractedRelation.class);
@@ -1193,7 +1193,7 @@ class LightRagBuilderTest {
             {
               "sourceEntityName": "Alice",
               "targetEntityName": "Bob",
-              "type": "works_with",
+              "keywords": "works_with",
               "description": "collaboration",
               "weight": 0.0
             }

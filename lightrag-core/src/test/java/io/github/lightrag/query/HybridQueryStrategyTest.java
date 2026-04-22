@@ -12,6 +12,7 @@ import java.util.List;
 import java.util.Map;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static io.github.lightrag.support.RelationIds.relationId;
 
 class HybridQueryStrategyTest {
     @Test
@@ -39,7 +40,7 @@ class HybridQueryStrategyTest {
             .containsExactly("entity:alice", "entity:bob");
         assertThat(context.matchedRelations())
             .extracting(match -> match.relationId())
-            .containsExactly("relation:entity:alice|works_with|entity:bob");
+            .containsExactly(relationId("entity:alice", "entity:bob"));
         assertThat(context.matchedChunks())
             .extracting(match -> match.chunkId())
             .containsExactly("chunk-1", "chunk-2");
@@ -76,9 +77,9 @@ class HybridQueryStrategyTest {
             .containsExactly("entity:alice", "entity:bob", "entity:carol");
         assertThat(context.matchedRelations())
             .extracting(match -> match.relationId())
-            .containsExactly(
-                "relation:entity:alice|works_with|entity:bob",
-                "relation:entity:bob|reports_to|entity:carol"
+            .containsExactlyInAnyOrder(
+                relationId("entity:alice", "entity:bob"),
+                relationId("entity:bob", "entity:carol")
             );
         assertThat(context.matchedChunks())
             .extracting(match -> match.chunkId())
@@ -114,7 +115,7 @@ class HybridQueryStrategyTest {
             .containsExactly("entity:alice", "entity:bob");
         assertThat(context.matchedRelations())
             .extracting(match -> match.relationId())
-            .containsExactly("relation:entity:alice|works_with|entity:bob");
+            .containsExactly(relationId("entity:alice", "entity:bob"));
     }
 
     @Test

@@ -5,20 +5,25 @@ import com.zaxxer.hikari.HikariDataSource;
 import io.github.lightrag.storage.VectorStore;
 import org.junit.jupiter.api.Test;
 import org.testcontainers.containers.PostgreSQLContainer;
+import org.testcontainers.junit.jupiter.Container;
+import org.testcontainers.junit.jupiter.Testcontainers;
 import org.testcontainers.utility.DockerImageName;
 
 import java.util.List;
+import java.util.UUID;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
+@Testcontainers
 class PostgresVectorStoreTest {
+    @Container
+    private static final PostgreSQLContainer<?> POSTGRES = newPostgresContainer();
+
     @Test
     void storesVectorsByNamespaceAndId() {
-        try (
-            var container = newPostgresContainer();
-            var resources = newStoreResources(container);
-        ) {
+        var config = newConfig();
+        try (var resources = newStoreResources(config)) {
             resources.store().saveAll(
                 "chunks",
                 List.of(new VectorStore.VectorRecord("chunk-1", List.of(1.0d, 0.0d, 0.0d)))
@@ -39,10 +44,8 @@ class PostgresVectorStoreTest {
 
     @Test
     void listsVectorsInDeterministicIdOrder() {
-        try (
-            var container = newPostgresContainer();
-            var resources = newStoreResources(container);
-        ) {
+        var config = newConfig();
+        try (var resources = newStoreResources(config)) {
             var second = new VectorStore.VectorRecord("vec-2", List.of(1.0d, 0.0d, 0.0d));
             var first = new VectorStore.VectorRecord("vec-1", List.of(0.0d, 1.0d, 0.0d));
 
@@ -54,10 +57,8 @@ class PostgresVectorStoreTest {
 
     @Test
     void returnsTopKSimilarityByNamespace() {
-        try (
-            var container = newPostgresContainer();
-            var resources = newStoreResources(container);
-        ) {
+        var config = newConfig();
+        try (var resources = newStoreResources(config)) {
             resources.store().saveAll(
                 "chunks",
                 List.of(
@@ -80,10 +81,8 @@ class PostgresVectorStoreTest {
 
     @Test
     void rejectsMismatchedVectorDimensions() {
-        try (
-            var container = newPostgresContainer();
-            var resources = newStoreResources(container);
-        ) {
+        var config = newConfig();
+        try (var resources = newStoreResources(config)) {
             assertThatThrownBy(() -> resources.store().saveAll(
                 "chunks",
                 List.of(new VectorStore.VectorRecord("chunk-1", List.of(1.0d, 0.0d)))
@@ -95,20 +94,16 @@ class PostgresVectorStoreTest {
 
     @Test
     void returnsEmptyForNonPositiveTopKBeforeValidatingDimensions() {
-        try (
-            var container = newPostgresContainer();
-            var resources = newStoreResources(container);
-        ) {
+        var config = newConfig();
+        try (var resources = newStoreResources(config)) {
             assertThat(resources.store().search("chunks", List.of(1.0d, 0.0d), 0)).isEmpty();
         }
     }
 
     @Test
     void returnsEmptyForMissingNamespaceBeforeValidatingDimensions() {
-        try (
-            var container = newPostgresContainer();
-            var resources = newStoreResources(container);
-        ) {
+        var config = newConfig();
+        try (var resources = newStoreResources(config)) {
             assertThat(resources.store().search("missing", List.of(1.0d, 0.0d), 1)).isEmpty();
         }
     }
@@ -119,19 +114,21 @@ class PostgresVectorStoreTest {
         return new PostgreSQLContainer<>(image);
     }
 
-    private static StoreResources newStoreResources(PostgreSQLContainer<?> container) {
-        container.start();
-        var config = new PostgresStorageConfig(
-            container.getJdbcUrl(),
-            container.getUsername(),
-            container.getPassword(),
-            "lightrag",
-            3,
-            "rag_"
-        );
+    private static StoreResources newStoreResources(PostgresStorageConfig config) {
         var dataSource = newDataSource(config);
         new PostgresSchemaManager(dataSource, config).bootstrap();
         return new StoreResources(dataSource, new PostgresVectorStore(dataSource, config));
+    }
+
+    private static PostgresStorageConfig newConfig() {
+        return new PostgresStorageConfig(
+            POSTGRES.getJdbcUrl(),
+            POSTGRES.getUsername(),
+            POSTGRES.getPassword(),
+            "lightrag_" + UUID.randomUUID().toString().replace("-", ""),
+            3,
+            "rag_"
+        );
     }
 
     private static HikariDataSource newDataSource(PostgresStorageConfig config) {

@@ -373,12 +373,13 @@ public final class MySqlMilvusNeo4jStorageProvider implements AtomicStorageProvi
     private static io.github.lightrag.types.Relation toRelation(GraphStore.RelationRecord relationRecord) {
         return new io.github.lightrag.types.Relation(
             relationRecord.id(),
-            relationRecord.sourceEntityId(),
-            relationRecord.targetEntityId(),
-            relationRecord.type(),
+            relationRecord.srcId(),
+            relationRecord.tgtId(),
+            relationRecord.keywords(),
             relationRecord.description(),
             relationRecord.weight(),
-            relationRecord.sourceChunkIds()
+            relationRecord.sourceId(),
+            relationRecord.filePath()
         );
     }
 

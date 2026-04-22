@@ -46,6 +46,7 @@ import java.util.concurrent.locks.ReentrantReadWriteLock;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
+import static io.github.lightrag.support.RelationIds.relationId;
 
 class MySqlMilvusNeo4jStorageProviderTest {
     @Test
@@ -589,9 +590,9 @@ class MySqlMilvusNeo4jStorageProviderTest {
                 ChunkMergeStatus.SUCCEEDED,
                 ChunkGraphStatus.MATERIALIZED,
                 List.of("entity:alice"),
-                List.of("relation:entity:alice|works_with|entity:bob"),
+                List.of(relationId("entity:alice", "entity:bob")),
                 List.of("entity:alice"),
-                List.of("relation:entity:alice|works_with|entity:bob"),
+                List.of(relationId("entity:alice", "entity:bob")),
                 FailureStage.FINALIZING,
                 Instant.parse("2026-04-12T10:00:05Z"),
                 null

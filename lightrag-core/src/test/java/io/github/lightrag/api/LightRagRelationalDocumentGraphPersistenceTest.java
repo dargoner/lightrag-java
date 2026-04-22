@@ -18,6 +18,8 @@ import io.github.lightrag.types.Document;
 import org.junit.jupiter.api.Test;
 import org.testcontainers.containers.MySQLContainer;
 import org.testcontainers.containers.PostgreSQLContainer;
+import org.testcontainers.junit.jupiter.Container;
+import org.testcontainers.junit.jupiter.Testcontainers;
 import org.testcontainers.utility.DockerImageName;
 
 import javax.sql.DataSource;
@@ -27,93 +29,78 @@ import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 import java.util.Optional;
+import java.util.UUID;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
+@Testcontainers
 class LightRagRelationalDocumentGraphPersistenceTest {
     private static final String WORKSPACE = "default";
+    @Container
+    private static final SharedPostgresContainer POSTGRES = new SharedPostgresContainer(
+        DockerImageName.parse("pgvector/pgvector:pg16").asCompatibleSubstituteFor("postgres")
+    );
+    @Container
+    private static final SharedMySqlContainer MYSQL = new SharedMySqlContainer(DockerImageName.parse("mysql:8.4"));
 
     @Test
     void postgresInspectAndChunkStatusQueriesSurviveProviderRestart() {
-        try (var container = newPostgresContainer()) {
-            container.start();
-            var config = new PostgresStorageConfig(
-                container.getJdbcUrl(),
-                container.getUsername(),
-                container.getPassword(),
-                "lightrag",
-                2,
-                "rag_"
-            );
+        var config = newPostgresConfig();
 
-            try (var writer = LightRag.builder()
-                .chatModel(new FakeChatModel())
-                .embeddingModel(new FakeEmbeddingModel())
-                .storage(new PostgresStorageProvider(config, new NoopSnapshotStore()))
-                .build()) {
-                writer.ingest(WORKSPACE, List.of(new Document("doc-1", "Title", "Alice works with Bob", Map.of())));
-            }
+        try (var writer = LightRag.builder()
+            .chatModel(new FakeChatModel())
+            .embeddingModel(new FakeEmbeddingModel())
+            .storage(new PostgresStorageProvider(config, new NoopSnapshotStore()))
+            .build()) {
+            writer.ingest(WORKSPACE, List.of(new Document("doc-1", "Title", "Alice works with Bob", Map.of())));
+        }
 
-            try (var reader = LightRag.builder()
-                .chatModel(new FakeChatModel())
-                .embeddingModel(new FakeEmbeddingModel())
-                .storage(new PostgresStorageProvider(config, new NoopSnapshotStore()))
-                .build()) {
-                var inspection = reader.inspectDocumentGraph(WORKSPACE, "doc-1");
-                var chunkStatuses = reader.listDocumentChunkGraphStatuses(WORKSPACE, "doc-1");
+        try (var reader = LightRag.builder()
+            .chatModel(new FakeChatModel())
+            .embeddingModel(new FakeEmbeddingModel())
+            .storage(new PostgresStorageProvider(config, new NoopSnapshotStore()))
+            .build()) {
+            var inspection = reader.inspectDocumentGraph(WORKSPACE, "doc-1");
+            var chunkStatuses = reader.listDocumentChunkGraphStatuses(WORKSPACE, "doc-1");
 
-                assertThat(inspection.graphStatus()).isEqualTo(GraphMaterializationStatus.MERGED);
-                assertThat(inspection.snapshotStatus()).isEqualTo(SnapshotStatus.READY);
-                assertThat(chunkStatuses).hasSize(1);
-                assertThat(chunkStatuses.get(0).chunkId()).isEqualTo("doc-1:0");
-                assertThat(chunkStatuses.get(0).graphStatus()).isEqualTo(ChunkGraphStatus.MATERIALIZED);
-                assertThat(chunkStatuses.get(0).mergeStatus()).isEqualTo(ChunkMergeStatus.SUCCEEDED);
-            }
+            assertThat(inspection.graphStatus()).isEqualTo(GraphMaterializationStatus.MERGED);
+            assertThat(inspection.snapshotStatus()).isEqualTo(SnapshotStatus.READY);
+            assertThat(chunkStatuses).hasSize(1);
+            assertThat(chunkStatuses.get(0).chunkId()).isEqualTo("doc-1:0");
+            assertThat(chunkStatuses.get(0).graphStatus()).isEqualTo(ChunkGraphStatus.MATERIALIZED);
+            assertThat(chunkStatuses.get(0).mergeStatus()).isEqualTo(ChunkMergeStatus.SUCCEEDED);
         }
     }
 
     @Test
     void postgresTaskDocumentQueriesSurviveTaskCompletion() {
-        try (var container = newPostgresContainer()) {
-            container.start();
-            var config = new PostgresStorageConfig(
-                container.getJdbcUrl(),
-                container.getUsername(),
-                container.getPassword(),
-                "lightrag",
-                2,
-                "rag_"
-            );
+        var config = newPostgresConfig();
 
-            try (var rag = LightRag.builder()
-                .chatModel(new FakeChatModel())
-                .embeddingModel(new FakeEmbeddingModel())
-                .storage(new PostgresStorageProvider(config, new NoopSnapshotStore()))
-                .build()) {
-                var taskId = rag.submitIngest(WORKSPACE, List.of(
-                    new Document("doc-1", "Title", "Alice works with Bob", Map.of("source", "postgres-task"))
-                ));
+        try (var rag = LightRag.builder()
+            .chatModel(new FakeChatModel())
+            .embeddingModel(new FakeEmbeddingModel())
+            .storage(new PostgresStorageProvider(config, new NoopSnapshotStore()))
+            .build()) {
+            var taskId = rag.submitIngest(WORKSPACE, List.of(
+                new Document("doc-1", "Title", "Alice works with Bob", Map.of("source", "postgres-task"))
+            ));
 
-                var task = awaitTerminalTask(rag, taskId);
-                var taskDocument = rag.getTaskDocument(WORKSPACE, taskId, "doc-1");
+            var task = awaitTerminalTask(rag, taskId);
+            var taskDocument = rag.getTaskDocument(WORKSPACE, taskId, "doc-1");
 
-                assertThat(task.status()).isEqualTo(TaskStatus.SUCCEEDED);
-                assertThat(taskDocument.documentId()).isEqualTo("doc-1");
-                assertThat(taskDocument.status()).isEqualTo(DocumentStatus.PROCESSED);
-                assertThat(taskDocument.chunkCount()).isGreaterThan(0);
-                assertThat(taskDocument.entityCount()).isGreaterThan(0);
-                assertThat(taskDocument.chunkVectorCount()).isGreaterThan(0);
-            }
+            assertThat(task.status()).isEqualTo(TaskStatus.SUCCEEDED);
+            assertThat(taskDocument.documentId()).isEqualTo("doc-1");
+            assertThat(taskDocument.status()).isEqualTo(DocumentStatus.PROCESSED);
+            assertThat(taskDocument.chunkCount()).isGreaterThan(0);
+            assertThat(taskDocument.entityCount()).isGreaterThan(0);
+            assertThat(taskDocument.chunkVectorCount()).isGreaterThan(0);
         }
     }
 
     @Test
     void mySqlInspectAndChunkStatusQueriesSurviveProviderRestart() {
-        try (
-            var container = newMySqlContainer();
-            var dataSource = newDataSource(startedConfig(container))
-        ) {
-            var config = startedConfig(container);
+        var config = newMySqlConfig();
+        try (var dataSource = newDataSource(config)) {
             new MySqlSchemaManager(dataSource, config).bootstrap();
             var graphAdapter = new PersistentGraphStorageAdapter();
 
@@ -157,23 +144,23 @@ class LightRagRelationalDocumentGraphPersistenceTest {
         }
     }
 
-    private static PostgreSQLContainer<?> newPostgresContainer() {
-        return new PostgreSQLContainer<>(
-            DockerImageName.parse("pgvector/pgvector:pg16").asCompatibleSubstituteFor("postgres")
+    private static PostgresStorageConfig newPostgresConfig() {
+        return new PostgresStorageConfig(
+            POSTGRES.getJdbcUrl(),
+            POSTGRES.getUsername(),
+            POSTGRES.getPassword(),
+            "lightrag_" + UUID.randomUUID().toString().replace("-", ""),
+            2,
+            "rag_"
         );
     }
 
-    private static MySQLContainer<?> newMySqlContainer() {
-        return new MySQLContainer<>(DockerImageName.parse("mysql:8.4"));
-    }
-
-    private static MySqlStorageConfig startedConfig(MySQLContainer<?> container) {
-        container.start();
+    private static MySqlStorageConfig newMySqlConfig() {
         return new MySqlStorageConfig(
-            container.getJdbcUrl(),
-            container.getUsername(),
-            container.getPassword(),
-            "rag_"
+            MYSQL.getJdbcUrl(),
+            MYSQL.getUsername(),
+            MYSQL.getPassword(),
+            "rag_" + UUID.randomUUID().toString().replace("-", "").substring(0, 8) + "_"
         );
     }
 
@@ -300,6 +287,28 @@ class LightRagRelationalDocumentGraphPersistenceTest {
             relations.clear();
             snapshot.entities().forEach(entity -> entities.put(entity.id(), entity));
             snapshot.relations().forEach(relation -> relations.put(relation.id(), relation));
+        }
+    }
+
+    private static final class SharedPostgresContainer extends PostgreSQLContainer<SharedPostgresContainer> {
+        private SharedPostgresContainer(DockerImageName dockerImageName) {
+            super(dockerImageName);
+        }
+
+        @Override
+        public void stop() {
+            // Class-level shared container; avoid per-test shutdown stalls.
+        }
+    }
+
+    private static final class SharedMySqlContainer extends MySQLContainer<SharedMySqlContainer> {
+        private SharedMySqlContainer(DockerImageName dockerImageName) {
+            super(dockerImageName);
+        }
+
+        @Override
+        public void stop() {
+            // Class-level shared container; avoid per-test shutdown stalls.
         }
     }
 }

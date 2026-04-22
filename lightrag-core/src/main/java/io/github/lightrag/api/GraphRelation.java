@@ -1,27 +1,72 @@
 package io.github.lightrag.api;
 
+import io.github.lightrag.indexing.RelationCanonicalizer;
+
 import java.util.List;
 import java.util.Objects;
 
 public record GraphRelation(
-    String id,
-    String sourceEntityId,
-    String targetEntityId,
-    String type,
+    String relationId,
+    String srcId,
+    String tgtId,
+    String keywords,
     String description,
     double weight,
-    List<String> sourceChunkIds
+    String sourceId,
+    String filePath
 ) {
+    public GraphRelation(
+        String relationId,
+        String srcId,
+        String tgtId,
+        String keywords,
+        String description,
+        double weight,
+        List<String> sourceChunkIds
+    ) {
+        this(
+            relationId,
+            srcId,
+            tgtId,
+            keywords,
+            description,
+            weight,
+            RelationCanonicalizer.joinValues(sourceChunkIds),
+            ""
+        );
+    }
+
     public GraphRelation {
-        id = requireNonBlank(id, "id");
-        sourceEntityId = requireNonBlank(sourceEntityId, "sourceEntityId");
-        targetEntityId = requireNonBlank(targetEntityId, "targetEntityId");
-        type = requireNonBlank(type, "type");
+        relationId = requireNonBlank(relationId, "relationId");
+        srcId = CreateRelationRequest.normalizeEndpoint(srcId, "srcId");
+        tgtId = CreateRelationRequest.normalizeEndpoint(tgtId, "tgtId");
+        keywords = requireNonBlank(keywords, "keywords");
         description = description == null ? "" : description.strip();
+        sourceId = sourceId == null ? "" : sourceId.strip();
+        filePath = filePath == null ? "" : filePath.strip();
         if (!Double.isFinite(weight)) {
             throw new IllegalArgumentException("weight must be finite");
         }
-        sourceChunkIds = List.copyOf(Objects.requireNonNull(sourceChunkIds, "sourceChunkIds"));
+    }
+
+    public String id() {
+        return relationId;
+    }
+
+    public String sourceEntityId() {
+        return srcId;
+    }
+
+    public String targetEntityId() {
+        return tgtId;
+    }
+
+    public String type() {
+        return keywords;
+    }
+
+    public List<String> sourceChunkIds() {
+        return RelationCanonicalizer.splitValues(sourceId);
     }
 
     private static String requireNonBlank(String value, String fieldName) {

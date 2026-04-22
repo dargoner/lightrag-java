@@ -27,6 +27,8 @@ import io.github.lightrag.storage.TaskDocumentStore;
 import io.github.lightrag.storage.VectorStore;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
+import org.testcontainers.junit.jupiter.Container;
+import org.testcontainers.junit.jupiter.Testcontainers;
 import org.testcontainers.containers.PostgreSQLContainer;
 import org.testcontainers.utility.DockerImageName;
 
@@ -39,6 +41,7 @@ import java.util.Arrays;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
+import java.util.UUID;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
@@ -47,21 +50,19 @@ import java.util.concurrent.atomic.AtomicReference;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
+@Testcontainers
 class PostgresStorageProviderTest {
+    @Container
+    private static final SharedPostgresContainer POSTGRES = new SharedPostgresContainer(
+        DockerImageName.parse("pgvector/pgvector:pg16").asCompatibleSubstituteFor("postgres")
+    );
     @Test
     @DisplayName("bootstraps the PostgreSQL schema and required tables")
     void bootstrapsSchemaAndRequiredTables() throws SQLException {
         PostgreSQLContainer<?> container = newPostgresContainer();
         container.start();
 
-        PostgresStorageConfig config = new PostgresStorageConfig(
-            container.getJdbcUrl(),
-            container.getUsername(),
-            container.getPassword(),
-            "lightrag",
-            3,
-            "rag_"
-        );
+        PostgresStorageConfig config = newConfig();
 
         SnapshotStore snapshotStore = new InMemorySnapshotStore();
 
@@ -90,7 +91,6 @@ class PostgresStorageProviderTest {
                     "rag_entity_aliases",
                     "rag_entity_chunks",
                     "rag_relations",
-                    "rag_relation_chunks",
                     "rag_schema_version",
                     "rag_task",
                     "rag_task_document",
@@ -100,7 +100,8 @@ class PostgresStorageProviderTest {
                 assertThat(columnNames(connection, config, "documents")).contains("workspace_id");
                 assertThat(columnNames(connection, config, "chunks")).contains("workspace_id", "document_id");
                 assertThat(columnNames(connection, config, "entities")).contains("workspace_id");
-                assertThat(columnNames(connection, config, "relations")).contains("workspace_id");
+                assertThat(columnNames(connection, config, "relations"))
+                    .contains("workspace_id", "id", "src_id", "tgt_id", "keywords", "description", "weight", "source_id", "file_path");
                 assertThat(columnNames(connection, config, "vectors")).contains("workspace_id");
                 assertThat(columnNames(connection, config, "document_status")).contains("workspace_id");
                 assertThat(columnNames(connection, config, "task")).contains("workspace_id");
@@ -120,7 +121,7 @@ class PostgresStorageProviderTest {
                     .containsExactly("workspace_id", "task_id", "document_id");
                 assertThat(primaryKeyColumns(connection, config, "task_stage"))
                     .containsExactly("workspace_id", "task_id", "stage");
-                assertThat(schemaVersion(connection, config)).contains(4);
+                assertThat(schemaVersion(connection, config)).contains(5);
             }
         }
     }
@@ -130,14 +131,7 @@ class PostgresStorageProviderTest {
         PostgreSQLContainer<?> container = newPostgresContainer();
         container.start();
 
-        PostgresStorageConfig config = new PostgresStorageConfig(
-            container.getJdbcUrl(),
-            container.getUsername(),
-            container.getPassword(),
-            "lightrag",
-            3,
-            "rag_"
-        );
+        PostgresStorageConfig config = newConfig();
 
         try (
             container;
@@ -196,23 +190,9 @@ class PostgresStorageProviderTest {
         PostgreSQLContainer<?> container = newPostgresContainer();
         container.start();
 
-        PostgresStorageConfig bootstrapConfig = new PostgresStorageConfig(
-            container.getJdbcUrl(),
-            container.getUsername(),
-            container.getPassword(),
-            "lightrag",
-            3,
-            "rag_"
-        );
-
-        PostgresStorageConfig validationConfig = new PostgresStorageConfig(
-            withCurrentSchema(container.getJdbcUrl(), "lightrag"),
-            container.getUsername(),
-            container.getPassword(),
-            "lightrag",
-            3,
-            "rag_"
-        );
+        var schema = uniqueSchemaName();
+        PostgresStorageConfig bootstrapConfig = newConfig(schema, 3);
+        PostgresStorageConfig validationConfig = newConfigWithCurrentSchema(schema, 3);
 
         try (container) {
             try (PostgresStorageProvider ignored = new PostgresStorageProvider(bootstrapConfig, new InMemorySnapshotStore())) {
@@ -230,14 +210,7 @@ class PostgresStorageProviderTest {
         PostgreSQLContainer<?> container = newPostgresContainer();
         container.start();
 
-        PostgresStorageConfig config = new PostgresStorageConfig(
-            container.getJdbcUrl(),
-            container.getUsername(),
-            container.getPassword(),
-            "lightrag",
-            3,
-            "rag_"
-        );
+        PostgresStorageConfig config = newConfig();
 
         SnapshotStore snapshotStore = new InMemorySnapshotStore();
 
@@ -263,14 +236,7 @@ class PostgresStorageProviderTest {
         PostgreSQLContainer<?> container = newPostgresContainer();
         container.start();
 
-        PostgresStorageConfig config = new PostgresStorageConfig(
-            container.getJdbcUrl(),
-            container.getUsername(),
-            container.getPassword(),
-            "lightrag",
-            3,
-            "rag_"
-        );
+        PostgresStorageConfig config = newConfig();
 
         SnapshotStore snapshotStore = new InMemorySnapshotStore();
 
@@ -303,7 +269,7 @@ class PostgresStorageProviderTest {
                 .isInstanceOf(IllegalStateException.class)
                 .hasMessageContaining("schema version")
                 .hasMessageContaining("999")
-                .hasMessageContaining("4");
+                .hasMessageContaining("5");
         }
     }
 
@@ -312,14 +278,7 @@ class PostgresStorageProviderTest {
         PostgreSQLContainer<?> container = newPostgresContainer();
         container.start();
 
-        PostgresStorageConfig config = new PostgresStorageConfig(
-            container.getJdbcUrl(),
-            container.getUsername(),
-            container.getPassword(),
-            "lightrag",
-            3,
-            "rag_"
-        );
+        PostgresStorageConfig config = newConfig();
 
         SnapshotStore snapshotStore = new InMemorySnapshotStore();
 
@@ -332,7 +291,7 @@ class PostgresStorageProviderTest {
                 )) {
                     connection.createStatement().execute("DROP TABLE " + config.qualifiedTableName("documents"));
                     assertThat(existingTables(connection, config.schema())).doesNotContain("rag_documents");
-                    assertThat(schemaVersion(connection, config)).contains(4);
+                    assertThat(schemaVersion(connection, config)).contains(5);
                 }
             }
 
@@ -348,7 +307,7 @@ class PostgresStorageProviderTest {
                 assertThat(existingTables(connection, config.schema())).contains("rag_document_status");
                 assertThat(existingTables(connection, config.schema())).contains("rag_task");
                 assertThat(existingTables(connection, config.schema())).contains("rag_task_stage");
-                assertThat(schemaVersion(connection, config)).contains(4);
+                assertThat(schemaVersion(connection, config)).contains(5);
             }
         }
     }
@@ -358,14 +317,7 @@ class PostgresStorageProviderTest {
         PostgreSQLContainer<?> container = newPostgresContainer();
         container.start();
 
-        var config = new PostgresStorageConfig(
-            container.getJdbcUrl(),
-            container.getUsername(),
-            container.getPassword(),
-            "lightrag",
-            3,
-            "rag_"
-        );
+        var config = newConfig();
 
         try (
             container;
@@ -428,14 +380,7 @@ class PostgresStorageProviderTest {
         PostgreSQLContainer<?> container = newPostgresContainer();
         container.start();
 
-        var config = new PostgresStorageConfig(
-            container.getJdbcUrl(),
-            container.getUsername(),
-            container.getPassword(),
-            "lightrag",
-            3,
-            "rag_"
-        );
+        var config = newConfig();
 
         var alphaSnapshot = new SnapshotStore.Snapshot(
             List.of(new DocumentStore.DocumentRecord("doc-1", "Alpha Snapshot", "alpha-body", Map.of("workspace", "alpha"))),
@@ -473,14 +418,7 @@ class PostgresStorageProviderTest {
         PostgreSQLContainer<?> container = newPostgresContainer();
         container.start();
 
-        var config = new PostgresStorageConfig(
-            container.getJdbcUrl(),
-            container.getUsername(),
-            container.getPassword(),
-            "lightrag",
-            3,
-            "rag_"
-        );
+        var config = newConfig();
 
         try (
             container;
@@ -506,14 +444,7 @@ class PostgresStorageProviderTest {
         PostgreSQLContainer<?> container = newPostgresContainer();
         container.start();
 
-        var config = new PostgresStorageConfig(
-            container.getJdbcUrl(),
-            container.getUsername(),
-            container.getPassword(),
-            "lightrag",
-            3,
-            "rag_"
-        );
+        var config = newConfig();
 
         try (
             container;
@@ -543,14 +474,7 @@ class PostgresStorageProviderTest {
         PostgreSQLContainer<?> container = newPostgresContainer();
         container.start();
 
-        var declaredConfig = new PostgresStorageConfig(
-            container.getJdbcUrl(),
-            container.getUsername(),
-            container.getPassword(),
-            "lightrag",
-            3,
-            "rag_"
-        );
+        var declaredConfig = newConfig();
         var externalDataSourceConfig = new PostgresStorageConfig(
             withCurrentSchema(container.getJdbcUrl(), "public"),
             container.getUsername(),
@@ -576,7 +500,7 @@ class PostgresStorageProviderTest {
             assertThat(effectiveConfig.schema()).isEqualTo("public");
             try (var connection = externalDataSource.getConnection()) {
                 assertThat(existingTables(connection, "public")).contains("rag_documents");
-                assertThat(existingTables(connection, "lightrag")).doesNotContain("rag_documents");
+                assertThat(existingTables(connection, declaredConfig.schema())).doesNotContain("rag_documents");
             }
         }
     }
@@ -586,14 +510,7 @@ class PostgresStorageProviderTest {
         PostgreSQLContainer<?> container = newPostgresContainer();
         container.start();
 
-        PostgresStorageConfig config = new PostgresStorageConfig(
-            container.getJdbcUrl(),
-            container.getUsername(),
-            container.getPassword(),
-            "lightrag",
-            3,
-            "rag_"
-        );
+        PostgresStorageConfig config = newConfig();
 
         try (
             container;
@@ -630,22 +547,9 @@ class PostgresStorageProviderTest {
         container.start();
 
         SnapshotStore snapshotStore = new InMemorySnapshotStore();
-        PostgresStorageConfig original = new PostgresStorageConfig(
-            container.getJdbcUrl(),
-            container.getUsername(),
-            container.getPassword(),
-            "lightrag",
-            3,
-            "rag_"
-        );
-        PostgresStorageConfig drifted = new PostgresStorageConfig(
-            container.getJdbcUrl(),
-            container.getUsername(),
-            container.getPassword(),
-            "lightrag",
-            4,
-            "rag_"
-        );
+        var schema = uniqueSchemaName();
+        PostgresStorageConfig original = newConfig(schema, 3);
+        PostgresStorageConfig drifted = newConfig(schema, 4);
 
         try (container; PostgresStorageProvider ignored = new PostgresStorageProvider(original, snapshotStore)) {
             assertThatThrownBy(() -> new PostgresStorageProvider(drifted, snapshotStore))
@@ -659,14 +563,7 @@ class PostgresStorageProviderTest {
         PostgreSQLContainer<?> container = newPostgresContainer();
         container.start();
 
-        PostgresStorageConfig config = new PostgresStorageConfig(
-            container.getJdbcUrl(),
-            container.getUsername(),
-            container.getPassword(),
-            "lightrag",
-            3,
-            "rag_"
-        );
+        PostgresStorageConfig config = newConfig();
 
         try (container; HikariDataSource dataSource = newDataSource(config)) {
             PostgresSchemaManager manager = new PostgresSchemaManager(
@@ -702,14 +599,7 @@ class PostgresStorageProviderTest {
         PostgreSQLContainer<?> container = newPostgresContainer();
         container.start();
 
-        PostgresStorageConfig config = new PostgresStorageConfig(
-            container.getJdbcUrl(),
-            container.getUsername(),
-            container.getPassword(),
-            "lightrag",
-            4,
-            "rag_"
-        );
+        PostgresStorageConfig config = newConfig(4);
 
         try (container; HikariDataSource dataSource = newDataSource(config)) {
             PostgresSchemaManager manager = new PostgresSchemaManager(
@@ -753,14 +643,7 @@ class PostgresStorageProviderTest {
         PostgreSQLContainer<?> container = newPostgresContainer();
         container.start();
 
-        PostgresStorageConfig config = new PostgresStorageConfig(
-            container.getJdbcUrl(),
-            container.getUsername(),
-            container.getPassword(),
-            "lightrag",
-            3,
-            "rag_"
-        );
+        PostgresStorageConfig config = newConfig();
 
         try (container; PostgresStorageProvider provider = new PostgresStorageProvider(config, new InMemorySnapshotStore())) {
             provider.writeAtomically(storage -> {
@@ -801,14 +684,7 @@ class PostgresStorageProviderTest {
         PostgreSQLContainer<?> container = newPostgresContainer();
         container.start();
 
-        var config = new PostgresStorageConfig(
-            container.getJdbcUrl(),
-            container.getUsername(),
-            container.getPassword(),
-            "lightrag",
-            3,
-            "rag_"
-        );
+        var config = newConfig();
 
         try (container; PostgresStorageProvider provider = new PostgresStorageProvider(config, new InMemorySnapshotStore())) {
             var attempts = new AtomicInteger();
@@ -835,14 +711,7 @@ class PostgresStorageProviderTest {
         container.start();
         var snapshotStore = new InMemorySnapshotStore();
 
-        var config = new PostgresStorageConfig(
-            container.getJdbcUrl(),
-            container.getUsername(),
-            container.getPassword(),
-            "lightrag",
-            3,
-            "rag_"
-        );
+        var config = newConfig();
 
         try (container; PostgresStorageProvider provider = new PostgresStorageProvider(config, snapshotStore)) {
             assertThat(provider.documentStore()).isSameAs(provider.documentStore());
@@ -877,14 +746,7 @@ class PostgresStorageProviderTest {
         PostgreSQLContainer<?> container = newPostgresContainer();
         container.start();
 
-        var config = new PostgresStorageConfig(
-            container.getJdbcUrl(),
-            container.getUsername(),
-            container.getPassword(),
-            "lightrag",
-            3,
-            "rag_"
-        );
+        var config = newConfig();
 
         try (container; PostgresStorageProvider provider = new PostgresStorageProvider(config, new InMemorySnapshotStore())) {
             provider.documentStore().save(new DocumentStore.DocumentRecord("doc-0", "Existing", "seed", Map.of("seed", "true")));
@@ -940,14 +802,7 @@ class PostgresStorageProviderTest {
         PostgreSQLContainer<?> container = newPostgresContainer();
         container.start();
 
-        var config = new PostgresStorageConfig(
-            container.getJdbcUrl(),
-            container.getUsername(),
-            container.getPassword(),
-            "lightrag",
-            3,
-            "rag_"
-        );
+        var config = newConfig();
 
         try (
             container;
@@ -1007,14 +862,7 @@ class PostgresStorageProviderTest {
         PostgreSQLContainer<?> container = newPostgresContainer();
         container.start();
 
-        var config = new PostgresStorageConfig(
-            container.getJdbcUrl(),
-            container.getUsername(),
-            container.getPassword(),
-            "lightrag",
-            3,
-            "rag_"
-        );
+        var config = newConfig();
 
         try (container; PostgresStorageProvider provider = new PostgresStorageProvider(config, new InMemorySnapshotStore())) {
             provider.documentStore().save(new DocumentStore.DocumentRecord("doc-0", "Existing", "seed", Map.of("seed", "true")));
@@ -1049,14 +897,7 @@ class PostgresStorageProviderTest {
         PostgreSQLContainer<?> container = newPostgresContainer();
         container.start();
 
-        var config = new PostgresStorageConfig(
-            container.getJdbcUrl(),
-            container.getUsername(),
-            container.getPassword(),
-            "lightrag",
-            3,
-            "rag_"
-        );
+        var config = newConfig();
 
         try (
             container;
@@ -1119,14 +960,7 @@ class PostgresStorageProviderTest {
         PostgreSQLContainer<?> container = newPostgresContainer();
         container.start();
 
-        var config = new PostgresStorageConfig(
-            container.getJdbcUrl(),
-            container.getUsername(),
-            container.getPassword(),
-            "lightrag",
-            3,
-            "rag_"
-        );
+        var config = newConfig();
 
         try (
             container;
@@ -1195,14 +1029,7 @@ class PostgresStorageProviderTest {
         PostgreSQLContainer<?> container = newPostgresContainer();
         container.start();
 
-        var config = new PostgresStorageConfig(
-            container.getJdbcUrl(),
-            container.getUsername(),
-            container.getPassword(),
-            "lightrag",
-            3,
-            "rag_"
-        );
+        var config = newConfig();
         var originalDocument = new DocumentStore.DocumentRecord("doc-0", "Existing", "seed", Map.of("seed", "true"));
         var originalChunk = new ChunkStore.ChunkRecord("doc-0:0", "doc-0", "seed", 4, 0, Map.of("seed", "true"));
         var originalEntity = new GraphStore.EntityRecord(
@@ -1270,14 +1097,7 @@ class PostgresStorageProviderTest {
         PostgreSQLContainer<?> container = newPostgresContainer();
         container.start();
 
-        var config = new PostgresStorageConfig(
-            container.getJdbcUrl(),
-            container.getUsername(),
-            container.getPassword(),
-            "lightrag",
-            3,
-            "rag_"
-        );
+        var config = newConfig();
         var replacement = new SnapshotStore.Snapshot(
             List.of(new DocumentStore.DocumentRecord("doc-1", "Snapshot", "Body", Map.of("source", "snapshot"))),
             List.of(new ChunkStore.ChunkRecord("doc-1:0", "doc-1", "Body", 4, 0, Map.of("source", "snapshot"))),
@@ -1324,14 +1144,7 @@ class PostgresStorageProviderTest {
         PostgreSQLContainer<?> container = newPostgresContainer();
         container.start();
 
-        var config = new PostgresStorageConfig(
-            container.getJdbcUrl(),
-            container.getUsername(),
-            container.getPassword(),
-            "lightrag",
-            3,
-            "rag_"
-        );
+        var config = newConfig();
         var replacementSnapshot = graphSnapshot("doc-1", Instant.parse("2026-04-12T09:00:00Z"));
         var replacementChunkSnapshot = chunkGraphSnapshot("doc-1", "doc-1:0", Instant.parse("2026-04-12T09:00:01Z"));
         var replacementDocumentJournal = documentGraphJournal("doc-1", 2, Instant.parse("2026-04-12T09:00:02Z"));
@@ -1380,14 +1193,7 @@ class PostgresStorageProviderTest {
         PostgreSQLContainer<?> container = newPostgresContainer();
         container.start();
 
-        var config = new PostgresStorageConfig(
-            container.getJdbcUrl(),
-            container.getUsername(),
-            container.getPassword(),
-            "lightrag",
-            3,
-            "rag_"
-        );
+        var config = newConfig();
         var snapshot = graphSnapshot("doc-1", Instant.parse("2026-04-12T10:00:00Z"));
         var chunkSnapshot = chunkGraphSnapshot("doc-1", "doc-1:0", Instant.parse("2026-04-12T10:00:01Z"));
         var documentJournal = documentGraphJournal("doc-1", 2, Instant.parse("2026-04-12T10:00:02Z"));
@@ -1419,9 +1225,41 @@ class PostgresStorageProviderTest {
     }
 
     private static PostgreSQLContainer<?> newPostgresContainer() {
-        return new PostgreSQLContainer<>(
-            DockerImageName.parse("pgvector/pgvector:pg16").asCompatibleSubstituteFor("postgres")
+        return POSTGRES;
+    }
+
+    private static PostgresStorageConfig newConfig() {
+        return newConfig(uniqueSchemaName(), 3);
+    }
+
+    private static PostgresStorageConfig newConfig(int vectorDimensions) {
+        return newConfig(uniqueSchemaName(), vectorDimensions);
+    }
+
+    private static PostgresStorageConfig newConfig(String schema, int vectorDimensions) {
+        return new PostgresStorageConfig(
+            POSTGRES.getJdbcUrl(),
+            POSTGRES.getUsername(),
+            POSTGRES.getPassword(),
+            schema,
+            vectorDimensions,
+            "rag_"
         );
+    }
+
+    private static PostgresStorageConfig newConfigWithCurrentSchema(String schema, int vectorDimensions) {
+        return new PostgresStorageConfig(
+            withCurrentSchema(POSTGRES.getJdbcUrl(), schema),
+            POSTGRES.getUsername(),
+            POSTGRES.getPassword(),
+            schema,
+            vectorDimensions,
+            "rag_"
+        );
+    }
+
+    private static String uniqueSchemaName() {
+        return "lightrag_" + UUID.randomUUID().toString().replace("-", "");
     }
 
     private static HikariDataSource newDataSource(PostgresStorageConfig config) {
@@ -1684,6 +1522,17 @@ class PostgresStorageProviderTest {
     private static String withCurrentSchema(String jdbcUrl, String schema) {
         String separator = jdbcUrl.contains("?") ? "&" : "?";
         return jdbcUrl + separator + "currentSchema=" + schema;
+    }
+
+    private static final class SharedPostgresContainer extends PostgreSQLContainer<SharedPostgresContainer> {
+        private SharedPostgresContainer(DockerImageName dockerImageName) {
+            super(dockerImageName);
+        }
+
+        @Override
+        public void stop() {
+            // Shared class-level container; lifecycle is managed by Testcontainers/JUnit.
+        }
     }
 
     private static DocumentGraphSnapshotStore.DocumentGraphSnapshot graphSnapshot(String documentId, Instant now) {

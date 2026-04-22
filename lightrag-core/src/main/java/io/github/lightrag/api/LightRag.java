@@ -267,9 +267,14 @@ public final class LightRag implements AutoCloseable {
         return newGraphManagementPipeline(resolveProvider(scope)).editEntity(request);
     }
 
-    public GraphRelation editRelation(String workspaceId, EditRelationRequest request) {
+    public GraphRelation updateRelation(String workspaceId, UpdateRelationRequest request) {
         var scope = resolveScope(workspaceId);
-        return newGraphManagementPipeline(resolveProvider(scope)).editRelation(request);
+        return newGraphManagementPipeline(resolveProvider(scope)).updateRelation(request);
+    }
+
+    public void deleteRelation(String workspaceId, DeleteRelationRequest request) {
+        var scope = resolveScope(workspaceId);
+        newGraphManagementPipeline(resolveProvider(scope)).deleteRelation(request);
     }
 
     public GraphEntity mergeEntities(String workspaceId, MergeEntitiesRequest request) {

@@ -35,10 +35,10 @@ class IndexingPipelineRefinementIntegrationTest {
               "entities": [],
               "relations": [
                 {
-                  "sourceEntityName": "订单系统",
-                  "targetEntityName": "PostgreSQL",
-                  "type": "依赖",
-                  "description": "订单系统依赖 PostgreSQL 进行事务存储",
+                  "source_entity": "订单系统",
+                  "target_entity": "PostgreSQL",
+                  "relationship_keywords": "依赖",
+                  "relationship_description": "订单系统依赖 PostgreSQL 进行事务存储",
                   "weight": 1.0,
                   "supportingChunkIndexes": [0, 1]
                 }

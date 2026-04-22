@@ -66,7 +66,7 @@ public final class DefaultExtractionMergePolicy implements ExtractionMergePolicy
         return new ExtractedRelation(
             left.sourceEntityName(),
             left.targetEntityName(),
-            left.type(),
+            mergeKeywords(left.keywords(), right.keywords()),
             longerText(left.description(), right.description()),
             Math.max(left.weight(), right.weight())
         );
@@ -83,13 +83,39 @@ public final class DefaultExtractionMergePolicy implements ExtractionMergePolicy
     private static String relationKey(ExtractedRelation relation) {
         return normalize(relation.sourceEntityName())
             + "\u0000"
-            + canonicalRelationType(relation.type())
+            + canonicalKeywords(relation.keywords())
             + "\u0000"
             + normalize(relation.targetEntityName());
     }
 
-    private static String canonicalRelationType(String value) {
-        return normalize(value).replaceAll("[\\s_-]+", "_");
+    private static String canonicalKeywords(String value) {
+        var keywords = new java.util.TreeSet<String>();
+        for (var rawKeyword : Objects.requireNonNull(value, "value").split(",")) {
+            var normalized = normalize(rawKeyword).replaceAll("[\\s_-]+", "_");
+            if (!normalized.isEmpty()) {
+                keywords.add(normalized);
+            }
+        }
+        return String.join(", ", keywords);
+    }
+
+    private static String mergeKeywords(String left, String right) {
+        var keywords = new LinkedHashSet<String>();
+        addKeywords(keywords, left);
+        addKeywords(keywords, right);
+        return String.join(", ", keywords);
+    }
+
+    private static void addKeywords(LinkedHashSet<String> keywords, String value) {
+        if (value == null || value.isBlank()) {
+            return;
+        }
+        for (var rawKeyword : value.split(",")) {
+            var normalized = rawKeyword.strip().replaceAll("[\\s_-]+", "_");
+            if (!normalized.isEmpty()) {
+                keywords.add(normalized);
+            }
+        }
     }
 
     private static String normalize(String value) {

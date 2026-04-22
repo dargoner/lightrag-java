@@ -15,6 +15,7 @@ import io.github.lightrag.storage.TaskStageStore;
 import io.github.lightrag.storage.TaskStore;
 import io.github.lightrag.storage.VectorStore;
 import io.github.lightrag.storage.memory.InMemoryGraphStore;
+import io.github.lightrag.support.RelationIds;
 import io.github.lightrag.types.Document;
 import org.junit.jupiter.api.Test;
 
@@ -60,14 +61,14 @@ class IndexingPipelineBatchGraphPersistenceTest {
     }
 
     private static String relationKey(String source, String type, String target) {
-        return "relation:" + entityKey(source) + "|" + type.toLowerCase(Locale.ROOT) + "|" + entityKey(target);
+        return RelationIds.relationId(entityKey(source), entityKey(target));
     }
 
     private static final class FakeChatModel implements ChatModel {
         @Override
         public String generate(ChatRequest request) {
             return """
-                {"entities":[{"name":"Alice","type":"person","description":"Alice","aliases":[]},{"name":"Bob","type":"person","description":"Bob","aliases":[]}],"relations":[{"sourceEntityName":"Alice","targetEntityName":"Bob","type":"works_with","description":"works with","weight":1.0}]}
+                {"entities":[{"name":"Alice","type":"person","description":"Alice","aliases":[]},{"name":"Bob","type":"person","description":"Bob","aliases":[]}],"relations":[{"source_entity":"Alice","target_entity":"Bob","relationship_keywords":"works_with","relationship_description":"works with","weight":1.0}]}
                 """;
         }
     }

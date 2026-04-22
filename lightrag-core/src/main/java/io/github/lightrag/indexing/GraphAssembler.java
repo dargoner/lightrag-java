@@ -16,11 +16,6 @@ import java.util.Objects;
 import java.util.Set;
 
 public final class GraphAssembler {
-    private static final Set<String> SYMMETRIC_RELATION_TYPES = Set.of(
-        "related_to",
-        "works_with"
-    );
-
     public Graph assemble(List<ChunkExtraction> extractions) {
         var batch = List.copyOf(Objects.requireNonNull(extractions, "extractions"));
         var entitiesById = new LinkedHashMap<String, MutableEntity>();
@@ -103,27 +98,20 @@ public final class GraphAssembler {
     ) {
         var sourceEntity = ensureEntity(chunkId, extractedRelation.sourceEntityName(), entitiesById, entityIdByMergeKey);
         var targetEntity = ensureEntity(chunkId, extractedRelation.targetEntityName(), entitiesById, entityIdByMergeKey);
-        var normalizedType = normalizeKey(extractedRelation.type());
-        var canonicalType = canonicalRelationType(extractedRelation.type());
-        var mergeKey = relationMergeKey(sourceEntity.id, targetEntity.id, canonicalType);
+        var canonicalRef = RelationCanonicalizer.canonicalize(sourceEntity.id, targetEntity.id);
+        var mergeKey = relationMergeKey(canonicalRef.srcId(), canonicalRef.tgtId());
         var relationId = relationIdByMergeKey.get(mergeKey);
-        if (relationId == null && isSymmetricRelationType(canonicalType)) {
-            relationId = relationIdByMergeKey.get(relationMergeKey(targetEntity.id, sourceEntity.id, canonicalType));
-        }
         if (relationId == null) {
-            relationId = "relation:" + sourceEntity.id + "|" + normalizedType + "|" + targetEntity.id;
+            relationId = canonicalRef.relationId();
         }
         var finalRelationId = relationId;
         var relation = relationsById.computeIfAbsent(
             finalRelationId,
-            ignored -> MutableRelation.create(finalRelationId, sourceEntity.id, targetEntity.id, extractedRelation)
+            ignored -> MutableRelation.create(finalRelationId, canonicalRef.srcId(), canonicalRef.tgtId(), extractedRelation)
         );
         relation.mergeFrom(extractedRelation);
         relation.addSourceChunkId(chunkId);
         relationIdByMergeKey.put(mergeKey, finalRelationId);
-        if (isSymmetricRelationType(canonicalType)) {
-            relationIdByMergeKey.putIfAbsent(relationMergeKey(targetEntity.id, sourceEntity.id, canonicalType), finalRelationId);
-        }
     }
 
     private static MutableEntity ensureEntity(
@@ -177,17 +165,8 @@ public final class GraphAssembler {
         return normalized.toLowerCase(Locale.ROOT);
     }
 
-    private static String canonicalRelationType(String value) {
-        var normalized = normalizeKey(value);
-        return normalized.replaceAll("[\\s_-]+", "_");
-    }
-
-    private static String relationMergeKey(String sourceEntityId, String targetEntityId, String canonicalType) {
-        return sourceEntityId + "\u0000" + canonicalType + "\u0000" + targetEntityId;
-    }
-
-    private static boolean isSymmetricRelationType(String canonicalType) {
-        return SYMMETRIC_RELATION_TYPES.contains(canonicalType);
+    private static String relationMergeKey(String sourceEntityId, String targetEntityId) {
+        return sourceEntityId + "\u0000" + targetEntityId;
     }
 
     public record ChunkExtraction(String chunkId, ExtractionResult extraction) {
@@ -307,25 +286,25 @@ public final class GraphAssembler {
 
     private static final class MutableRelation {
         private final String id;
-        private final String sourceEntityId;
-        private final String targetEntityId;
-        private final String type;
+        private final String srcId;
+        private final String tgtId;
+        private String keywords;
         private String description;
         private double weight;
         private final LinkedHashSet<String> sourceChunkIds = new LinkedHashSet<>();
 
         private MutableRelation(
             String id,
-            String sourceEntityId,
-            String targetEntityId,
-            String type,
+            String srcId,
+            String tgtId,
+            String keywords,
             String description,
             double weight
         ) {
             this.id = id;
-            this.sourceEntityId = sourceEntityId;
-            this.targetEntityId = targetEntityId;
-            this.type = type;
+            this.srcId = srcId;
+            this.tgtId = tgtId;
+            this.keywords = keywords;
             this.description = description;
             this.weight = weight;
         }
@@ -340,13 +319,14 @@ public final class GraphAssembler {
                 id,
                 sourceEntityId,
                 targetEntityId,
-                relation.type(),
+                canonicalKeywords(relation.keywords()),
                 relation.description(),
                 relation.weight()
             );
         }
 
         private void mergeFrom(ExtractedRelation relation) {
+            keywords = mergeKeywords(keywords, relation.keywords());
             if (description.isEmpty() && !relation.description().isEmpty()) {
                 description = relation.description();
             }
@@ -360,13 +340,48 @@ public final class GraphAssembler {
         private Relation toRelation() {
             return new Relation(
                 id,
-                sourceEntityId,
-                targetEntityId,
-                type,
+                srcId,
+                tgtId,
+                keywords,
                 description,
                 weight,
-                new ArrayList<>(sourceChunkIds)
+                RelationCanonicalizer.joinValues(new ArrayList<>(sourceChunkIds)),
+                ""
             );
+        }
+    }
+
+    private static String canonicalKeywords(String value) {
+        var normalized = normalizeKey(value);
+        if (normalized.isEmpty()) {
+            return normalized;
+        }
+        var keywords = new java.util.TreeSet<String>();
+        for (var rawKeyword : normalized.split(",")) {
+            var keyword = rawKeyword.strip().replaceAll("[\\s_-]+", "_");
+            if (!keyword.isEmpty()) {
+                keywords.add(keyword);
+            }
+        }
+        return String.join(", ", keywords);
+    }
+
+    private static String mergeKeywords(String current, String incoming) {
+        var keywords = new LinkedHashSet<String>();
+        addKeywords(keywords, current);
+        addKeywords(keywords, incoming);
+        return String.join(", ", keywords);
+    }
+
+    private static void addKeywords(LinkedHashSet<String> keywords, String value) {
+        if (value == null || value.isBlank()) {
+            return;
+        }
+        for (var rawKeyword : value.split(",")) {
+            var keyword = rawKeyword.strip().replaceAll("[\\s_-]+", "_");
+            if (!keyword.isEmpty()) {
+                keywords.add(keyword);
+            }
         }
     }
 }
