@@ -3,6 +3,10 @@ package io.github.lightrag.storage.milvus;
 import io.github.lightrag.storage.HybridVectorStore;
 import io.github.lightrag.storage.VectorStore;
 
+import java.nio.charset.StandardCharsets;
+import java.security.MessageDigest;
+import java.security.NoSuchAlgorithmException;
+import java.util.HexFormat;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Objects;
@@ -52,9 +56,10 @@ public final class MilvusVectorStore implements HybridVectorStore, AutoCloseable
         if (values.isEmpty()) {
             return;
         }
-        var collectionName = collectionName(namespace);
+        var normalizedNamespace = normalizeNamespace(namespace);
+        var collectionName = collectionName();
         ensureCollection(namespace, collectionName);
-        clientAdapter.upsert(collectionName, values.stream().map(this::toStoredRow).toList());
+        clientAdapter.upsert(collectionName, values.stream().map(record -> toStoredRow(normalizedNamespace, record)).toList());
     }
 
     @Override
@@ -73,13 +78,16 @@ public final class MilvusVectorStore implements HybridVectorStore, AutoCloseable
 
     @Override
     public List<VectorMatch> search(String namespace, SearchRequest request) {
-        var collectionName = collectionName(namespace);
+        var normalizedNamespace = normalizeNamespace(namespace);
+        var collectionName = collectionName();
+        var filter = filter(normalizedNamespace);
         var searchRequest = Objects.requireNonNull(request, "request");
         return switch (searchRequest.mode()) {
             case SEMANTIC -> clientAdapter.semanticSearch(new MilvusClientAdapter.SemanticSearchRequest(
                 collectionName,
                 requireVector(searchRequest.queryVector(), "semantic"),
-                searchRequest.topK()
+                searchRequest.topK(),
+                filter
             ));
             case KEYWORD -> {
                 var queryText = composeQueryText(searchRequest.queryText(), searchRequest.keywords());
@@ -89,7 +97,8 @@ public final class MilvusVectorStore implements HybridVectorStore, AutoCloseable
                 yield clientAdapter.keywordSearch(new MilvusClientAdapter.KeywordSearchRequest(
                     collectionName,
                     queryText,
-                    searchRequest.topK()
+                    searchRequest.topK(),
+                    filter
                 ));
             }
             case HYBRID -> {
@@ -98,7 +107,8 @@ public final class MilvusVectorStore implements HybridVectorStore, AutoCloseable
                     yield clientAdapter.semanticSearch(new MilvusClientAdapter.SemanticSearchRequest(
                         collectionName,
                         requireVector(searchRequest.queryVector(), "hybrid"),
-                        searchRequest.topK()
+                        searchRequest.topK(),
+                        filter
                     ));
                 }
                 yield clientAdapter.hybridSearch(new MilvusClientAdapter.HybridSearchRequest(
@@ -106,6 +116,7 @@ public final class MilvusVectorStore implements HybridVectorStore, AutoCloseable
                     requireVector(searchRequest.queryVector(), "hybrid"),
                     queryText,
                     searchRequest.topK(),
+                    filter,
                     hybridRankerType(),
                     hybridRankerWeights(),
                     config.hybridRrfK()
@@ -116,7 +127,7 @@ public final class MilvusVectorStore implements HybridVectorStore, AutoCloseable
 
     @Override
     public List<VectorRecord> list(String namespace) {
-        return clientAdapter.list(collectionName(namespace)).stream()
+        return clientAdapter.list(new MilvusClientAdapter.ListRequest(collectionName(), filter(normalizeNamespace(namespace)))).stream()
             .sorted(java.util.Comparator.comparing(VectorRecord::id))
             .toList();
     }
@@ -127,14 +138,17 @@ public final class MilvusVectorStore implements HybridVectorStore, AutoCloseable
     }
 
     public void deleteNamespace(String namespace) {
-        clientAdapter.deleteAll(collectionName(namespace));
+        clientAdapter.deleteAll(new MilvusClientAdapter.DeleteRequest(collectionName(), filter(normalizeNamespace(namespace))));
     }
 
     public void flushNamespaces(List<String> namespaces) {
         if (!config.flushOnWrite()) {
             return;
         }
-        clientAdapter.flush(namespaces.stream().map(this::collectionName).distinct().toList());
+        if (namespaces.isEmpty()) {
+            return;
+        }
+        clientAdapter.flush(List.of(collectionName()));
     }
 
     private void ensureCollection(String namespace, String collectionName) {
@@ -148,9 +162,13 @@ public final class MilvusVectorStore implements HybridVectorStore, AutoCloseable
         }
     }
 
-    private MilvusClientAdapter.StoredVectorRow toStoredRow(EnrichedVectorRecord record) {
+    private MilvusClientAdapter.StoredVectorRow toStoredRow(String namespace, EnrichedVectorRecord record) {
         validateVector(record.vector());
         return new MilvusClientAdapter.StoredVectorRow(
+            technicalPrimaryKey(workspaceId, namespace, record.id()),
+            record.id(),
+            workspaceId,
+            namespace,
             record.id(),
             record.vector(),
             record.searchableText(),
@@ -162,8 +180,30 @@ public final class MilvusVectorStore implements HybridVectorStore, AutoCloseable
         );
     }
 
-    private String collectionName(String namespace) {
-        return config.collectionName(workspaceId, Objects.requireNonNull(namespace, "namespace"));
+    private String collectionName() {
+        return config.sharedCollectionName();
+    }
+
+    private String normalizeNamespace(String namespace) {
+        return Objects.requireNonNull(namespace, "namespace");
+    }
+
+    private String filter(String namespace) {
+        return "workspace_id == \"" + escapeFilterLiteral(workspaceId) + "\" && record_type == \"" + escapeFilterLiteral(namespace) + "\"";
+    }
+
+    private static String escapeFilterLiteral(String value) {
+        return value.replace("\\", "\\\\").replace("\"", "\\\"");
+    }
+
+    private static String technicalPrimaryKey(String workspaceId, String namespace, String vectorId) {
+        try {
+            var raw = workspaceId + "\u001F" + namespace + "\u001F" + vectorId;
+            var digest = MessageDigest.getInstance("MD5").digest(raw.getBytes(StandardCharsets.UTF_8));
+            return "pk-" + HexFormat.of().formatHex(digest);
+        } catch (NoSuchAlgorithmException exception) {
+            throw new IllegalStateException("MD5 digest is unavailable", exception);
+        }
     }
 
     private List<Double> requireVector(List<Double> vector, String label) {

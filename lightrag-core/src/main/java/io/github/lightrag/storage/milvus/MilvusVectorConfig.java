@@ -155,6 +155,13 @@ public record MilvusVectorConfig(
         return normalized.substring(0, prefixLength) + "_" + digest;
     }
 
+    public String sharedCollectionName() {
+        var normalized = collectionPrefix.endsWith("_")
+            ? collectionPrefix.substring(0, collectionPrefix.length() - 1)
+            : collectionPrefix;
+        return normalized.isBlank() ? "lightrag_vectors" : normalized;
+    }
+
     private static String validatePrefix(String prefix) {
         Objects.requireNonNull(prefix, "collectionPrefix");
         if (prefix.isEmpty()) {

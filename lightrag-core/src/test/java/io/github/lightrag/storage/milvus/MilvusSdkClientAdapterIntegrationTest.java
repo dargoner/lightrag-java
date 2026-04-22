@@ -14,6 +14,7 @@ import io.milvus.v2.service.collection.request.DescribeCollectionReq;
 import io.milvus.v2.service.collection.request.DropCollectionReq;
 import io.milvus.v2.service.collection.request.LoadCollectionReq;
 import io.milvus.v2.service.utility.request.FlushReq;
+import io.milvus.v2.service.vector.request.QueryReq;
 import io.milvus.v2.service.vector.request.UpsertReq;
 import org.junit.jupiter.api.Test;
 import org.testcontainers.containers.GenericContainer;
@@ -101,7 +102,7 @@ class MilvusSdkClientAdapterIntegrationTest {
             60,
             MilvusVectorConfig.SchemaDriftStrategy.STRICT_REBUILD
         );
-        var collectionName = config.collectionName("alpha", "chunks");
+        var collectionName = config.sharedCollectionName();
 
         var client = new MilvusClientV2(connectConfig(config));
         try (var adapter = new MilvusSdkClientAdapter(config)) {
@@ -118,7 +119,7 @@ class MilvusSdkClientAdapterIntegrationTest {
             var fullTextField = description.getCollectionSchema().getField(FULL_TEXT_FIELD);
 
             assertThat(fullTextField.getAnalyzerParams()).containsEntry("type", "chinese");
-            assertThat(adapter.list(collectionName)).isEmpty();
+            assertThat(adapter.list(new MilvusClientAdapter.ListRequest(collectionName, "pk_id != \"\""))).isEmpty();
         } finally {
             client.close();
         }
@@ -136,7 +137,7 @@ class MilvusSdkClientAdapterIntegrationTest {
             "rag_" + logicalId + "_",
             3
         );
-        var collectionName = config.collectionName("alpha", "chunks");
+        var collectionName = config.sharedCollectionName();
 
         var client = new MilvusClientV2(connectConfig(config));
         try (var adapter = new MilvusSdkClientAdapter(config)) {
@@ -157,7 +158,7 @@ class MilvusSdkClientAdapterIntegrationTest {
             var fullTextField = description.getCollectionSchema().getField(FULL_TEXT_FIELD);
 
             assertThat(fullTextField.getAnalyzerParams()).containsEntry("type", "english");
-            assertThat(adapter.list(collectionName)).hasSize(1);
+            assertThat(listLegacyIds(client, config, collectionName)).containsExactly("seed-1");
         } finally {
             client.close();
         }
@@ -179,7 +180,7 @@ class MilvusSdkClientAdapterIntegrationTest {
             60,
             MilvusVectorConfig.SchemaDriftStrategy.IGNORE
         );
-        var collectionName = config.collectionName("alpha", "chunks");
+        var collectionName = config.sharedCollectionName();
 
         var client = new MilvusClientV2(connectConfig(config));
         try (var adapter = new MilvusSdkClientAdapter(config)) {
@@ -196,10 +197,24 @@ class MilvusSdkClientAdapterIntegrationTest {
             var fullTextField = description.getCollectionSchema().getField(FULL_TEXT_FIELD);
 
             assertThat(fullTextField.getAnalyzerParams()).containsEntry("type", "english");
-            assertThat(adapter.list(collectionName)).hasSize(1);
+            assertThat(listLegacyIds(client, config, collectionName)).containsExactly("seed-1");
         } finally {
             client.close();
         }
+    }
+
+    private static List<String> listLegacyIds(MilvusClientV2 client, MilvusVectorConfig config, String collectionName) {
+        return client.query(QueryReq.builder()
+                .databaseName(config.databaseName())
+                .collectionName(collectionName)
+                .filter(ID_FIELD + " != \"\"")
+                .outputFields(List.of(ID_FIELD))
+                .limit(10)
+                .build())
+            .getQueryResults()
+            .stream()
+            .map(row -> row.getEntity().get(ID_FIELD).toString())
+            .toList();
     }
 
     private static void createHybridCollection(

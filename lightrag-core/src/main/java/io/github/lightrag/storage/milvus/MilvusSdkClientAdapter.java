@@ -40,7 +40,10 @@ public final class MilvusSdkClientAdapter implements MilvusClientAdapter {
     static final int MILVUS_RELATION_ENDPOINT_MAX_LENGTH = 512;
     static final int MILVUS_RELATION_FILE_PATH_MAX_LENGTH = 32_768;
 
-    private static final String ID_FIELD = "id";
+    private static final String PK_ID_FIELD = "pk_id";
+    private static final String VECTOR_ID_FIELD = "vector_id";
+    private static final String WORKSPACE_ID_FIELD = "workspace_id";
+    private static final String RECORD_TYPE_FIELD = "record_type";
     private static final String DENSE_VECTOR_FIELD = "dense_vector";
     private static final String SEARCHABLE_TEXT_FIELD = "searchable_text";
     private static final String FULL_TEXT_FIELD = "full_text";
@@ -48,7 +51,6 @@ public final class MilvusSdkClientAdapter implements MilvusClientAdapter {
     private static final String SRC_ID_FIELD = "src_id";
     private static final String TGT_ID_FIELD = "tgt_id";
     private static final String FILE_PATH_FIELD = "file_path";
-    private static final String RELATION_NAMESPACE = "relations";
     private static final int MAX_VARCHAR_LENGTH = 65_535;
     private static final int QUERY_PAGE_SIZE = 1_000;
     private static final long DEFAULT_CONNECT_TIMEOUT_MS = 10_000L;
@@ -59,7 +61,6 @@ public final class MilvusSdkClientAdapter implements MilvusClientAdapter {
     private final MilvusClientV2 client;
     private final boolean ownsClient;
     private final ConsistencyLevel queryConsistency;
-    private final java.util.Set<String> relationCollections = java.util.concurrent.ConcurrentHashMap.newKeySet();
 
     public MilvusSdkClientAdapter(MilvusVectorConfig config) {
         this(Objects.requireNonNull(config, "config"), createOwnedClient(config), true);
@@ -83,9 +84,6 @@ public final class MilvusSdkClientAdapter implements MilvusClientAdapter {
     @Override
     public void ensureCollection(CollectionDefinition collectionDefinition) {
         var definition = Objects.requireNonNull(collectionDefinition, "collectionDefinition");
-        if (RELATION_NAMESPACE.equals(definition.namespace())) {
-            relationCollections.add(definition.collectionName());
-        }
         try {
             if (!hasCollection(definition.collectionName())) {
                 createCollection(definition);
@@ -115,7 +113,7 @@ public final class MilvusSdkClientAdapter implements MilvusClientAdapter {
                 .databaseName(config.databaseName())
                 .collectionName(targetCollection)
                 .data(values.stream()
-                    .map(row -> toJsonRow(row, relationCollections.contains(targetCollection)))
+                    .map(MilvusSdkClientAdapter::toJsonRow)
                     .toList())
                 .build());
         } catch (RuntimeException exception) {
@@ -125,7 +123,13 @@ public final class MilvusSdkClientAdapter implements MilvusClientAdapter {
 
     @Override
     public List<VectorStore.VectorRecord> list(String collectionName) {
-        var targetCollection = Objects.requireNonNull(collectionName, "collectionName");
+        return list(new ListRequest(collectionName, PK_ID_FIELD + " != \"\""));
+    }
+
+    @Override
+    public List<VectorStore.VectorRecord> list(ListRequest request) {
+        var listRequest = Objects.requireNonNull(request, "request");
+        var targetCollection = listRequest.collectionName();
         if (!hasCollection(targetCollection)) {
             return List.of();
         }
@@ -136,8 +140,8 @@ public final class MilvusSdkClientAdapter implements MilvusClientAdapter {
                 var response = client.query(QueryReq.builder()
                     .databaseName(config.databaseName())
                     .collectionName(targetCollection)
-                    .filter(ID_FIELD + " != \"\"")
-                    .outputFields(List.of(ID_FIELD, DENSE_VECTOR_FIELD))
+                    .filter(listRequest.filter())
+                    .outputFields(List.of(VECTOR_ID_FIELD, DENSE_VECTOR_FIELD))
                     .limit(QUERY_PAGE_SIZE)
                     .offset(offset)
                     .consistencyLevel(queryConsistency)
@@ -149,7 +153,7 @@ public final class MilvusSdkClientAdapter implements MilvusClientAdapter {
                 for (var row : page) {
                     var entity = row.getEntity();
                     results.add(new VectorStore.VectorRecord(
-                        Objects.toString(entity.get(ID_FIELD)),
+                        Objects.toString(entity.get(VECTOR_ID_FIELD)),
                         toDoubleList(entity.get(DENSE_VECTOR_FIELD))
                     ));
                 }
@@ -179,7 +183,8 @@ public final class MilvusSdkClientAdapter implements MilvusClientAdapter {
                 .annsField(DENSE_VECTOR_FIELD)
                 .metricType(IndexParam.MetricType.COSINE)
                 .topK(searchRequest.topK())
-                .outputFields(List.of(ID_FIELD))
+                .filter(searchRequest.filter())
+                .outputFields(List.of(VECTOR_ID_FIELD))
                 .data(List.of(new FloatVec(toFloatList(searchRequest.queryVector()))))
                 .consistencyLevel(queryConsistency)
                 .build()));
@@ -201,7 +206,8 @@ public final class MilvusSdkClientAdapter implements MilvusClientAdapter {
                 .annsField(SPARSE_VECTOR_FIELD)
                 .metricType(IndexParam.MetricType.BM25)
                 .topK(searchRequest.topK())
-                .outputFields(List.of(ID_FIELD))
+                .filter(searchRequest.filter())
+                .outputFields(List.of(VECTOR_ID_FIELD))
                 .data(List.of(new EmbeddedText(searchRequest.queryText())))
                 .consistencyLevel(queryConsistency)
                 .build()));
@@ -221,12 +227,14 @@ public final class MilvusSdkClientAdapter implements MilvusClientAdapter {
                 .vectorFieldName(DENSE_VECTOR_FIELD)
                 .metricType(IndexParam.MetricType.COSINE)
                 .topK(searchRequest.topK())
+                .filter(searchRequest.filter())
                 .vectors(List.of(new FloatVec(toFloatList(searchRequest.queryVector()))))
                 .build();
             var sparseSearch = AnnSearchReq.builder()
                 .vectorFieldName(SPARSE_VECTOR_FIELD)
                 .metricType(IndexParam.MetricType.BM25)
                 .topK(searchRequest.topK())
+                .filter(searchRequest.filter())
                 .vectors(List.of(new EmbeddedText(searchRequest.queryText())))
                 .build();
             return toMatches(client.hybridSearch(HybridSearchReq.builder()
@@ -235,7 +243,7 @@ public final class MilvusSdkClientAdapter implements MilvusClientAdapter {
                 .searchRequests(List.of(denseSearch, sparseSearch))
                 .ranker(buildRanker(searchRequest))
                 .topK(searchRequest.topK())
-                .outFields(List.of(ID_FIELD))
+                .outFields(List.of(VECTOR_ID_FIELD))
                 .consistencyLevel(queryConsistency)
                 .build()));
         } catch (RuntimeException exception) {
@@ -245,7 +253,13 @@ public final class MilvusSdkClientAdapter implements MilvusClientAdapter {
 
     @Override
     public void deleteAll(String collectionName) {
-        var targetCollection = Objects.requireNonNull(collectionName, "collectionName");
+        deleteAll(new DeleteRequest(collectionName, PK_ID_FIELD + " != \"\""));
+    }
+
+    @Override
+    public void deleteAll(DeleteRequest request) {
+        var deleteRequest = Objects.requireNonNull(request, "request");
+        var targetCollection = deleteRequest.collectionName();
         if (!hasCollection(targetCollection)) {
             return;
         }
@@ -253,7 +267,7 @@ public final class MilvusSdkClientAdapter implements MilvusClientAdapter {
             client.delete(DeleteReq.builder()
                 .databaseName(config.databaseName())
                 .collectionName(targetCollection)
-                .filter(ID_FIELD + " != \"\"")
+                .filter(deleteRequest.filter())
                 .build());
         } catch (RuntimeException exception) {
             throw new StorageException("Failed to clear Milvus collection: " + targetCollection, exception);
@@ -318,8 +332,17 @@ public final class MilvusSdkClientAdapter implements MilvusClientAdapter {
         if (schema.isEnableDynamicField()) {
             return "dynamic field setting differs";
         }
-        if (!hasCompatibleIdField(schema)) {
-            return "id field differs";
+        if (!hasCompatiblePrimaryKeyField(schema)) {
+            return "pk_id field differs";
+        }
+        if (!hasCompatibleVectorIdField(schema)) {
+            return "vector_id field differs";
+        }
+        if (!hasCompatibleWorkspaceIdField(schema)) {
+            return "workspace_id field differs";
+        }
+        if (!hasCompatibleRecordTypeField(schema)) {
+            return "record_type field differs";
         }
         if (!hasCompatibleDenseField(schema, definition.vectorDimensions())) {
             return "dense vector field differs";
@@ -336,8 +359,7 @@ public final class MilvusSdkClientAdapter implements MilvusClientAdapter {
         if (!hasCompatibleBm25Function(schema)) {
             return "bm25 function differs";
         }
-        if (RELATION_NAMESPACE.equals(definition.namespace())
-            && !hasCompatibleRelationMetadataFields(schema)) {
+        if (!hasCompatibleRelationMetadataFields(schema)) {
             return "relation metadata fields differ";
         }
         return null;
@@ -398,13 +420,25 @@ public final class MilvusSdkClientAdapter implements MilvusClientAdapter {
             .build());
     }
 
-    private boolean hasCompatibleIdField(CreateCollectionReq.CollectionSchema schema) {
-        var field = schema.getField(ID_FIELD);
+    private boolean hasCompatiblePrimaryKeyField(CreateCollectionReq.CollectionSchema schema) {
+        var field = schema.getField(PK_ID_FIELD);
         return field != null
             && field.getDataType() == DataType.VarChar
             && Integer.valueOf(MILVUS_RELATION_ID_MAX_LENGTH).equals(field.getMaxLength())
             && Boolean.TRUE.equals(field.getIsPrimaryKey())
             && Boolean.FALSE.equals(field.getAutoID());
+    }
+
+    private boolean hasCompatibleVectorIdField(CreateCollectionReq.CollectionSchema schema) {
+        return hasCompatibleVarCharField(schema, VECTOR_ID_FIELD, MAX_VARCHAR_LENGTH);
+    }
+
+    private boolean hasCompatibleWorkspaceIdField(CreateCollectionReq.CollectionSchema schema) {
+        return hasCompatibleVarCharField(schema, WORKSPACE_ID_FIELD, MAX_VARCHAR_LENGTH);
+    }
+
+    private boolean hasCompatibleRecordTypeField(CreateCollectionReq.CollectionSchema schema) {
+        return hasCompatibleVarCharField(schema, RECORD_TYPE_FIELD, 32);
     }
 
     private boolean hasCompatibleRelationMetadataFields(CreateCollectionReq.CollectionSchema schema) {
@@ -470,7 +504,7 @@ public final class MilvusSdkClientAdapter implements MilvusClientAdapter {
         var analyzerType = definition.analyzerType();
         var schema = CreateCollectionReq.CollectionSchema.builder()
             .enableDynamicField(false)
-            .fieldSchemaList(fieldSchemas(vectorDimensions, analyzerType, RELATION_NAMESPACE.equals(definition.namespace())))
+            .fieldSchemaList(fieldSchemas(vectorDimensions, analyzerType))
             .functionList(List.of(
                 CreateCollectionReq.Function.builder()
                     .name("bm25_full_text")
@@ -485,16 +519,30 @@ public final class MilvusSdkClientAdapter implements MilvusClientAdapter {
 
     private static List<CreateCollectionReq.FieldSchema> fieldSchemas(
         int vectorDimensions,
-        String analyzerType,
-        boolean relationCollection
+        String analyzerType
     ) {
         var fields = new ArrayList<CreateCollectionReq.FieldSchema>();
         fields.add(CreateCollectionReq.FieldSchema.builder()
-            .name(ID_FIELD)
+            .name(PK_ID_FIELD)
             .dataType(DataType.VarChar)
             .maxLength(MILVUS_RELATION_ID_MAX_LENGTH)
             .isPrimaryKey(true)
             .autoID(false)
+            .build());
+        fields.add(CreateCollectionReq.FieldSchema.builder()
+            .name(VECTOR_ID_FIELD)
+            .dataType(DataType.VarChar)
+            .maxLength(MAX_VARCHAR_LENGTH)
+            .build());
+        fields.add(CreateCollectionReq.FieldSchema.builder()
+            .name(WORKSPACE_ID_FIELD)
+            .dataType(DataType.VarChar)
+            .maxLength(MAX_VARCHAR_LENGTH)
+            .build());
+        fields.add(CreateCollectionReq.FieldSchema.builder()
+            .name(RECORD_TYPE_FIELD)
+            .dataType(DataType.VarChar)
+            .maxLength(32)
             .build());
         fields.add(CreateCollectionReq.FieldSchema.builder()
             .name(DENSE_VECTOR_FIELD)
@@ -518,23 +566,21 @@ public final class MilvusSdkClientAdapter implements MilvusClientAdapter {
             .name(SPARSE_VECTOR_FIELD)
             .dataType(DataType.SparseFloatVector)
             .build());
-        if (relationCollection) {
-            fields.add(CreateCollectionReq.FieldSchema.builder()
-                .name(SRC_ID_FIELD)
-                .dataType(DataType.VarChar)
-                .maxLength(MILVUS_RELATION_ENDPOINT_MAX_LENGTH)
-                .build());
-            fields.add(CreateCollectionReq.FieldSchema.builder()
-                .name(TGT_ID_FIELD)
-                .dataType(DataType.VarChar)
-                .maxLength(MILVUS_RELATION_ENDPOINT_MAX_LENGTH)
-                .build());
-            fields.add(CreateCollectionReq.FieldSchema.builder()
-                .name(FILE_PATH_FIELD)
-                .dataType(DataType.VarChar)
-                .maxLength(MILVUS_RELATION_FILE_PATH_MAX_LENGTH)
-                .build());
-        }
+        fields.add(CreateCollectionReq.FieldSchema.builder()
+            .name(SRC_ID_FIELD)
+            .dataType(DataType.VarChar)
+            .maxLength(MILVUS_RELATION_ENDPOINT_MAX_LENGTH)
+            .build());
+        fields.add(CreateCollectionReq.FieldSchema.builder()
+            .name(TGT_ID_FIELD)
+            .dataType(DataType.VarChar)
+            .maxLength(MILVUS_RELATION_ENDPOINT_MAX_LENGTH)
+            .build());
+        fields.add(CreateCollectionReq.FieldSchema.builder()
+            .name(FILE_PATH_FIELD)
+            .dataType(DataType.VarChar)
+            .maxLength(MILVUS_RELATION_FILE_PATH_MAX_LENGTH)
+            .build());
         return List.copyOf(fields);
     }
 
@@ -588,17 +634,18 @@ public final class MilvusSdkClientAdapter implements MilvusClientAdapter {
         return builder.build();
     }
 
-    private static JsonObject toJsonRow(StoredVectorRow row, boolean relationCollection) {
+    private static JsonObject toJsonRow(StoredVectorRow row) {
         var json = new JsonObject();
-        json.addProperty(ID_FIELD, row.id());
+        json.addProperty(PK_ID_FIELD, row.pkId());
+        json.addProperty(VECTOR_ID_FIELD, row.vectorId());
+        json.addProperty(WORKSPACE_ID_FIELD, row.workspaceId());
+        json.addProperty(RECORD_TYPE_FIELD, row.recordType());
         json.add(DENSE_VECTOR_FIELD, toJsonArray(row.denseVector()));
         json.addProperty(SEARCHABLE_TEXT_FIELD, row.searchableText());
         json.addProperty(FULL_TEXT_FIELD, row.fullText());
-        if (relationCollection) {
-            json.addProperty(SRC_ID_FIELD, row.srcId());
-            json.addProperty(TGT_ID_FIELD, row.tgtId());
-            json.addProperty(FILE_PATH_FIELD, row.filePath());
-        }
+        json.addProperty(SRC_ID_FIELD, row.srcId());
+        json.addProperty(TGT_ID_FIELD, row.tgtId());
+        json.addProperty(FILE_PATH_FIELD, row.filePath());
         return json;
     }
 
@@ -639,7 +686,10 @@ public final class MilvusSdkClientAdapter implements MilvusClientAdapter {
         }
         var matches = new ArrayList<VectorStore.VectorMatch>();
         for (var result : groups.get(0)) {
-            var id = result.getId() != null ? result.getId().toString() : result.getPrimaryKey();
+            var entity = result.getEntity();
+            var id = entity != null && entity.containsKey(VECTOR_ID_FIELD)
+                ? Objects.toString(entity.get(VECTOR_ID_FIELD))
+                : result.getId() != null ? result.getId().toString() : result.getPrimaryKey();
             matches.add(new VectorStore.VectorMatch(id, result.getScore()));
         }
         return List.copyOf(matches);

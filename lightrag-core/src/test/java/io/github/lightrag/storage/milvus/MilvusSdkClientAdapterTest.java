@@ -7,13 +7,19 @@ import static org.assertj.core.api.Assertions.assertThat;
 
 class MilvusSdkClientAdapterTest {
     @Test
-    void relationCollectionSchemaMatchesUpstreamLengths() {
+    void sharedCollectionSchemaContainsWorkspaceTypeAndRelationMetadataFields() {
         var schema = MilvusSdkClientAdapter.collectionSchema(
-            new MilvusClientAdapter.CollectionDefinition("rag_default_relations", "relations", 3, "chinese")
+            new MilvusClientAdapter.CollectionDefinition("rag_shared", "relations", 3, "chinese")
         );
 
-        assertThat(schema.getField("id").getMaxLength())
+        assertThat(schema.getField("pk_id").getMaxLength())
             .isEqualTo(MilvusSdkClientAdapter.MILVUS_RELATION_ID_MAX_LENGTH);
+        assertThat(schema.getField("vector_id").getMaxLength())
+            .isEqualTo(65_535);
+        assertThat(schema.getField("workspace_id").getMaxLength())
+            .isEqualTo(65_535);
+        assertThat(schema.getField("record_type").getMaxLength())
+            .isEqualTo(32);
         assertThat(schema.getField("src_id").getMaxLength())
             .isEqualTo(MilvusSdkClientAdapter.MILVUS_RELATION_ENDPOINT_MAX_LENGTH);
         assertThat(schema.getField("tgt_id").getMaxLength())
@@ -23,16 +29,9 @@ class MilvusSdkClientAdapterTest {
     }
 
     @Test
-    void chunkCollectionSchemaKeepsBaseHybridFieldsOnly() {
-        var schema = MilvusSdkClientAdapter.collectionSchema(
-            new MilvusClientAdapter.CollectionDefinition("rag_default_chunks", "chunks", 3, "chinese")
-        );
-
-        assertThat(schema.getField("id").getMaxLength())
-            .isEqualTo(MilvusSdkClientAdapter.MILVUS_RELATION_ID_MAX_LENGTH);
-        assertThat(schema.getField("src_id")).isNull();
-        assertThat(schema.getField("tgt_id")).isNull();
-        assertThat(schema.getField("file_path")).isNull();
+    void resolvesSharedCollectionNameFromPrefix() {
+        assertThat(testConfig().sharedCollectionName())
+            .isEqualTo("rag");
     }
 
     @Test

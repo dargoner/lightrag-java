@@ -11,6 +11,10 @@ public interface MilvusClientAdapter extends AutoCloseable {
 
     List<VectorStore.VectorRecord> list(String collectionName);
 
+    default List<VectorStore.VectorRecord> list(ListRequest request) {
+        throw new UnsupportedOperationException("list with filter is not implemented");
+    }
+
     List<VectorStore.VectorMatch> semanticSearch(SemanticSearchRequest request);
 
     List<VectorStore.VectorMatch> keywordSearch(KeywordSearchRequest request);
@@ -19,6 +23,10 @@ public interface MilvusClientAdapter extends AutoCloseable {
 
     default void deleteAll(String collectionName) {
         throw new UnsupportedOperationException("deleteAll is not implemented");
+    }
+
+    default void deleteAll(DeleteRequest request) {
+        throw new UnsupportedOperationException("deleteAll with filter is not implemented");
     }
 
     default void flush(List<String> collectionNames) {
@@ -31,6 +39,10 @@ public interface MilvusClientAdapter extends AutoCloseable {
     }
 
     record StoredVectorRow(
+        String pkId,
+        String vectorId,
+        String workspaceId,
+        String recordType,
         String id,
         List<Double> denseVector,
         String searchableText,
@@ -41,20 +53,24 @@ public interface MilvusClientAdapter extends AutoCloseable {
         String filePath
     ) {
         public StoredVectorRow(
+            String pkId,
+            String vectorId,
+            String workspaceId,
+            String recordType,
             String id,
             List<Double> denseVector,
             String searchableText,
             List<String> keywords,
             String fullText
         ) {
-            this(id, denseVector, searchableText, keywords, fullText, "", "", "");
+            this(pkId, vectorId, workspaceId, recordType, id, denseVector, searchableText, keywords, fullText, "", "", "");
         }
     }
 
-    record SemanticSearchRequest(String collectionName, List<Double> queryVector, int topK) {
+    record SemanticSearchRequest(String collectionName, List<Double> queryVector, int topK, String filter) {
     }
 
-    record KeywordSearchRequest(String collectionName, String queryText, int topK) {
+    record KeywordSearchRequest(String collectionName, String queryText, int topK, String filter) {
     }
 
     record HybridSearchRequest(
@@ -62,10 +78,17 @@ public interface MilvusClientAdapter extends AutoCloseable {
         List<Double> queryVector,
         String queryText,
         int topK,
+        String filter,
         HybridRankerType rankerType,
         List<Float> weights,
         int rrfK
     ) {
+    }
+
+    record ListRequest(String collectionName, String filter) {
+    }
+
+    record DeleteRequest(String collectionName, String filter) {
     }
 
     enum HybridRankerType {

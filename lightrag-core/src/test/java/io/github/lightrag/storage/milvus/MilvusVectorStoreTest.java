@@ -40,18 +40,20 @@ class MilvusVectorStoreTest {
         );
 
         assertThat(adapter.ensureCollectionRequests).hasSize(1);
-        assertThat(adapter.ensureCollectionRequests.get(0).collectionName()).isEqualTo("rag_alpha_chunks");
+        assertThat(adapter.ensureCollectionRequests.get(0).collectionName()).isEqualTo("rag");
         assertThat(adapter.ensureCollectionRequests.get(0).vectorDimensions()).isEqualTo(3);
         assertThat(adapter.ensureCollectionRequests.get(0).analyzerType()).isEqualTo("chinese");
-        assertThat(adapter.upsertedRows.get("rag_alpha_chunks")).containsExactly(
-            new MilvusClientAdapter.StoredVectorRow(
-                "chunk-1",
-                List.of(1.0d, 0.0d, 0.0d),
-                "semantic body",
-                List.of("java", "sdk"),
-                "semantic body\njava sdk"
-            )
-        );
+        assertThat(adapter.upsertedRows.get("rag")).singleElement().satisfies(row -> {
+            assertThat(row.pkId()).startsWith("pk-");
+            assertThat(row.vectorId()).isEqualTo("chunk-1");
+            assertThat(row.workspaceId()).isEqualTo("alpha");
+            assertThat(row.recordType()).isEqualTo("chunks");
+            assertThat(row.id()).isEqualTo("chunk-1");
+            assertThat(row.denseVector()).containsExactly(1.0d, 0.0d, 0.0d);
+            assertThat(row.searchableText()).isEqualTo("semantic body");
+            assertThat(row.keywords()).containsExactly("java", "sdk");
+            assertThat(row.fullText()).isEqualTo("semantic body\njava sdk");
+        });
     }
 
     @Test
@@ -73,7 +75,12 @@ class MilvusVectorStoreTest {
 
         assertThat(matches).containsExactly(new VectorStore.VectorMatch("chunk-2", 0.91d));
         assertThat(adapter.lastSemanticRequest).isEqualTo(
-            new MilvusClientAdapter.SemanticSearchRequest("rag_alpha_chunks", List.of(0.3d, 0.2d, 0.1d), 5)
+            new MilvusClientAdapter.SemanticSearchRequest(
+                "rag",
+                List.of(0.3d, 0.2d, 0.1d),
+                5,
+                namespaceFilter("alpha", "chunks")
+            )
         );
     }
 
@@ -96,7 +103,12 @@ class MilvusVectorStoreTest {
 
         assertThat(matches).containsExactly(new VectorStore.VectorMatch("chunk-3", 8.4d));
         assertThat(adapter.lastKeywordRequest).isEqualTo(
-            new MilvusClientAdapter.KeywordSearchRequest("rag_alpha_chunks", "semantic query java sdk", 4)
+            new MilvusClientAdapter.KeywordSearchRequest(
+                "rag",
+                "semantic query java sdk",
+                4,
+                namespaceFilter("alpha", "chunks")
+            )
         );
     }
 
@@ -120,10 +132,11 @@ class MilvusVectorStoreTest {
         assertThat(matches).containsExactly(new VectorStore.VectorMatch("chunk-4", 0.77d));
         assertThat(adapter.lastHybridRequest).isEqualTo(
             new MilvusClientAdapter.HybridSearchRequest(
-                "rag_alpha_chunks",
+                "rag",
                 List.of(0.9d, 0.1d, 0.0d),
                 "hybrid query milvus bm25",
                 6,
+                namespaceFilter("alpha", "chunks"),
                 MilvusClientAdapter.HybridRankerType.RRF,
                 List.of(),
                 60
@@ -166,10 +179,11 @@ class MilvusVectorStoreTest {
         assertThat(matches).containsExactly(new VectorStore.VectorMatch("chunk-5", 0.66d));
         assertThat(adapter.lastHybridRequest).isEqualTo(
             new MilvusClientAdapter.HybridSearchRequest(
-                "rag_alpha_chunks",
+                "rag",
                 List.of(0.8d, 0.1d, 0.1d),
                 "weighted query milvus",
                 3,
+                namespaceFilter("alpha", "chunks"),
                 MilvusClientAdapter.HybridRankerType.WEIGHTED,
                 List.of(0.5f, 0.5f),
                 99
@@ -193,6 +207,33 @@ class MilvusVectorStoreTest {
             new VectorStore.VectorRecord("entity-1", List.of(1.0d, 0.0d, 0.0d)),
             new VectorStore.VectorRecord("entity-2", List.of(0.0d, 1.0d, 0.0d))
         );
+        assertThat(adapter.lastListRequest).isEqualTo(
+            new MilvusClientAdapter.ListRequest("rag", namespaceFilter("alpha", "entities"))
+        );
+    }
+
+    @Test
+    void deleteNamespaceOnlyClearsOneLogicalSlice() {
+        var adapter = new FakeMilvusClientAdapter();
+        var store = new MilvusVectorStore(adapter, testConfig(), "alpha");
+        store.saveAll(
+            "chunks",
+            List.of(new VectorStore.VectorRecord("chunk-1", List.of(1.0d, 0.0d, 0.0d)))
+        );
+        store.saveAll(
+            "entities",
+            List.of(new VectorStore.VectorRecord("entity-1", List.of(0.0d, 1.0d, 0.0d)))
+        );
+
+        store.deleteNamespace("chunks");
+
+        assertThat(adapter.lastDeleteRequest).isEqualTo(
+            new MilvusClientAdapter.DeleteRequest("rag", namespaceFilter("alpha", "chunks"))
+        );
+        assertThat(store.list("chunks")).isEmpty();
+        assertThat(store.list("entities")).containsExactly(
+            new VectorStore.VectorRecord("entity-1", List.of(0.0d, 1.0d, 0.0d))
+        );
     }
 
     @Test
@@ -202,7 +243,7 @@ class MilvusVectorStoreTest {
 
         store.flushNamespaces(List.of("chunks", "chunks", "entities"));
 
-        assertThat(adapter.flushedCollectionNames).containsExactly("rag_alpha_chunks", "rag_alpha_entities");
+        assertThat(adapter.flushedCollectionNames).containsExactly("rag");
     }
 
     @Test
@@ -245,12 +286,18 @@ class MilvusVectorStoreTest {
         );
     }
 
+    private static String namespaceFilter(String workspaceId, String namespace) {
+        return "workspace_id == \"" + workspaceId + "\" && record_type == \"" + namespace + "\"";
+    }
+
     private static final class FakeMilvusClientAdapter implements MilvusClientAdapter {
         private final List<MilvusClientAdapter.CollectionDefinition> ensureCollectionRequests = new ArrayList<>();
         private final Map<String, List<MilvusClientAdapter.StoredVectorRow>> upsertedRows = new LinkedHashMap<>();
         private MilvusClientAdapter.SemanticSearchRequest lastSemanticRequest;
         private MilvusClientAdapter.KeywordSearchRequest lastKeywordRequest;
         private MilvusClientAdapter.HybridSearchRequest lastHybridRequest;
+        private MilvusClientAdapter.ListRequest lastListRequest;
+        private MilvusClientAdapter.DeleteRequest lastDeleteRequest;
         private final List<String> flushedCollectionNames = new ArrayList<>();
         private List<VectorStore.VectorMatch> semanticResults = List.of();
         private List<VectorStore.VectorMatch> keywordResults = List.of();
@@ -269,9 +316,16 @@ class MilvusVectorStoreTest {
 
         @Override
         public List<VectorStore.VectorRecord> list(String collectionName) {
-            return upsertedRows.getOrDefault(collectionName, List.of()).stream()
+            return list(new MilvusClientAdapter.ListRequest(collectionName, ""));
+        }
+
+        @Override
+        public List<VectorStore.VectorRecord> list(MilvusClientAdapter.ListRequest request) {
+            lastListRequest = request;
+            return upsertedRows.getOrDefault(request.collectionName(), List.of()).stream()
+                .filter(row -> matchesFilter(row, request.filter()))
                 .sorted(java.util.Comparator.comparing(MilvusClientAdapter.StoredVectorRow::id))
-                .map(row -> new VectorStore.VectorRecord(row.id(), row.denseVector()))
+                .map(row -> new VectorStore.VectorRecord(row.vectorId(), row.denseVector()))
                 .toList();
         }
 
@@ -294,12 +348,46 @@ class MilvusVectorStoreTest {
         }
 
         @Override
+        public void deleteAll(MilvusClientAdapter.DeleteRequest request) {
+            lastDeleteRequest = request;
+            upsertedRows.computeIfPresent(request.collectionName(), (collectionName, rows) -> rows.stream()
+                .filter(row -> !matchesFilter(row, request.filter()))
+                .toList());
+        }
+
+        @Override
         public void flush(List<String> collectionNames) {
             flushedCollectionNames.addAll(collectionNames);
         }
 
         @Override
         public void close() {
+        }
+
+        private static boolean matchesFilter(MilvusClientAdapter.StoredVectorRow row, String filter) {
+            if (filter == null || filter.isBlank()) {
+                return true;
+            }
+            var clauses = filter.split("&&");
+            for (var clause : clauses) {
+                var trimmed = clause.trim();
+                if (trimmed.startsWith("workspace_id == \"")) {
+                    if (!row.workspaceId().equals(extractQuotedValue(trimmed))) {
+                        return false;
+                    }
+                } else if (trimmed.startsWith("record_type == \"")) {
+                    if (!row.recordType().equals(extractQuotedValue(trimmed))) {
+                        return false;
+                    }
+                }
+            }
+            return true;
+        }
+
+        private static String extractQuotedValue(String clause) {
+            var firstQuote = clause.indexOf('"');
+            var lastQuote = clause.lastIndexOf('"');
+            return clause.substring(firstQuote + 1, lastQuote);
         }
     }
 }
