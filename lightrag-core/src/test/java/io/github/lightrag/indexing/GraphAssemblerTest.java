@@ -23,7 +23,7 @@ class GraphAssemblerTest {
         ));
 
         assertThat(graph.entities()).containsExactly(
-            new Entity("entity:alice", "Alice", "person", "Researcher", List.of(), List.of("chunk-1", "chunk-2"))
+            new Entity("alice", "Alice", "person", "Researcher", List.of(), List.of("chunk-1", "chunk-2"))
         );
         assertThat(graph.relations()).isEmpty();
     }
@@ -38,7 +38,7 @@ class GraphAssemblerTest {
         ));
 
         assertThat(graph.entities()).containsExactly(
-            new Entity("entity:robert", "Robert", "person", "Lead", List.of("Bob", "Bobby"), List.of("chunk-1", "chunk-2"))
+            new Entity("robert", "Robert", "person", "Lead", List.of("Bob", "Bobby"), List.of("chunk-1", "chunk-2"))
         );
     }
 
@@ -66,14 +66,14 @@ class GraphAssemblerTest {
         ));
 
         assertThat(graph.entities()).containsExactly(
-            new Entity("entity:alice", "Alice", "person", "Researcher", List.of(), List.of("chunk-1", "chunk-2")),
-            new Entity("entity:bob", "Bob", "person", "Engineer", List.of("Robert"), List.of("chunk-1", "chunk-2"))
+            new Entity("alice", "Alice", "person", "Researcher", List.of(), List.of("chunk-1", "chunk-2")),
+            new Entity("bob", "Bob", "person", "Engineer", List.of("Robert"), List.of("chunk-1", "chunk-2"))
         );
         assertThat(graph.relations()).containsExactly(
             new Relation(
-                relationId("entity:alice", "entity:bob"),
-                "entity:alice",
-                "entity:bob",
+                relationId("alice", "bob"),
+                "alice",
+                "bob",
                 "works_with",
                 "collaboration",
                 1.0d,
@@ -104,9 +104,9 @@ class GraphAssemblerTest {
 
         assertThat(graph.relations()).containsExactly(
             new Relation(
-                relationId("entity:alice", "entity:bob"),
-                "entity:alice",
-                "entity:bob",
+                relationId("alice", "bob"),
+                "alice",
+                "bob",
                 "works_with",
                 "first",
                 0.9d,
@@ -137,9 +137,9 @@ class GraphAssemblerTest {
 
         assertThat(graph.relations()).containsExactly(
             new Relation(
-                relationId("entity:alice", "entity:bob"),
-                "entity:alice",
-                "entity:bob",
+                relationId("alice", "bob"),
+                "alice",
+                "bob",
                 "related_to",
                 "forward",
                 0.8d,
@@ -170,9 +170,9 @@ class GraphAssemblerTest {
 
         assertThat(graph.relations()).containsExactly(
             new Relation(
-                relationId("entity:alice", "entity:bob"),
-                "entity:alice",
-                "entity:bob",
+                relationId("alice", "bob"),
+                "alice",
+                "bob",
                 "reports_to",
                 "forward",
                 0.8d,

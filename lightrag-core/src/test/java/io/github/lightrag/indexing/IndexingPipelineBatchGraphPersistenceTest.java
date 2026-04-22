@@ -57,7 +57,7 @@ class IndexingPipelineBatchGraphPersistenceTest {
     }
 
     private static String entityKey(String name) {
-        return "entity:" + name.strip().toLowerCase(Locale.ROOT);
+        return "" + name.strip().toLowerCase(Locale.ROOT);
     }
 
     private static String relationKey(String source, String type, String target) {

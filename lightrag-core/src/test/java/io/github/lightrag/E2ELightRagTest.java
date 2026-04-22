@@ -61,19 +61,19 @@ class E2ELightRagTest {
         assertThat(storage.chunkStore().listByDocument("doc-1")).hasSize(1);
         assertThat(storage.graphStore().allEntities())
             .extracting(entity -> entity.id())
-            .containsExactly("entity:alice", "entity:bob");
+            .containsExactly("alice", "bob");
         assertThat(storage.graphStore().allRelations())
             .extracting(relation -> relation.id())
-            .containsExactly(relationId("entity:alice", "entity:bob"));
+            .containsExactly(relationId("alice", "bob"));
         assertThat(storage.vectorStore().list("chunks"))
             .extracting(VectorStore.VectorRecord::id)
             .containsExactly("doc-1:0");
         assertThat(storage.vectorStore().list("entities"))
             .extracting(VectorStore.VectorRecord::id)
-            .containsExactly("entity:alice", "entity:bob");
+            .containsExactly("alice", "bob");
         assertThat(storage.vectorStore().list("relations"))
             .extracting(VectorStore.VectorRecord::id)
-            .containsExactly(relationId("entity:alice", "entity:bob"));
+            .containsExactly(relationId("alice", "bob"));
     }
 
     @Test
@@ -130,7 +130,7 @@ class E2ELightRagTest {
         snapshotStore.save(snapshotPath, new SnapshotStore.Snapshot(
             List.of(new DocumentStore.DocumentRecord("doc-seed", "Seed", "Body", Map.of())),
             List.of(new ChunkStore.ChunkRecord("doc-seed:0", "doc-seed", "Body", 4, 0, Map.of())),
-            List.of(new GraphStore.EntityRecord("entity:seed", "Seed", "person", "Seed entity", List.of(), List.of("doc-seed:0"))),
+            List.of(new GraphStore.EntityRecord("seed", "Seed", "person", "Seed entity", List.of(), List.of("doc-seed:0"))),
             List.of(),
             Map.of("chunks", List.of(new VectorStore.VectorRecord("doc-seed:0", List.of(1.0d, 0.0d))))
         ));
@@ -146,7 +146,7 @@ class E2ELightRagTest {
         assertThat(rag).isNotNull();
         assertThat(storage.documentStore().load("doc-seed")).isPresent();
         assertThat(storage.chunkStore().load("doc-seed:0")).isPresent();
-        assertThat(storage.graphStore().loadEntity("entity:seed")).isPresent();
+        assertThat(storage.graphStore().loadEntity("seed")).isPresent();
         assertThat(storage.vectorStore().list("chunks"))
             .extracting(VectorStore.VectorRecord::id)
             .containsExactly("doc-seed:0");
@@ -184,7 +184,7 @@ class E2ELightRagTest {
               ],
               "entities": [
                 {
-                  "id": "entity:seed",
+                  "id": "seed",
                   "name": "Seed",
                   "type": "person",
                   "description": "Seed entity",
@@ -215,7 +215,7 @@ class E2ELightRagTest {
         assertThat(rag).isNotNull();
         assertThat(storage.documentStore().load("doc-seed")).isPresent();
         assertThat(storage.chunkStore().load("doc-seed:0")).isPresent();
-        assertThat(storage.graphStore().loadEntity("entity:seed")).isPresent();
+        assertThat(storage.graphStore().loadEntity("seed")).isPresent();
         assertThat(rag.listDocumentStatuses(WORKSPACE)).isEmpty();
     }
 
@@ -568,7 +568,7 @@ class E2ELightRagTest {
             .build());
 
         assertThat(entity).isEqualTo(new GraphEntity(
-            "entity:alice",
+            "alice",
             "Alice",
             "person",
             "Researcher",
@@ -576,9 +576,9 @@ class E2ELightRagTest {
             List.of()
         ));
 
-        assertThat(storage.graphStore().loadEntity("entity:alice"))
+        assertThat(storage.graphStore().loadEntity("alice"))
             .contains(new GraphStore.EntityRecord(
-                "entity:alice",
+                "alice",
                 "Alice",
                 "person",
                 "Researcher",
@@ -591,7 +591,7 @@ class E2ELightRagTest {
         assertThat(storage.vectorStore().list("chunks")).isEmpty();
         assertThat(storage.vectorStore().list("entities"))
             .extracting(VectorStore.VectorRecord::id)
-            .containsExactly("entity:alice");
+            .containsExactly("alice");
         assertThat(storage.vectorStore().list("relations")).isEmpty();
     }
 
@@ -625,20 +625,20 @@ class E2ELightRagTest {
             .build());
 
         assertThat(relation).isEqualTo(new GraphRelation(
-            relationId("entity:alice", "entity:bob"),
-            "entity:alice",
-            "entity:bob",
+            relationId("alice", "bob"),
+            "alice",
+            "bob",
             "works_with",
             "collaboration",
             0.8d,
             List.of()
         ));
 
-        assertThat(storage.graphStore().loadRelation(relationId("entity:alice", "entity:bob")))
+        assertThat(storage.graphStore().loadRelation(relationId("alice", "bob")))
             .contains(new GraphStore.RelationRecord(
-                relationId("entity:alice", "entity:bob"),
-                "entity:alice",
-                "entity:bob",
+                relationId("alice", "bob"),
+                "alice",
+                "bob",
                 "works_with",
                 "collaboration",
                 0.8d,
@@ -646,10 +646,10 @@ class E2ELightRagTest {
             ));
         assertThat(storage.vectorStore().list("entities"))
             .extracting(VectorStore.VectorRecord::id)
-            .containsExactly("entity:alice", "entity:bob");
+            .containsExactly("alice", "bob");
         assertThat(storage.vectorStore().list("relations"))
             .extracting(VectorStore.VectorRecord::id)
-            .containsExactly(relationId("entity:alice", "entity:bob"));
+            .containsExactly(relationId("alice", "bob"));
     }
 
     @Test
@@ -707,8 +707,8 @@ class E2ELightRagTest {
             .build());
 
         assertThat(storage.restoreCalls()).isZero();
-        assertThat(storage.graphStore().loadEntity("entity:alice")).isPresent();
-        assertThat(storage.graphStore().loadRelation(relationId("entity:alice", "entity:bob"))).isPresent();
+        assertThat(storage.graphStore().loadEntity("alice")).isPresent();
+        assertThat(storage.graphStore().loadRelation(relationId("alice", "bob"))).isPresent();
     }
 
     @Test
@@ -745,29 +745,29 @@ class E2ELightRagTest {
             .build());
 
         assertThat(entity).isEqualTo(new GraphEntity(
-            "entity:robert",
+            "robert",
             "Robert",
             "person",
             "Principal investigator",
             List.of("Bob"),
             List.of()
         ));
-        assertThat(storage.graphStore().loadEntity("entity:bob")).isEmpty();
-        assertThat(storage.graphStore().loadEntity("entity:robert"))
+        assertThat(storage.graphStore().loadEntity("bob")).isEmpty();
+        assertThat(storage.graphStore().loadEntity("robert"))
             .contains(new GraphStore.EntityRecord(
-                "entity:robert",
+                "robert",
                 "Robert",
                 "person",
                 "Principal investigator",
                 List.of("Bob"),
                 List.of()
             ));
-        assertThat(storage.graphStore().loadRelation(relationId("entity:alice", "entity:bob"))).isEmpty();
-        assertThat(storage.graphStore().loadRelation(relationId("entity:alice", "entity:robert")))
+        assertThat(storage.graphStore().loadRelation(relationId("alice", "bob"))).isEmpty();
+        assertThat(storage.graphStore().loadRelation(relationId("alice", "robert")))
             .contains(new GraphStore.RelationRecord(
-                relationId("entity:alice", "entity:robert"),
-                "entity:alice",
-                "entity:robert",
+                relationId("alice", "robert"),
+                "alice",
+                "robert",
                 "works_with",
                 "collaboration",
                 0.8d,
@@ -775,10 +775,10 @@ class E2ELightRagTest {
             ));
         assertThat(storage.vectorStore().list("entities"))
             .extracting(VectorStore.VectorRecord::id)
-            .containsExactly("entity:alice", "entity:robert");
+            .containsExactly("alice", "robert");
         assertThat(storage.vectorStore().list("relations"))
             .extracting(VectorStore.VectorRecord::id)
-            .containsExactly(relationId("entity:alice", "entity:robert"));
+            .containsExactly(relationId("alice", "robert"));
     }
 
     @Test
@@ -821,11 +821,11 @@ class E2ELightRagTest {
             .weight(0.9d)
             .build());
 
-        var relationId = RelationCanonicalizer.relationId("entity:alice", "entity:bob");
+        var relationId = RelationCanonicalizer.relationId("alice", "bob");
         assertThat(relation).isEqualTo(new GraphRelation(
             relationId,
-            "entity:alice",
-            "entity:bob",
+            "alice",
+            "bob",
             "reports_to",
             "reporting line",
             0.9d,
@@ -834,8 +834,8 @@ class E2ELightRagTest {
         assertThat(storage.graphStore().loadRelation(relationId))
             .contains(new GraphStore.RelationRecord(
                 relationId,
-                "entity:alice",
-                "entity:bob",
+                "alice",
+                "bob",
                 "reports_to",
                 "reporting line",
                 0.9d,
@@ -870,16 +870,16 @@ class E2ELightRagTest {
             .build());
 
         assertThat(entity).isEqualTo(new GraphEntity(
-            "entity:alice",
+            "alice",
             "Alice",
             "person",
             "Principal investigator",
             List.of("Lead Alice"),
             List.of()
         ));
-        assertThat(storage.graphStore().loadEntity("entity:alice"))
+        assertThat(storage.graphStore().loadEntity("alice"))
             .contains(new GraphStore.EntityRecord(
-                "entity:alice",
+                "alice",
                 "Alice",
                 "person",
                 "Principal investigator",
@@ -889,7 +889,7 @@ class E2ELightRagTest {
         assertThat(storage.vectorStore().list("entities")).isNotEqualTo(before);
         assertThat(storage.vectorStore().list("entities"))
             .extracting(VectorStore.VectorRecord::id)
-            .containsExactly("entity:alice");
+            .containsExactly("alice");
     }
 
     @Test
@@ -996,7 +996,7 @@ class E2ELightRagTest {
 
         var storage = InMemoryStorageProvider.create();
         storage.graphStore().saveEntity(new GraphStore.EntityRecord(
-            "entity:alice",
+            "alice",
             "Alice",
             "person",
             "Researcher",
@@ -1004,7 +1004,7 @@ class E2ELightRagTest {
             List.of()
         ));
         storage.graphStore().saveEntity(new GraphStore.EntityRecord(
-            "entity:alicia",
+            "alicia",
             "Alicia",
             "person",
             "Engineer",
@@ -1012,7 +1012,7 @@ class E2ELightRagTest {
             List.of()
         ));
         storage.graphStore().saveEntity(new GraphStore.EntityRecord(
-            "entity:bob",
+            "bob",
             "Bob",
             "person",
             "Manager",
@@ -1058,9 +1058,9 @@ class E2ELightRagTest {
             .build());
 
         assertThat(renamed.aliases()).containsExactly("Bob");
-        assertThat(storage.graphStore().loadEntity("entity:robert"))
+        assertThat(storage.graphStore().loadEntity("robert"))
             .contains(new GraphStore.EntityRecord(
-                "entity:robert",
+                "robert",
                 "Robert",
                 "person",
                 "Engineer",
@@ -1090,16 +1090,16 @@ class E2ELightRagTest {
             .build());
 
         assertThat(renamed).isEqualTo(new GraphEntity(
-            "entity:bob",
+            "bob",
             "BOB",
             "person",
             "Engineer",
             List.of(),
             List.of()
         ));
-        assertThat(storage.graphStore().loadEntity("entity:bob"))
+        assertThat(storage.graphStore().loadEntity("bob"))
             .contains(new GraphStore.EntityRecord(
-                "entity:bob",
+                "bob",
                 "BOB",
                 "person",
                 "Engineer",
@@ -1112,7 +1112,7 @@ class E2ELightRagTest {
     void renameRejectsRelationIdCollisionDuringMigration() {
         var storage = InMemoryStorageProvider.create();
         storage.graphStore().saveEntity(new GraphStore.EntityRecord(
-            "entity:alice",
+            "alice",
             "Alice",
             "person",
             "Researcher",
@@ -1120,7 +1120,7 @@ class E2ELightRagTest {
             List.of()
         ));
         storage.graphStore().saveEntity(new GraphStore.EntityRecord(
-            "entity:bob",
+            "bob",
             "Bob",
             "person",
             "Engineer",
@@ -1128,18 +1128,18 @@ class E2ELightRagTest {
             List.of()
         ));
         storage.graphStore().saveRelation(new GraphStore.RelationRecord(
-            relationId("entity:alice", "entity:bob"),
-            "entity:alice",
-            "entity:bob",
+            relationId("alice", "bob"),
+            "alice",
+            "bob",
             "works_with",
             "Current",
             0.8d,
             List.of()
         ));
         storage.graphStore().saveRelation(new GraphStore.RelationRecord(
-            relationId("entity:alice", "entity:robert"),
-            "entity:alice",
-            "entity:robert",
+            relationId("alice", "robert"),
+            "alice",
+            "robert",
             "works_with",
             "Dangling",
             0.7d,
@@ -1211,33 +1211,33 @@ class E2ELightRagTest {
             .build());
 
         assertThat(merged).isEqualTo(new GraphEntity(
-            "entity:robert",
+            "robert",
             "Robert",
             "person",
             "Principal investigator\n\nEngineer",
             List.of("Rob", "Robert Jr", "Bob"),
             List.of()
         ));
-        assertThat(storage.graphStore().loadEntity("entity:bob")).isEmpty();
-        assertThat(storage.graphStore().loadEntity("entity:robert"))
+        assertThat(storage.graphStore().loadEntity("bob")).isEmpty();
+        assertThat(storage.graphStore().loadEntity("robert"))
             .contains(new GraphStore.EntityRecord(
-                "entity:robert",
+                "robert",
                 "Robert",
                 "person",
                 "Principal investigator\n\nEngineer",
                 List.of("Rob", "Robert Jr", "Bob"),
                 List.of()
             ));
-        assertThat(storage.graphStore().loadRelation(relationId("entity:alice", "entity:robert"))).isPresent();
-        assertThat(storage.graphStore().loadRelation(relationId("entity:robert", "entity:carol"))).isPresent();
+        assertThat(storage.graphStore().loadRelation(relationId("alice", "robert"))).isPresent();
+        assertThat(storage.graphStore().loadRelation(relationId("robert", "carol"))).isPresent();
         assertThat(storage.vectorStore().list("entities"))
             .extracting(VectorStore.VectorRecord::id)
-            .containsExactly("entity:alice", "entity:carol", "entity:robert");
+            .containsExactly("alice", "carol", "robert");
         assertThat(storage.vectorStore().list("relations"))
             .extracting(VectorStore.VectorRecord::id)
             .containsExactlyInAnyOrder(
-                relationId("entity:alice", "entity:robert"),
-                relationId("entity:robert", "entity:carol")
+                relationId("alice", "robert"),
+                relationId("robert", "carol")
             );
     }
 
@@ -1292,22 +1292,22 @@ class E2ELightRagTest {
             .targetEntityName("Robert")
             .build());
 
-        assertThat(merged.id()).isEqualTo("entity:robert");
+        assertThat(merged.id()).isEqualTo("robert");
         assertThat(storage.graphStore().allRelations())
             .containsExactly(
                 new GraphStore.RelationRecord(
-                    relationId("entity:alice", "entity:robert"),
-                    "entity:alice",
-                    "entity:robert",
+                    relationId("alice", "robert"),
+                    "alice",
+                    "robert",
                     "works_with",
-                    "with Bob\n\nwith Robert",
+                    "with Robert\n\nwith Bob",
                     0.9d,
                     List.of()
                 )
             );
         assertThat(storage.vectorStore().list("relations"))
             .extracting(VectorStore.VectorRecord::id)
-            .containsExactly(relationId("entity:alice", "entity:robert"));
+            .containsExactly(relationId("alice", "robert"));
     }
 
     @Test
@@ -1320,7 +1320,7 @@ class E2ELightRagTest {
             .build();
 
         storage.graphStore().saveEntity(new GraphStore.EntityRecord(
-            "entity:alice",
+            "alice",
             "Alice",
             "person",
             "Researcher",
@@ -1328,7 +1328,7 @@ class E2ELightRagTest {
             List.of()
         ));
         storage.graphStore().saveEntity(new GraphStore.EntityRecord(
-            "entity:alicia",
+            "alicia",
             "Alicia",
             "person",
             "Engineer",
@@ -1394,7 +1394,7 @@ class E2ELightRagTest {
             .build());
 
         assertThat(merged).isEqualTo(new GraphEntity(
-            "entity:robert",
+            "robert",
             "Robert",
             "leader",
             "Merged profile",
@@ -1445,13 +1445,13 @@ class E2ELightRagTest {
         var snapshot = storage.snapshotStore().load(snapshotPath);
         assertThat(snapshot.entities())
             .extracting(GraphStore.EntityRecord::id)
-            .containsExactly("entity:alice", "entity:robert");
+            .containsExactly("alice", "robert");
         assertThat(snapshot.relations())
             .extracting(GraphStore.RelationRecord::id)
-            .containsExactly(relationId("entity:alice", "entity:robert"));
+            .containsExactly(relationId("alice", "robert"));
         assertThat(snapshot.vectors().get("entities"))
             .extracting(VectorStore.VectorRecord::id)
-            .containsExactly("entity:alice", "entity:robert");
+            .containsExactly("alice", "robert");
     }
 
     @Test
@@ -1511,13 +1511,13 @@ class E2ELightRagTest {
 
                 assertThat(storage.graphStore().allEntities())
                     .extracting(GraphStore.EntityRecord::id)
-                    .containsExactly("entity:alice", "entity:robert");
+                    .containsExactly("alice", "robert");
                 assertThat(storage.graphStore().allRelations())
                     .extracting(GraphStore.RelationRecord::id)
-                    .containsExactly(relationId("entity:alice", "entity:robert"));
+                    .containsExactly(relationId("alice", "robert"));
                 assertThat(storage.vectorStore().list("entities"))
                     .extracting(VectorStore.VectorRecord::id)
-                    .containsExactly("entity:alice", "entity:robert");
+                    .containsExactly("alice", "robert");
             }
         }
     }
@@ -1587,13 +1587,13 @@ class E2ELightRagTest {
 
                 assertThat(storage.graphStore().allEntities())
                     .extracting(GraphStore.EntityRecord::id)
-                    .containsExactly("entity:alice", "entity:robert");
+                    .containsExactly("alice", "robert");
                 assertThat(storage.graphStore().allRelations())
                     .extracting(GraphStore.RelationRecord::id)
-                    .containsExactly(relationId("entity:alice", "entity:robert"));
+                    .containsExactly(relationId("alice", "robert"));
                 assertThat(storage.vectorStore().list("relations"))
                     .extracting(VectorStore.VectorRecord::id)
-                    .containsExactly(relationId("entity:alice", "entity:robert"));
+                    .containsExactly(relationId("alice", "robert"));
             }
         }
     }
@@ -1638,13 +1638,13 @@ class E2ELightRagTest {
         var snapshot = storage.snapshotStore().load(snapshotPath);
         assertThat(snapshot.entities())
             .extracting(GraphStore.EntityRecord::id)
-            .containsExactly("entity:alice", "entity:bob");
+            .containsExactly("alice", "bob");
         assertThat(snapshot.relations())
             .extracting(GraphStore.RelationRecord::id)
-            .containsExactly(relationId("entity:alice", "entity:bob"));
+            .containsExactly(relationId("alice", "bob"));
         assertThat(snapshot.vectors().get("relations"))
             .extracting(VectorStore.VectorRecord::id)
-            .containsExactly(relationId("entity:alice", "entity:bob"));
+            .containsExactly(relationId("alice", "bob"));
     }
 
     @Test
@@ -1702,16 +1702,16 @@ class E2ELightRagTest {
 
                 assertThat(storage.graphStore().allEntities())
                     .extracting(GraphStore.EntityRecord::id)
-                    .containsExactly("entity:alice", "entity:bob");
+                    .containsExactly("alice", "bob");
                 assertThat(storage.graphStore().allRelations())
                     .extracting(GraphStore.RelationRecord::id)
-                    .containsExactly(relationId("entity:alice", "entity:bob"));
+                    .containsExactly(relationId("alice", "bob"));
                 assertThat(storage.vectorStore().list("entities"))
                     .extracting(VectorStore.VectorRecord::id)
-                    .containsExactly("entity:alice", "entity:bob");
+                    .containsExactly("alice", "bob");
                 assertThat(storage.vectorStore().list("relations"))
                     .extracting(VectorStore.VectorRecord::id)
-                    .containsExactly(relationId("entity:alice", "entity:bob"));
+                    .containsExactly(relationId("alice", "bob"));
             }
         }
     }
@@ -1777,16 +1777,16 @@ class E2ELightRagTest {
 
                 assertThat(storage.graphStore().allEntities())
                     .extracting(GraphStore.EntityRecord::id)
-                    .containsExactly("entity:alice", "entity:robert");
+                    .containsExactly("alice", "robert");
                 assertThat(storage.graphStore().allRelations())
                     .extracting(GraphStore.RelationRecord::id)
-                    .containsExactly(relationId("entity:alice", "entity:robert"));
+                    .containsExactly(relationId("alice", "robert"));
                 assertThat(storage.vectorStore().list("entities"))
                     .extracting(VectorStore.VectorRecord::id)
-                    .containsExactly("entity:alice", "entity:robert");
+                    .containsExactly("alice", "robert");
                 assertThat(storage.vectorStore().list("relations"))
                     .extracting(VectorStore.VectorRecord::id)
-                    .containsExactly(relationId("entity:alice", "entity:robert"));
+                    .containsExactly(relationId("alice", "robert"));
             }
         }
     }
@@ -2430,15 +2430,15 @@ class E2ELightRagTest {
 
         assertThat(storage.documentStore().load("doc-1")).isPresent();
         assertThat(storage.chunkStore().listByDocument("doc-1")).hasSize(1);
-        assertThat(storage.graphStore().loadEntity("entity:alice")).isEmpty();
-        assertThat(storage.graphStore().loadEntity("entity:bob")).isPresent();
+        assertThat(storage.graphStore().loadEntity("alice")).isEmpty();
+        assertThat(storage.graphStore().loadEntity("bob")).isPresent();
         assertThat(storage.graphStore().allRelations()).isEmpty();
         assertThat(storage.vectorStore().list("chunks"))
             .extracting(VectorStore.VectorRecord::id)
             .containsExactly("doc-1:0");
         assertThat(storage.vectorStore().list("entities"))
             .extracting(VectorStore.VectorRecord::id)
-            .containsExactly("entity:bob");
+            .containsExactly("bob");
         assertThat(storage.vectorStore().list("relations")).isEmpty();
     }
 
@@ -2458,14 +2458,14 @@ class E2ELightRagTest {
         assertThat(storage.documentStore().load("doc-1")).isPresent();
         assertThat(storage.chunkStore().listByDocument("doc-1")).hasSize(1);
         assertThat(storage.graphStore().allRelations()).isEmpty();
-        assertThat(storage.graphStore().loadEntity("entity:alice")).isPresent();
-        assertThat(storage.graphStore().loadEntity("entity:bob")).isPresent();
+        assertThat(storage.graphStore().loadEntity("alice")).isPresent();
+        assertThat(storage.graphStore().loadEntity("bob")).isPresent();
         assertThat(storage.vectorStore().list("chunks"))
             .extracting(VectorStore.VectorRecord::id)
             .containsExactly("doc-1:0");
         assertThat(storage.vectorStore().list("entities"))
             .extracting(VectorStore.VectorRecord::id)
-            .containsExactly("entity:alice", "entity:bob");
+            .containsExactly("alice", "bob");
         assertThat(storage.vectorStore().list("relations")).isEmpty();
     }
 
@@ -2492,10 +2492,10 @@ class E2ELightRagTest {
             .containsExactly("doc-2");
         assertThat(storage.graphStore().allEntities())
             .extracting(GraphStore.EntityRecord::id)
-            .containsExactly("entity:bob", "entity:carol");
+            .containsExactly("bob", "carol");
         assertThat(storage.graphStore().allRelations())
             .extracting(GraphStore.RelationRecord::id)
-            .containsExactly(relationId("entity:bob", "entity:carol"));
+            .containsExactly(relationId("bob", "carol"));
     }
 
     @Test
@@ -2527,12 +2527,12 @@ class E2ELightRagTest {
             .containsExactly("doc-1", "doc-2");
         assertThat(storage.graphStore().allEntities())
             .extracting(GraphStore.EntityRecord::id)
-            .containsExactly("entity:alice", "entity:bob", "entity:carol");
+            .containsExactly("alice", "bob", "carol");
         assertThat(storage.graphStore().allRelations())
             .extracting(GraphStore.RelationRecord::id)
             .containsExactlyInAnyOrder(
-                relationId("entity:alice", "entity:bob"),
-                relationId("entity:bob", "entity:carol")
+                relationId("alice", "bob"),
+                relationId("bob", "carol")
             );
     }
 
@@ -2555,10 +2555,10 @@ class E2ELightRagTest {
             .containsExactly("doc-1");
         assertThat(storage.graphStore().allEntities())
             .extracting(GraphStore.EntityRecord::id)
-            .containsExactly("entity:alice", "entity:bob");
+            .containsExactly("alice", "bob");
         assertThat(storage.graphStore().allRelations())
             .extracting(GraphStore.RelationRecord::id)
-            .containsExactly(relationId("entity:alice", "entity:bob"));
+            .containsExactly(relationId("alice", "bob"));
     }
 
     @Test
@@ -2665,7 +2665,7 @@ class E2ELightRagTest {
             snapshotStore.save(snapshotPath, new SnapshotStore.Snapshot(
                 List.of(new DocumentStore.DocumentRecord("doc-seed", "Seed", "Body", Map.of())),
                 List.of(new ChunkStore.ChunkRecord("doc-seed:0", "doc-seed", "Body", 4, 0, Map.of())),
-                List.of(new GraphStore.EntityRecord("entity:seed", "Seed", "person", "Seed entity", List.of(), List.of("doc-seed:0"))),
+                List.of(new GraphStore.EntityRecord("seed", "Seed", "person", "Seed entity", List.of(), List.of("doc-seed:0"))),
                 List.of(),
                 Map.of("chunks", List.of(new VectorStore.VectorRecord("doc-seed:0", List.of(1.0d, 0.0d))))
             ));
@@ -2693,7 +2693,7 @@ class E2ELightRagTest {
                 assertThat(rag).isNotNull();
                 assertThat(storage.documentStore().load("doc-seed")).isPresent();
                 assertThat(storage.chunkStore().load("doc-seed:0")).isPresent();
-                assertThat(storage.graphStore().loadEntity("entity:seed")).isPresent();
+                assertThat(storage.graphStore().loadEntity("seed")).isPresent();
                 assertThat(storage.vectorStore().list("chunks"))
                     .extracting(VectorStore.VectorRecord::id)
                     .containsExactly("doc-seed:0");
@@ -2865,12 +2865,12 @@ class E2ELightRagTest {
 
                 assertThat(storage.graphStore().allEntities())
                     .extracting(GraphStore.EntityRecord::id)
-                    .contains("entity:atlas", "entity:graphstore", "entity:knowledgegraphteam");
+                    .contains("atlas", "graphstore", "knowledgegraphteam");
                 assertThat(storage.graphStore().allRelations())
                     .extracting(GraphStore.RelationRecord::id)
                     .contains(
-                        relationId("entity:atlas", "entity:graphstore"),
-                        relationId("entity:graphstore", "entity:knowledgegraphteam")
+                        relationId("atlas", "graphstore"),
+                        relationId("graphstore", "knowledgegraphteam")
                     );
 
                 var result = rag.query(WORKSPACE, QueryRequest.builder()
@@ -2914,7 +2914,7 @@ class E2ELightRagTest {
             snapshotStore.save(snapshotPath, new SnapshotStore.Snapshot(
                 List.of(new DocumentStore.DocumentRecord("doc-seed", "Seed", "Body", Map.of())),
                 List.of(new ChunkStore.ChunkRecord("doc-seed:0", "doc-seed", "Body", 4, 0, Map.of())),
-                List.of(new GraphStore.EntityRecord("entity:seed", "Seed", "person", "Seed entity", List.of(), List.of("doc-seed:0"))),
+                List.of(new GraphStore.EntityRecord("seed", "Seed", "person", "Seed entity", List.of(), List.of("doc-seed:0"))),
                 List.of(),
                 Map.of("chunks", List.of(new VectorStore.VectorRecord("doc-seed:0", List.of(1.0d, 0.0d))))
             ));
@@ -2948,7 +2948,7 @@ class E2ELightRagTest {
                 assertThat(rag).isNotNull();
                 assertThat(storage.documentStore().load("doc-seed")).isPresent();
                 assertThat(storage.chunkStore().load("doc-seed:0")).isPresent();
-                assertThat(storage.graphStore().loadEntity("entity:seed")).isPresent();
+                assertThat(storage.graphStore().loadEntity("seed")).isPresent();
                 assertThat(storage.vectorStore().list("chunks"))
                     .extracting(VectorStore.VectorRecord::id)
                     .containsExactly("doc-seed:0");

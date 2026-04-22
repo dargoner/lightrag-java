@@ -42,10 +42,10 @@ class MixQueryStrategyTest {
 
         assertThat(context.matchedEntities())
             .extracting(match -> match.entityId())
-            .containsExactly("entity:alice", "entity:bob");
+            .containsExactly("alice", "bob");
         assertThat(context.matchedRelations())
             .extracting(match -> match.relationId())
-            .containsExactly(relationId("entity:alice", "entity:bob"));
+            .containsExactly(relationId("alice", "bob"));
         assertThat(context.matchedChunks())
             .extracting(match -> match.chunkId())
             .containsExactly("chunk-1", "chunk-2");
@@ -78,10 +78,10 @@ class MixQueryStrategyTest {
 
         assertThat(context.matchedEntities())
             .extracting(match -> match.entityId())
-            .containsExactly("entity:alice", "entity:bob");
+            .containsExactly("alice", "bob");
         assertThat(context.matchedRelations())
             .extracting(match -> match.relationId())
-            .containsExactly(relationId("entity:alice", "entity:bob"));
+            .containsExactly(relationId("alice", "bob"));
         assertThat(context.matchedChunks())
             .extracting(match -> match.chunkId())
             .containsExactly("chunk-1", "chunk-2", "chunk-3");

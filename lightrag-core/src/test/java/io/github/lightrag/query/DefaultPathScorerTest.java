@@ -17,9 +17,9 @@ class DefaultPathScorerTest {
     @Test
     void ranksBetterSupportedPathAboveWeakerAlternative() {
         var scorer = new DefaultPathScorer();
-        var atlas = new Entity("entity:atlas", "Atlas", "Component", "", List.of(), List.of("chunk-1"));
-        var graphStore = new Entity("entity:graphstore", "GraphStore", "Service", "", List.of(), List.of("chunk-1", "chunk-2"));
-        var team = new Entity("entity:team", "KnowledgeGraphTeam", "Team", "", List.of(), List.of("chunk-2"));
+        var atlas = new Entity("atlas", "Atlas", "Component", "", List.of(), List.of("chunk-1"));
+        var graphStore = new Entity("graphstore", "GraphStore", "Service", "", List.of(), List.of("chunk-1", "chunk-2"));
+        var team = new Entity("team", "KnowledgeGraphTeam", "Team", "", List.of(), List.of("chunk-2"));
         var dependsOn = new Relation("relation:1", atlas.id(), graphStore.id(), "depends_on", "", 1.0d, List.of("chunk-1"));
         var ownedBy = new Relation("relation:2", graphStore.id(), team.id(), "owned_by", "", 1.0d, List.of("chunk-2"));
 
@@ -62,9 +62,9 @@ class DefaultPathScorerTest {
     @Test
     void prefersHigherWeightRelationWhenOtherSignalsAreSimilar() {
         var scorer = new DefaultPathScorer();
-        var atlas = new Entity("entity:atlas", "Atlas", "Component", "", List.of(), List.of("chunk-1"));
-        var graphStore = new Entity("entity:graphstore", "GraphStore", "Service", "", List.of(), List.of("chunk-1"));
-        var platform = new Entity("entity:platform", "Platform", "System", "", List.of(), List.of("chunk-2"));
+        var atlas = new Entity("atlas", "Atlas", "Component", "", List.of(), List.of("chunk-1"));
+        var graphStore = new Entity("graphstore", "GraphStore", "Service", "", List.of(), List.of("chunk-1"));
+        var platform = new Entity("platform", "Platform", "System", "", List.of(), List.of("chunk-2"));
         var weak = new Relation("relation:weak", atlas.id(), graphStore.id(), "depends_on", "", 0.2d, List.of("chunk-1"));
         var strong = new Relation("relation:strong", atlas.id(), platform.id(), "depends_on", "", 1.0d, List.of("chunk-2"));
 
@@ -88,10 +88,10 @@ class DefaultPathScorerTest {
     @Test
     void prefersPathWhoseTerminalEntityMatchesQueryTarget() {
         var scorer = new DefaultPathScorer();
-        var atlas = new Entity("entity:atlas", "Atlas", "Component", "", List.of(), List.of("chunk-1"));
-        var graphStore = new Entity("entity:graphstore", "GraphStore", "Service", "", List.of(), List.of("chunk-1"));
-        var team = new Entity("entity:team", "KnowledgeGraphTeam", "Team", "", List.of(), List.of("chunk-2"));
-        var platform = new Entity("entity:platform", "PlatformOps", "Team", "", List.of(), List.of("chunk-3"));
+        var atlas = new Entity("atlas", "Atlas", "Component", "", List.of(), List.of("chunk-1"));
+        var graphStore = new Entity("graphstore", "GraphStore", "Service", "", List.of(), List.of("chunk-1"));
+        var team = new Entity("team", "KnowledgeGraphTeam", "Team", "", List.of(), List.of("chunk-2"));
+        var platform = new Entity("platform", "PlatformOps", "Team", "", List.of(), List.of("chunk-3"));
         var dependsOn = new Relation("relation:dependsOn", atlas.id(), graphStore.id(), "depends_on", "", 0.9d, List.of("chunk-1"));
         var ownedBy = new Relation("relation:ownedBy", graphStore.id(), team.id(), "owned_by", "", 0.8d, List.of("chunk-2"));
         var operatedBy = new Relation("relation:operatedBy", graphStore.id(), platform.id(), "operated_by", "", 1.0d, List.of("chunk-3"));

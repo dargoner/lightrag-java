@@ -37,10 +37,10 @@ class LocalQueryStrategyTest {
 
         assertThat(context.matchedEntities())
             .extracting(match -> match.entityId())
-            .containsExactly("entity:alice", "entity:bob");
+            .containsExactly("alice", "bob");
         assertThat(context.matchedRelations())
             .extracting(match -> match.relationId())
-            .containsExactly(relationId("entity:alice", "entity:bob"));
+            .containsExactly(relationId("alice", "bob"));
         assertThat(context.matchedChunks())
             .extracting(match -> match.chunkId())
             .containsExactly("chunk-1", "chunk-2");
@@ -92,10 +92,10 @@ class LocalQueryStrategyTest {
 
         assertThat(context.matchedEntities())
             .extracting(match -> match.entityId())
-            .containsExactly("entity:alice", "entity:bob");
+            .containsExactly("alice", "bob");
         assertThat(context.matchedRelations())
             .extracting(match -> match.relationId())
-            .containsExactly(relationId("entity:alice", "entity:bob"));
+            .containsExactly(relationId("alice", "bob"));
     }
 
     @Test
@@ -115,7 +115,7 @@ class LocalQueryStrategyTest {
 
         assertThat(context.matchedEntities())
             .extracting(match -> match.entityId())
-            .containsExactly("entity:alice");
+            .containsExactly("alice");
     }
 
     @Test
@@ -163,7 +163,7 @@ class LocalQueryStrategyTest {
             )
         ));
         storage.graphStore().saveEntity(new GraphStore.EntityRecord(
-            "entity:alpha",
+            "alpha",
             "Alpha",
             "concept",
             "Parent-child test",
@@ -171,7 +171,7 @@ class LocalQueryStrategyTest {
             List.of("chunk-parent#child:0")
         ));
         storage.vectorStore().saveAll("entities", List.of(
-            new VectorStore.VectorRecord("entity:alpha", List.of(1.0d, 0.0d))
+            new VectorStore.VectorRecord("alpha", List.of(1.0d, 0.0d))
         ));
 
         var strategy = new LocalQueryStrategy(
@@ -198,7 +198,7 @@ class LocalQueryStrategyTest {
         var delegate = InMemoryStorageProvider.create();
         seedGraph(delegate);
         var vectorStore = new RecordingHybridVectorStore(List.of(
-            new VectorStore.VectorMatch("entity:alice", 1.0d)
+            new VectorStore.VectorMatch("alice", 1.0d)
         ));
         var storage = new TestStorageProvider(delegate, vectorStore);
         var strategy = new LocalQueryStrategy(
@@ -222,7 +222,7 @@ class LocalQueryStrategyTest {
         assertThat(vectorStore.recordedRequest.keywords()).containsExactly("alice", "focus");
         assertThat(context.matchedEntities())
             .extracting(match -> match.entityId())
-            .containsExactly("entity:alice", "entity:bob");
+            .containsExactly("alice", "bob");
     }
 
     @Test
@@ -301,7 +301,7 @@ class LocalQueryStrategyTest {
             )
         ));
         storage.graphStore().saveEntity(new GraphStore.EntityRecord(
-            "entity:alpha",
+            "alpha",
             "Alpha",
             "concept",
             "Metadata filter test",
@@ -309,7 +309,7 @@ class LocalQueryStrategyTest {
             List.of("chunk-parent#child:0")
         ));
         storage.vectorStore().saveAll("entities", List.of(
-            new VectorStore.VectorRecord("entity:alpha", List.of(1.0d, 0.0d))
+            new VectorStore.VectorRecord("alpha", List.of(1.0d, 0.0d))
         ));
 
         var strategy = new LocalQueryStrategy(
@@ -328,7 +328,7 @@ class LocalQueryStrategyTest {
 
         assertThat(context.matchedEntities())
             .extracting(match -> match.entityId())
-            .containsExactly("entity:alpha");
+            .containsExactly("alpha");
         assertThat(context.matchedChunks()).isEmpty();
     }
 
@@ -359,7 +359,7 @@ class LocalQueryStrategyTest {
         ));
 
         storage.graphStore().saveEntity(new GraphStore.EntityRecord(
-            "entity:alice",
+            "alice",
             "Alice",
             "person",
             "Researcher",
@@ -367,7 +367,7 @@ class LocalQueryStrategyTest {
             List.of("chunk-1")
         ));
         storage.graphStore().saveEntity(new GraphStore.EntityRecord(
-            "entity:bob",
+            "bob",
             "Bob",
             "person",
             "Engineer",
@@ -375,7 +375,7 @@ class LocalQueryStrategyTest {
             List.of("chunk-2", "chunk-3")
         ));
         storage.graphStore().saveEntity(new GraphStore.EntityRecord(
-            "entity:carol",
+            "carol",
             "Carol",
             "person",
             "Manager",
@@ -383,18 +383,18 @@ class LocalQueryStrategyTest {
             List.of("chunk-3")
         ));
         storage.graphStore().saveRelation(new GraphStore.RelationRecord(
-            relationId("entity:alice", "entity:bob"),
-            "entity:alice",
-            "entity:bob",
+            relationId("alice", "bob"),
+            "alice",
+            "bob",
             "works_with",
             "Alice collaborates with Bob",
             0.8d,
             List.of("chunk-1", "chunk-2")
         ));
         storage.graphStore().saveRelation(new GraphStore.RelationRecord(
-            relationId("entity:bob", "entity:carol"),
-            "entity:bob",
-            "entity:carol",
+            relationId("bob", "carol"),
+            "bob",
+            "carol",
             "reports_to",
             "Bob reports to Carol",
             0.6d,
@@ -409,13 +409,13 @@ class LocalQueryStrategyTest {
             new VectorStore.VectorRecord("chunk-3", List.of(0.0d, 1.0d))
         ));
         storage.vectorStore().saveAll("entities", List.of(
-            new VectorStore.VectorRecord("entity:alice", List.of(1.0d, 0.0d)),
-            new VectorStore.VectorRecord("entity:bob", List.of(0.6d, 0.4d)),
-            new VectorStore.VectorRecord("entity:carol", List.of(0.0d, 1.0d))
+            new VectorStore.VectorRecord("alice", List.of(1.0d, 0.0d)),
+            new VectorStore.VectorRecord("bob", List.of(0.6d, 0.4d)),
+            new VectorStore.VectorRecord("carol", List.of(0.0d, 1.0d))
         ));
         storage.vectorStore().saveAll("relations", List.of(
-            new VectorStore.VectorRecord(relationId("entity:alice", "entity:bob"), List.of(1.0d, 0.0d)),
-            new VectorStore.VectorRecord(relationId("entity:bob", "entity:carol"), List.of(0.0d, 1.0d))
+            new VectorStore.VectorRecord(relationId("alice", "bob"), List.of(1.0d, 0.0d)),
+            new VectorStore.VectorRecord(relationId("bob", "carol"), List.of(0.0d, 1.0d))
         ));
     }
 

@@ -550,7 +550,7 @@ public final class GraphManagementPipeline {
     }
 
     private static String entityId(String entityName) {
-        return "entity:" + normalizeKey(entityName);
+        return normalizeKey(entityName);
     }
 
     private static String normalizeKey(String value) {

@@ -37,10 +37,10 @@ class HybridQueryStrategyTest {
 
         assertThat(context.matchedEntities())
             .extracting(match -> match.entityId())
-            .containsExactly("entity:alice", "entity:bob");
+            .containsExactly("alice", "bob");
         assertThat(context.matchedRelations())
             .extracting(match -> match.relationId())
-            .containsExactly(relationId("entity:alice", "entity:bob"));
+            .containsExactly(relationId("alice", "bob"));
         assertThat(context.matchedChunks())
             .extracting(match -> match.chunkId())
             .containsExactly("chunk-1", "chunk-2");
@@ -74,12 +74,12 @@ class HybridQueryStrategyTest {
 
         assertThat(context.matchedEntities())
             .extracting(match -> match.entityId())
-            .containsExactly("entity:alice", "entity:bob", "entity:carol");
+            .containsExactly("alice", "bob", "carol");
         assertThat(context.matchedRelations())
             .extracting(match -> match.relationId())
             .containsExactlyInAnyOrder(
-                relationId("entity:alice", "entity:bob"),
-                relationId("entity:bob", "entity:carol")
+                relationId("alice", "bob"),
+                relationId("bob", "carol")
             );
         assertThat(context.matchedChunks())
             .extracting(match -> match.chunkId())
@@ -112,10 +112,10 @@ class HybridQueryStrategyTest {
 
         assertThat(context.matchedEntities())
             .extracting(match -> match.entityId())
-            .containsExactly("entity:alice", "entity:bob");
+            .containsExactly("alice", "bob");
         assertThat(context.matchedRelations())
             .extracting(match -> match.relationId())
-            .containsExactly(relationId("entity:alice", "entity:bob"));
+            .containsExactly(relationId("alice", "bob"));
     }
 
     @Test
@@ -147,7 +147,7 @@ class HybridQueryStrategyTest {
 
         assertThat(context.matchedEntities())
             .extracting(match -> match.entityId())
-            .containsExactly("entity:alice", "entity:bob");
+            .containsExactly("alice", "bob");
     }
 
     @Test

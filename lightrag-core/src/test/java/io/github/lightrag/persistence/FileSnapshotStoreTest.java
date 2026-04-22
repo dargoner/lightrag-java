@@ -87,7 +87,7 @@ class FileSnapshotStoreTest {
             List.of(new DocumentStore.DocumentRecord("doc-1", "Title", "Body", Map.of("source", "test"))),
             List.of(new ChunkStore.ChunkRecord("doc-1:0", "doc-1", "Body", 4, 0, Map.of("source", "test"))),
             List.of(new GraphStore.EntityRecord(
-                "entity:alice",
+                "alice",
                 "Alice",
                 "person",
                 "Researcher",
@@ -95,9 +95,9 @@ class FileSnapshotStoreTest {
                 List.of("doc-1:0")
             )),
             List.of(new GraphStore.RelationRecord(
-                relationId("entity:alice", "entity:bob"),
-                "entity:alice",
-                "entity:bob",
+                relationId("alice", "bob"),
+                "alice",
+                "bob",
                 "works_with",
                 "Collaboration",
                 0.8d,

@@ -292,12 +292,12 @@ class LightRagTaskApiTest {
         rag.ingest(WORKSPACE, List.of(new Document("doc-1", "Title", "Alice works with Bob", Map.of())));
         assertThat(storage.graphStore().allEntities())
             .extracting(entity -> entity.id())
-            .containsExactly("entity:alice", "entity:bob");
+            .containsExactly("alice", "bob");
         rag.deleteByEntity(WORKSPACE, "Alice");
 
         assertThat(storage.graphStore().allEntities())
             .extracting(entity -> entity.id())
-            .containsExactly("entity:bob");
+            .containsExactly("bob");
         assertThat(storage.documentStore().load("doc-1")).isPresent();
 
         var taskId = rag.submitRebuild(WORKSPACE);
@@ -310,7 +310,7 @@ class LightRagTaskApiTest {
             .contains(TaskStage.GRAPH_ASSEMBLY);
         assertThat(storage.graphStore().allEntities())
             .extracting(entity -> entity.id())
-            .containsExactly("entity:alice", "entity:bob");
+            .containsExactly("alice", "bob");
     }
 
     @Test
@@ -379,9 +379,9 @@ class LightRagTaskApiTest {
                 1,
                 ChunkMergeStatus.FAILED,
                 ChunkGraphStatus.PARTIAL,
-                List.of("entity:alice", "entity:bob"),
-                List.of(relationId("entity:alice", "entity:bob")),
-                List.of("entity:alice"),
+                List.of("alice", "bob"),
+                List.of(relationId("alice", "bob")),
+                List.of("alice"),
                 List.of(),
                 FailureStage.RELATION_MATERIALIZATION,
                 Instant.now(),
@@ -390,8 +390,8 @@ class LightRagTaskApiTest {
         ));
         ((InMemoryGraphStore) storage.graphStore()).restore(
             List.of(
-                ((InMemoryGraphStore) storage.graphStore()).loadEntity("entity:alice").orElseThrow(),
-                ((InMemoryGraphStore) storage.graphStore()).loadEntity("entity:bob").orElseThrow()
+                ((InMemoryGraphStore) storage.graphStore()).loadEntity("alice").orElseThrow(),
+                ((InMemoryGraphStore) storage.graphStore()).loadEntity("bob").orElseThrow()
             ),
             List.of()
         );
@@ -447,9 +447,9 @@ class LightRagTaskApiTest {
                 1,
                 ChunkMergeStatus.FAILED,
                 ChunkGraphStatus.PARTIAL,
-                List.of("entity:alice", "entity:bob"),
-                List.of(relationId("entity:alice", "entity:bob")),
-                List.of("entity:alice"),
+                List.of("alice", "bob"),
+                List.of(relationId("alice", "bob")),
+                List.of("alice"),
                 List.of(),
                 FailureStage.RELATION_MATERIALIZATION,
                 Instant.now(),
@@ -458,8 +458,8 @@ class LightRagTaskApiTest {
         ));
         ((InMemoryGraphStore) storage.graphStore()).restore(
             List.of(
-                ((InMemoryGraphStore) storage.graphStore()).loadEntity("entity:alice").orElseThrow(),
-                ((InMemoryGraphStore) storage.graphStore()).loadEntity("entity:bob").orElseThrow()
+                ((InMemoryGraphStore) storage.graphStore()).loadEntity("alice").orElseThrow(),
+                ((InMemoryGraphStore) storage.graphStore()).loadEntity("bob").orElseThrow()
             ),
             List.of()
         );

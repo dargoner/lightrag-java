@@ -143,9 +143,9 @@ class GraphMaterializationPipelineTest {
         ));
         ((InMemoryGraphStore) storage.graphStore()).restore(
             List.of(
-                new io.github.lightrag.storage.GraphStore.EntityRecord("entity:alice", "Alice", "person", "Alice", List.of(), List.of("doc-1:0")),
-                new io.github.lightrag.storage.GraphStore.EntityRecord("entity:bob", "Bob", "person", "Bob", List.of(), List.of("doc-1:0", "doc-1:1")),
-                new io.github.lightrag.storage.GraphStore.EntityRecord("entity:carol", "Carol", "person", "Carol", List.of(), List.of("doc-1:1"))
+                new io.github.lightrag.storage.GraphStore.EntityRecord("alice", "Alice", "person", "Alice", List.of(), List.of("doc-1:0")),
+                new io.github.lightrag.storage.GraphStore.EntityRecord("bob", "Bob", "person", "Bob", List.of(), List.of("doc-1:0", "doc-1:1")),
+                new io.github.lightrag.storage.GraphStore.EntityRecord("carol", "Carol", "person", "Carol", List.of(), List.of("doc-1:1"))
             ),
             List.of(
                 new io.github.lightrag.storage.GraphStore.RelationRecord(
@@ -281,13 +281,13 @@ class GraphMaterializationPipelineTest {
             )
         ));
         ((InMemoryGraphStore) storage.graphStore()).restore(
-            List.of(((InMemoryGraphStore) storage.graphStore()).loadEntity("entity:alice").orElseThrow()),
+            List.of(((InMemoryGraphStore) storage.graphStore()).loadEntity("alice").orElseThrow()),
             List.of()
         );
         ((InMemoryVectorStore) storage.vectorStore()).restore(Map.of(
             StorageSnapshots.ENTITY_NAMESPACE,
             List.of(((InMemoryVectorStore) storage.vectorStore()).list(StorageSnapshots.ENTITY_NAMESPACE).stream()
-                .filter(vector -> vector.id().equals("entity:alice"))
+                .filter(vector -> vector.id().equals("alice"))
                 .findFirst()
                 .orElseThrow())
         ));
@@ -397,7 +397,7 @@ class GraphMaterializationPipelineTest {
     }
 
     private static String entityKey(String name) {
-        return "entity:" + name.strip().toLowerCase(Locale.ROOT);
+        return "" + name.strip().toLowerCase(Locale.ROOT);
     }
 
     private static String relationKey(String source, String type, String target) {

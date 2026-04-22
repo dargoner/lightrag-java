@@ -206,7 +206,7 @@ public final class GraphAssembler {
         private static MutableEntity create(ExtractedEntity entity) {
             var normalizedName = normalizeKey(entity.name());
             var mutable = new MutableEntity(
-                "entity:" + normalizedName,
+                normalizedName,
                 entity.name(),
                 entity.type(),
                 entity.description(),

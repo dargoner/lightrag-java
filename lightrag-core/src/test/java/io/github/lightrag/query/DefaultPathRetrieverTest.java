@@ -23,7 +23,7 @@ class DefaultPathRetrieverTest {
     @Test
     void reasoningPathRejectsInvalidShape() {
         assertThatThrownBy(() -> new io.github.lightrag.types.reasoning.ReasoningPath(
-            List.of("entity:atlas"),
+            List.of("atlas"),
             List.of("relation:1"),
             List.of("chunk-1"),
             1,
@@ -35,9 +35,9 @@ class DefaultPathRetrieverTest {
 
     @Test
     void retrievesOneHopAndTwoHopPathsFromSeedEntity() {
-        var atlas = entity("entity:atlas", "Atlas", List.of("chunk-1"));
-        var graphStore = entity("entity:graphstore", "GraphStore", List.of("chunk-1", "chunk-2"));
-        var team = entity("entity:team", "KnowledgeGraphTeam", List.of("chunk-2"));
+        var atlas = entity("atlas", "Atlas", List.of("chunk-1"));
+        var graphStore = entity("graphstore", "GraphStore", List.of("chunk-1", "chunk-2"));
+        var team = entity("team", "KnowledgeGraphTeam", List.of("chunk-2"));
         var dependsOn = relation("relation:atlas|depends_on|graphstore", atlas.id(), graphStore.id(), "depends_on", List.of("chunk-1"));
         var ownedBy = relation("relation:graphstore|owned_by|team", graphStore.id(), team.id(), "owned_by", List.of("chunk-2"));
         var store = new FakeGraphStore(List.of(atlas, graphStore, team), List.of(dependsOn, ownedBy));

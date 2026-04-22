@@ -35,10 +35,10 @@ class GlobalQueryStrategyTest {
 
         assertThat(context.matchedRelations())
             .extracting(match -> match.relationId())
-            .containsExactly(relationId("entity:bob", "entity:carol"));
+            .containsExactly(relationId("bob", "carol"));
         assertThat(context.matchedEntities())
             .extracting(match -> match.entityId())
-            .containsExactly("entity:bob", "entity:carol");
+            .containsExactly("bob", "carol");
         assertThat(context.matchedChunks())
             .extracting(match -> match.chunkId())
             .containsExactly("chunk-3");
@@ -88,10 +88,10 @@ class GlobalQueryStrategyTest {
 
         assertThat(context.matchedRelations())
             .extracting(match -> match.relationId())
-            .containsExactly(relationId("entity:bob", "entity:carol"));
+            .containsExactly(relationId("bob", "carol"));
         assertThat(context.matchedEntities())
             .extracting(match -> match.entityId())
-            .containsExactly("entity:bob", "entity:carol");
+            .containsExactly("bob", "carol");
     }
 
     @Test
@@ -113,7 +113,7 @@ class GlobalQueryStrategyTest {
 
         assertThat(context.matchedRelations())
             .extracting(match -> match.relationId())
-            .containsExactly(relationId("entity:alice", "entity:bob"));
+            .containsExactly(relationId("alice", "bob"));
     }
 
     @Test
@@ -136,8 +136,8 @@ class GlobalQueryStrategyTest {
         assertThat(context.matchedRelations())
             .extracting(match -> match.relationId())
             .containsExactly(
-                relationId("entity:alice", "entity:bob"),
-                relationId("entity:bob", "entity:carol")
+                relationId("alice", "bob"),
+                relationId("bob", "carol")
             );
         assertThat(context.matchedChunks())
             .extracting(match -> match.chunkId())
@@ -159,15 +159,15 @@ class GlobalQueryStrategyTest {
         ));
         storage.graphStore().saveRelation(new io.github.lightrag.storage.GraphStore.RelationRecord(
             "relation:plain",
-            "entity:a",
-            "entity:b",
+            "a",
+            "b",
             "rel",
             "Single level relation",
             0.8d,
             List.of("chunk-plain")
         ));
         storage.graphStore().saveEntity(new io.github.lightrag.storage.GraphStore.EntityRecord(
-            "entity:a",
+            "a",
             "A",
             "type",
             "A desc",
@@ -175,7 +175,7 @@ class GlobalQueryStrategyTest {
             List.of("chunk-plain")
         ));
         storage.graphStore().saveEntity(new io.github.lightrag.storage.GraphStore.EntityRecord(
-            "entity:b",
+            "b",
             "B",
             "type",
             "B desc",
@@ -210,7 +210,7 @@ class GlobalQueryStrategyTest {
         var delegate = InMemoryStorageProvider.create();
         LocalQueryStrategyTest.seedGraph(delegate);
         var vectorStore = new RecordingHybridVectorStore(List.of(
-            new VectorStore.VectorMatch(relationId("entity:bob", "entity:carol"), 1.0d)
+            new VectorStore.VectorMatch(relationId("bob", "carol"), 1.0d)
         ));
         var storage = new TestStorageProvider(delegate, vectorStore);
         var strategy = new GlobalQueryStrategy(
@@ -234,7 +234,7 @@ class GlobalQueryStrategyTest {
         assertThat(vectorStore.recordedRequest.keywords()).containsExactly("org", "focus");
         assertThat(context.matchedRelations())
             .extracting(match -> match.relationId())
-            .containsExactly(relationId("entity:bob", "entity:carol"));
+            .containsExactly(relationId("bob", "carol"));
     }
 
     @Test
@@ -312,15 +312,15 @@ class GlobalQueryStrategyTest {
         ));
         storage.graphStore().saveRelation(new io.github.lightrag.storage.GraphStore.RelationRecord(
             "relation:alpha",
-            "entity:a",
-            "entity:b",
+            "a",
+            "b",
             "rel",
             "Metadata filter test",
             0.8d,
             List.of("chunk-parent#child:0")
         ));
         storage.graphStore().saveEntity(new io.github.lightrag.storage.GraphStore.EntityRecord(
-            "entity:a",
+            "a",
             "A",
             "type",
             "A desc",
@@ -328,7 +328,7 @@ class GlobalQueryStrategyTest {
             List.of("chunk-parent#child:0")
         ));
         storage.graphStore().saveEntity(new io.github.lightrag.storage.GraphStore.EntityRecord(
-            "entity:b",
+            "b",
             "B",
             "type",
             "B desc",

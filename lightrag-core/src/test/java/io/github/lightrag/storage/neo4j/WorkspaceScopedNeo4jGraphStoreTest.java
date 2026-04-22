@@ -133,18 +133,18 @@ class WorkspaceScopedNeo4jGraphStoreTest {
 
         try (var alpha = newStore("alpha");
              var beta = newStore("beta")) {
-            var alphaEntity = entity("entity:住房公积金", "住房公积金-alpha");
-            var betaEntity = entity("entity:住房公积金", "住房公积金-beta");
+            var alphaEntity = entity("住房公积金", "住房公积金-alpha");
+            var betaEntity = entity("住房公积金", "住房公积金-beta");
             var alphaRelation = relation(
                 "relation:住房公积金:覆盖城市",
-                "entity:住房公积金",
-                "entity:覆盖城市",
+                "住房公积金",
+                "覆盖城市",
                 "alpha relation"
             );
             var betaRelation = relation(
                 "relation:住房公积金:覆盖城市",
-                "entity:住房公积金",
-                "entity:覆盖城市",
+                "住房公积金",
+                "覆盖城市",
                 "beta relation"
             );
 
@@ -153,8 +153,8 @@ class WorkspaceScopedNeo4jGraphStoreTest {
             alpha.saveRelation(alphaRelation);
             beta.saveRelation(betaRelation);
 
-            assertThat(alpha.loadEntity("entity:住房公积金")).contains(alphaEntity);
-            assertThat(beta.loadEntity("entity:住房公积金")).contains(betaEntity);
+            assertThat(alpha.loadEntity("住房公积金")).contains(alphaEntity);
+            assertThat(beta.loadEntity("住房公积金")).contains(betaEntity);
             assertThat(alpha.allRelations()).containsExactly(alphaRelation);
             assertThat(beta.allRelations()).containsExactly(betaRelation);
         }

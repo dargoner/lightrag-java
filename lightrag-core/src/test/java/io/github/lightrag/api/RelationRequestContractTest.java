@@ -1,6 +1,7 @@
 package io.github.lightrag.api;
 
 import io.github.lightrag.indexing.RelationCanonicalizer;
+import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 
 import static org.assertj.core.api.Assertions.assertThat;
@@ -24,5 +25,14 @@ class RelationRequestContractTest {
         assertThat(canonical.tgtId()).isEqualTo("bob");
         assertThat(canonical.relationId()).startsWith("rel-");
         assertThat(canonical.relationId().length()).isLessThanOrEqualTo(64);
+    }
+
+    @Test
+    @DisplayName("graph entity keys use normalized names without legacy prefix")
+    void graphEntityKeysUseNormalizedNamesWithoutLegacyPrefix() {
+        assertThat(RelationCanonicalizer.canonicalize("alice", "bob").srcId())
+            .doesNotStartWith("entity:");
+        assertThat(RelationCanonicalizer.canonicalize("alice", "bob").tgtId())
+            .doesNotStartWith("entity:");
     }
 }
