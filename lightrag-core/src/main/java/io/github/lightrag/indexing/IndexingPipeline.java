@@ -736,6 +736,7 @@ public final class IndexingPipeline {
             "accepted %d pre-chunked chunks for %s".formatted(prepared.chunks().size(), source.documentId())
         );
         var chunks = prepared.chunks();
+        publishPendingChunkTasks(source.documentId(), chunks);
         progressListener.onStageStarted(io.github.lightrag.api.TaskStage.VECTOR_INDEXING, "embedding chunks for " + source.documentId());
         var chunkVectors = chunkVectors(chunks);
         for (var chunk : chunks) {
@@ -777,6 +778,23 @@ public final class IndexingPipeline {
             entityVectors,
             relationVectors
         );
+    }
+
+    private void publishPendingChunkTasks(String documentId, List<io.github.lightrag.types.Chunk> chunks) {
+        for (var chunk : chunks) {
+            progressListener.onChunkPending(
+                documentId,
+                chunk.id(),
+                io.github.lightrag.api.TaskEventScope.VECTOR,
+                "chunk vector pending for " + chunk.id()
+            );
+            progressListener.onChunkPending(
+                documentId,
+                chunk.id(),
+                io.github.lightrag.api.TaskEventScope.GRAPH,
+                "chunk graph pending for " + chunk.id()
+            );
+        }
     }
 
     private List<GraphAssembler.ChunkExtraction> refineExtractions(List<io.github.lightrag.types.Chunk> chunks) {

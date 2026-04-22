@@ -142,6 +142,53 @@ class LightRagTaskApiTest {
     }
 
     @Test
+    void submitIngestPreChunkedPublishesPendingChunkEventsBeforeRuntimeChunkEvents() {
+        var events = new java.util.concurrent.CopyOnWriteArrayList<TaskEvent>();
+        var rag = LightRag.builder()
+            .chatModel(new FakeChatModel())
+            .embeddingModel(new FakeEmbeddingModel())
+            .storage(InMemoryStorageProvider.create())
+            .taskEventListener(events::add)
+            .build();
+
+        var taskId = rag.submitIngestPreChunked(
+            WORKSPACE,
+            List.of(new PreChunkedDocument(
+                "doc-1",
+                "Title",
+                List.of(
+                    new Chunk("chunk-1", "doc-1", "Alice works with Bob", 4, 0, Map.of("source", "prechunked-task-test")),
+                    new Chunk("chunk-2", "doc-1", "Bob supports Carol", 4, 1, Map.of("source", "prechunked-task-test"))
+                ),
+                Map.of("source", "prechunked-task-test")
+            )),
+            TaskSubmitOptions.defaults()
+        );
+
+        awaitTerminalTask(rag, taskId);
+
+        var chunkEvents = events.stream()
+            .filter(event -> event.chunkId() != null)
+            .toList();
+
+        assertThat(chunkEvents.stream()
+            .filter(event -> event.eventType() == TaskEventType.CHUNK_PENDING)
+            .toList())
+            .extracting(TaskEvent::scope, TaskEvent::chunkId)
+            .containsExactlyInAnyOrder(
+                org.assertj.core.groups.Tuple.tuple(TaskEventScope.VECTOR, "chunk-1"),
+                org.assertj.core.groups.Tuple.tuple(TaskEventScope.GRAPH, "chunk-1"),
+                org.assertj.core.groups.Tuple.tuple(TaskEventScope.VECTOR, "chunk-2"),
+                org.assertj.core.groups.Tuple.tuple(TaskEventScope.GRAPH, "chunk-2")
+            );
+
+        assertThat(indexOfChunkEvent(chunkEvents, TaskEventType.CHUNK_PENDING, TaskEventScope.VECTOR, "chunk-1"))
+            .isLessThan(indexOfChunkEvent(chunkEvents, TaskEventType.CHUNK_VECTORS_READY, TaskEventScope.VECTOR, "chunk-1"));
+        assertThat(indexOfChunkEvent(chunkEvents, TaskEventType.CHUNK_PENDING, TaskEventScope.GRAPH, "chunk-1"))
+            .isLessThan(indexOfChunkEvent(chunkEvents, TaskEventType.CHUNK_STARTED, TaskEventScope.CHUNK, "chunk-1"));
+    }
+
+    @Test
     void submitIngestPublishesEventsToTaskScopedListener() {
         var events = new java.util.concurrent.CopyOnWriteArrayList<TaskEvent>();
         var rag = LightRag.builder()
@@ -497,6 +544,21 @@ class LightRagTaskApiTest {
         }
         assertThat(snapshot.status().isTerminal()).isTrue();
         return snapshot;
+    }
+
+    private static int indexOfChunkEvent(
+        List<TaskEvent> events,
+        TaskEventType eventType,
+        TaskEventScope scope,
+        String chunkId
+    ) {
+        for (int index = 0; index < events.size(); index++) {
+            var event = events.get(index);
+            if (eventType == event.eventType() && scope == event.scope() && chunkId.equals(event.chunkId())) {
+                return index;
+            }
+        }
+        throw new AssertionError("missing chunk event: " + eventType + ", scope=" + scope + ", chunkId=" + chunkId);
     }
 
     private static final class FakeChatModel implements ChatModel {

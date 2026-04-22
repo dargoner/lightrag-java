@@ -1,5 +1,6 @@
 package io.github.lightrag.indexing;
 
+import io.github.lightrag.api.TaskEventScope;
 import io.github.lightrag.api.TaskStage;
 
 public interface IndexingProgressListener {
@@ -37,6 +38,9 @@ public interface IndexingProgressListener {
     }
 
     default void onDocumentFailed(String documentId, String message) {
+    }
+
+    default void onChunkPending(String documentId, String chunkId, TaskEventScope scope, String message) {
     }
 
     default void onChunkStarted(String documentId, String chunkId, String message) {

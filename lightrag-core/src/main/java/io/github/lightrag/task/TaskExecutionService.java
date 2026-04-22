@@ -597,6 +597,19 @@ public final class TaskExecutionService implements AutoCloseable {
         }
 
         @Override
+        public void onChunkPending(String documentId, String chunkId, TaskEventScope scope, String message) {
+            eventPublisher.publish(chunkEvent(
+                TaskEventType.CHUNK_PENDING,
+                scope,
+                documentId,
+                chunkId,
+                "pending",
+                message,
+                Map.of()
+            ));
+        }
+
+        @Override
         public void onChunkStarted(String documentId, String chunkId, String message) {
             eventPublisher.publish(chunkEvent(
                 TaskEventType.CHUNK_STARTED,
