@@ -7,7 +7,7 @@
 - Redefine relation semantics around upstream-style `src_id`, `tgt_id`, `keywords`, `description`, `weight`, `source_id`, and `file_path`.
 - Align PostgreSQL, MySQL, Neo4j, and Milvus relation storage formats, field names, and length rules with upstream LightRAG as closely as practical.
 - Replace the current public Java relation-management API surface that depends on `relationType` and `currentRelationType`.
-- Provide a one-time migration path from the existing Java relation model to the new upstream-aligned model.
+- Define a clean-break upgrade path from the existing Java relation model to the new upstream-aligned model without preserving in-place relation data.
 - Ship the change as the next minor version line.
 
 ## Non-Goals
@@ -286,69 +286,52 @@ Entity merge must rewrite relation endpoints into canonical order and then fold 
 
 Self-loops created by entity merge are dropped.
 
-## Migration Strategy
+## Upgrade Strategy
 
-This redesign requires a one-time offline migration. Do not attempt long-lived dual-write compatibility.
+This redesign is a clean-break schema and API change. The SDK will not provide an in-place relation migration path from the old Java model.
 
-### Source data
+### Upgrade contract
 
-Read old relation records from the current Java stores:
+Upgrading to the new relation model means:
 
-- `id`
-- `sourceEntityId`
-- `targetEntityId`
-- `type`
-- `description`
-- `weight`
-- `sourceChunkIds`
+- old persisted relation rows are treated as incompatible
+- old Neo4j relation edges are treated as incompatible
+- old Milvus relation vector collections are treated as incompatible
+- relation data must be rebuilt from source documents or re-imported through the new API
 
-### Transform
+### Required operator actions
 
-For each old relation:
+Before enabling the new version, operators must:
 
-1. map `sourceEntityId` and `targetEntityId` to canonical sorted `src_id` and `tgt_id`
-2. drop self-loops
-3. map old `type` into candidate `keywords`
-4. map `sourceChunkIds` into `source_id` joined by `<SEP>`
-5. backfill `file_path`
-   - derive from existing chunk/document metadata when available
-   - otherwise use `unknown_source`
+1. take a full backup if historical relation data matters
+2. drop or isolate old relation storage structures
+3. recreate relation tables, graph edges, and relation-vector collections with the new schema
+4. re-run document ingestion or import custom graph data through the new upstream-aligned API
 
-### Aggregate
+### Supported cutover shape
 
-Group transformed rows by canonical endpoint pair.
+Supported cutover:
 
-For each group:
+- deploy new code
+- recreate relation storage
+- rebuild relation data
 
-- `relation_id` = short hash derived from canonical pair
-- `keywords` = unique sorted values joined by commas
-- `description` = merged, deduplicated, summarized if needed
-- `weight` = sum of migrated weights
-- `source_id` = merged unique chunk IDs joined by `<SEP>`
-- `file_path` = merged unique file paths joined by `<SEP>`
+Unsupported cutover:
 
-### Rebuild
+- mixed old/new relation schemas in the same runtime
+- automatic row-by-row transformation of old relation data
+- long-lived compatibility layers for old relation identifiers
 
-After aggregation:
+### Why no migration
 
-- rewrite relational relation rows
-- rebuild Neo4j relation edges
-- drop and recreate Milvus relation collections
-- regenerate all relation embeddings
+The semantic break is too large for a safe in-place migration:
 
-### Rollout sequence
+- relation identity changes from `src + type + tgt` to canonical endpoint pair only
+- multiple old Java relations can collapse into one upstream-aligned relation
+- vector IDs change from readable relation strings to short hash IDs
+- graph, relational, and vector backends all change shape together
 
-Recommended rollout:
-
-1. stop writes
-2. snapshot old data
-3. migrate and aggregate relations
-4. rebuild storage backends
-5. run consistency checks
-6. switch application code to the new API and schema
-7. resume writes
-
-Do not support mixed old/new relation schemas in the same running deployment.
+The safe and explicit model is therefore: break compatibility, rebuild relation data, and validate the rebuilt state.
 
 ## Query and Retrieval Effects
 
@@ -360,6 +343,8 @@ This redesign changes retrieval inputs and graph-loading behavior in several way
 - path and evidence objects must report the new relation payload shape
 
 This is an intentional semantic change, not a compatibility bug.
+
+Existing persisted relation data from the old Java model is not expected to survive the upgrade in place.
 
 ## Testing Requirements
 
@@ -411,17 +396,16 @@ This is a required part of the work, not an optional release follow-up.
 
 ## Risks
 
-- migration can collapse multiple old relation rows into one new row, which changes query outputs
-- file-path backfill may be incomplete for older data
+- existing relation data must be rebuilt, which increases upgrade cost
 - existing consumers compiled against current graph-management APIs will break
 - all relation embeddings must be regenerated, which can be expensive on large datasets
 
 ## Mitigations
 
-- keep the migration offline and explicit
-- take a pre-migration snapshot for rollback
-- add deterministic migration reporting: old relation count, new relation count, dropped self-loop count, merged duplicate count
-- fail fast if migrated relation consistency checks do not match across storage backends
+- document the upgrade as a clean break in README and release notes
+- require pre-upgrade backup when historical relation data matters
+- fail fast when the SDK detects old incompatible relation schema artifacts
+- provide deterministic rebuild verification across relational, graph, and vector stores
 
 ## Acceptance Criteria
 
