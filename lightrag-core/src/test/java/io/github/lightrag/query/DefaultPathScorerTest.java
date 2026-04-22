@@ -6,6 +6,7 @@ import io.github.lightrag.types.Relation;
 import io.github.lightrag.types.ScoredEntity;
 import io.github.lightrag.types.ScoredRelation;
 import io.github.lightrag.types.reasoning.PathRetrievalResult;
+import io.github.lightrag.types.reasoning.RelationEndpoint;
 import io.github.lightrag.types.reasoning.ReasoningPath;
 import org.junit.jupiter.api.Test;
 
@@ -35,14 +36,17 @@ class DefaultPathScorerTest {
             List.of(
                 new ReasoningPath(
                     List.of(atlas.id(), graphStore.id()),
-                    List.of(dependsOn.id()),
+                    List.of(new RelationEndpoint(atlas.id(), graphStore.id())),
                     List.of("chunk-1"),
                     1,
                     0.0d
                 ),
                 new ReasoningPath(
                     List.of(atlas.id(), graphStore.id(), team.id()),
-                    List.of(dependsOn.id(), ownedBy.id()),
+                    List.of(
+                        new RelationEndpoint(atlas.id(), graphStore.id()),
+                        new RelationEndpoint(graphStore.id(), team.id())
+                    ),
                     List.of("chunk-1", "chunk-2"),
                     2,
                     0.0d
@@ -77,12 +81,25 @@ class DefaultPathScorerTest {
                 new ScoredRelation(strong.id(), strong, 0.90d)
             ),
             List.of(
-                new ReasoningPath(List.of(atlas.id(), graphStore.id()), List.of(weak.id()), List.of("chunk-1"), 1, 0.0d),
-                new ReasoningPath(List.of(atlas.id(), platform.id()), List.of(strong.id()), List.of("chunk-2"), 1, 0.0d)
+                new ReasoningPath(
+                    List.of(atlas.id(), graphStore.id()),
+                    List.of(new RelationEndpoint(atlas.id(), graphStore.id())),
+                    List.of("chunk-1"),
+                    1,
+                    0.0d
+                ),
+                new ReasoningPath(
+                    List.of(atlas.id(), platform.id()),
+                    List.of(new RelationEndpoint(atlas.id(), platform.id())),
+                    List.of("chunk-2"),
+                    1,
+                    0.0d
+                )
             )
         ));
 
-        assertThat(reranked.get(0).relationIds()).containsExactly("relation:strong");
+        assertThat(reranked.get(0).relationEndpoints())
+            .containsExactly(new RelationEndpoint(atlas.id(), platform.id()));
     }
 
     @Test
@@ -111,8 +128,26 @@ class DefaultPathScorerTest {
                 new ScoredRelation(operatedBy.id(), operatedBy, 0.95d)
             ),
             List.of(
-                new ReasoningPath(List.of(atlas.id(), graphStore.id(), team.id()), List.of(dependsOn.id(), ownedBy.id()), List.of("chunk-1", "chunk-2"), 2, 0.0d),
-                new ReasoningPath(List.of(atlas.id(), graphStore.id(), platform.id()), List.of(dependsOn.id(), operatedBy.id()), List.of("chunk-1", "chunk-3"), 2, 0.0d)
+                new ReasoningPath(
+                    List.of(atlas.id(), graphStore.id(), team.id()),
+                    List.of(
+                        new RelationEndpoint(atlas.id(), graphStore.id()),
+                        new RelationEndpoint(graphStore.id(), team.id())
+                    ),
+                    List.of("chunk-1", "chunk-2"),
+                    2,
+                    0.0d
+                ),
+                new ReasoningPath(
+                    List.of(atlas.id(), graphStore.id(), platform.id()),
+                    List.of(
+                        new RelationEndpoint(atlas.id(), graphStore.id()),
+                        new RelationEndpoint(graphStore.id(), platform.id())
+                    ),
+                    List.of("chunk-1", "chunk-3"),
+                    2,
+                    0.0d
+                )
             )
         ));
 

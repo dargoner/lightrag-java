@@ -4,6 +4,7 @@ import io.github.lightrag.api.QueryRequest;
 import io.github.lightrag.storage.GraphStore;
 import io.github.lightrag.types.QueryContext;
 import io.github.lightrag.types.reasoning.PathRetrievalResult;
+import io.github.lightrag.types.reasoning.RelationEndpoint;
 import io.github.lightrag.types.reasoning.ReasoningPath;
 
 import java.util.ArrayList;
@@ -49,7 +50,7 @@ public final class DefaultPathRetriever implements PathRetriever {
         String currentEntityId,
         int remainingHop,
         List<String> entityIds,
-        List<String> relationIds,
+        List<RelationEndpoint> relationEndpoints,
         LinkedHashSet<String> chunkIds,
         Map<String, ReasoningPath> paths
     ) {
@@ -65,29 +66,30 @@ public final class DefaultPathRetriever implements PathRetriever {
             String nextEntityId = currentEntityId.equals(relation.sourceEntityId())
                 ? relation.targetEntityId()
                 : relation.sourceEntityId();
-            if (entityIds.contains(nextEntityId) || relationIds.contains(relation.id())) {
+            var relationEndpoint = new RelationEndpoint(relation.sourceEntityId(), relation.targetEntityId());
+            if (entityIds.contains(nextEntityId) || relationEndpoints.contains(relationEndpoint)) {
                 continue;
             }
             var nextEntityIds = new ArrayList<>(entityIds);
             nextEntityIds.add(nextEntityId);
-            var nextRelationIds = new ArrayList<>(relationIds);
-            nextRelationIds.add(relation.id());
+            var nextRelationEndpoints = new ArrayList<>(relationEndpoints);
+            nextRelationEndpoints.add(relationEndpoint);
             var nextChunkIds = new LinkedHashSet<>(chunkIds);
             nextChunkIds.addAll(relation.sourceChunkIds());
             var path = new ReasoningPath(
                 List.copyOf(nextEntityIds),
-                List.copyOf(nextRelationIds),
+                List.copyOf(nextRelationEndpoints),
                 List.copyOf(nextChunkIds),
-                nextRelationIds.size(),
+                nextRelationEndpoints.size(),
                 0.0d
             );
             paths.putIfAbsent(pathKey(path), path);
             expansions++;
-            expand(nextEntityId, remainingHop - 1, nextEntityIds, nextRelationIds, nextChunkIds, paths);
+            expand(nextEntityId, remainingHop - 1, nextEntityIds, nextRelationEndpoints, nextChunkIds, paths);
         }
     }
 
     private static String pathKey(ReasoningPath path) {
-        return String.join("->", path.relationIds());
+        return String.join("->", path.entityIds());
     }
 }

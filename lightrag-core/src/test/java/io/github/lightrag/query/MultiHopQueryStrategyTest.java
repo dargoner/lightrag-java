@@ -11,6 +11,7 @@ import io.github.lightrag.types.ScoredChunk;
 import io.github.lightrag.types.ScoredEntity;
 import io.github.lightrag.types.ScoredRelation;
 import io.github.lightrag.types.reasoning.PathRetrievalResult;
+import io.github.lightrag.types.reasoning.RelationEndpoint;
 import io.github.lightrag.types.reasoning.ReasoningPath;
 import org.junit.jupiter.api.Test;
 
@@ -44,7 +45,10 @@ class MultiHopQueryStrategyTest {
             ),
             List.of(new ReasoningPath(
                 List.of(atlas.id(), graphStore.id(), team.id()),
-                List.of(dependsOn.id(), ownedBy.id()),
+                List.of(
+                    new RelationEndpoint(atlas.id(), graphStore.id()),
+                    new RelationEndpoint(graphStore.id(), team.id())
+                ),
                 List.of("chunk-1", "chunk-2"),
                 2,
                 0.0d
@@ -100,7 +104,7 @@ class MultiHopQueryStrategyTest {
             List.of(new ScoredRelation(dependsOn.id(), dependsOn, 0.88d)),
             List.of(new ReasoningPath(
                 List.of(atlas.id(), graphStore.id()),
-                List.of(dependsOn.id()),
+                List.of(new RelationEndpoint(atlas.id(), graphStore.id())),
                 List.of("chunk-2"),
                 1,
                 0.0d
@@ -152,7 +156,10 @@ class MultiHopQueryStrategyTest {
                 ),
                 List.of(new ReasoningPath(
                     List.of(atlas.id(), graphStore.id(), team.id()),
-                    List.of(dependsOn.id(), ownedBy.id()),
+                    List.of(
+                        new RelationEndpoint(atlas.id(), graphStore.id()),
+                        new RelationEndpoint(graphStore.id(), team.id())
+                    ),
                     List.of("chunk-1", "chunk-2", "chunk-3"),
                     2,
                     0.0d
@@ -198,7 +205,7 @@ class MultiHopQueryStrategyTest {
                 List.of(new ScoredRelation(dependsOn.id(), dependsOn, 0.20d)),
                 List.of(new ReasoningPath(
                     List.of(atlas.id(), graphStore.id()),
-                    List.of(dependsOn.id()),
+                    List.of(new RelationEndpoint(atlas.id(), graphStore.id())),
                     List.of(),
                     1,
                     0.0d
@@ -206,7 +213,7 @@ class MultiHopQueryStrategyTest {
             )),
             (request, retrievalResult) -> List.of(new ReasoningPath(
                 List.of(atlas.id(), graphStore.id()),
-                List.of(dependsOn.id()),
+                List.of(new RelationEndpoint(atlas.id(), graphStore.id())),
                 List.of(),
                 1,
                 0.20d
@@ -254,7 +261,10 @@ class MultiHopQueryStrategyTest {
                 ),
                 List.of(new ReasoningPath(
                     List.of(atlas.id(), graphStore.id(), team.id()),
-                    List.of(dependsOn.id(), ownedBy.id()),
+                    List.of(
+                        new RelationEndpoint(atlas.id(), graphStore.id()),
+                        new RelationEndpoint(graphStore.id(), team.id())
+                    ),
                     List.of("chunk-hop-1", "chunk-hop-2"),
                     2,
                     0.0d
@@ -306,7 +316,10 @@ class MultiHopQueryStrategyTest {
                 ),
                 List.of(new ReasoningPath(
                     List.of(atlas.id(), graphStore.id(), team.id()),
-                    List.of(dependsOn.id(), ownedBy.id()),
+                    List.of(
+                        new RelationEndpoint(atlas.id(), graphStore.id()),
+                        new RelationEndpoint(graphStore.id(), team.id())
+                    ),
                     List.of("chunk-hop-1", "chunk-hop-2"),
                     2,
                     0.0d

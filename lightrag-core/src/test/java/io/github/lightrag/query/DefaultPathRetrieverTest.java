@@ -9,6 +9,7 @@ import io.github.lightrag.types.ScoredChunk;
 import io.github.lightrag.types.ScoredEntity;
 import io.github.lightrag.types.ScoredRelation;
 import io.github.lightrag.types.reasoning.PathRetrievalResult;
+import io.github.lightrag.types.reasoning.RelationEndpoint;
 import org.junit.jupiter.api.Test;
 
 import java.util.LinkedHashMap;
@@ -24,7 +25,7 @@ class DefaultPathRetrieverTest {
     void reasoningPathRejectsInvalidShape() {
         assertThatThrownBy(() -> new io.github.lightrag.types.reasoning.ReasoningPath(
             List.of("atlas"),
-            List.of("relation:1"),
+            List.of(new RelationEndpoint("atlas", "graphstore")),
             List.of("chunk-1"),
             1,
             0.0d

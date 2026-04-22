@@ -33,12 +33,12 @@ public final class ReasoningContextAssembler {
         for (int pathIndex = 0; pathIndex < selectedPaths.size(); pathIndex++) {
             var path = selectedPaths.get(pathIndex);
             lines.add("Reasoning Path " + (pathIndex + 1));
-            for (int hopIndex = 0; hopIndex < path.relationIds().size(); hopIndex++) {
-                var relationId = path.relationIds().get(hopIndex);
+            for (int hopIndex = 0; hopIndex < path.relationEndpoints().size(); hopIndex++) {
+                var relationEndpoint = path.relationEndpoints().get(hopIndex);
                 var sourceEntityId = path.entityIds().get(hopIndex);
                 var targetEntityId = path.entityIds().get(hopIndex + 1);
-                var relation = graphStore.loadRelation(relationId)
-                    .orElseThrow(() -> new IllegalStateException("missing relation: " + relationId));
+                var relation = graphStore.loadRelation(relationEndpoint.srcId(), relationEndpoint.tgtId())
+                    .orElseThrow(() -> new IllegalStateException("missing relation: " + relationEndpoint));
                 var source = graphStore.loadEntity(sourceEntityId)
                     .orElseThrow(() -> new IllegalStateException("missing entity: " + sourceEntityId));
                 var target = graphStore.loadEntity(targetEntityId)
@@ -59,9 +59,9 @@ public final class ReasoningContextAssembler {
     public List<ScoredChunk> supportingChunks(List<ReasoningPath> paths, List<ScoredChunk> fallbackChunks) {
         var merged = new LinkedHashMap<String, ScoredChunk>();
         for (var path : Objects.requireNonNull(paths, "paths")) {
-            for (var relationId : path.relationIds()) {
-                var relation = graphStore.loadRelation(relationId)
-                    .orElseThrow(() -> new IllegalStateException("missing relation: " + relationId));
+            for (var relationEndpoint : path.relationEndpoints()) {
+                var relation = graphStore.loadRelation(relationEndpoint.srcId(), relationEndpoint.tgtId())
+                    .orElseThrow(() -> new IllegalStateException("missing relation: " + relationEndpoint));
                 for (var chunkId : relation.sourceChunkIds()) {
                     if (addChunkIfPresent(merged, chunkId)) {
                         break;
@@ -70,9 +70,9 @@ public final class ReasoningContextAssembler {
             }
         }
         for (var path : paths) {
-            for (var relationId : path.relationIds()) {
-                var relation = graphStore.loadRelation(relationId)
-                    .orElseThrow(() -> new IllegalStateException("missing relation: " + relationId));
+            for (var relationEndpoint : path.relationEndpoints()) {
+                var relation = graphStore.loadRelation(relationEndpoint.srcId(), relationEndpoint.tgtId())
+                    .orElseThrow(() -> new IllegalStateException("missing relation: " + relationEndpoint));
                 for (var chunkId : relation.sourceChunkIds()) {
                     addChunkIfPresent(merged, chunkId);
                 }

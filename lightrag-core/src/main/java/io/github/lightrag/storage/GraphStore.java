@@ -32,6 +32,15 @@ public interface GraphStore {
 
     Optional<RelationRecord> loadRelation(String relationId);
 
+    default Optional<RelationRecord> loadRelation(String sourceEntityId, String targetEntityId) {
+        var canonical = RelationCanonicalizer.canonicalize(sourceEntityId, targetEntityId);
+        return findRelations(canonical.srcId()).stream()
+            .filter(relation ->
+                relation.sourceEntityId().equals(canonical.srcId())
+                    && relation.targetEntityId().equals(canonical.tgtId()))
+            .findFirst();
+    }
+
     default List<EntityRecord> loadEntities(List<String> entityIds) {
         Objects.requireNonNull(entityIds, "entityIds");
         var entities = new ArrayList<EntityRecord>(entityIds.size());
