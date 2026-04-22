@@ -57,6 +57,46 @@ class LightRagWorkspaceTest {
     }
 
     @Test
+    void structuredQueryRoutesDifferentCallsToDifferentWorkspaceProviders() {
+        var workspaceStorageProvider = new TestWorkspaceStorageProvider();
+        var rag = LightRag.builder()
+            .chatModel(new NoOpChatModel())
+            .embeddingModel(new WorkspaceEmbeddingModel())
+            .workspaceStorage(workspaceStorageProvider)
+            .automaticQueryKeywordExtraction(false)
+            .build();
+
+        rag.ingest("alpha", List.of(new Document("doc-alpha", "Alpha", "alpha token", Map.of())));
+        rag.ingest("beta", List.of(new Document("doc-beta", "Beta", "beta token", Map.of())));
+
+        var alphaResult = rag.queryStructured("alpha", QueryRequest.builder()
+            .query("alpha")
+            .mode(QueryMode.NAIVE)
+            .chunkTopK(1)
+            .onlyNeedContext(true)
+            .build());
+        var betaResult = rag.queryStructured("beta", QueryRequest.builder()
+            .query("beta")
+            .mode(QueryMode.NAIVE)
+            .chunkTopK(1)
+            .onlyNeedContext(true)
+            .build());
+
+        assertThat(alphaResult.contexts())
+            .extracting(QueryResult.Context::sourceId)
+            .containsExactly("doc-alpha:0");
+        assertThat(alphaResult.chunks())
+            .extracting(StructuredQueryChunk::id)
+            .containsExactly("doc-alpha:0");
+        assertThat(betaResult.contexts())
+            .extracting(QueryResult.Context::sourceId)
+            .containsExactly("doc-beta:0");
+        assertThat(betaResult.chunks())
+            .extracting(StructuredQueryChunk::id)
+            .containsExactly("doc-beta:0");
+    }
+
+    @Test
     void saveSnapshotAndRestoreSnapshotOperateOnTheTargetWorkspaceOnly() {
         var workspaceStorageProvider = new TestWorkspaceStorageProvider();
         var rag = LightRag.builder()

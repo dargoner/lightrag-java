@@ -3,11 +3,17 @@ package io.github.lightrag.query;
 import io.github.lightrag.api.QueryMode;
 import io.github.lightrag.api.QueryRequest;
 import io.github.lightrag.api.QueryResult;
+import io.github.lightrag.api.StructuredQueryChunk;
+import io.github.lightrag.api.StructuredQueryEntity;
+import io.github.lightrag.api.StructuredQueryRelation;
+import io.github.lightrag.api.StructuredQueryResult;
 import io.github.lightrag.model.ChatModel;
 import io.github.lightrag.model.RerankModel;
 import io.github.lightrag.synthesis.PathAwareAnswerSynthesizer;
 import io.github.lightrag.types.QueryContext;
 import io.github.lightrag.types.ScoredChunk;
+import io.github.lightrag.types.ScoredEntity;
+import io.github.lightrag.types.ScoredRelation;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -168,10 +174,120 @@ public final class QueryEngine {
 
     public QueryResult query(QueryRequest request) {
         var query = Objects.requireNonNull(request, "request");
-        var startedAt = System.nanoTime();
         if (query.mode() == QueryMode.BYPASS) {
             return bypassQuery(query);
         }
+        var execution = executeStandardQuery(query);
+        if (execution.resolvedQuery().onlyNeedContext() && !execution.resolvedQuery().onlyNeedPrompt()) {
+            return new QueryResult(
+                execution.queryContext().assembledContext(),
+                execution.references().contexts(),
+                execution.references().references()
+            );
+        }
+        if (execution.resolvedQuery().onlyNeedPrompt()) {
+            return new QueryResult(
+                renderStandardPrompt(execution.chatRequest()),
+                execution.references().contexts(),
+                execution.references().references()
+            );
+        }
+        if (execution.resolvedQuery().stream()) {
+            return QueryResult.streaming(
+                execution.responseModel().stream(execution.chatRequest()),
+                execution.references().contexts(),
+                execution.references().references()
+            );
+        }
+        return new QueryResult(
+            generateStandardAnswer(execution),
+            execution.references().contexts(),
+            execution.references().references()
+        );
+    }
+
+    public StructuredQueryResult queryStructured(QueryRequest request) {
+        var query = Objects.requireNonNull(request, "request");
+        if (query.stream()) {
+            throw new IllegalArgumentException("queryStructured does not support stream=true");
+        }
+        if (query.mode() == QueryMode.BYPASS) {
+            return bypassStructuredQuery(query);
+        }
+        var execution = executeStandardQuery(query);
+        return new StructuredQueryResult(
+            resolveStructuredAnswer(execution),
+            execution.references().contexts(),
+            execution.references().references(),
+            execution.queryContext().matchedEntities().stream()
+                .map(QueryEngine::toStructuredEntity)
+                .toList(),
+            execution.queryContext().matchedRelations().stream()
+                .map(QueryEngine::toStructuredRelation)
+                .toList(),
+            execution.queryContext().matchedChunks().stream()
+                .map(QueryEngine::toStructuredChunk)
+                .toList()
+        );
+    }
+
+    private String generateTwoStageAnswer(ChatModel responseModel, ChatModel.ChatRequest baseRequest) {
+        var reasoningDraft = responseModel.generate(new ChatModel.ChatRequest(
+            pathAwareAnswerSynthesizer.buildReasoningStagePrompt(baseRequest.systemPrompt()),
+            baseRequest.userPrompt(),
+            baseRequest.conversationHistory()
+        ));
+        return responseModel.generate(new ChatModel.ChatRequest(
+            pathAwareAnswerSynthesizer.buildFinalStagePrompt(baseRequest.systemPrompt(), reasoningDraft),
+            baseRequest.userPrompt(),
+            baseRequest.conversationHistory()
+        ));
+    }
+
+    private boolean rerankEnabled(QueryRequest request) {
+        return request.enableRerank() && rerankModel != null;
+    }
+
+    private static QueryRequest expandChunkRequest(QueryRequest request, int rerankCandidateMultiplier) {
+        long expandedChunkTopK = Math.max((long) request.chunkTopK() * rerankCandidateMultiplier, request.chunkTopK());
+        return new QueryRequest(
+            request.query(),
+            request.mode(),
+            request.topK(),
+            (int) Math.min(Integer.MAX_VALUE, expandedChunkTopK),
+            request.maxEntityTokens(),
+            request.maxRelationTokens(),
+            Integer.MAX_VALUE,
+            request.maxHop(),
+            request.pathTopK(),
+            request.multiHopEnabled(),
+            request.responseType(),
+            request.enableRerank(),
+            request.onlyNeedContext(),
+            request.onlyNeedPrompt(),
+            request.includeReferences(),
+            request.stream(),
+            request.modelFunc(),
+            request.userPrompt(),
+            request.hlKeywords(),
+            request.llKeywords(),
+            request.conversationHistory(),
+            request.metadataFilters(),
+            request.metadataConditions()
+        );
+    }
+
+    private boolean shouldUseMultiHop(QueryRequest request) {
+        return request.multiHopEnabled()
+            && request.mode() != QueryMode.NAIVE
+            && request.mode() != QueryMode.BYPASS
+            && queryIntentClassifier != null
+            && multiHopStrategy != null
+            && queryIntentClassifier.classify(request) == QueryIntent.MULTI_HOP;
+    }
+
+    private QueryExecution executeStandardQuery(QueryRequest query) {
+        var startedAt = System.nanoTime();
         var responseModel = selectChatModel(query);
         var keywordStartedAt = System.nanoTime();
         var resolvedQuery = keywordExtractor.resolve(query, responseModel);
@@ -252,74 +368,7 @@ public final class QueryEngine {
             resolvedQuery.query(),
             resolvedQuery.conversationHistory()
         );
-        if (resolvedQuery.onlyNeedContext() && !resolvedQuery.onlyNeedPrompt()) {
-            return new QueryResult(assembledContext, references.contexts(), references.references());
-        }
-        if (resolvedQuery.onlyNeedPrompt()) {
-            return new QueryResult(renderStandardPrompt(chatRequest), references.contexts(), references.references());
-        }
-        if (resolvedQuery.stream()) {
-            return QueryResult.streaming(responseModel.stream(chatRequest), references.contexts(), references.references());
-        }
-        var answer = pathAwareAnswerSynthesizer.shouldUseTwoStage(resolvedQuery, chatRequest.systemPrompt())
-            ? generateTwoStageAnswer(responseModel, chatRequest)
-            : responseModel.generate(chatRequest);
-        return new QueryResult(answer, references.contexts(), references.references());
-    }
-
-    private String generateTwoStageAnswer(ChatModel responseModel, ChatModel.ChatRequest baseRequest) {
-        var reasoningDraft = responseModel.generate(new ChatModel.ChatRequest(
-            pathAwareAnswerSynthesizer.buildReasoningStagePrompt(baseRequest.systemPrompt()),
-            baseRequest.userPrompt(),
-            baseRequest.conversationHistory()
-        ));
-        return responseModel.generate(new ChatModel.ChatRequest(
-            pathAwareAnswerSynthesizer.buildFinalStagePrompt(baseRequest.systemPrompt(), reasoningDraft),
-            baseRequest.userPrompt(),
-            baseRequest.conversationHistory()
-        ));
-    }
-
-    private boolean rerankEnabled(QueryRequest request) {
-        return request.enableRerank() && rerankModel != null;
-    }
-
-    private static QueryRequest expandChunkRequest(QueryRequest request, int rerankCandidateMultiplier) {
-        long expandedChunkTopK = Math.max((long) request.chunkTopK() * rerankCandidateMultiplier, request.chunkTopK());
-        return new QueryRequest(
-            request.query(),
-            request.mode(),
-            request.topK(),
-            (int) Math.min(Integer.MAX_VALUE, expandedChunkTopK),
-            request.maxEntityTokens(),
-            request.maxRelationTokens(),
-            Integer.MAX_VALUE,
-            request.maxHop(),
-            request.pathTopK(),
-            request.multiHopEnabled(),
-            request.responseType(),
-            request.enableRerank(),
-            request.onlyNeedContext(),
-            request.onlyNeedPrompt(),
-            request.includeReferences(),
-            request.stream(),
-            request.modelFunc(),
-            request.userPrompt(),
-            request.hlKeywords(),
-            request.llKeywords(),
-            request.conversationHistory(),
-            request.metadataFilters(),
-            request.metadataConditions()
-        );
-    }
-
-    private boolean shouldUseMultiHop(QueryRequest request) {
-        return request.multiHopEnabled()
-            && request.mode() != QueryMode.NAIVE
-            && request.mode() != QueryMode.BYPASS
-            && queryIntentClassifier != null
-            && multiHopStrategy != null
-            && queryIntentClassifier.classify(request) == QueryIntent.MULTI_HOP;
+        return new QueryExecution(responseModel, resolvedQuery, assembledQueryContext, references, chatRequest);
     }
 
     private QueryResult bypassQuery(QueryRequest query) {
@@ -339,6 +388,37 @@ public final class QueryEngine {
             return QueryResult.streaming(responseModel.stream(chatRequest), List.of(), List.of());
         }
         return new QueryResult(responseModel.generate(chatRequest), List.of(), List.of());
+    }
+
+    private StructuredQueryResult bypassStructuredQuery(QueryRequest query) {
+        var chatRequest = new ChatModel.ChatRequest(
+            "",
+            buildBypassUserPrompt(query),
+            query.conversationHistory()
+        );
+        var responseModel = selectChatModel(query);
+        var answer = query.onlyNeedContext() && !query.onlyNeedPrompt()
+            ? ""
+            : query.onlyNeedPrompt()
+                ? renderBypassPrompt(chatRequest)
+                : responseModel.generate(chatRequest);
+        return new StructuredQueryResult(answer, List.of(), List.of(), List.of(), List.of(), List.of());
+    }
+
+    private String resolveStructuredAnswer(QueryExecution execution) {
+        if (execution.resolvedQuery().onlyNeedContext() && !execution.resolvedQuery().onlyNeedPrompt()) {
+            return execution.queryContext().assembledContext();
+        }
+        if (execution.resolvedQuery().onlyNeedPrompt()) {
+            return renderStandardPrompt(execution.chatRequest());
+        }
+        return generateStandardAnswer(execution);
+    }
+
+    private String generateStandardAnswer(QueryExecution execution) {
+        return pathAwareAnswerSynthesizer.shouldUseTwoStage(execution.resolvedQuery(), execution.chatRequest().systemPrompt())
+            ? generateTwoStageAnswer(execution.responseModel(), execution.chatRequest())
+            : execution.responseModel().generate(execution.chatRequest());
     }
 
     private ChatModel selectChatModel(QueryRequest request) {
@@ -465,5 +545,52 @@ public final class QueryEngine {
             }
         }
         return true;
+    }
+
+    private static StructuredQueryEntity toStructuredEntity(ScoredEntity entity) {
+        return new StructuredQueryEntity(
+            entity.entityId(),
+            entity.entity().name(),
+            entity.entity().type(),
+            entity.entity().description(),
+            entity.entity().aliases(),
+            entity.entity().sourceChunkIds(),
+            entity.score()
+        );
+    }
+
+    private static StructuredQueryRelation toStructuredRelation(ScoredRelation relation) {
+        return new StructuredQueryRelation(
+            relation.relationId(),
+            relation.relation().srcId(),
+            relation.relation().tgtId(),
+            relation.relation().keywords(),
+            relation.relation().description(),
+            relation.relation().weight(),
+            relation.relation().sourceChunkIds(),
+            relation.relation().filePath(),
+            relation.score()
+        );
+    }
+
+    private static StructuredQueryChunk toStructuredChunk(ScoredChunk chunk) {
+        return new StructuredQueryChunk(
+            chunk.chunkId(),
+            chunk.chunk().documentId(),
+            chunk.chunk().text(),
+            chunk.chunk().tokenCount(),
+            chunk.chunk().order(),
+            chunk.chunk().metadata(),
+            chunk.score()
+        );
+    }
+
+    private record QueryExecution(
+        ChatModel responseModel,
+        QueryRequest resolvedQuery,
+        QueryContext queryContext,
+        QueryReferences.Result references,
+        ChatModel.ChatRequest chatRequest
+    ) {
     }
 }

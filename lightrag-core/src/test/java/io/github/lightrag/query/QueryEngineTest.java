@@ -538,10 +538,12 @@ class QueryEngineTest {
     @Test
     void queryStructuredReturnsPromptForOnlyNeedPromptRequests() {
         var chatModel = new RecordingChatModel();
+        var strategies = new EnumMap<QueryMode, QueryStrategy>(QueryMode.class);
+        strategies.put(QueryMode.NAIVE, new RecordingQueryStrategy(baseContext()));
         var engine = new QueryEngine(
             chatModel,
             new ContextAssembler(),
-            strategiesReturning(baseContext()),
+            strategies,
             null
         );
 

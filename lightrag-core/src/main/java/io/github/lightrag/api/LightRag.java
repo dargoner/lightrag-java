@@ -314,6 +314,11 @@ public final class LightRag implements AutoCloseable {
         return newQueryEngine(resolveProvider(scope)).query(request);
     }
 
+    public StructuredQueryResult queryStructured(String workspaceId, QueryRequest request) {
+        var scope = resolveScope(workspaceId);
+        return newQueryEngine(resolveProvider(scope)).queryStructured(request);
+    }
+
     public DocumentProcessingStatus getDocumentStatus(String workspaceId, String documentId) {
         var scope = resolveScope(workspaceId);
         return resolveProvider(scope).documentStatusStore()
