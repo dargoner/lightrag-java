@@ -17,6 +17,7 @@ import java.util.Locale;
 import java.util.Map;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static io.github.lightrag.support.RelationIds.relationId;
 
 class LightRagTaskApiTest {
     private static final String WORKSPACE = "default";
@@ -291,12 +292,12 @@ class LightRagTaskApiTest {
         rag.ingest(WORKSPACE, List.of(new Document("doc-1", "Title", "Alice works with Bob", Map.of())));
         assertThat(storage.graphStore().allEntities())
             .extracting(entity -> entity.id())
-            .containsExactly("entity:alice", "entity:bob");
+            .containsExactly("alice", "bob");
         rag.deleteByEntity(WORKSPACE, "Alice");
 
         assertThat(storage.graphStore().allEntities())
             .extracting(entity -> entity.id())
-            .containsExactly("entity:bob");
+            .containsExactly("bob");
         assertThat(storage.documentStore().load("doc-1")).isPresent();
 
         var taskId = rag.submitRebuild(WORKSPACE);
@@ -309,7 +310,7 @@ class LightRagTaskApiTest {
             .contains(TaskStage.GRAPH_ASSEMBLY);
         assertThat(storage.graphStore().allEntities())
             .extracting(entity -> entity.id())
-            .containsExactly("entity:alice", "entity:bob");
+            .containsExactly("alice", "bob");
     }
 
     @Test
@@ -378,9 +379,9 @@ class LightRagTaskApiTest {
                 1,
                 ChunkMergeStatus.FAILED,
                 ChunkGraphStatus.PARTIAL,
-                List.of("entity:alice", "entity:bob"),
-                List.of("relation:entity:alice|works_with|entity:bob"),
-                List.of("entity:alice"),
+                List.of("alice", "bob"),
+                List.of(relationId("alice", "bob")),
+                List.of("alice"),
                 List.of(),
                 FailureStage.RELATION_MATERIALIZATION,
                 Instant.now(),
@@ -389,8 +390,8 @@ class LightRagTaskApiTest {
         ));
         ((InMemoryGraphStore) storage.graphStore()).restore(
             List.of(
-                ((InMemoryGraphStore) storage.graphStore()).loadEntity("entity:alice").orElseThrow(),
-                ((InMemoryGraphStore) storage.graphStore()).loadEntity("entity:bob").orElseThrow()
+                ((InMemoryGraphStore) storage.graphStore()).loadEntity("alice").orElseThrow(),
+                ((InMemoryGraphStore) storage.graphStore()).loadEntity("bob").orElseThrow()
             ),
             List.of()
         );
@@ -446,9 +447,9 @@ class LightRagTaskApiTest {
                 1,
                 ChunkMergeStatus.FAILED,
                 ChunkGraphStatus.PARTIAL,
-                List.of("entity:alice", "entity:bob"),
-                List.of("relation:entity:alice|works_with|entity:bob"),
-                List.of("entity:alice"),
+                List.of("alice", "bob"),
+                List.of(relationId("alice", "bob")),
+                List.of("alice"),
                 List.of(),
                 FailureStage.RELATION_MATERIALIZATION,
                 Instant.now(),
@@ -457,8 +458,8 @@ class LightRagTaskApiTest {
         ));
         ((InMemoryGraphStore) storage.graphStore()).restore(
             List.of(
-                ((InMemoryGraphStore) storage.graphStore()).loadEntity("entity:alice").orElseThrow(),
-                ((InMemoryGraphStore) storage.graphStore()).loadEntity("entity:bob").orElseThrow()
+                ((InMemoryGraphStore) storage.graphStore()).loadEntity("alice").orElseThrow(),
+                ((InMemoryGraphStore) storage.graphStore()).loadEntity("bob").orElseThrow()
             ),
             List.of()
         );
@@ -475,11 +476,9 @@ class LightRagTaskApiTest {
         assertThat(task.stages())
             .extracting(TaskStageSnapshot::stage)
             .contains(
+                TaskStage.PREPARING,
                 TaskStage.SNAPSHOT_LOADING,
                 TaskStage.GRAPH_INSPECTION,
-                TaskStage.ENTITY_MATERIALIZATION,
-                TaskStage.RELATION_MATERIALIZATION,
-                TaskStage.FINALIZING,
                 TaskStage.COMPLETED
             );
     }

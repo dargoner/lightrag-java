@@ -2,6 +2,7 @@ package io.github.lightrag.demo;
 
 import io.github.lightrag.api.CreateEntityRequest;
 import io.github.lightrag.api.CreateRelationRequest;
+import io.github.lightrag.api.DeleteRelationRequest;
 import io.github.lightrag.api.GraphEntity;
 import io.github.lightrag.api.GraphRelation;
 import io.github.lightrag.api.LightRag;
@@ -101,14 +102,14 @@ class GraphControllerTest {
                     {
                       "sourceEntityName": "Alice",
                       "targetEntityName": "Bob",
-                      "relationType": "connects",
+                      "keywords": "connects",
                       "description": "Details",
                       "weight": 0.5
                     }
                     """))
             .andExpect(status().isOk())
-            .andExpect(jsonPath("$.id").value("rel-1"))
-            .andExpect(jsonPath("$.type").value("connects"));
+            .andExpect(jsonPath("$.relationId").value("rel-1"))
+            .andExpect(jsonPath("$.keywords").value("connects"));
     }
 
     @Test
@@ -125,7 +126,7 @@ class GraphControllerTest {
     @Test
     void deleteRelationBadRequestWhenLightRagThrows() throws Exception {
         doThrow(new IllegalArgumentException("bad relation"))
-            .when(lightRag).deleteByRelation("alpha", "Alice", "Bob");
+            .when(lightRag).deleteRelation(eq("alpha"), any(DeleteRelationRequest.class));
 
         mockMvc.perform(delete("/graph/relations")
                 .header("X-Workspace-Id", "alpha")

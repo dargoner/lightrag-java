@@ -99,7 +99,8 @@ public final class PostgresSchemaManager {
     private List<Migration> migrations() {
         return List.of(
             new Migration(3, versionThreeStatements()),
-            new Migration(4, versionFourStatements())
+            new Migration(4, versionFourStatements()),
+            new Migration(5, versionFiveStatements())
         );
     }
 
@@ -164,12 +165,14 @@ public final class PostgresSchemaManager {
             """
                 CREATE TABLE IF NOT EXISTS %s (
                     workspace_id TEXT NOT NULL,
-                    id TEXT NOT NULL,
-                    source_entity_id TEXT NOT NULL,
-                    target_entity_id TEXT NOT NULL,
-                    type TEXT NOT NULL,
+                    id VARCHAR(64) NOT NULL,
+                    src_id VARCHAR(256) NOT NULL,
+                    tgt_id VARCHAR(256) NOT NULL,
+                    keywords TEXT NOT NULL,
                     description TEXT NOT NULL,
                     weight DOUBLE PRECISION NOT NULL,
+                    source_id TEXT NOT NULL DEFAULT '',
+                    file_path VARCHAR(32768) NOT NULL DEFAULT '',
                     PRIMARY KEY (workspace_id, id)
                 )
                 """.formatted(config.qualifiedTableName("relations")),
@@ -327,6 +330,12 @@ public final class PostgresSchemaManager {
         );
     }
 
+    private List<String> versionFiveStatements() {
+        return List.of(
+            "DROP TABLE IF EXISTS %s".formatted(config.qualifiedTableName("relation_chunks"))
+        );
+    }
+
     private void ensureSchemaVersionTable(Statement statement) throws SQLException {
         statement.execute(
             """
@@ -394,7 +403,6 @@ public final class PostgresSchemaManager {
             "entity_aliases",
             "entity_chunks",
             "relations",
-            "relation_chunks",
             "vectors",
             "document_status",
             "document_graph_snapshots",

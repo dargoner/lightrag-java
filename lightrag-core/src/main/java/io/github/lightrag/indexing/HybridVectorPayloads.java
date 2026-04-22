@@ -73,7 +73,10 @@ public final class HybridVectorPayloads {
                     vector.id(),
                     vector.vector(),
                     relationSummary(relation),
-                    relationKeywords(relation)
+                    relationKeywords(relation),
+                    relation.srcId(),
+                    relation.tgtId(),
+                    relation.filePath()
                 );
             })
             .toList();
@@ -97,9 +100,10 @@ public final class HybridVectorPayloads {
 
     private static List<String> relationKeywords(Relation relation) {
         return normalizedKeywords(List.of(
-            relation.sourceEntityId(),
-            relation.type(),
-            relation.targetEntityId()
+            relation.srcId(),
+            relation.keywords(),
+            relation.tgtId(),
+            relation.filePath()
         ));
     }
 
@@ -114,9 +118,9 @@ public final class HybridVectorPayloads {
 
     private static String relationSummary(Relation relation) {
         return "%s\n%s\n%s\n%s".formatted(
-            relation.sourceEntityId(),
-            relation.type(),
-            relation.targetEntityId(),
+            relation.srcId(),
+            relation.keywords(),
+            relation.tgtId(),
             relation.description()
         );
     }

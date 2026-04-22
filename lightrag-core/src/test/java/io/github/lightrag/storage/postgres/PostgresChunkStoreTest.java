@@ -5,21 +5,26 @@ import com.zaxxer.hikari.HikariDataSource;
 import io.github.lightrag.storage.ChunkStore;
 import org.junit.jupiter.api.Test;
 import org.testcontainers.containers.PostgreSQLContainer;
+import org.testcontainers.junit.jupiter.Container;
+import org.testcontainers.junit.jupiter.Testcontainers;
 import org.testcontainers.utility.DockerImageName;
 
 import java.sql.DriverManager;
 import java.util.Map;
+import java.util.UUID;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
+@Testcontainers
 class PostgresChunkStoreTest {
+    @Container
+    private static final PostgreSQLContainer<?> POSTGRES = newPostgresContainer();
+
     @Test
     void savesAndLoadsChunksById() {
-        try (
-            var container = newPostgresContainer();
-            var resources = newStoreResources(container);
-        ) {
+        var config = newConfig();
+        try (var resources = newStoreResources(config)) {
             var chunk = new ChunkStore.ChunkRecord(
                 "chunk-1",
                 "doc-1",
@@ -37,10 +42,8 @@ class PostgresChunkStoreTest {
 
     @Test
     void listsChunksInDeterministicIdOrder() {
-        try (
-            var container = newPostgresContainer();
-            var resources = newStoreResources(container);
-        ) {
+        var config = newConfig();
+        try (var resources = newStoreResources(config)) {
             var second = new ChunkStore.ChunkRecord("chunk-2", "doc-1", "Second", 10, 1, Map.of("kind", "body"));
             var first = new ChunkStore.ChunkRecord("chunk-1", "doc-1", "First", 8, 0, Map.of("kind", "intro"));
 
@@ -53,10 +56,8 @@ class PostgresChunkStoreTest {
 
     @Test
     void listsDocumentChunksByOrderThenId() {
-        try (
-            var container = newPostgresContainer();
-            var resources = newStoreResources(container);
-        ) {
+        var config = newConfig();
+        try (var resources = newStoreResources(config)) {
             var laterSameOrder = new ChunkStore.ChunkRecord("chunk-2", "doc-1", "Later", 9, 0, Map.of());
             var first = new ChunkStore.ChunkRecord("chunk-1", "doc-1", "First", 8, 0, Map.of());
             var second = new ChunkStore.ChunkRecord("chunk-3", "doc-1", "Second", 7, 1, Map.of());
@@ -73,56 +74,46 @@ class PostgresChunkStoreTest {
 
     @Test
     void bootstrapRejectsLegacyChunkForeignKeyConstraintSchema() throws Exception {
-        try (var container = newPostgresContainer()) {
-            container.start();
-            var config = new PostgresStorageConfig(
-                container.getJdbcUrl(),
-                container.getUsername(),
-                container.getPassword(),
-                "lightrag",
-                3,
-                "rag_"
-            );
+        var config = newConfig();
 
-            try (
-                var connection = DriverManager.getConnection(
-                    container.getJdbcUrl(),
-                    container.getUsername(),
-                    container.getPassword()
+        try (
+            var connection = DriverManager.getConnection(
+                config.jdbcUrl(),
+                config.username(),
+                config.password()
+            )
+        ) {
+            connection.createStatement().execute("CREATE SCHEMA IF NOT EXISTS " + config.schemaName());
+            connection.createStatement().execute(
+                """
+                CREATE TABLE IF NOT EXISTS %s (
+                    id TEXT PRIMARY KEY,
+                    title TEXT NOT NULL,
+                    content TEXT NOT NULL,
+                    metadata JSONB NOT NULL DEFAULT '{}'::jsonb
                 )
-            ) {
-                connection.createStatement().execute("CREATE SCHEMA IF NOT EXISTS " + config.schemaName());
-                connection.createStatement().execute(
-                    """
-                    CREATE TABLE IF NOT EXISTS %s (
-                        id TEXT PRIMARY KEY,
-                        title TEXT NOT NULL,
-                        content TEXT NOT NULL,
-                        metadata JSONB NOT NULL DEFAULT '{}'::jsonb
-                    )
-                    """.formatted(config.qualifiedTableName("documents"))
-                );
-                connection.createStatement().execute(
-                    """
-                    CREATE TABLE IF NOT EXISTS %s (
-                        id TEXT PRIMARY KEY,
-                        document_id TEXT NOT NULL REFERENCES %s (id) ON DELETE CASCADE,
-                        text TEXT NOT NULL,
-                        token_count INTEGER NOT NULL,
-                        chunk_order INTEGER NOT NULL,
-                        metadata JSONB NOT NULL DEFAULT '{}'::jsonb
-                    )
-                    """.formatted(config.qualifiedTableName("chunks"), config.qualifiedTableName("documents"))
-                );
-            }
+                """.formatted(config.qualifiedTableName("documents"))
+            );
+            connection.createStatement().execute(
+                """
+                CREATE TABLE IF NOT EXISTS %s (
+                    id TEXT PRIMARY KEY,
+                    document_id TEXT NOT NULL REFERENCES %s (id) ON DELETE CASCADE,
+                    text TEXT NOT NULL,
+                    token_count INTEGER NOT NULL,
+                    chunk_order INTEGER NOT NULL,
+                    metadata JSONB NOT NULL DEFAULT '{}'::jsonb
+                )
+                """.formatted(config.qualifiedTableName("chunks"), config.qualifiedTableName("documents"))
+            );
+        }
 
-            var dataSource = newDataSource(config);
-            try (dataSource) {
-                assertThatThrownBy(() -> new PostgresSchemaManager(dataSource, config).bootstrap())
-                    .isInstanceOf(IllegalStateException.class)
-                    .hasMessageContaining("legacy")
-                    .hasMessageContaining("workspace");
-            }
+        var dataSource = newDataSource(config);
+        try (dataSource) {
+            assertThatThrownBy(() -> new PostgresSchemaManager(dataSource, config).bootstrap())
+                .isInstanceOf(IllegalStateException.class)
+                .hasMessageContaining("legacy")
+                .hasMessageContaining("workspace");
         }
     }
 
@@ -132,19 +123,21 @@ class PostgresChunkStoreTest {
         return new PostgreSQLContainer<>(image);
     }
 
-    private static StoreResources newStoreResources(PostgreSQLContainer<?> container) {
-        container.start();
-        var config = new PostgresStorageConfig(
-            container.getJdbcUrl(),
-            container.getUsername(),
-            container.getPassword(),
-            "lightrag",
-            3,
-            "rag_"
-        );
+    private static StoreResources newStoreResources(PostgresStorageConfig config) {
         var dataSource = newDataSource(config);
         new PostgresSchemaManager(dataSource, config).bootstrap();
         return new StoreResources(dataSource, new PostgresChunkStore(dataSource, config));
+    }
+
+    private static PostgresStorageConfig newConfig() {
+        return new PostgresStorageConfig(
+            POSTGRES.getJdbcUrl(),
+            POSTGRES.getUsername(),
+            POSTGRES.getPassword(),
+            "lightrag_" + UUID.randomUUID().toString().replace("-", ""),
+            3,
+            "rag_"
+        );
     }
 
     private static HikariDataSource newDataSource(PostgresStorageConfig config) {

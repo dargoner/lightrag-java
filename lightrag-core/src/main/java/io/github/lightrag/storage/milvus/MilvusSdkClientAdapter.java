@@ -36,11 +36,19 @@ import java.util.Map;
 import java.util.Objects;
 
 public final class MilvusSdkClientAdapter implements MilvusClientAdapter {
+    static final int MILVUS_RELATION_ID_MAX_LENGTH = 64;
+    static final int MILVUS_RELATION_ENDPOINT_MAX_LENGTH = 512;
+    static final int MILVUS_RELATION_FILE_PATH_MAX_LENGTH = 32_768;
+
     private static final String ID_FIELD = "id";
     private static final String DENSE_VECTOR_FIELD = "dense_vector";
     private static final String SEARCHABLE_TEXT_FIELD = "searchable_text";
     private static final String FULL_TEXT_FIELD = "full_text";
     private static final String SPARSE_VECTOR_FIELD = "sparse_vector";
+    private static final String SRC_ID_FIELD = "src_id";
+    private static final String TGT_ID_FIELD = "tgt_id";
+    private static final String FILE_PATH_FIELD = "file_path";
+    private static final String RELATION_NAMESPACE = "relations";
     private static final int MAX_VARCHAR_LENGTH = 65_535;
     private static final int QUERY_PAGE_SIZE = 1_000;
     private static final long DEFAULT_CONNECT_TIMEOUT_MS = 10_000L;
@@ -51,6 +59,7 @@ public final class MilvusSdkClientAdapter implements MilvusClientAdapter {
     private final MilvusClientV2 client;
     private final boolean ownsClient;
     private final ConsistencyLevel queryConsistency;
+    private final java.util.Set<String> relationCollections = java.util.concurrent.ConcurrentHashMap.newKeySet();
 
     public MilvusSdkClientAdapter(MilvusVectorConfig config) {
         this(Objects.requireNonNull(config, "config"), createOwnedClient(config), true);
@@ -74,6 +83,9 @@ public final class MilvusSdkClientAdapter implements MilvusClientAdapter {
     @Override
     public void ensureCollection(CollectionDefinition collectionDefinition) {
         var definition = Objects.requireNonNull(collectionDefinition, "collectionDefinition");
+        if (RELATION_NAMESPACE.equals(definition.namespace())) {
+            relationCollections.add(definition.collectionName());
+        }
         try {
             if (!hasCollection(definition.collectionName())) {
                 createCollection(definition);
@@ -102,7 +114,9 @@ public final class MilvusSdkClientAdapter implements MilvusClientAdapter {
             client.upsert(UpsertReq.builder()
                 .databaseName(config.databaseName())
                 .collectionName(targetCollection)
-                .data(values.stream().map(MilvusSdkClientAdapter::toJsonRow).toList())
+                .data(values.stream()
+                    .map(row -> toJsonRow(row, relationCollections.contains(targetCollection)))
+                    .toList())
                 .build());
         } catch (RuntimeException exception) {
             throw new StorageException("Failed to upsert rows into Milvus collection: " + targetCollection, exception);
@@ -322,6 +336,10 @@ public final class MilvusSdkClientAdapter implements MilvusClientAdapter {
         if (!hasCompatibleBm25Function(schema)) {
             return "bm25 function differs";
         }
+        if (RELATION_NAMESPACE.equals(definition.namespace())
+            && !hasCompatibleRelationMetadataFields(schema)) {
+            return "relation metadata fields differ";
+        }
         return null;
     }
 
@@ -331,7 +349,7 @@ public final class MilvusSdkClientAdapter implements MilvusClientAdapter {
             .collectionName(definition.collectionName())
             .enableDynamicField(false)
             .consistencyLevel(ConsistencyLevel.BOUNDED)
-            .collectionSchema(collectionSchema(definition.vectorDimensions(), definition.analyzerType()))
+            .collectionSchema(collectionSchema(definition))
             .indexParams(indexParams())
             .build());
     }
@@ -384,9 +402,15 @@ public final class MilvusSdkClientAdapter implements MilvusClientAdapter {
         var field = schema.getField(ID_FIELD);
         return field != null
             && field.getDataType() == DataType.VarChar
-            && Integer.valueOf(191).equals(field.getMaxLength())
+            && Integer.valueOf(MILVUS_RELATION_ID_MAX_LENGTH).equals(field.getMaxLength())
             && Boolean.TRUE.equals(field.getIsPrimaryKey())
             && Boolean.FALSE.equals(field.getAutoID());
+    }
+
+    private boolean hasCompatibleRelationMetadataFields(CreateCollectionReq.CollectionSchema schema) {
+        return hasCompatibleVarCharField(schema, SRC_ID_FIELD, MILVUS_RELATION_ENDPOINT_MAX_LENGTH)
+            && hasCompatibleVarCharField(schema, TGT_ID_FIELD, MILVUS_RELATION_ENDPOINT_MAX_LENGTH)
+            && hasCompatibleVarCharField(schema, FILE_PATH_FIELD, MILVUS_RELATION_FILE_PATH_MAX_LENGTH);
     }
 
     private boolean hasCompatibleDenseField(CreateCollectionReq.CollectionSchema schema, int vectorDimensions) {
@@ -430,40 +454,23 @@ public final class MilvusSdkClientAdapter implements MilvusClientAdapter {
         );
     }
 
-    private CreateCollectionReq.CollectionSchema collectionSchema(int vectorDimensions, String analyzerType) {
+    private boolean hasCompatibleVarCharField(
+        CreateCollectionReq.CollectionSchema schema,
+        String fieldName,
+        int maxLength
+    ) {
+        var field = schema.getField(fieldName);
+        return field != null
+            && field.getDataType() == DataType.VarChar
+            && Integer.valueOf(maxLength).equals(field.getMaxLength());
+    }
+
+    static CreateCollectionReq.CollectionSchema collectionSchema(CollectionDefinition definition) {
+        var vectorDimensions = definition.vectorDimensions();
+        var analyzerType = definition.analyzerType();
         var schema = CreateCollectionReq.CollectionSchema.builder()
             .enableDynamicField(false)
-            .fieldSchemaList(List.of(
-                CreateCollectionReq.FieldSchema.builder()
-                    .name(ID_FIELD)
-                    .dataType(DataType.VarChar)
-                    .maxLength(191)
-                    .isPrimaryKey(true)
-                    .autoID(false)
-                    .build(),
-                CreateCollectionReq.FieldSchema.builder()
-                    .name(DENSE_VECTOR_FIELD)
-                    .dataType(DataType.FloatVector)
-                    .dimension(vectorDimensions)
-                    .build(),
-                CreateCollectionReq.FieldSchema.builder()
-                    .name(SEARCHABLE_TEXT_FIELD)
-                    .dataType(DataType.VarChar)
-                    .maxLength(MAX_VARCHAR_LENGTH)
-                    .build(),
-                CreateCollectionReq.FieldSchema.builder()
-                    .name(FULL_TEXT_FIELD)
-                    .dataType(DataType.VarChar)
-                    .maxLength(MAX_VARCHAR_LENGTH)
-                    .enableAnalyzer(true)
-                    .enableMatch(true)
-                    .analyzerParams(Map.of("type", analyzerType))
-                    .build(),
-                CreateCollectionReq.FieldSchema.builder()
-                    .name(SPARSE_VECTOR_FIELD)
-                    .dataType(DataType.SparseFloatVector)
-                    .build()
-            ))
+            .fieldSchemaList(fieldSchemas(vectorDimensions, analyzerType, RELATION_NAMESPACE.equals(definition.namespace())))
             .functionList(List.of(
                 CreateCollectionReq.Function.builder()
                     .name("bm25_full_text")
@@ -474,6 +481,61 @@ public final class MilvusSdkClientAdapter implements MilvusClientAdapter {
             ))
             .build();
         return schema;
+    }
+
+    private static List<CreateCollectionReq.FieldSchema> fieldSchemas(
+        int vectorDimensions,
+        String analyzerType,
+        boolean relationCollection
+    ) {
+        var fields = new ArrayList<CreateCollectionReq.FieldSchema>();
+        fields.add(CreateCollectionReq.FieldSchema.builder()
+            .name(ID_FIELD)
+            .dataType(DataType.VarChar)
+            .maxLength(MILVUS_RELATION_ID_MAX_LENGTH)
+            .isPrimaryKey(true)
+            .autoID(false)
+            .build());
+        fields.add(CreateCollectionReq.FieldSchema.builder()
+            .name(DENSE_VECTOR_FIELD)
+            .dataType(DataType.FloatVector)
+            .dimension(vectorDimensions)
+            .build());
+        fields.add(CreateCollectionReq.FieldSchema.builder()
+            .name(SEARCHABLE_TEXT_FIELD)
+            .dataType(DataType.VarChar)
+            .maxLength(MAX_VARCHAR_LENGTH)
+            .build());
+        fields.add(CreateCollectionReq.FieldSchema.builder()
+            .name(FULL_TEXT_FIELD)
+            .dataType(DataType.VarChar)
+            .maxLength(MAX_VARCHAR_LENGTH)
+            .enableAnalyzer(true)
+            .enableMatch(true)
+            .analyzerParams(Map.of("type", analyzerType))
+            .build());
+        fields.add(CreateCollectionReq.FieldSchema.builder()
+            .name(SPARSE_VECTOR_FIELD)
+            .dataType(DataType.SparseFloatVector)
+            .build());
+        if (relationCollection) {
+            fields.add(CreateCollectionReq.FieldSchema.builder()
+                .name(SRC_ID_FIELD)
+                .dataType(DataType.VarChar)
+                .maxLength(MILVUS_RELATION_ENDPOINT_MAX_LENGTH)
+                .build());
+            fields.add(CreateCollectionReq.FieldSchema.builder()
+                .name(TGT_ID_FIELD)
+                .dataType(DataType.VarChar)
+                .maxLength(MILVUS_RELATION_ENDPOINT_MAX_LENGTH)
+                .build());
+            fields.add(CreateCollectionReq.FieldSchema.builder()
+                .name(FILE_PATH_FIELD)
+                .dataType(DataType.VarChar)
+                .maxLength(MILVUS_RELATION_FILE_PATH_MAX_LENGTH)
+                .build());
+        }
+        return List.copyOf(fields);
     }
 
     private List<IndexParam> indexParams() {
@@ -526,12 +588,17 @@ public final class MilvusSdkClientAdapter implements MilvusClientAdapter {
         return builder.build();
     }
 
-    private static JsonObject toJsonRow(StoredVectorRow row) {
+    private static JsonObject toJsonRow(StoredVectorRow row, boolean relationCollection) {
         var json = new JsonObject();
         json.addProperty(ID_FIELD, row.id());
         json.add(DENSE_VECTOR_FIELD, toJsonArray(row.denseVector()));
         json.addProperty(SEARCHABLE_TEXT_FIELD, row.searchableText());
         json.addProperty(FULL_TEXT_FIELD, row.fullText());
+        if (relationCollection) {
+            json.addProperty(SRC_ID_FIELD, row.srcId());
+            json.addProperty(TGT_ID_FIELD, row.tgtId());
+            json.addProperty(FILE_PATH_FIELD, row.filePath());
+        }
         return json;
     }
 

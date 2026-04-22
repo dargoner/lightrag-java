@@ -5,19 +5,24 @@ import com.zaxxer.hikari.HikariDataSource;
 import io.github.lightrag.storage.GraphStore;
 import org.junit.jupiter.api.Test;
 import org.testcontainers.containers.PostgreSQLContainer;
+import org.testcontainers.junit.jupiter.Container;
+import org.testcontainers.junit.jupiter.Testcontainers;
 import org.testcontainers.utility.DockerImageName;
 
 import java.util.List;
+import java.util.UUID;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
+@Testcontainers
 class PostgresGraphStoreTest {
+    @Container
+    private static final PostgreSQLContainer<?> POSTGRES = newPostgresContainer();
+
     @Test
     void savesAndLoadsEntitiesAndRelations() {
-        try (
-            var container = newPostgresContainer();
-            var resources = newStoreResources(container);
-        ) {
+        var config = newConfig();
+        try (var resources = newStoreResources(config)) {
             var entity = new GraphStore.EntityRecord(
                 "entity-1",
                 "Alice",
@@ -46,10 +51,8 @@ class PostgresGraphStoreTest {
 
     @Test
     void listsEntitiesAndRelationsInDeterministicOrder() {
-        try (
-            var container = newPostgresContainer();
-            var resources = newStoreResources(container);
-        ) {
+        var config = newConfig();
+        try (var resources = newStoreResources(config)) {
             var secondEntity = new GraphStore.EntityRecord("entity-2", "Bob", "person", "Engineer", List.of(), List.of("chunk-2"));
             var firstEntity = new GraphStore.EntityRecord("entity-1", "Alice", "person", "Researcher", List.of("A"), List.of("chunk-1"));
             var secondRelation = new GraphStore.RelationRecord(
@@ -83,10 +86,8 @@ class PostgresGraphStoreTest {
 
     @Test
     void findsOneHopRelationsForEntity() {
-        try (
-            var container = newPostgresContainer();
-            var resources = newStoreResources(container);
-        ) {
+        var config = newConfig();
+        try (var resources = newStoreResources(config)) {
             var first = new GraphStore.RelationRecord(
                 "relation-1",
                 "entity-1",
@@ -115,10 +116,8 @@ class PostgresGraphStoreTest {
 
     @Test
     void overwritingRelationUpdatesEndpointIndexing() {
-        try (
-            var container = newPostgresContainer();
-            var resources = newStoreResources(container);
-        ) {
+        var config = newConfig();
+        try (var resources = newStoreResources(config)) {
             var original = new GraphStore.RelationRecord(
                 "relation-1",
                 "entity-1",
@@ -149,25 +148,53 @@ class PostgresGraphStoreTest {
         }
     }
 
+    @Test
+    void replayingBootstrapDoesNotDeleteExistingRelations() {
+        var config = newConfig();
+        var dataSource = newDataSource(config);
+        try (dataSource) {
+            var manager = new PostgresSchemaManager(dataSource, config);
+            var relation = new GraphStore.RelationRecord(
+                "relation-1",
+                "entity-1",
+                "entity-2",
+                "knows",
+                "Alice knows Bob",
+                0.9d,
+                "chunk-1<SEP>chunk-2",
+                "/tmp/doc.md"
+            );
+
+            manager.bootstrap();
+            new PostgresGraphStore(dataSource, config).saveRelation(relation);
+
+            manager.bootstrap();
+
+            assertThat(new PostgresGraphStore(dataSource, config).loadRelation("relation-1")).contains(relation);
+        }
+    }
+
     private static PostgreSQLContainer<?> newPostgresContainer() {
         var image = DockerImageName.parse("pgvector/pgvector:pg16")
             .asCompatibleSubstituteFor("postgres");
         return new PostgreSQLContainer<>(image);
     }
 
-    private static StoreResources newStoreResources(PostgreSQLContainer<?> container) {
-        container.start();
-        var config = new PostgresStorageConfig(
-            container.getJdbcUrl(),
-            container.getUsername(),
-            container.getPassword(),
-            "lightrag",
-            3,
-            "rag_"
-        );
+    private static StoreResources newStoreResources(PostgresStorageConfig config) {
         var dataSource = newDataSource(config);
         new PostgresSchemaManager(dataSource, config).bootstrap();
         return new StoreResources(dataSource, new PostgresGraphStore(dataSource, config));
+    }
+
+    private static PostgresStorageConfig newConfig() {
+        return new PostgresStorageConfig(
+            POSTGRES.getJdbcUrl(),
+            POSTGRES.getUsername(),
+            POSTGRES.getPassword(),
+            "lightrag_" + UUID.randomUUID().toString().replace("-", ""),
+            3,
+            "rag_"
+        );
     }
 
     private static HikariDataSource newDataSource(PostgresStorageConfig config) {

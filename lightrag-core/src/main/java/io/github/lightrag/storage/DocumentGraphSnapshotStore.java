@@ -89,14 +89,14 @@ public interface DocumentGraphSnapshotStore {
     record ExtractedRelationRecord(
         String sourceEntityName,
         String targetEntityName,
-        String type,
+        String keywords,
         String description,
         double weight
     ) {
         public ExtractedRelationRecord {
             sourceEntityName = requireNonBlank(sourceEntityName, "sourceEntityName");
             targetEntityName = requireNonBlank(targetEntityName, "targetEntityName");
-            type = requireNonBlank(type, "type");
+            keywords = requireNonBlank(keywords, "keywords");
             description = normalizeNullable(description);
             if (!Double.isFinite(weight)) {
                 throw new IllegalArgumentException("weight must be finite");

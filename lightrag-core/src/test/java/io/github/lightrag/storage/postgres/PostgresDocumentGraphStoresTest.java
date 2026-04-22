@@ -14,21 +14,28 @@ import io.github.lightrag.storage.DocumentGraphJournalStore;
 import io.github.lightrag.storage.DocumentGraphSnapshotStore;
 import org.junit.jupiter.api.Test;
 import org.testcontainers.containers.PostgreSQLContainer;
+import org.testcontainers.junit.jupiter.Container;
+import org.testcontainers.junit.jupiter.Testcontainers;
 import org.testcontainers.utility.DockerImageName;
 
 import java.sql.DriverManager;
 import java.time.Instant;
 import java.util.List;
+import java.util.UUID;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
+@Testcontainers
 class PostgresDocumentGraphStoresTest {
+    @Container
+    private static final PostgreSQLContainer<?> POSTGRES = newPostgresContainer();
+
     @Test
     void roundTripsDocumentAndChunkSnapshots() {
+        var config = newConfig();
         try (
-            var container = newPostgresContainer();
-            var resources = newStoreResources(container, "workspace-a");
+            var resources = newStoreResources(config, "workspace-a");
         ) {
             var documentSnapshot = new DocumentGraphSnapshotStore.DocumentGraphSnapshot(
                 "doc-1",
@@ -78,9 +85,9 @@ class PostgresDocumentGraphStoresTest {
 
     @Test
     void roundTripsDocumentAndChunkJournals() {
+        var config = newConfig();
         try (
-            var container = newPostgresContainer();
-            var resources = newStoreResources(container, "workspace-a");
+            var resources = newStoreResources(config, "workspace-a");
         ) {
             var documentJournal = new DocumentGraphJournalStore.DocumentGraphJournal(
                 "doc-1",
@@ -103,9 +110,9 @@ class PostgresDocumentGraphStoresTest {
                     3,
                     ChunkMergeStatus.FAILED,
                     ChunkGraphStatus.PARTIAL,
-                    List.of("entity:alice"),
+                    List.of("alice"),
                     List.of("relation:alice->bob"),
-                    List.of("entity:alice"),
+                    List.of("alice"),
                     List.of(),
                     FailureStage.RELATION_MATERIALIZATION,
                     Instant.parse("2026-01-02T00:06:00Z"),
@@ -117,9 +124,9 @@ class PostgresDocumentGraphStoresTest {
                     3,
                     ChunkMergeStatus.SUCCEEDED,
                     ChunkGraphStatus.MATERIALIZED,
-                    List.of("entity:alice"),
+                    List.of("alice"),
                     List.of("relation:alice->bob"),
-                    List.of("entity:alice"),
+                    List.of("alice"),
                     List.of("relation:alice->bob"),
                     null,
                     Instant.parse("2026-01-02T00:05:30Z"),
@@ -140,10 +147,10 @@ class PostgresDocumentGraphStoresTest {
 
     @Test
     void isolatesDataByWorkspace() {
+        var config = newConfig();
         try (
-            var container = newPostgresContainer();
-            var workspaceA = newStoreResources(container, "workspace-a");
-            var workspaceB = newStoreResources(container, "workspace-b");
+            var workspaceA = newStoreResources(config, "workspace-a");
+            var workspaceB = newStoreResources(config, "workspace-b");
         ) {
             var snapshot = new DocumentGraphSnapshotStore.DocumentGraphSnapshot(
                 "doc-1",
@@ -182,9 +189,9 @@ class PostgresDocumentGraphStoresTest {
 
     @Test
     void saveChunksReplacesCurrentChunkSnapshotSetAndCleansRemovedRows() {
+        var config = newConfig();
         try (
-            var container = newPostgresContainer();
-            var resources = newStoreResources(container, "workspace-a");
+            var resources = newStoreResources(config, "workspace-a");
         ) {
             resources.snapshotStore().saveChunks("doc-1", List.of(
                 chunkSnapshot("doc-1", "chunk-1", 0, "hash-1"),
@@ -203,9 +210,9 @@ class PostgresDocumentGraphStoresTest {
 
     @Test
     void appendChunksUpsertsPerChunkAndKeepsLatestRow() {
+        var config = newConfig();
         try (
-            var container = newPostgresContainer();
-            var resources = newStoreResources(container, "workspace-a");
+            var resources = newStoreResources(config, "workspace-a");
         ) {
             resources.journalStore().appendChunks("doc-1", List.of(
                 chunkJournal("doc-1", "chunk-1", 1, ChunkMergeStatus.RUNNING, ChunkGraphStatus.NOT_MATERIALIZED, "first")
@@ -225,42 +232,32 @@ class PostgresDocumentGraphStoresTest {
 
     @Test
     void bootstrapRejectsGraphStateTablesMissingWorkspaceId() throws Exception {
-        try (var container = newPostgresContainer()) {
-            container.start();
-            var config = new PostgresStorageConfig(
-                container.getJdbcUrl(),
-                container.getUsername(),
-                container.getPassword(),
-                "lightrag",
-                3,
-                "rag_"
+        var config = newConfig();
+
+        try (
+            var connection = DriverManager.getConnection(
+                config.jdbcUrl(),
+                config.username(),
+                config.password()
             );
+            var statement = connection.createStatement()
+        ) {
+            statement.execute("CREATE SCHEMA IF NOT EXISTS " + config.schemaName());
+            statement.execute(
+                """
+                CREATE TABLE IF NOT EXISTS %s (
+                    document_id TEXT NOT NULL PRIMARY KEY,
+                    version INTEGER NOT NULL
+                )
+                """.formatted(config.qualifiedTableName("document_graph_snapshots"))
+            );
+        }
 
-            try (
-                var connection = DriverManager.getConnection(
-                    container.getJdbcUrl(),
-                    container.getUsername(),
-                    container.getPassword()
-                );
-                var statement = connection.createStatement()
-            ) {
-                statement.execute("CREATE SCHEMA IF NOT EXISTS " + config.schemaName());
-                statement.execute(
-                    """
-                    CREATE TABLE IF NOT EXISTS %s (
-                        document_id TEXT NOT NULL PRIMARY KEY,
-                        version INTEGER NOT NULL
-                    )
-                    """.formatted(config.qualifiedTableName("document_graph_snapshots"))
-                );
-            }
-
-            try (var dataSource = newDataSource(config)) {
-                assertThatThrownBy(() -> new PostgresSchemaManager(dataSource, config).bootstrap())
-                    .isInstanceOf(IllegalStateException.class)
-                    .hasMessageContaining("workspace_id")
-                    .hasMessageContaining("document_graph_snapshots");
-            }
+        try (var dataSource = newDataSource(config)) {
+            assertThatThrownBy(() -> new PostgresSchemaManager(dataSource, config).bootstrap())
+                .isInstanceOf(IllegalStateException.class)
+                .hasMessageContaining("workspace_id")
+                .hasMessageContaining("document_graph_snapshots");
         }
     }
 
@@ -313,24 +310,24 @@ class PostgresDocumentGraphStoresTest {
         return new PostgreSQLContainer<>(image);
     }
 
-    private static StoreResources newStoreResources(PostgreSQLContainer<?> container, String workspaceId) {
-        if (!container.isRunning()) {
-            container.start();
-        }
-        var config = new PostgresStorageConfig(
-            container.getJdbcUrl(),
-            container.getUsername(),
-            container.getPassword(),
-            "lightrag",
-            3,
-            "rag_"
-        );
+    private static StoreResources newStoreResources(PostgresStorageConfig config, String workspaceId) {
         var dataSource = newDataSource(config);
         new PostgresSchemaManager(dataSource, config).bootstrap();
         return new StoreResources(
             dataSource,
             new PostgresDocumentGraphSnapshotStore(dataSource, config, workspaceId),
             new PostgresDocumentGraphJournalStore(dataSource, config, workspaceId)
+        );
+    }
+
+    private static PostgresStorageConfig newConfig() {
+        return new PostgresStorageConfig(
+            POSTGRES.getJdbcUrl(),
+            POSTGRES.getUsername(),
+            POSTGRES.getPassword(),
+            "lightrag_" + UUID.randomUUID().toString().replace("-", ""),
+            3,
+            "rag_"
         );
     }
 

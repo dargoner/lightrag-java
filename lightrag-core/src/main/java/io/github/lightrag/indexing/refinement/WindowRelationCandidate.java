@@ -5,7 +5,7 @@ import java.util.List;
 public record WindowRelationCandidate(
     String sourceEntityName,
     String targetEntityName,
-    String type,
+    String keywords,
     String description,
     Double weight,
     List<Integer> supportingChunkIndexes

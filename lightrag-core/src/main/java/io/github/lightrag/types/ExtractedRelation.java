@@ -5,14 +5,14 @@ import java.util.Objects;
 public record ExtractedRelation(
     String sourceEntityName,
     String targetEntityName,
-    String type,
+    String keywords,
     String description,
     Double weight
 ) {
     public ExtractedRelation {
         sourceEntityName = requireNonBlank(sourceEntityName, "sourceEntityName");
         targetEntityName = requireNonBlank(targetEntityName, "targetEntityName");
-        type = requireNonBlank(type, "type");
+        keywords = requireNonBlank(keywords, "keywords");
         description = description == null ? "" : description.strip();
         weight = weight == null ? 1.0d : weight;
         if (!Double.isFinite(weight)) {

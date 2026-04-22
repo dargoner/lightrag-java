@@ -551,7 +551,7 @@ The current implementation is intentionally narrow:
 When a multi-hop path is selected, the assembled context includes structured sections such as:
 
 - `Reasoning Path 1`
-- `Hop 1: A --relation--> B`
+- `Hop 1: A -> B | keywords: relation`
 - `Relation detail: ...`
 - `Evidence [chunk-id]: ...`
 
@@ -818,7 +818,8 @@ The Java SDK now supports manual graph mutations in addition to document ingest:
 - `createEntity(String workspaceId, CreateEntityRequest request)`
 - `editEntity(String workspaceId, EditEntityRequest request)`
 - `createRelation(String workspaceId, CreateRelationRequest request)`
-- `editRelation(String workspaceId, EditRelationRequest request)`
+- `updateRelation(String workspaceId, UpdateRelationRequest request)`
+- `deleteRelation(String workspaceId, DeleteRelationRequest request)`
 
 ```java
 var alice = rag.createEntity("default", CreateEntityRequest.builder()
@@ -837,7 +838,7 @@ var bob = rag.createEntity("default", CreateEntityRequest.builder()
 var worksWith = rag.createRelation("default", CreateRelationRequest.builder()
     .sourceEntityName("Alice")
     .targetEntityName("Bob")
-    .relationType("works_with")
+    .keywords("works_with")
     .description("Cross-team collaboration")
     .weight(0.8d)
     .build());
@@ -848,11 +849,10 @@ var robert = rag.editEntity("default", EditEntityRequest.builder()
     .description("Principal investigator")
     .build());
 
-var reportsTo = rag.editRelation("default", EditRelationRequest.builder()
+var reportsTo = rag.updateRelation("default", UpdateRelationRequest.builder()
     .sourceEntityName("Alice")
     .targetEntityName("Robert")
-    .currentRelationType("works_with")
-    .newRelationType("reports_to")
+    .keywords("reports_to")
     .description("Formal reporting line")
     .weight(0.9d)
     .build());
@@ -868,8 +868,9 @@ var merged = rag.mergeEntities("default", MergeEntitiesRequest.builder()
 Notes:
 - Entity lookup is deterministic: exact normalized names win, aliases are only used when they resolve to exactly one entity.
 - Entity names and aliases share one external lookup namespace, so a new name or alias cannot reuse another entity's name or alias.
-- Java relation operations require an explicit relation type because relation identity is `sourceEntityId + normalizedRelationType + targetEntityId`.
-- `mergeEntities(...)` merges existing source entities into an existing target entity, redirects source relations, folds duplicate rewritten relations, and drops self-loops created by the merge.
+- Java relation operations align with upstream LightRAG: relation identity is the canonical endpoint pair, while relation semantics live in `keywords`.
+- Relation IDs use the upstream-style short format `rel-<md5(canonical_src + canonical_tgt)>`.
+- `mergeEntities(...)` merges existing source entities into an existing target entity, redirects source relations onto canonical endpoint pairs, folds duplicate rewritten relations, and drops self-loops created by the merge.
 
 ## PostgreSQL Storage
 

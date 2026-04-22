@@ -109,7 +109,7 @@ class MilvusSdkClientAdapterIntegrationTest {
             createHybridCollection(client, config, collectionName, 3, "english");
             upsertSeedRow(client, config, collectionName);
 
-            adapter.ensureCollection(new MilvusClientAdapter.CollectionDefinition(collectionName, 3, "chinese"));
+            adapter.ensureCollection(new MilvusClientAdapter.CollectionDefinition(collectionName, "chunks", 3, "chinese"));
 
             var description = client.describeCollection(DescribeCollectionReq.builder()
                 .databaseName(config.databaseName())
@@ -145,7 +145,7 @@ class MilvusSdkClientAdapterIntegrationTest {
             upsertSeedRow(client, config, collectionName);
 
             assertThatThrownBy(() -> adapter.ensureCollection(
-                new MilvusClientAdapter.CollectionDefinition(collectionName, 3, "chinese")
+                new MilvusClientAdapter.CollectionDefinition(collectionName, "chunks", 3, "chinese")
             ))
                 .isInstanceOf(StorageException.class)
                 .hasMessageContaining("schema drift");
@@ -187,7 +187,7 @@ class MilvusSdkClientAdapterIntegrationTest {
             createHybridCollection(client, config, collectionName, 3, "english");
             upsertSeedRow(client, config, collectionName);
 
-            adapter.ensureCollection(new MilvusClientAdapter.CollectionDefinition(collectionName, 3, "chinese"));
+            adapter.ensureCollection(new MilvusClientAdapter.CollectionDefinition(collectionName, "chunks", 3, "chinese"));
 
             var description = client.describeCollection(DescribeCollectionReq.builder()
                 .databaseName(config.databaseName())

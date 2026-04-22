@@ -22,6 +22,7 @@ import io.github.lightrag.storage.SnapshotStore;
 import io.github.lightrag.storage.TaskStageStore;
 import io.github.lightrag.storage.TaskStore;
 import io.github.lightrag.task.TaskMetadataReporter;
+import io.github.lightrag.support.RelationIds;
 import io.github.lightrag.storage.memory.InMemoryGraphStore;
 import io.github.lightrag.storage.memory.InMemoryVectorStore;
 import io.github.lightrag.types.Chunk;
@@ -142,9 +143,9 @@ class GraphMaterializationPipelineTest {
         ));
         ((InMemoryGraphStore) storage.graphStore()).restore(
             List.of(
-                new io.github.lightrag.storage.GraphStore.EntityRecord("entity:alice", "Alice", "person", "Alice", List.of(), List.of("doc-1:0")),
-                new io.github.lightrag.storage.GraphStore.EntityRecord("entity:bob", "Bob", "person", "Bob", List.of(), List.of("doc-1:0", "doc-1:1")),
-                new io.github.lightrag.storage.GraphStore.EntityRecord("entity:carol", "Carol", "person", "Carol", List.of(), List.of("doc-1:1"))
+                new io.github.lightrag.storage.GraphStore.EntityRecord("alice", "Alice", "person", "Alice", List.of(), List.of("doc-1:0")),
+                new io.github.lightrag.storage.GraphStore.EntityRecord("bob", "Bob", "person", "Bob", List.of(), List.of("doc-1:0", "doc-1:1")),
+                new io.github.lightrag.storage.GraphStore.EntityRecord("carol", "Carol", "person", "Carol", List.of(), List.of("doc-1:1"))
             ),
             List.of(
                 new io.github.lightrag.storage.GraphStore.RelationRecord(
@@ -280,13 +281,13 @@ class GraphMaterializationPipelineTest {
             )
         ));
         ((InMemoryGraphStore) storage.graphStore()).restore(
-            List.of(((InMemoryGraphStore) storage.graphStore()).loadEntity("entity:alice").orElseThrow()),
+            List.of(((InMemoryGraphStore) storage.graphStore()).loadEntity("alice").orElseThrow()),
             List.of()
         );
         ((InMemoryVectorStore) storage.vectorStore()).restore(Map.of(
             StorageSnapshots.ENTITY_NAMESPACE,
             List.of(((InMemoryVectorStore) storage.vectorStore()).list(StorageSnapshots.ENTITY_NAMESPACE).stream()
-                .filter(vector -> vector.id().equals("entity:alice"))
+                .filter(vector -> vector.id().equals("alice"))
                 .findFirst()
                 .orElseThrow())
         ));
@@ -396,18 +397,18 @@ class GraphMaterializationPipelineTest {
     }
 
     private static String entityKey(String name) {
-        return "entity:" + name.strip().toLowerCase(Locale.ROOT);
+        return "" + name.strip().toLowerCase(Locale.ROOT);
     }
 
     private static String relationKey(String source, String type, String target) {
-        return "relation:" + entityKey(source) + "|" + type.toLowerCase(Locale.ROOT) + "|" + entityKey(target);
+        return RelationIds.relationId(entityKey(source), entityKey(target));
     }
 
     private static final class FakeChatModel implements ChatModel {
         @Override
         public String generate(ChatRequest request) {
             return """
-                {"entities":[{"name":"Alice","type":"person","description":"Alice","aliases":[]},{"name":"Bob","type":"person","description":"Bob","aliases":[]}],"relations":[{"sourceEntityName":"Alice","targetEntityName":"Bob","type":"works_with","description":"works with","weight":1.0}]}
+                {"entities":[{"name":"Alice","type":"person","description":"Alice","aliases":[]},{"name":"Bob","type":"person","description":"Bob","aliases":[]}],"relations":[{"source_entity":"Alice","target_entity":"Bob","relationship_keywords":"works_with","relationship_description":"works with","weight":1.0}]}
                 """;
         }
     }

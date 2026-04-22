@@ -6,6 +6,7 @@ import io.github.lightrag.types.Relation;
 import io.github.lightrag.types.ScoredEntity;
 import io.github.lightrag.types.ScoredRelation;
 import io.github.lightrag.types.reasoning.PathRetrievalResult;
+import io.github.lightrag.types.reasoning.RelationEndpoint;
 import io.github.lightrag.types.reasoning.ReasoningPath;
 import org.junit.jupiter.api.Test;
 
@@ -17,9 +18,9 @@ class DefaultPathScorerTest {
     @Test
     void ranksBetterSupportedPathAboveWeakerAlternative() {
         var scorer = new DefaultPathScorer();
-        var atlas = new Entity("entity:atlas", "Atlas", "Component", "", List.of(), List.of("chunk-1"));
-        var graphStore = new Entity("entity:graphstore", "GraphStore", "Service", "", List.of(), List.of("chunk-1", "chunk-2"));
-        var team = new Entity("entity:team", "KnowledgeGraphTeam", "Team", "", List.of(), List.of("chunk-2"));
+        var atlas = new Entity("atlas", "Atlas", "Component", "", List.of(), List.of("chunk-1"));
+        var graphStore = new Entity("graphstore", "GraphStore", "Service", "", List.of(), List.of("chunk-1", "chunk-2"));
+        var team = new Entity("team", "KnowledgeGraphTeam", "Team", "", List.of(), List.of("chunk-2"));
         var dependsOn = new Relation("relation:1", atlas.id(), graphStore.id(), "depends_on", "", 1.0d, List.of("chunk-1"));
         var ownedBy = new Relation("relation:2", graphStore.id(), team.id(), "owned_by", "", 1.0d, List.of("chunk-2"));
 
@@ -35,14 +36,17 @@ class DefaultPathScorerTest {
             List.of(
                 new ReasoningPath(
                     List.of(atlas.id(), graphStore.id()),
-                    List.of(dependsOn.id()),
+                    List.of(new RelationEndpoint(atlas.id(), graphStore.id())),
                     List.of("chunk-1"),
                     1,
                     0.0d
                 ),
                 new ReasoningPath(
                     List.of(atlas.id(), graphStore.id(), team.id()),
-                    List.of(dependsOn.id(), ownedBy.id()),
+                    List.of(
+                        new RelationEndpoint(atlas.id(), graphStore.id()),
+                        new RelationEndpoint(graphStore.id(), team.id())
+                    ),
                     List.of("chunk-1", "chunk-2"),
                     2,
                     0.0d
@@ -62,9 +66,9 @@ class DefaultPathScorerTest {
     @Test
     void prefersHigherWeightRelationWhenOtherSignalsAreSimilar() {
         var scorer = new DefaultPathScorer();
-        var atlas = new Entity("entity:atlas", "Atlas", "Component", "", List.of(), List.of("chunk-1"));
-        var graphStore = new Entity("entity:graphstore", "GraphStore", "Service", "", List.of(), List.of("chunk-1"));
-        var platform = new Entity("entity:platform", "Platform", "System", "", List.of(), List.of("chunk-2"));
+        var atlas = new Entity("atlas", "Atlas", "Component", "", List.of(), List.of("chunk-1"));
+        var graphStore = new Entity("graphstore", "GraphStore", "Service", "", List.of(), List.of("chunk-1"));
+        var platform = new Entity("platform", "Platform", "System", "", List.of(), List.of("chunk-2"));
         var weak = new Relation("relation:weak", atlas.id(), graphStore.id(), "depends_on", "", 0.2d, List.of("chunk-1"));
         var strong = new Relation("relation:strong", atlas.id(), platform.id(), "depends_on", "", 1.0d, List.of("chunk-2"));
 
@@ -77,21 +81,34 @@ class DefaultPathScorerTest {
                 new ScoredRelation(strong.id(), strong, 0.90d)
             ),
             List.of(
-                new ReasoningPath(List.of(atlas.id(), graphStore.id()), List.of(weak.id()), List.of("chunk-1"), 1, 0.0d),
-                new ReasoningPath(List.of(atlas.id(), platform.id()), List.of(strong.id()), List.of("chunk-2"), 1, 0.0d)
+                new ReasoningPath(
+                    List.of(atlas.id(), graphStore.id()),
+                    List.of(new RelationEndpoint(atlas.id(), graphStore.id())),
+                    List.of("chunk-1"),
+                    1,
+                    0.0d
+                ),
+                new ReasoningPath(
+                    List.of(atlas.id(), platform.id()),
+                    List.of(new RelationEndpoint(atlas.id(), platform.id())),
+                    List.of("chunk-2"),
+                    1,
+                    0.0d
+                )
             )
         ));
 
-        assertThat(reranked.get(0).relationIds()).containsExactly("relation:strong");
+        assertThat(reranked.get(0).relationEndpoints())
+            .containsExactly(new RelationEndpoint(atlas.id(), platform.id()));
     }
 
     @Test
     void prefersPathWhoseTerminalEntityMatchesQueryTarget() {
         var scorer = new DefaultPathScorer();
-        var atlas = new Entity("entity:atlas", "Atlas", "Component", "", List.of(), List.of("chunk-1"));
-        var graphStore = new Entity("entity:graphstore", "GraphStore", "Service", "", List.of(), List.of("chunk-1"));
-        var team = new Entity("entity:team", "KnowledgeGraphTeam", "Team", "", List.of(), List.of("chunk-2"));
-        var platform = new Entity("entity:platform", "PlatformOps", "Team", "", List.of(), List.of("chunk-3"));
+        var atlas = new Entity("atlas", "Atlas", "Component", "", List.of(), List.of("chunk-1"));
+        var graphStore = new Entity("graphstore", "GraphStore", "Service", "", List.of(), List.of("chunk-1"));
+        var team = new Entity("team", "KnowledgeGraphTeam", "Team", "", List.of(), List.of("chunk-2"));
+        var platform = new Entity("platform", "PlatformOps", "Team", "", List.of(), List.of("chunk-3"));
         var dependsOn = new Relation("relation:dependsOn", atlas.id(), graphStore.id(), "depends_on", "", 0.9d, List.of("chunk-1"));
         var ownedBy = new Relation("relation:ownedBy", graphStore.id(), team.id(), "owned_by", "", 0.8d, List.of("chunk-2"));
         var operatedBy = new Relation("relation:operatedBy", graphStore.id(), platform.id(), "operated_by", "", 1.0d, List.of("chunk-3"));
@@ -111,8 +128,26 @@ class DefaultPathScorerTest {
                 new ScoredRelation(operatedBy.id(), operatedBy, 0.95d)
             ),
             List.of(
-                new ReasoningPath(List.of(atlas.id(), graphStore.id(), team.id()), List.of(dependsOn.id(), ownedBy.id()), List.of("chunk-1", "chunk-2"), 2, 0.0d),
-                new ReasoningPath(List.of(atlas.id(), graphStore.id(), platform.id()), List.of(dependsOn.id(), operatedBy.id()), List.of("chunk-1", "chunk-3"), 2, 0.0d)
+                new ReasoningPath(
+                    List.of(atlas.id(), graphStore.id(), team.id()),
+                    List.of(
+                        new RelationEndpoint(atlas.id(), graphStore.id()),
+                        new RelationEndpoint(graphStore.id(), team.id())
+                    ),
+                    List.of("chunk-1", "chunk-2"),
+                    2,
+                    0.0d
+                ),
+                new ReasoningPath(
+                    List.of(atlas.id(), graphStore.id(), platform.id()),
+                    List.of(
+                        new RelationEndpoint(atlas.id(), graphStore.id()),
+                        new RelationEndpoint(graphStore.id(), platform.id())
+                    ),
+                    List.of("chunk-1", "chunk-3"),
+                    2,
+                    0.0d
+                )
             )
         ));
 

@@ -1177,7 +1177,7 @@ class QueryEngineTest {
             List.of(),
             List.of(),
             List.of(scoredChunk("chunk-2", "GraphStore 服务由知识图谱组维护。", 0.95d)),
-            "Reasoning Path 1\nHop 1: Atlas --depends_on--> GraphStore\nHop 2: GraphStore --owned_by--> KnowledgeGraphTeam"
+            "Reasoning Path 1\nHop 1: Atlas -> GraphStore | keywords: depends_on\nHop 2: GraphStore -> KnowledgeGraphTeam | keywords: owned_by"
         ));
         var engine = new QueryEngine(
             chatModel,

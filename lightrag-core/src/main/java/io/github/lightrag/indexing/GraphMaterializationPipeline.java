@@ -575,7 +575,7 @@ public final class GraphMaterializationPipeline {
                         .map(relation -> new DocumentGraphSnapshotStore.ExtractedRelationRecord(
                             relation.sourceEntityName(),
                             relation.targetEntityName(),
-                            relation.type(),
+                            relation.keywords(),
                             relation.description(),
                             relation.weight()
                         ))
@@ -605,7 +605,7 @@ public final class GraphMaterializationPipeline {
                         .map(relation -> new io.github.lightrag.types.ExtractedRelation(
                             relation.sourceEntityName(),
                             relation.targetEntityName(),
-                            relation.type(),
+                            relation.keywords(),
                             relation.description() == null ? "" : relation.description(),
                             relation.weight()
                         ))
@@ -865,9 +865,9 @@ public final class GraphMaterializationPipeline {
     private static GraphStore.RelationRecord mergeRelation(GraphStore.RelationRecord existing, Relation incoming) {
         return new GraphStore.RelationRecord(
             existing.id(),
-            existing.sourceEntityId(),
-            existing.targetEntityId(),
-            existing.type(),
+            existing.srcId(),
+            existing.tgtId(),
+            existing.keywords(),
             existing.description().isEmpty() ? incoming.description() : existing.description(),
             Math.max(existing.weight(), incoming.weight()),
             union(existing.sourceChunkIds(), incoming.sourceChunkIds())
@@ -888,9 +888,9 @@ public final class GraphMaterializationPipeline {
     private static GraphStore.RelationRecord toRelationRecord(Relation relation) {
         return new GraphStore.RelationRecord(
             relation.id(),
-            relation.sourceEntityId(),
-            relation.targetEntityId(),
-            relation.type(),
+            relation.srcId(),
+            relation.tgtId(),
+            relation.keywords(),
             relation.description(),
             relation.weight(),
             relation.sourceChunkIds()
@@ -908,9 +908,9 @@ public final class GraphMaterializationPipeline {
 
     private static String relationSummary(Relation relation) {
         return "%s\n%s\n%s\n%s".formatted(
-            relation.sourceEntityId(),
-            relation.type(),
-            relation.targetEntityId(),
+            relation.srcId(),
+            relation.keywords(),
+            relation.tgtId(),
             relation.description()
         );
     }

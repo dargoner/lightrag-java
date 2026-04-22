@@ -1,6 +1,7 @@
 package io.github.lightrag.query;
 
 import io.github.lightrag.api.QueryRequest;
+import io.github.lightrag.types.reasoning.RelationEndpoint;
 import io.github.lightrag.types.reasoning.PathRetrievalResult;
 import io.github.lightrag.types.reasoning.ReasoningPath;
 
@@ -22,11 +23,15 @@ public final class DefaultPathScorer implements PathScorer {
             entityScores.put(entity.entityId(), entity.score());
             entityNames.put(entity.entityId(), entity.entity().name());
         }
-        var relationScores = new LinkedHashMap<String, Double>();
-        var relationWeights = new LinkedHashMap<String, Double>();
+        var relationScores = new LinkedHashMap<RelationEndpoint, Double>();
+        var relationWeights = new LinkedHashMap<RelationEndpoint, Double>();
         for (var relation : result.seedRelations()) {
-            relationScores.put(relation.relationId(), relation.score());
-            relationWeights.put(relation.relationId(), relation.relation().weight());
+            var endpoint = new RelationEndpoint(
+                relation.relation().srcId(),
+                relation.relation().tgtId()
+            );
+            relationScores.put(endpoint, relation.score());
+            relationWeights.put(endpoint, relation.relation().weight());
         }
         return result.paths().stream()
             .map(path -> withScore(path, request, entityScores, entityNames, relationScores, relationWeights))
@@ -40,17 +45,17 @@ public final class DefaultPathScorer implements PathScorer {
         QueryRequest request,
         Map<String, Double> entityScores,
         Map<String, String> entityNames,
-        Map<String, Double> relationScores,
-        Map<String, Double> relationWeights
+        Map<RelationEndpoint, Double> relationScores,
+        Map<RelationEndpoint, Double> relationWeights
     ) {
         double seedScore = entityScores.getOrDefault(path.entityIds().get(0), 0.0d);
         double terminalEntityScore = entityScores.getOrDefault(path.entityIds().get(path.entityIds().size() - 1), 0.0d);
-        double avgRelationScore = path.relationIds().stream()
-            .mapToDouble(relationId -> relationScores.getOrDefault(relationId, 0.0d))
+        double avgRelationScore = path.relationEndpoints().stream()
+            .mapToDouble(relationEndpoint -> relationScores.getOrDefault(relationEndpoint, 0.0d))
             .average()
             .orElse(0.0d);
-        double avgRelationWeight = path.relationIds().stream()
-            .mapToDouble(relationId -> relationWeights.getOrDefault(relationId, 0.0d))
+        double avgRelationWeight = path.relationEndpoints().stream()
+            .mapToDouble(relationEndpoint -> relationWeights.getOrDefault(relationEndpoint, 0.0d))
             .average()
             .orElse(0.0d);
         double evidenceCoverage = Math.min(1.0d, (double) path.supportingChunkIds().size() / Math.max(1, path.hopCount()));
@@ -72,7 +77,7 @@ public final class DefaultPathScorer implements PathScorer {
             - duplicatePenalty;
         return new ReasoningPath(
             path.entityIds(),
-            path.relationIds(),
+            path.relationEndpoints(),
             path.supportingChunkIds(),
             path.hopCount(),
             Math.max(score, 0.0d)

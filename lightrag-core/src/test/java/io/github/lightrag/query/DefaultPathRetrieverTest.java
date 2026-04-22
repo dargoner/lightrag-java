@@ -9,6 +9,7 @@ import io.github.lightrag.types.ScoredChunk;
 import io.github.lightrag.types.ScoredEntity;
 import io.github.lightrag.types.ScoredRelation;
 import io.github.lightrag.types.reasoning.PathRetrievalResult;
+import io.github.lightrag.types.reasoning.RelationEndpoint;
 import org.junit.jupiter.api.Test;
 
 import java.util.LinkedHashMap;
@@ -23,8 +24,8 @@ class DefaultPathRetrieverTest {
     @Test
     void reasoningPathRejectsInvalidShape() {
         assertThatThrownBy(() -> new io.github.lightrag.types.reasoning.ReasoningPath(
-            List.of("entity:atlas"),
-            List.of("relation:1"),
+            List.of("atlas"),
+            List.of(new RelationEndpoint("atlas", "graphstore")),
             List.of("chunk-1"),
             1,
             0.0d
@@ -35,9 +36,9 @@ class DefaultPathRetrieverTest {
 
     @Test
     void retrievesOneHopAndTwoHopPathsFromSeedEntity() {
-        var atlas = entity("entity:atlas", "Atlas", List.of("chunk-1"));
-        var graphStore = entity("entity:graphstore", "GraphStore", List.of("chunk-1", "chunk-2"));
-        var team = entity("entity:team", "KnowledgeGraphTeam", List.of("chunk-2"));
+        var atlas = entity("atlas", "Atlas", List.of("chunk-1"));
+        var graphStore = entity("graphstore", "GraphStore", List.of("chunk-1", "chunk-2"));
+        var team = entity("team", "KnowledgeGraphTeam", List.of("chunk-2"));
         var dependsOn = relation("relation:atlas|depends_on|graphstore", atlas.id(), graphStore.id(), "depends_on", List.of("chunk-1"));
         var ownedBy = relation("relation:graphstore|owned_by|team", graphStore.id(), team.id(), "owned_by", List.of("chunk-2"));
         var store = new FakeGraphStore(List.of(atlas, graphStore, team), List.of(dependsOn, ownedBy));
@@ -102,9 +103,9 @@ class DefaultPathRetrieverTest {
             for (var relation : relations) {
                 relationsById.put(relation.id(), new RelationRecord(
                     relation.id(),
-                    relation.sourceEntityId(),
-                    relation.targetEntityId(),
-                    relation.type(),
+                    relation.srcId(),
+                    relation.tgtId(),
+                    relation.keywords(),
                     relation.description(),
                     relation.weight(),
                     relation.sourceChunkIds()
@@ -145,7 +146,7 @@ class DefaultPathRetrieverTest {
         @Override
         public List<RelationRecord> findRelations(String entityId) {
             return relationsById.values().stream()
-                .filter(relation -> relation.sourceEntityId().equals(entityId) || relation.targetEntityId().equals(entityId))
+                .filter(relation -> relation.srcId().equals(entityId) || relation.tgtId().equals(entityId))
                 .toList();
         }
     }

@@ -10,6 +10,7 @@ import org.junit.jupiter.api.Test;
 import java.util.List;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static io.github.lightrag.support.RelationIds.relationId;
 
 class GraphAssemblerTest {
     @Test
@@ -22,7 +23,7 @@ class GraphAssemblerTest {
         ));
 
         assertThat(graph.entities()).containsExactly(
-            new Entity("entity:alice", "Alice", "person", "Researcher", List.of(), List.of("chunk-1", "chunk-2"))
+            new Entity("alice", "Alice", "person", "Researcher", List.of(), List.of("chunk-1", "chunk-2"))
         );
         assertThat(graph.relations()).isEmpty();
     }
@@ -37,12 +38,12 @@ class GraphAssemblerTest {
         ));
 
         assertThat(graph.entities()).containsExactly(
-            new Entity("entity:robert", "Robert", "person", "Lead", List.of("Bob", "Bobby"), List.of("chunk-1", "chunk-2"))
+            new Entity("robert", "Robert", "person", "Lead", List.of("Bob", "Bobby"), List.of("chunk-1", "chunk-2"))
         );
     }
 
     @Test
-    void mergesRelationsByNormalizedEndpointsAndType() {
+    void mergesRelationsByCanonicalEndpoints() {
         var assembler = new GraphAssembler();
 
         var graph = assembler.assemble(List.of(
@@ -65,14 +66,14 @@ class GraphAssemblerTest {
         ));
 
         assertThat(graph.entities()).containsExactly(
-            new Entity("entity:alice", "Alice", "person", "Researcher", List.of(), List.of("chunk-1", "chunk-2")),
-            new Entity("entity:bob", "Bob", "person", "Engineer", List.of("Robert"), List.of("chunk-1", "chunk-2"))
+            new Entity("alice", "Alice", "person", "Researcher", List.of(), List.of("chunk-1", "chunk-2")),
+            new Entity("bob", "Bob", "person", "Engineer", List.of("Robert"), List.of("chunk-1", "chunk-2"))
         );
         assertThat(graph.relations()).containsExactly(
             new Relation(
-                "relation:entity:alice|works_with|entity:bob",
-                "entity:alice",
-                "entity:bob",
+                relationId("alice", "bob"),
+                "alice",
+                "bob",
                 "works_with",
                 "collaboration",
                 1.0d,
@@ -82,7 +83,7 @@ class GraphAssemblerTest {
     }
 
     @Test
-    void mergesRelationTypeVariantsWithoutChangingFirstRelationId() {
+    void mergesRelationKeywordVariantsIntoSingleCanonicalEdge() {
         var assembler = new GraphAssembler();
 
         var graph = assembler.assemble(List.of(
@@ -103,9 +104,9 @@ class GraphAssemblerTest {
 
         assertThat(graph.relations()).containsExactly(
             new Relation(
-                "relation:entity:alice|works_with|entity:bob",
-                "entity:alice",
-                "entity:bob",
+                relationId("alice", "bob"),
+                "alice",
+                "bob",
                 "works_with",
                 "first",
                 0.9d,
@@ -115,7 +116,7 @@ class GraphAssemblerTest {
     }
 
     @Test
-    void foldsSymmetricRelationsIntoFirstSeenDirection() {
+    void foldsSymmetricRelationsIntoSingleCanonicalEdge() {
         var assembler = new GraphAssembler();
 
         var graph = assembler.assemble(List.of(
@@ -136,9 +137,9 @@ class GraphAssemblerTest {
 
         assertThat(graph.relations()).containsExactly(
             new Relation(
-                "relation:entity:alice|related_to|entity:bob",
-                "entity:alice",
-                "entity:bob",
+                relationId("alice", "bob"),
+                "alice",
+                "bob",
                 "related_to",
                 "forward",
                 0.8d,
@@ -148,7 +149,7 @@ class GraphAssemblerTest {
     }
 
     @Test
-    void keepsAsymmetricRelationsDirectional() {
+    void mergesRepeatedEndpointsEvenWhenRelationKeywordsSuggestDirection() {
         var assembler = new GraphAssembler();
 
         var graph = assembler.assemble(List.of(
@@ -169,22 +170,13 @@ class GraphAssemblerTest {
 
         assertThat(graph.relations()).containsExactly(
             new Relation(
-                "relation:entity:alice|reports_to|entity:bob",
-                "entity:alice",
-                "entity:bob",
+                relationId("alice", "bob"),
+                "alice",
+                "bob",
                 "reports_to",
                 "forward",
-                0.6d,
-                List.of("chunk-1")
-            ),
-            new Relation(
-                "relation:entity:bob|reports_to|entity:alice",
-                "entity:bob",
-                "entity:alice",
-                "reports_to",
-                "reverse",
                 0.8d,
-                List.of("chunk-2")
+                List.of("chunk-1", "chunk-2")
             )
         );
     }

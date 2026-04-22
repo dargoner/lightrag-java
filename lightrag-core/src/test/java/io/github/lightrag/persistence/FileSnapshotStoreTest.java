@@ -25,6 +25,7 @@ import java.util.List;
 import java.util.Map;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static io.github.lightrag.support.RelationIds.relationId;
 
 class FileSnapshotStoreTest {
     @TempDir
@@ -86,7 +87,7 @@ class FileSnapshotStoreTest {
             List.of(new DocumentStore.DocumentRecord("doc-1", "Title", "Body", Map.of("source", "test"))),
             List.of(new ChunkStore.ChunkRecord("doc-1:0", "doc-1", "Body", 4, 0, Map.of("source", "test"))),
             List.of(new GraphStore.EntityRecord(
-                "entity:alice",
+                "alice",
                 "Alice",
                 "person",
                 "Researcher",
@@ -94,9 +95,9 @@ class FileSnapshotStoreTest {
                 List.of("doc-1:0")
             )),
             List.of(new GraphStore.RelationRecord(
-                "relation:entity:alice|works_with|entity:bob",
-                "entity:alice",
-                "entity:bob",
+                relationId("alice", "bob"),
+                "alice",
+                "bob",
                 "works_with",
                 "Collaboration",
                 0.8d,

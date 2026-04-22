@@ -394,7 +394,6 @@ public final class PostgresStorageProvider implements AtomicStorageProvider, Aut
     }
 
     private void truncateAll(Connection connection) throws SQLException {
-        deleteWorkspaceRows(connection, "relation_chunks");
         deleteWorkspaceRows(connection, "entity_chunks");
         deleteWorkspaceRows(connection, "entity_aliases");
         deleteWorkspaceRows(connection, "relations");

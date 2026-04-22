@@ -5,7 +5,7 @@ import io.github.lightrag.api.QueryMode;
 import io.github.lightrag.api.CreateEntityRequest;
 import io.github.lightrag.api.CreateRelationRequest;
 import io.github.lightrag.api.EditEntityRequest;
-import io.github.lightrag.api.EditRelationRequest;
+import io.github.lightrag.api.UpdateRelationRequest;
 import io.github.lightrag.api.DocumentProcessingStatus;
 import io.github.lightrag.api.DocumentStatus;
 import io.github.lightrag.api.GraphEntity;
@@ -13,6 +13,7 @@ import io.github.lightrag.api.GraphRelation;
 import io.github.lightrag.api.MergeEntitiesRequest;
 import io.github.lightrag.api.QueryRequest;
 import io.github.lightrag.api.QueryResult;
+import io.github.lightrag.indexing.RelationCanonicalizer;
 import io.github.lightrag.model.ChatModel;
 import io.github.lightrag.model.EmbeddingModel;
 import io.github.lightrag.model.RerankModel;
@@ -27,6 +28,7 @@ import io.github.lightrag.storage.neo4j.Neo4jGraphConfig;
 import io.github.lightrag.storage.neo4j.PostgresNeo4jStorageProvider;
 import io.github.lightrag.storage.postgres.PostgresStorageConfig;
 import io.github.lightrag.storage.postgres.PostgresStorageProvider;
+import io.github.lightrag.support.Neo4jTestContainers;
 import io.github.lightrag.types.Document;
 import org.testcontainers.containers.Neo4jContainer;
 import org.junit.jupiter.api.Test;
@@ -60,19 +62,19 @@ class E2ELightRagTest {
         assertThat(storage.chunkStore().listByDocument("doc-1")).hasSize(1);
         assertThat(storage.graphStore().allEntities())
             .extracting(entity -> entity.id())
-            .containsExactly("entity:alice", "entity:bob");
+            .containsExactly("alice", "bob");
         assertThat(storage.graphStore().allRelations())
             .extracting(relation -> relation.id())
-            .containsExactly("relation:entity:alice|works_with|entity:bob");
+            .containsExactly(relationId("alice", "bob"));
         assertThat(storage.vectorStore().list("chunks"))
             .extracting(VectorStore.VectorRecord::id)
             .containsExactly("doc-1:0");
         assertThat(storage.vectorStore().list("entities"))
             .extracting(VectorStore.VectorRecord::id)
-            .containsExactly("entity:alice", "entity:bob");
+            .containsExactly("alice", "bob");
         assertThat(storage.vectorStore().list("relations"))
             .extracting(VectorStore.VectorRecord::id)
-            .containsExactly("relation:entity:alice|works_with|entity:bob");
+            .containsExactly(relationId("alice", "bob"));
     }
 
     @Test
@@ -129,7 +131,7 @@ class E2ELightRagTest {
         snapshotStore.save(snapshotPath, new SnapshotStore.Snapshot(
             List.of(new DocumentStore.DocumentRecord("doc-seed", "Seed", "Body", Map.of())),
             List.of(new ChunkStore.ChunkRecord("doc-seed:0", "doc-seed", "Body", 4, 0, Map.of())),
-            List.of(new GraphStore.EntityRecord("entity:seed", "Seed", "person", "Seed entity", List.of(), List.of("doc-seed:0"))),
+            List.of(new GraphStore.EntityRecord("seed", "Seed", "person", "Seed entity", List.of(), List.of("doc-seed:0"))),
             List.of(),
             Map.of("chunks", List.of(new VectorStore.VectorRecord("doc-seed:0", List.of(1.0d, 0.0d))))
         ));
@@ -145,7 +147,7 @@ class E2ELightRagTest {
         assertThat(rag).isNotNull();
         assertThat(storage.documentStore().load("doc-seed")).isPresent();
         assertThat(storage.chunkStore().load("doc-seed:0")).isPresent();
-        assertThat(storage.graphStore().loadEntity("entity:seed")).isPresent();
+        assertThat(storage.graphStore().loadEntity("seed")).isPresent();
         assertThat(storage.vectorStore().list("chunks"))
             .extracting(VectorStore.VectorRecord::id)
             .containsExactly("doc-seed:0");
@@ -183,7 +185,7 @@ class E2ELightRagTest {
               ],
               "entities": [
                 {
-                  "id": "entity:seed",
+                  "id": "seed",
                   "name": "Seed",
                   "type": "person",
                   "description": "Seed entity",
@@ -214,7 +216,7 @@ class E2ELightRagTest {
         assertThat(rag).isNotNull();
         assertThat(storage.documentStore().load("doc-seed")).isPresent();
         assertThat(storage.chunkStore().load("doc-seed:0")).isPresent();
-        assertThat(storage.graphStore().loadEntity("entity:seed")).isPresent();
+        assertThat(storage.graphStore().loadEntity("seed")).isPresent();
         assertThat(rag.listDocumentStatuses(WORKSPACE)).isEmpty();
     }
 
@@ -506,7 +508,7 @@ class E2ELightRagTest {
             var postgres = new PostgreSQLContainer<>(
                 DockerImageName.parse("pgvector/pgvector:pg16").asCompatibleSubstituteFor("postgres")
             );
-            var neo4j = new Neo4jContainer<>("neo4j:5-community").withAdminPassword("password")
+            var neo4j = Neo4jTestContainers.create()
         ) {
             postgres.start();
             neo4j.start();
@@ -567,7 +569,7 @@ class E2ELightRagTest {
             .build());
 
         assertThat(entity).isEqualTo(new GraphEntity(
-            "entity:alice",
+            "alice",
             "Alice",
             "person",
             "Researcher",
@@ -575,9 +577,9 @@ class E2ELightRagTest {
             List.of()
         ));
 
-        assertThat(storage.graphStore().loadEntity("entity:alice"))
+        assertThat(storage.graphStore().loadEntity("alice"))
             .contains(new GraphStore.EntityRecord(
-                "entity:alice",
+                "alice",
                 "Alice",
                 "person",
                 "Researcher",
@@ -590,7 +592,7 @@ class E2ELightRagTest {
         assertThat(storage.vectorStore().list("chunks")).isEmpty();
         assertThat(storage.vectorStore().list("entities"))
             .extracting(VectorStore.VectorRecord::id)
-            .containsExactly("entity:alice");
+            .containsExactly("alice");
         assertThat(storage.vectorStore().list("relations")).isEmpty();
     }
 
@@ -618,26 +620,26 @@ class E2ELightRagTest {
         var relation = rag.createRelation(WORKSPACE, CreateRelationRequest.builder()
             .sourceEntityName("Alice")
             .targetEntityName("Robert")
-            .relationType("works_with")
+            .keywords("works_with")
             .description("collaboration")
             .weight(0.8d)
             .build());
 
         assertThat(relation).isEqualTo(new GraphRelation(
-            "relation:entity:alice|works_with|entity:bob",
-            "entity:alice",
-            "entity:bob",
+            relationId("alice", "bob"),
+            "alice",
+            "bob",
             "works_with",
             "collaboration",
             0.8d,
             List.of()
         ));
 
-        assertThat(storage.graphStore().loadRelation("relation:entity:alice|works_with|entity:bob"))
+        assertThat(storage.graphStore().loadRelation(relationId("alice", "bob")))
             .contains(new GraphStore.RelationRecord(
-                "relation:entity:alice|works_with|entity:bob",
-                "entity:alice",
-                "entity:bob",
+                relationId("alice", "bob"),
+                "alice",
+                "bob",
                 "works_with",
                 "collaboration",
                 0.8d,
@@ -645,10 +647,10 @@ class E2ELightRagTest {
             ));
         assertThat(storage.vectorStore().list("entities"))
             .extracting(VectorStore.VectorRecord::id)
-            .containsExactly("entity:alice", "entity:bob");
+            .containsExactly("alice", "bob");
         assertThat(storage.vectorStore().list("relations"))
             .extracting(VectorStore.VectorRecord::id)
-            .containsExactly("relation:entity:alice|works_with|entity:bob");
+            .containsExactly(relationId("alice", "bob"));
     }
 
     @Test
@@ -700,14 +702,14 @@ class E2ELightRagTest {
         rag.createRelation(WORKSPACE, CreateRelationRequest.builder()
             .sourceEntityName("Alice")
             .targetEntityName("Bob")
-            .relationType("works_with")
+            .keywords("works_with")
             .description("collaboration")
             .weight(0.8d)
             .build());
 
         assertThat(storage.restoreCalls()).isZero();
-        assertThat(storage.graphStore().loadEntity("entity:alice")).isPresent();
-        assertThat(storage.graphStore().loadRelation("relation:entity:alice|works_with|entity:bob")).isPresent();
+        assertThat(storage.graphStore().loadEntity("alice")).isPresent();
+        assertThat(storage.graphStore().loadRelation(relationId("alice", "bob"))).isPresent();
     }
 
     @Test
@@ -732,7 +734,7 @@ class E2ELightRagTest {
         rag.createRelation(WORKSPACE, CreateRelationRequest.builder()
             .sourceEntityName("Alice")
             .targetEntityName("Bob")
-            .relationType("works_with")
+            .keywords("works_with")
             .description("collaboration")
             .weight(0.8d)
             .build());
@@ -744,29 +746,29 @@ class E2ELightRagTest {
             .build());
 
         assertThat(entity).isEqualTo(new GraphEntity(
-            "entity:robert",
+            "robert",
             "Robert",
             "person",
             "Principal investigator",
             List.of("Bob"),
             List.of()
         ));
-        assertThat(storage.graphStore().loadEntity("entity:bob")).isEmpty();
-        assertThat(storage.graphStore().loadEntity("entity:robert"))
+        assertThat(storage.graphStore().loadEntity("bob")).isEmpty();
+        assertThat(storage.graphStore().loadEntity("robert"))
             .contains(new GraphStore.EntityRecord(
-                "entity:robert",
+                "robert",
                 "Robert",
                 "person",
                 "Principal investigator",
                 List.of("Bob"),
                 List.of()
             ));
-        assertThat(storage.graphStore().loadRelation("relation:entity:alice|works_with|entity:bob")).isEmpty();
-        assertThat(storage.graphStore().loadRelation("relation:entity:alice|works_with|entity:robert"))
+        assertThat(storage.graphStore().loadRelation(relationId("alice", "bob"))).isEmpty();
+        assertThat(storage.graphStore().loadRelation(relationId("alice", "robert")))
             .contains(new GraphStore.RelationRecord(
-                "relation:entity:alice|works_with|entity:robert",
-                "entity:alice",
-                "entity:robert",
+                relationId("alice", "robert"),
+                "alice",
+                "robert",
                 "works_with",
                 "collaboration",
                 0.8d,
@@ -774,10 +776,10 @@ class E2ELightRagTest {
             ));
         assertThat(storage.vectorStore().list("entities"))
             .extracting(VectorStore.VectorRecord::id)
-            .containsExactly("entity:alice", "entity:robert");
+            .containsExactly("alice", "robert");
         assertThat(storage.vectorStore().list("relations"))
             .extracting(VectorStore.VectorRecord::id)
-            .containsExactly("relation:entity:alice|works_with|entity:robert");
+            .containsExactly(relationId("alice", "robert"));
     }
 
     @Test
@@ -799,38 +801,42 @@ class E2ELightRagTest {
             .type("person")
             .description("Engineer")
             .build());
+        rag.createEntity(WORKSPACE, CreateEntityRequest.builder()
+            .name("Carol")
+            .type("person")
+            .description("Manager")
+            .build());
         rag.createRelation(WORKSPACE, CreateRelationRequest.builder()
             .sourceEntityName("Alice")
             .targetEntityName("Bob")
-            .relationType("works_with")
+            .keywords("works_with")
             .description("collaboration")
             .weight(0.8d)
             .build());
 
-        var relation = rag.editRelation(WORKSPACE, EditRelationRequest.builder()
+        var relation = rag.updateRelation(WORKSPACE, UpdateRelationRequest.builder()
             .sourceEntityName("Alice")
             .targetEntityName("Bob")
-            .currentRelationType("works_with")
-            .newRelationType("reports_to")
+            .keywords("reports_to")
             .description("reporting line")
             .weight(0.9d)
             .build());
 
+        var relationId = RelationCanonicalizer.relationId("alice", "bob");
         assertThat(relation).isEqualTo(new GraphRelation(
-            "relation:entity:alice|reports_to|entity:bob",
-            "entity:alice",
-            "entity:bob",
+            relationId,
+            "alice",
+            "bob",
             "reports_to",
             "reporting line",
             0.9d,
             List.of()
         ));
-        assertThat(storage.graphStore().loadRelation("relation:entity:alice|works_with|entity:bob")).isEmpty();
-        assertThat(storage.graphStore().loadRelation("relation:entity:alice|reports_to|entity:bob"))
+        assertThat(storage.graphStore().loadRelation(relationId))
             .contains(new GraphStore.RelationRecord(
-                "relation:entity:alice|reports_to|entity:bob",
-                "entity:alice",
-                "entity:bob",
+                relationId,
+                "alice",
+                "bob",
                 "reports_to",
                 "reporting line",
                 0.9d,
@@ -838,7 +844,7 @@ class E2ELightRagTest {
             ));
         assertThat(storage.vectorStore().list("relations"))
             .extracting(VectorStore.VectorRecord::id)
-            .containsExactly("relation:entity:alice|reports_to|entity:bob");
+            .containsExactly(relationId);
     }
 
     @Test
@@ -865,16 +871,16 @@ class E2ELightRagTest {
             .build());
 
         assertThat(entity).isEqualTo(new GraphEntity(
-            "entity:alice",
+            "alice",
             "Alice",
             "person",
             "Principal investigator",
             List.of("Lead Alice"),
             List.of()
         ));
-        assertThat(storage.graphStore().loadEntity("entity:alice"))
+        assertThat(storage.graphStore().loadEntity("alice"))
             .contains(new GraphStore.EntityRecord(
-                "entity:alice",
+                "alice",
                 "Alice",
                 "person",
                 "Principal investigator",
@@ -884,7 +890,7 @@ class E2ELightRagTest {
         assertThat(storage.vectorStore().list("entities")).isNotEqualTo(before);
         assertThat(storage.vectorStore().list("entities"))
             .extracting(VectorStore.VectorRecord::id)
-            .containsExactly("entity:alice");
+            .containsExactly("alice");
     }
 
     @Test
@@ -906,10 +912,15 @@ class E2ELightRagTest {
             .type("person")
             .description("Engineer")
             .build());
+        rag.createEntity(WORKSPACE, CreateEntityRequest.builder()
+            .name("Carol")
+            .type("person")
+            .description("Manager")
+            .build());
         rag.createRelation(WORKSPACE, CreateRelationRequest.builder()
             .sourceEntityName("Alice")
             .targetEntityName("Bob")
-            .relationType("works_with")
+            .keywords("works_with")
             .description("collaboration")
             .weight(0.8d)
             .build());
@@ -924,7 +935,7 @@ class E2ELightRagTest {
         assertThatThrownBy(() -> rag.createRelation(WORKSPACE, CreateRelationRequest.builder()
             .sourceEntityName("Alice")
             .targetEntityName("Bob")
-            .relationType("works_with")
+            .keywords("works_with")
             .description("duplicate")
             .weight(1.0d)
             .build()))
@@ -936,10 +947,9 @@ class E2ELightRagTest {
             .build()))
             .isInstanceOf(IllegalArgumentException.class)
             .hasMessageContaining("does not match");
-        assertThatThrownBy(() -> rag.editRelation(WORKSPACE, EditRelationRequest.builder()
+        assertThatThrownBy(() -> rag.updateRelation(WORKSPACE, UpdateRelationRequest.builder()
             .sourceEntityName("Alice")
-            .targetEntityName("Bob")
-            .currentRelationType("reports_to")
+            .targetEntityName("Carol")
             .description("Nope")
             .build()))
             .isInstanceOf(IllegalArgumentException.class)
@@ -958,15 +968,15 @@ class E2ELightRagTest {
         assertThatThrownBy(() -> CreateRelationRequest.builder()
             .sourceEntityName("Alice")
             .targetEntityName("Bob")
-            .relationType("   ")
+            .keywords("   ")
             .description("Invalid")
             .build())
             .isInstanceOf(IllegalArgumentException.class)
-            .hasMessageContaining("relationType must not be blank");
+            .hasMessageContaining("keywords must not be blank");
         assertThatThrownBy(() -> CreateRelationRequest.builder()
             .sourceEntityName("Alice")
             .targetEntityName("Bob")
-            .relationType("works_with")
+            .keywords("works_with")
             .weight(Double.NaN)
             .build())
             .isInstanceOf(IllegalArgumentException.class)
@@ -977,18 +987,17 @@ class E2ELightRagTest {
             .build())
             .isInstanceOf(IllegalArgumentException.class)
             .hasMessageContaining("newName must not be blank");
-        assertThatThrownBy(() -> EditRelationRequest.builder()
+        assertThatThrownBy(() -> UpdateRelationRequest.builder()
             .sourceEntityName("Alice")
             .targetEntityName("Bob")
-            .currentRelationType("works_with")
-            .newRelationType("   ")
+            .keywords("   ")
             .build())
             .isInstanceOf(IllegalArgumentException.class)
-            .hasMessageContaining("newRelationType must not be blank");
+            .hasMessageContaining("keywords must not be blank");
 
         var storage = InMemoryStorageProvider.create();
         storage.graphStore().saveEntity(new GraphStore.EntityRecord(
-            "entity:alice",
+            "alice",
             "Alice",
             "person",
             "Researcher",
@@ -996,7 +1005,7 @@ class E2ELightRagTest {
             List.of()
         ));
         storage.graphStore().saveEntity(new GraphStore.EntityRecord(
-            "entity:alicia",
+            "alicia",
             "Alicia",
             "person",
             "Engineer",
@@ -1004,7 +1013,7 @@ class E2ELightRagTest {
             List.of()
         ));
         storage.graphStore().saveEntity(new GraphStore.EntityRecord(
-            "entity:bob",
+            "bob",
             "Bob",
             "person",
             "Manager",
@@ -1020,7 +1029,7 @@ class E2ELightRagTest {
         assertThatThrownBy(() -> rag.createRelation(WORKSPACE, CreateRelationRequest.builder()
             .sourceEntityName("Shared")
             .targetEntityName("Bob")
-            .relationType("works_with")
+            .keywords("works_with")
             .description("ambiguous")
             .build()))
             .isInstanceOf(IllegalArgumentException.class)
@@ -1050,9 +1059,9 @@ class E2ELightRagTest {
             .build());
 
         assertThat(renamed.aliases()).containsExactly("Bob");
-        assertThat(storage.graphStore().loadEntity("entity:robert"))
+        assertThat(storage.graphStore().loadEntity("robert"))
             .contains(new GraphStore.EntityRecord(
-                "entity:robert",
+                "robert",
                 "Robert",
                 "person",
                 "Engineer",
@@ -1082,16 +1091,16 @@ class E2ELightRagTest {
             .build());
 
         assertThat(renamed).isEqualTo(new GraphEntity(
-            "entity:bob",
+            "bob",
             "BOB",
             "person",
             "Engineer",
             List.of(),
             List.of()
         ));
-        assertThat(storage.graphStore().loadEntity("entity:bob"))
+        assertThat(storage.graphStore().loadEntity("bob"))
             .contains(new GraphStore.EntityRecord(
-                "entity:bob",
+                "bob",
                 "BOB",
                 "person",
                 "Engineer",
@@ -1104,7 +1113,7 @@ class E2ELightRagTest {
     void renameRejectsRelationIdCollisionDuringMigration() {
         var storage = InMemoryStorageProvider.create();
         storage.graphStore().saveEntity(new GraphStore.EntityRecord(
-            "entity:alice",
+            "alice",
             "Alice",
             "person",
             "Researcher",
@@ -1112,7 +1121,7 @@ class E2ELightRagTest {
             List.of()
         ));
         storage.graphStore().saveEntity(new GraphStore.EntityRecord(
-            "entity:bob",
+            "bob",
             "Bob",
             "person",
             "Engineer",
@@ -1120,18 +1129,18 @@ class E2ELightRagTest {
             List.of()
         ));
         storage.graphStore().saveRelation(new GraphStore.RelationRecord(
-            "relation:entity:alice|works_with|entity:bob",
-            "entity:alice",
-            "entity:bob",
+            relationId("alice", "bob"),
+            "alice",
+            "bob",
             "works_with",
             "Current",
             0.8d,
             List.of()
         ));
         storage.graphStore().saveRelation(new GraphStore.RelationRecord(
-            "relation:entity:alice|works_with|entity:robert",
-            "entity:alice",
-            "entity:robert",
+            relationId("alice", "robert"),
+            "alice",
+            "robert",
             "works_with",
             "Dangling",
             0.7d,
@@ -1177,17 +1186,22 @@ class E2ELightRagTest {
             .description("Principal investigator")
             .aliases(List.of("Rob"))
             .build());
+        rag.createEntity(WORKSPACE, CreateEntityRequest.builder()
+            .name("Carol")
+            .type("person")
+            .description("Director")
+            .build());
         rag.createRelation(WORKSPACE, CreateRelationRequest.builder()
             .sourceEntityName("Alice")
             .targetEntityName("Bob")
-            .relationType("works_with")
+            .keywords("works_with")
             .description("collaboration")
             .weight(0.8d)
             .build());
         rag.createRelation(WORKSPACE, CreateRelationRequest.builder()
             .sourceEntityName("Bob")
-            .targetEntityName("Alice")
-            .relationType("reports_to")
+            .targetEntityName("Carol")
+            .keywords("reports_to")
             .description("line management")
             .weight(0.4d)
             .build());
@@ -1198,33 +1212,33 @@ class E2ELightRagTest {
             .build());
 
         assertThat(merged).isEqualTo(new GraphEntity(
-            "entity:robert",
+            "robert",
             "Robert",
             "person",
             "Principal investigator\n\nEngineer",
             List.of("Rob", "Robert Jr", "Bob"),
             List.of()
         ));
-        assertThat(storage.graphStore().loadEntity("entity:bob")).isEmpty();
-        assertThat(storage.graphStore().loadEntity("entity:robert"))
+        assertThat(storage.graphStore().loadEntity("bob")).isEmpty();
+        assertThat(storage.graphStore().loadEntity("robert"))
             .contains(new GraphStore.EntityRecord(
-                "entity:robert",
+                "robert",
                 "Robert",
                 "person",
                 "Principal investigator\n\nEngineer",
                 List.of("Rob", "Robert Jr", "Bob"),
                 List.of()
             ));
-        assertThat(storage.graphStore().loadRelation("relation:entity:alice|works_with|entity:robert")).isPresent();
-        assertThat(storage.graphStore().loadRelation("relation:entity:robert|reports_to|entity:alice")).isPresent();
+        assertThat(storage.graphStore().loadRelation(relationId("alice", "robert"))).isPresent();
+        assertThat(storage.graphStore().loadRelation(relationId("robert", "carol"))).isPresent();
         assertThat(storage.vectorStore().list("entities"))
             .extracting(VectorStore.VectorRecord::id)
-            .containsExactly("entity:alice", "entity:robert");
+            .containsExactly("alice", "carol", "robert");
         assertThat(storage.vectorStore().list("relations"))
             .extracting(VectorStore.VectorRecord::id)
             .containsExactlyInAnyOrder(
-                "relation:entity:alice|works_with|entity:robert",
-                "relation:entity:robert|reports_to|entity:alice"
+                relationId("alice", "robert"),
+                relationId("robert", "carol")
             );
     }
 
@@ -1255,21 +1269,21 @@ class E2ELightRagTest {
         rag.createRelation(WORKSPACE, CreateRelationRequest.builder()
             .sourceEntityName("Alice")
             .targetEntityName("Bob")
-            .relationType("works_with")
+            .keywords("works_with")
             .description("with Bob")
             .weight(0.5d)
             .build());
         rag.createRelation(WORKSPACE, CreateRelationRequest.builder()
             .sourceEntityName("Alice")
             .targetEntityName("Robert")
-            .relationType("works_with")
+            .keywords("works_with")
             .description("with Robert")
             .weight(0.9d)
             .build());
         rag.createRelation(WORKSPACE, CreateRelationRequest.builder()
             .sourceEntityName("Bob")
             .targetEntityName("Robert")
-            .relationType("reports_to")
+            .keywords("reports_to")
             .description("Bob reports to Robert")
             .weight(0.7d)
             .build());
@@ -1279,22 +1293,22 @@ class E2ELightRagTest {
             .targetEntityName("Robert")
             .build());
 
-        assertThat(merged.id()).isEqualTo("entity:robert");
+        assertThat(merged.id()).isEqualTo("robert");
         assertThat(storage.graphStore().allRelations())
             .containsExactly(
                 new GraphStore.RelationRecord(
-                    "relation:entity:alice|works_with|entity:robert",
-                    "entity:alice",
-                    "entity:robert",
+                    relationId("alice", "robert"),
+                    "alice",
+                    "robert",
                     "works_with",
-                    "with Bob\n\nwith Robert",
+                    "with Robert\n\nwith Bob",
                     0.9d,
                     List.of()
                 )
             );
         assertThat(storage.vectorStore().list("relations"))
             .extracting(VectorStore.VectorRecord::id)
-            .containsExactly("relation:entity:alice|works_with|entity:robert");
+            .containsExactly(relationId("alice", "robert"));
     }
 
     @Test
@@ -1307,7 +1321,7 @@ class E2ELightRagTest {
             .build();
 
         storage.graphStore().saveEntity(new GraphStore.EntityRecord(
-            "entity:alice",
+            "alice",
             "Alice",
             "person",
             "Researcher",
@@ -1315,7 +1329,7 @@ class E2ELightRagTest {
             List.of()
         ));
         storage.graphStore().saveEntity(new GraphStore.EntityRecord(
-            "entity:alicia",
+            "alicia",
             "Alicia",
             "person",
             "Engineer",
@@ -1381,7 +1395,7 @@ class E2ELightRagTest {
             .build());
 
         assertThat(merged).isEqualTo(new GraphEntity(
-            "entity:robert",
+            "robert",
             "Robert",
             "leader",
             "Merged profile",
@@ -1419,7 +1433,7 @@ class E2ELightRagTest {
         rag.createRelation(WORKSPACE, CreateRelationRequest.builder()
             .sourceEntityName("Alice")
             .targetEntityName("Bob")
-            .relationType("works_with")
+            .keywords("works_with")
             .description("collaboration")
             .weight(0.8d)
             .build());
@@ -1432,13 +1446,13 @@ class E2ELightRagTest {
         var snapshot = storage.snapshotStore().load(snapshotPath);
         assertThat(snapshot.entities())
             .extracting(GraphStore.EntityRecord::id)
-            .containsExactly("entity:alice", "entity:robert");
+            .containsExactly("alice", "robert");
         assertThat(snapshot.relations())
             .extracting(GraphStore.RelationRecord::id)
-            .containsExactly("relation:entity:alice|works_with|entity:robert");
+            .containsExactly(relationId("alice", "robert"));
         assertThat(snapshot.vectors().get("entities"))
             .extracting(VectorStore.VectorRecord::id)
-            .containsExactly("entity:alice", "entity:robert");
+            .containsExactly("alice", "robert");
     }
 
     @Test
@@ -1486,7 +1500,7 @@ class E2ELightRagTest {
                 rag.createRelation(WORKSPACE, CreateRelationRequest.builder()
                     .sourceEntityName("Alice")
                     .targetEntityName("Bob")
-                    .relationType("works_with")
+                    .keywords("works_with")
                     .description("collaboration")
                     .weight(0.8d)
                     .build());
@@ -1498,13 +1512,13 @@ class E2ELightRagTest {
 
                 assertThat(storage.graphStore().allEntities())
                     .extracting(GraphStore.EntityRecord::id)
-                    .containsExactly("entity:alice", "entity:robert");
+                    .containsExactly("alice", "robert");
                 assertThat(storage.graphStore().allRelations())
                     .extracting(GraphStore.RelationRecord::id)
-                    .containsExactly("relation:entity:alice|works_with|entity:robert");
+                    .containsExactly(relationId("alice", "robert"));
                 assertThat(storage.vectorStore().list("entities"))
                     .extracting(VectorStore.VectorRecord::id)
-                    .containsExactly("entity:alice", "entity:robert");
+                    .containsExactly("alice", "robert");
             }
         }
     }
@@ -1515,7 +1529,7 @@ class E2ELightRagTest {
             var postgres = new PostgreSQLContainer<>(
                 DockerImageName.parse("pgvector/pgvector:pg16").asCompatibleSubstituteFor("postgres")
             );
-            var neo4j = new Neo4jContainer<>("neo4j:5-community").withAdminPassword("password")
+            var neo4j = Neo4jTestContainers.create()
         ) {
             postgres.start();
             neo4j.start();
@@ -1562,7 +1576,7 @@ class E2ELightRagTest {
                 rag.createRelation(WORKSPACE, CreateRelationRequest.builder()
                     .sourceEntityName("Alice")
                     .targetEntityName("Bob")
-                    .relationType("works_with")
+                    .keywords("works_with")
                     .description("collaboration")
                     .weight(0.8d)
                     .build());
@@ -1574,13 +1588,13 @@ class E2ELightRagTest {
 
                 assertThat(storage.graphStore().allEntities())
                     .extracting(GraphStore.EntityRecord::id)
-                    .containsExactly("entity:alice", "entity:robert");
+                    .containsExactly("alice", "robert");
                 assertThat(storage.graphStore().allRelations())
                     .extracting(GraphStore.RelationRecord::id)
-                    .containsExactly("relation:entity:alice|works_with|entity:robert");
+                    .containsExactly(relationId("alice", "robert"));
                 assertThat(storage.vectorStore().list("relations"))
                     .extracting(VectorStore.VectorRecord::id)
-                    .containsExactly("relation:entity:alice|works_with|entity:robert");
+                    .containsExactly(relationId("alice", "robert"));
             }
         }
     }
@@ -1609,16 +1623,15 @@ class E2ELightRagTest {
         rag.createRelation(WORKSPACE, CreateRelationRequest.builder()
             .sourceEntityName("Alice")
             .targetEntityName("Bob")
-            .relationType("works_with")
+            .keywords("works_with")
             .description("collaboration")
             .weight(0.8d)
             .build());
 
-        rag.editRelation(WORKSPACE, EditRelationRequest.builder()
+        rag.updateRelation(WORKSPACE, UpdateRelationRequest.builder()
             .sourceEntityName("Alice")
             .targetEntityName("Bob")
-            .currentRelationType("works_with")
-            .newRelationType("reports_to")
+            .keywords("reports_to")
             .description("reporting line")
             .weight(0.9d)
             .build());
@@ -1626,13 +1639,13 @@ class E2ELightRagTest {
         var snapshot = storage.snapshotStore().load(snapshotPath);
         assertThat(snapshot.entities())
             .extracting(GraphStore.EntityRecord::id)
-            .containsExactly("entity:alice", "entity:bob");
+            .containsExactly("alice", "bob");
         assertThat(snapshot.relations())
             .extracting(GraphStore.RelationRecord::id)
-            .containsExactly("relation:entity:alice|reports_to|entity:bob");
+            .containsExactly(relationId("alice", "bob"));
         assertThat(snapshot.vectors().get("relations"))
             .extracting(VectorStore.VectorRecord::id)
-            .containsExactly("relation:entity:alice|reports_to|entity:bob");
+            .containsExactly(relationId("alice", "bob"));
     }
 
     @Test
@@ -1675,32 +1688,31 @@ class E2ELightRagTest {
                 rag.createRelation(WORKSPACE, CreateRelationRequest.builder()
                     .sourceEntityName("Alice")
                     .targetEntityName("Bob")
-                    .relationType("works_with")
+                    .keywords("works_with")
                     .description("collaboration")
                     .weight(0.8d)
                     .build());
 
-                rag.editRelation(WORKSPACE, EditRelationRequest.builder()
+                rag.updateRelation(WORKSPACE, UpdateRelationRequest.builder()
                     .sourceEntityName("Alice")
                     .targetEntityName("Bob")
-                    .currentRelationType("works_with")
-                    .newRelationType("reports_to")
+                    .keywords("reports_to")
                     .description("reporting line")
                     .weight(0.9d)
                     .build());
 
                 assertThat(storage.graphStore().allEntities())
                     .extracting(GraphStore.EntityRecord::id)
-                    .containsExactly("entity:alice", "entity:bob");
+                    .containsExactly("alice", "bob");
                 assertThat(storage.graphStore().allRelations())
                     .extracting(GraphStore.RelationRecord::id)
-                    .containsExactly("relation:entity:alice|reports_to|entity:bob");
+                    .containsExactly(relationId("alice", "bob"));
                 assertThat(storage.vectorStore().list("entities"))
                     .extracting(VectorStore.VectorRecord::id)
-                    .containsExactly("entity:alice", "entity:bob");
+                    .containsExactly("alice", "bob");
                 assertThat(storage.vectorStore().list("relations"))
                     .extracting(VectorStore.VectorRecord::id)
-                    .containsExactly("relation:entity:alice|reports_to|entity:bob");
+                    .containsExactly(relationId("alice", "bob"));
             }
         }
     }
@@ -1711,7 +1723,7 @@ class E2ELightRagTest {
             var postgres = new PostgreSQLContainer<>(
                 DockerImageName.parse("pgvector/pgvector:pg16").asCompatibleSubstituteFor("postgres")
             );
-            var neo4j = new Neo4jContainer<>("neo4j:5-community").withAdminPassword("password")
+            var neo4j = Neo4jTestContainers.create()
         ) {
             postgres.start();
             neo4j.start();
@@ -1753,7 +1765,7 @@ class E2ELightRagTest {
                 rag.createRelation(WORKSPACE, CreateRelationRequest.builder()
                     .sourceEntityName("Alice")
                     .targetEntityName("Bob")
-                    .relationType("works_with")
+                    .keywords("works_with")
                     .description("collaboration")
                     .weight(0.8d)
                     .build());
@@ -1766,16 +1778,16 @@ class E2ELightRagTest {
 
                 assertThat(storage.graphStore().allEntities())
                     .extracting(GraphStore.EntityRecord::id)
-                    .containsExactly("entity:alice", "entity:robert");
+                    .containsExactly("alice", "robert");
                 assertThat(storage.graphStore().allRelations())
                     .extracting(GraphStore.RelationRecord::id)
-                    .containsExactly("relation:entity:alice|works_with|entity:robert");
+                    .containsExactly(relationId("alice", "robert"));
                 assertThat(storage.vectorStore().list("entities"))
                     .extracting(VectorStore.VectorRecord::id)
-                    .containsExactly("entity:alice", "entity:robert");
+                    .containsExactly("alice", "robert");
                 assertThat(storage.vectorStore().list("relations"))
                     .extracting(VectorStore.VectorRecord::id)
-                    .containsExactly("relation:entity:alice|works_with|entity:robert");
+                    .containsExactly(relationId("alice", "robert"));
             }
         }
     }
@@ -1947,8 +1959,8 @@ class E2ELightRagTest {
         assertThat(result.answer())
             .contains("Multi-Hop Reasoning Instructions")
             .contains("Reasoning Path 1")
-            .contains("Hop 1: Atlas --depends_on--> GraphStore")
-            .contains("Hop 2: GraphStore --owned_by--> KnowledgeGraphTeam")
+            .contains("Hop 1: Atlas -> GraphStore | keywords: depends_on")
+            .contains("Hop 2: GraphStore -> KnowledgeGraphTeam | keywords: owned_by")
             .contains("Relation detail: Atlas relies on GraphStore as its dependency service.")
             .contains("Relation detail: GraphStore is maintained by the knowledge graph team.")
             .contains("Evidence [doc-1:0]: Atlas 组件依赖 GraphStore 服务。")
@@ -1992,8 +2004,8 @@ class E2ELightRagTest {
             .contains("Multi-Hop Reasoning Instructions")
             .contains("Validated Reasoning Draft")
             .contains("Reasoning Path 1")
-            .contains("Hop 1: Atlas --depends_on--> GraphStore")
-            .contains("Hop 2: GraphStore --owned_by--> KnowledgeGraphTeam")
+            .contains("Hop 1: Atlas -> GraphStore | keywords: depends_on")
+            .contains("Hop 2: GraphStore -> KnowledgeGraphTeam | keywords: owned_by")
             .contains("Relation detail: Atlas relies on GraphStore as its dependency service.")
             .contains("Evidence [doc-1:0]: Atlas 组件依赖 GraphStore 服务。")
             .contains("Evidence [doc-2:0]: GraphStore 服务由 KnowledgeGraphTeam 维护。");
@@ -2419,15 +2431,15 @@ class E2ELightRagTest {
 
         assertThat(storage.documentStore().load("doc-1")).isPresent();
         assertThat(storage.chunkStore().listByDocument("doc-1")).hasSize(1);
-        assertThat(storage.graphStore().loadEntity("entity:alice")).isEmpty();
-        assertThat(storage.graphStore().loadEntity("entity:bob")).isPresent();
+        assertThat(storage.graphStore().loadEntity("alice")).isEmpty();
+        assertThat(storage.graphStore().loadEntity("bob")).isPresent();
         assertThat(storage.graphStore().allRelations()).isEmpty();
         assertThat(storage.vectorStore().list("chunks"))
             .extracting(VectorStore.VectorRecord::id)
             .containsExactly("doc-1:0");
         assertThat(storage.vectorStore().list("entities"))
             .extracting(VectorStore.VectorRecord::id)
-            .containsExactly("entity:bob");
+            .containsExactly("bob");
         assertThat(storage.vectorStore().list("relations")).isEmpty();
     }
 
@@ -2447,14 +2459,14 @@ class E2ELightRagTest {
         assertThat(storage.documentStore().load("doc-1")).isPresent();
         assertThat(storage.chunkStore().listByDocument("doc-1")).hasSize(1);
         assertThat(storage.graphStore().allRelations()).isEmpty();
-        assertThat(storage.graphStore().loadEntity("entity:alice")).isPresent();
-        assertThat(storage.graphStore().loadEntity("entity:bob")).isPresent();
+        assertThat(storage.graphStore().loadEntity("alice")).isPresent();
+        assertThat(storage.graphStore().loadEntity("bob")).isPresent();
         assertThat(storage.vectorStore().list("chunks"))
             .extracting(VectorStore.VectorRecord::id)
             .containsExactly("doc-1:0");
         assertThat(storage.vectorStore().list("entities"))
             .extracting(VectorStore.VectorRecord::id)
-            .containsExactly("entity:alice", "entity:bob");
+            .containsExactly("alice", "bob");
         assertThat(storage.vectorStore().list("relations")).isEmpty();
     }
 
@@ -2481,10 +2493,10 @@ class E2ELightRagTest {
             .containsExactly("doc-2");
         assertThat(storage.graphStore().allEntities())
             .extracting(GraphStore.EntityRecord::id)
-            .containsExactly("entity:bob", "entity:carol");
+            .containsExactly("bob", "carol");
         assertThat(storage.graphStore().allRelations())
             .extracting(GraphStore.RelationRecord::id)
-            .containsExactly("relation:entity:bob|reports_to|entity:carol");
+            .containsExactly(relationId("bob", "carol"));
     }
 
     @Test
@@ -2516,12 +2528,12 @@ class E2ELightRagTest {
             .containsExactly("doc-1", "doc-2");
         assertThat(storage.graphStore().allEntities())
             .extracting(GraphStore.EntityRecord::id)
-            .containsExactly("entity:alice", "entity:bob", "entity:carol");
+            .containsExactly("alice", "bob", "carol");
         assertThat(storage.graphStore().allRelations())
             .extracting(GraphStore.RelationRecord::id)
-            .containsExactly(
-                "relation:entity:alice|works_with|entity:bob",
-                "relation:entity:bob|reports_to|entity:carol"
+            .containsExactlyInAnyOrder(
+                relationId("alice", "bob"),
+                relationId("bob", "carol")
             );
     }
 
@@ -2544,10 +2556,10 @@ class E2ELightRagTest {
             .containsExactly("doc-1");
         assertThat(storage.graphStore().allEntities())
             .extracting(GraphStore.EntityRecord::id)
-            .containsExactly("entity:alice", "entity:bob");
+            .containsExactly("alice", "bob");
         assertThat(storage.graphStore().allRelations())
             .extracting(GraphStore.RelationRecord::id)
-            .containsExactly("relation:entity:alice|works_with|entity:bob");
+            .containsExactly(relationId("alice", "bob"));
     }
 
     @Test
@@ -2654,7 +2666,7 @@ class E2ELightRagTest {
             snapshotStore.save(snapshotPath, new SnapshotStore.Snapshot(
                 List.of(new DocumentStore.DocumentRecord("doc-seed", "Seed", "Body", Map.of())),
                 List.of(new ChunkStore.ChunkRecord("doc-seed:0", "doc-seed", "Body", 4, 0, Map.of())),
-                List.of(new GraphStore.EntityRecord("entity:seed", "Seed", "person", "Seed entity", List.of(), List.of("doc-seed:0"))),
+                List.of(new GraphStore.EntityRecord("seed", "Seed", "person", "Seed entity", List.of(), List.of("doc-seed:0"))),
                 List.of(),
                 Map.of("chunks", List.of(new VectorStore.VectorRecord("doc-seed:0", List.of(1.0d, 0.0d))))
             ));
@@ -2682,7 +2694,7 @@ class E2ELightRagTest {
                 assertThat(rag).isNotNull();
                 assertThat(storage.documentStore().load("doc-seed")).isPresent();
                 assertThat(storage.chunkStore().load("doc-seed:0")).isPresent();
-                assertThat(storage.graphStore().loadEntity("entity:seed")).isPresent();
+                assertThat(storage.graphStore().loadEntity("seed")).isPresent();
                 assertThat(storage.vectorStore().list("chunks"))
                     .extracting(VectorStore.VectorRecord::id)
                     .containsExactly("doc-seed:0");
@@ -2740,7 +2752,7 @@ class E2ELightRagTest {
             var postgres = new PostgreSQLContainer<>(
                 DockerImageName.parse("pgvector/pgvector:pg16").asCompatibleSubstituteFor("postgres")
             );
-            var neo4j = new Neo4jContainer<>("neo4j:5-community").withAdminPassword("password")
+            var neo4j = Neo4jTestContainers.create()
         ) {
             postgres.start();
             neo4j.start();
@@ -2816,7 +2828,7 @@ class E2ELightRagTest {
             var postgres = new PostgreSQLContainer<>(
                 DockerImageName.parse("pgvector/pgvector:pg16").asCompatibleSubstituteFor("postgres")
             );
-            var neo4j = new Neo4jContainer<>("neo4j:5-community").withAdminPassword("password")
+            var neo4j = Neo4jTestContainers.create()
         ) {
             postgres.start();
             neo4j.start();
@@ -2854,12 +2866,12 @@ class E2ELightRagTest {
 
                 assertThat(storage.graphStore().allEntities())
                     .extracting(GraphStore.EntityRecord::id)
-                    .contains("entity:atlas", "entity:graphstore", "entity:knowledgegraphteam");
+                    .contains("atlas", "graphstore", "knowledgegraphteam");
                 assertThat(storage.graphStore().allRelations())
                     .extracting(GraphStore.RelationRecord::id)
                     .contains(
-                        "relation:entity:atlas|depends_on|entity:graphstore",
-                        "relation:entity:graphstore|owned_by|entity:knowledgegraphteam"
+                        relationId("atlas", "graphstore"),
+                        relationId("graphstore", "knowledgegraphteam")
                     );
 
                 var result = rag.query(WORKSPACE, QueryRequest.builder()
@@ -2873,8 +2885,8 @@ class E2ELightRagTest {
 
                 assertThat(result.answer())
                     .contains("Reasoning Path 1")
-                    .contains("Hop 1: Atlas --depends_on--> GraphStore")
-                    .contains("Hop 2: GraphStore --owned_by--> KnowledgeGraphTeam")
+                    .contains("Hop 1: Atlas -> GraphStore | keywords: depends_on")
+                    .contains("Hop 2: GraphStore -> KnowledgeGraphTeam | keywords: owned_by")
                     .contains("Relation detail: Atlas relies on GraphStore as its dependency service.")
                     .contains("Relation detail: GraphStore is maintained by the knowledge graph team.")
                     .contains("Evidence [doc-1:0]: Atlas 组件依赖 GraphStore 服务。")
@@ -2893,7 +2905,7 @@ class E2ELightRagTest {
             var postgres = new PostgreSQLContainer<>(
                 DockerImageName.parse("pgvector/pgvector:pg16").asCompatibleSubstituteFor("postgres")
             );
-            var neo4j = new Neo4jContainer<>("neo4j:5-community").withAdminPassword("password")
+            var neo4j = Neo4jTestContainers.create()
         ) {
             postgres.start();
             neo4j.start();
@@ -2903,7 +2915,7 @@ class E2ELightRagTest {
             snapshotStore.save(snapshotPath, new SnapshotStore.Snapshot(
                 List.of(new DocumentStore.DocumentRecord("doc-seed", "Seed", "Body", Map.of())),
                 List.of(new ChunkStore.ChunkRecord("doc-seed:0", "doc-seed", "Body", 4, 0, Map.of())),
-                List.of(new GraphStore.EntityRecord("entity:seed", "Seed", "person", "Seed entity", List.of(), List.of("doc-seed:0"))),
+                List.of(new GraphStore.EntityRecord("seed", "Seed", "person", "Seed entity", List.of(), List.of("doc-seed:0"))),
                 List.of(),
                 Map.of("chunks", List.of(new VectorStore.VectorRecord("doc-seed:0", List.of(1.0d, 0.0d))))
             ));
@@ -2937,7 +2949,7 @@ class E2ELightRagTest {
                 assertThat(rag).isNotNull();
                 assertThat(storage.documentStore().load("doc-seed")).isPresent();
                 assertThat(storage.chunkStore().load("doc-seed:0")).isPresent();
-                assertThat(storage.graphStore().loadEntity("entity:seed")).isPresent();
+                assertThat(storage.graphStore().loadEntity("seed")).isPresent();
                 assertThat(storage.vectorStore().list("chunks"))
                     .extracting(VectorStore.VectorRecord::id)
                     .containsExactly("doc-seed:0");
@@ -2987,10 +2999,10 @@ class E2ELightRagTest {
                       ],
                       "relations": [
                         {
-                          "sourceEntityName": "Bob",
-                          "targetEntityName": "Carol",
-                          "type": "reports_to",
-                          "description": "reporting line",
+                          "source_entity": "Bob",
+                          "target_entity": "Carol",
+                          "relationship_keywords": "reports_to",
+                          "relationship_description": "reporting line",
                           "weight": 0.9
                         }
                       ]
@@ -3015,10 +3027,10 @@ class E2ELightRagTest {
                   ],
                   "relations": [
                     {
-                      "sourceEntityName": "Alice",
-                      "targetEntityName": "Bob",
-                      "type": "works_with",
-                      "description": "collaboration",
+                      "source_entity": "Alice",
+                      "target_entity": "Bob",
+                      "relationship_keywords": "works_with",
+                      "relationship_description": "collaboration",
                       "weight": 0.8
                     }
                   ]
@@ -3264,10 +3276,10 @@ class E2ELightRagTest {
                       ],
                       "relations": [
                         {
-                          "sourceEntityName": "Atlas",
-                          "targetEntityName": "GraphStore",
-                          "type": "depends_on",
-                          "description": "Atlas relies on GraphStore as its dependency service.",
+                          "source_entity": "Atlas",
+                          "target_entity": "GraphStore",
+                          "relationship_keywords": "depends_on",
+                          "relationship_description": "Atlas relies on GraphStore as its dependency service.",
                           "weight": 0.9
                         }
                       ]
@@ -3293,10 +3305,10 @@ class E2ELightRagTest {
                       ],
                       "relations": [
                         {
-                          "sourceEntityName": "GraphStore",
-                          "targetEntityName": "KnowledgeGraphTeam",
-                          "type": "owned_by",
-                          "description": "GraphStore is maintained by the knowledge graph team.",
+                          "source_entity": "GraphStore",
+                          "target_entity": "KnowledgeGraphTeam",
+                          "relationship_keywords": "owned_by",
+                          "relationship_description": "GraphStore is maintained by the knowledge graph team.",
                           "weight": 1.0
                         }
                       ]
@@ -3431,6 +3443,10 @@ class E2ELightRagTest {
               "low_level_keywords": []
             }
             """;
+    }
+
+    private static String relationId(String srcId, String tgtId) {
+        return RelationCanonicalizer.canonicalize(srcId, tgtId).relationId();
     }
 
     private static List<String> readAll(io.github.lightrag.model.CloseableIterator<String> iterator) {

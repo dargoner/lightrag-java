@@ -11,6 +11,7 @@ import io.github.lightrag.types.ScoredChunk;
 import io.github.lightrag.types.ScoredEntity;
 import io.github.lightrag.types.ScoredRelation;
 import io.github.lightrag.types.reasoning.PathRetrievalResult;
+import io.github.lightrag.types.reasoning.RelationEndpoint;
 import io.github.lightrag.types.reasoning.ReasoningPath;
 import org.junit.jupiter.api.Test;
 
@@ -24,9 +25,9 @@ import static org.assertj.core.api.Assertions.assertThat;
 class MultiHopQueryStrategyTest {
     @Test
     void assemblesHopStructuredContextAndKeepsFallbackChunks() {
-        var atlas = new Entity("entity:atlas", "Atlas", "Component", "", List.of(), List.of("chunk-1"));
-        var graphStore = new Entity("entity:graphstore", "GraphStore", "Service", "", List.of(), List.of("chunk-1", "chunk-2"));
-        var team = new Entity("entity:team", "KnowledgeGraphTeam", "Team", "", List.of(), List.of("chunk-2"));
+        var atlas = new Entity("atlas", "Atlas", "Component", "", List.of(), List.of("chunk-1"));
+        var graphStore = new Entity("graphstore", "GraphStore", "Service", "", List.of(), List.of("chunk-1", "chunk-2"));
+        var team = new Entity("team", "KnowledgeGraphTeam", "Team", "", List.of(), List.of("chunk-2"));
         var dependsOn = new Relation("relation:1", atlas.id(), graphStore.id(), "depends_on", "Atlas relies on GraphStore as its dependency service.", 0.9d, List.of("chunk-1"));
         var ownedBy = new Relation("relation:2", graphStore.id(), team.id(), "owned_by", "GraphStore is maintained by the knowledge graph team.", 1.0d, List.of("chunk-2"));
         var seedContext = new QueryContext(
@@ -44,7 +45,10 @@ class MultiHopQueryStrategyTest {
             ),
             List.of(new ReasoningPath(
                 List.of(atlas.id(), graphStore.id(), team.id()),
-                List.of(dependsOn.id(), ownedBy.id()),
+                List.of(
+                    new RelationEndpoint(atlas.id(), graphStore.id()),
+                    new RelationEndpoint(graphStore.id(), team.id())
+                ),
                 List.of("chunk-1", "chunk-2"),
                 2,
                 0.0d
@@ -72,8 +76,8 @@ class MultiHopQueryStrategyTest {
             .contains("Reasoning Path 1")
             .contains("Hop 1")
             .contains("Hop 2")
-            .contains("Atlas --depends_on--> GraphStore")
-            .contains("GraphStore --owned_by--> KnowledgeGraphTeam")
+            .contains("Atlas -> GraphStore | keywords: depends_on")
+            .contains("GraphStore -> KnowledgeGraphTeam | keywords: owned_by")
             .contains("Relation detail: Atlas relies on GraphStore as its dependency service.")
             .contains("Relation detail: GraphStore is maintained by the knowledge graph team.")
             .contains("Evidence [chunk-1]: Atlas 组件依赖 GraphStore 服务。")
@@ -85,8 +89,8 @@ class MultiHopQueryStrategyTest {
 
     @Test
     void prioritizesReasoningPathChunksAheadOfFallbackChunks() {
-        var atlas = new Entity("entity:atlas", "Atlas", "Component", "", List.of(), List.of("chunk-2"));
-        var graphStore = new Entity("entity:graphstore", "GraphStore", "Service", "", List.of(), List.of("chunk-2"));
+        var atlas = new Entity("atlas", "Atlas", "Component", "", List.of(), List.of("chunk-2"));
+        var graphStore = new Entity("graphstore", "GraphStore", "Service", "", List.of(), List.of("chunk-2"));
         var dependsOn = new Relation("relation:1", atlas.id(), graphStore.id(), "depends_on", "", 0.9d, List.of("chunk-2"));
         var seedContext = new QueryContext(
             List.of(new ScoredEntity(atlas.id(), atlas, 0.95d)),
@@ -100,7 +104,7 @@ class MultiHopQueryStrategyTest {
             List.of(new ScoredRelation(dependsOn.id(), dependsOn, 0.88d)),
             List.of(new ReasoningPath(
                 List.of(atlas.id(), graphStore.id()),
-                List.of(dependsOn.id()),
+                List.of(new RelationEndpoint(atlas.id(), graphStore.id())),
                 List.of("chunk-2"),
                 1,
                 0.0d
@@ -131,9 +135,9 @@ class MultiHopQueryStrategyTest {
 
     @Test
     void reservesAtLeastOneEvidenceChunkPerHopBeforeExtraPathChunks() {
-        var atlas = new Entity("entity:atlas", "Atlas", "Component", "", List.of(), List.of("chunk-1", "chunk-2"));
-        var graphStore = new Entity("entity:graphstore", "GraphStore", "Service", "", List.of(), List.of("chunk-1", "chunk-2", "chunk-3"));
-        var team = new Entity("entity:team", "KnowledgeGraphTeam", "Team", "", List.of(), List.of("chunk-3"));
+        var atlas = new Entity("atlas", "Atlas", "Component", "", List.of(), List.of("chunk-1", "chunk-2"));
+        var graphStore = new Entity("graphstore", "GraphStore", "Service", "", List.of(), List.of("chunk-1", "chunk-2", "chunk-3"));
+        var team = new Entity("team", "KnowledgeGraphTeam", "Team", "", List.of(), List.of("chunk-3"));
         var dependsOn = new Relation("relation:1", atlas.id(), graphStore.id(), "depends_on", "", 0.9d, List.of("chunk-1", "chunk-2"));
         var ownedBy = new Relation("relation:2", graphStore.id(), team.id(), "owned_by", "", 1.0d, List.of("chunk-3"));
         var seedContext = new QueryContext(
@@ -152,7 +156,10 @@ class MultiHopQueryStrategyTest {
                 ),
                 List.of(new ReasoningPath(
                     List.of(atlas.id(), graphStore.id(), team.id()),
-                    List.of(dependsOn.id(), ownedBy.id()),
+                    List.of(
+                        new RelationEndpoint(atlas.id(), graphStore.id()),
+                        new RelationEndpoint(graphStore.id(), team.id())
+                    ),
                     List.of("chunk-1", "chunk-2", "chunk-3"),
                     2,
                     0.0d
@@ -182,8 +189,8 @@ class MultiHopQueryStrategyTest {
 
     @Test
     void fallsBackToSeedContextWhenRerankedPathsAreTooWeak() {
-        var atlas = new Entity("entity:atlas", "Atlas", "Component", "", List.of(), List.of("chunk-seed"));
-        var graphStore = new Entity("entity:graphstore", "GraphStore", "Service", "", List.of(), List.of("chunk-hop"));
+        var atlas = new Entity("atlas", "Atlas", "Component", "", List.of(), List.of("chunk-seed"));
+        var graphStore = new Entity("graphstore", "GraphStore", "Service", "", List.of(), List.of("chunk-hop"));
         var dependsOn = new Relation("relation:1", atlas.id(), graphStore.id(), "depends_on", "", 0.3d, List.of("chunk-hop"));
         var seedContext = new QueryContext(
             List.of(new ScoredEntity(atlas.id(), atlas, 0.95d)),
@@ -198,7 +205,7 @@ class MultiHopQueryStrategyTest {
                 List.of(new ScoredRelation(dependsOn.id(), dependsOn, 0.20d)),
                 List.of(new ReasoningPath(
                     List.of(atlas.id(), graphStore.id()),
-                    List.of(dependsOn.id()),
+                    List.of(new RelationEndpoint(atlas.id(), graphStore.id())),
                     List.of(),
                     1,
                     0.0d
@@ -206,7 +213,7 @@ class MultiHopQueryStrategyTest {
             )),
             (request, retrievalResult) -> List.of(new ReasoningPath(
                 List.of(atlas.id(), graphStore.id()),
-                List.of(dependsOn.id()),
+                List.of(new RelationEndpoint(atlas.id(), graphStore.id())),
                 List.of(),
                 1,
                 0.20d
@@ -233,9 +240,9 @@ class MultiHopQueryStrategyTest {
 
     @Test
     void clearsAssembledContextWhenMetadataFilteringChangesSupportingChunks() {
-        var atlas = new Entity("entity:atlas", "Atlas", "Component", "", List.of(), List.of("chunk-seed"));
-        var graphStore = new Entity("entity:graphstore", "GraphStore", "Service", "", List.of(), List.of("chunk-hop-1", "chunk-hop-2"));
-        var team = new Entity("entity:team", "KnowledgeGraphTeam", "Team", "", List.of(), List.of("chunk-hop-2"));
+        var atlas = new Entity("atlas", "Atlas", "Component", "", List.of(), List.of("chunk-seed"));
+        var graphStore = new Entity("graphstore", "GraphStore", "Service", "", List.of(), List.of("chunk-hop-1", "chunk-hop-2"));
+        var team = new Entity("team", "KnowledgeGraphTeam", "Team", "", List.of(), List.of("chunk-hop-2"));
         var dependsOn = new Relation("relation:1", atlas.id(), graphStore.id(), "depends_on", "", 0.9d, List.of("chunk-hop-1"));
         var ownedBy = new Relation("relation:2", graphStore.id(), team.id(), "owned_by", "", 0.85d, List.of("chunk-hop-2"));
         var seedContext = new QueryContext(
@@ -254,7 +261,10 @@ class MultiHopQueryStrategyTest {
                 ),
                 List.of(new ReasoningPath(
                     List.of(atlas.id(), graphStore.id(), team.id()),
-                    List.of(dependsOn.id(), ownedBy.id()),
+                    List.of(
+                        new RelationEndpoint(atlas.id(), graphStore.id()),
+                        new RelationEndpoint(graphStore.id(), team.id())
+                    ),
                     List.of("chunk-hop-1", "chunk-hop-2"),
                     2,
                     0.0d
@@ -285,9 +295,9 @@ class MultiHopQueryStrategyTest {
 
     @Test
     void clearsAssembledContextWhenMetadataConditionsChangeSupportingChunks() {
-        var atlas = new Entity("entity:atlas", "Atlas", "Component", "", List.of(), List.of("chunk-hop-1"));
-        var graphStore = new Entity("entity:graphstore", "GraphStore", "Service", "", List.of(), List.of("chunk-hop-1", "chunk-hop-2"));
-        var team = new Entity("entity:team", "KnowledgeGraphTeam", "Team", "", List.of(), List.of("chunk-hop-2"));
+        var atlas = new Entity("atlas", "Atlas", "Component", "", List.of(), List.of("chunk-hop-1"));
+        var graphStore = new Entity("graphstore", "GraphStore", "Service", "", List.of(), List.of("chunk-hop-1", "chunk-hop-2"));
+        var team = new Entity("team", "KnowledgeGraphTeam", "Team", "", List.of(), List.of("chunk-hop-2"));
         var dependsOn = new Relation("relation:1", atlas.id(), graphStore.id(), "depends_on", "", 0.9d, List.of("chunk-hop-1"));
         var ownedBy = new Relation("relation:2", graphStore.id(), team.id(), "owned_by", "", 0.85d, List.of("chunk-hop-2"));
         var seedContext = new QueryContext(
@@ -306,7 +316,10 @@ class MultiHopQueryStrategyTest {
                 ),
                 List.of(new ReasoningPath(
                     List.of(atlas.id(), graphStore.id(), team.id()),
-                    List.of(dependsOn.id(), ownedBy.id()),
+                    List.of(
+                        new RelationEndpoint(atlas.id(), graphStore.id()),
+                        new RelationEndpoint(graphStore.id(), team.id())
+                    ),
                     List.of("chunk-hop-1", "chunk-hop-2"),
                     2,
                     0.0d
@@ -412,9 +425,9 @@ class MultiHopQueryStrategyTest {
             for (var relation : relations) {
                 this.relations.put(relation.id(), new RelationRecord(
                     relation.id(),
-                    relation.sourceEntityId(),
-                    relation.targetEntityId(),
-                    relation.type(),
+                    relation.srcId(),
+                    relation.tgtId(),
+                    relation.keywords(),
                     relation.description(),
                     relation.weight(),
                     relation.sourceChunkIds()
@@ -455,7 +468,7 @@ class MultiHopQueryStrategyTest {
         @Override
         public List<RelationRecord> findRelations(String entityId) {
             return relations.values().stream()
-                .filter(relation -> relation.sourceEntityId().equals(entityId) || relation.targetEntityId().equals(entityId))
+                .filter(relation -> relation.srcId().equals(entityId) || relation.tgtId().equals(entityId))
                 .toList();
         }
     }

@@ -201,16 +201,16 @@ class KnowledgeExtractorTest {
               ],
               "relations": [
                 {
-                  "sourceEntityName": "Alice",
-                  "targetEntityName": "",
-                  "type": "works_with",
-                  "description": "ignored"
+                  "source_entity": "Alice",
+                  "target_entity": "",
+                  "relationship_keywords": "works_with",
+                  "relationship_description": "ignored"
                 },
                 {
-                  "sourceEntityName": " Alice ",
-                  "targetEntityName": " Bob ",
-                  "type": "works_with",
-                  "description": "collaboration"
+                  "source_entity": " Alice ",
+                  "target_entity": " Bob ",
+                  "relationship_keywords": "works_with",
+                  "relationship_description": "collaboration"
                 }
               ]
             }
@@ -311,17 +311,17 @@ class KnowledgeExtractorTest {
               ],
               "relations": [
                 {
-                  "sourceEntityName": "Alice",
-                  "targetEntityName": "Bob",
-                  "type": "works_with",
-                  "description": "collaboration",
+                  "source_entity": "Alice",
+                  "target_entity": "Bob",
+                  "relationship_keywords": "works_with",
+                  "relationship_description": "collaboration",
                   "weight": 1.7
                 },
                 {
-                  "sourceEntityName": "Alice",
-                  "targetEntityName": "Charlie",
-                  "type": "reviews",
-                  "description": "review chain",
+                  "source_entity": "Alice",
+                  "target_entity": "Charlie",
+                  "relationship_keywords": "reviews",
+                  "relationship_description": "review chain",
                   "confidence": 0.4
                 }
               ]
@@ -347,10 +347,10 @@ class KnowledgeExtractorTest {
               ],
               "relations": [
                 {
-                  "sourceEntityName": "Alice",
-                  "targetEntityName": "Bob",
-                  "type": "works_with",
-                  "description": "short",
+                  "source_entity": "Alice",
+                  "target_entity": "Bob",
+                  "relationship_keywords": "works_with",
+                  "relationship_description": "short",
                   "weight": 0.7
                 }
               ]
@@ -361,10 +361,10 @@ class KnowledgeExtractorTest {
               "entities": [],
               "relations": [
                 {
-                  "sourceEntityName": "Alice",
-                  "targetEntityName": "Bob",
-                  "type": "works-with",
-                  "description": "longer collaboration description",
+                  "source_entity": "Alice",
+                  "target_entity": "Bob",
+                  "relationship_keywords": "works-with",
+                  "relationship_description": "longer collaboration description",
                   "weight": 0.9
                 }
               ]
@@ -391,10 +391,10 @@ class KnowledgeExtractorTest {
               ],
               "relations": [
                 {
-                  "sourceEntityName": "Alice",
-                  "targetEntityName": "Bob",
-                  "type": "collaboration, research",
-                  "description": "short",
+                  "source_entity": "Alice",
+                  "target_entity": "Bob",
+                  "relationship_keywords": "collaboration, research",
+                  "relationship_description": "short",
                   "weight": 0.6
                 }
               ]
@@ -405,10 +405,10 @@ class KnowledgeExtractorTest {
               "entities": [],
               "relations": [
                 {
-                  "sourceEntityName": "Bob",
-                  "targetEntityName": "Alice",
-                  "type": "research, collaboration",
-                  "description": "longer collaboration description",
+                  "source_entity": "Bob",
+                  "target_entity": "Alice",
+                  "relationship_keywords": "research, collaboration",
+                  "relationship_description": "longer collaboration description",
                   "weight": 0.9
                 }
               ]
@@ -435,10 +435,10 @@ class KnowledgeExtractorTest {
               ],
               "relations": [
                 {
-                  "sourceEntityName": "Alice",
-                  "targetEntityName": "Bob",
-                  "type": "architecture, dependency",
-                  "description": "short",
+                  "source_entity": "Alice",
+                  "target_entity": "Bob",
+                  "relationship_keywords": "architecture, dependency",
+                  "relationship_description": "short",
                   "weight": 0.5
                 }
               ]
@@ -449,10 +449,10 @@ class KnowledgeExtractorTest {
               "entities": [],
               "relations": [
                 {
-                  "sourceEntityName": "Alice",
-                  "targetEntityName": "Bob",
-                  "type": "dependency, architecture",
-                  "description": "longer dependency description",
+                  "source_entity": "Alice",
+                  "target_entity": "Bob",
+                  "relationship_keywords": "dependency, architecture",
+                  "relationship_description": "longer dependency description",
                   "weight": 0.8
                 }
               ]
@@ -509,10 +509,10 @@ class KnowledgeExtractorTest {
               ],
               "relations": [
                 {
-                  "sourceEntityName": "Bob",
-                  "targetEntityName": "Alice",
-                  "type": "research, collaboration",
-                  "description": "short",
+                  "source_entity": "Bob",
+                  "target_entity": "Alice",
+                  "relationship_keywords": "research, collaboration",
+                  "relationship_description": "short",
                   "weight": 0.6
                 }
               ]
@@ -523,10 +523,10 @@ class KnowledgeExtractorTest {
               "entities": [],
               "relations": [
                 {
-                  "sourceEntityName": "Alice",
-                  "targetEntityName": "Bob",
-                  "type": "collaboration, research",
-                  "description": "longer collaboration description",
+                  "source_entity": "Alice",
+                  "target_entity": "Bob",
+                  "relationship_keywords": "collaboration, research",
+                  "relationship_description": "longer collaboration description",
                   "weight": 0.9
                 }
               ]
@@ -549,10 +549,10 @@ class KnowledgeExtractorTest {
               "entities": [],
               "relations": [
                 {
-                  "sourceEntityName": "订单系统",
-                  "targetEntityName": "PostgreSQL",
-                  "type": "依赖",
-                  "description": "订单系统依赖 PostgreSQL 进行事务存储",
+                  "source_entity": "订单系统",
+                  "target_entity": "PostgreSQL",
+                  "relationship_keywords": "依赖",
+                  "relationship_description": "订单系统依赖 PostgreSQL 进行事务存储",
                   "weight": 1.0,
                   "supportingChunkIndexes": [0, 1, 1]
                 }
@@ -588,10 +588,10 @@ class KnowledgeExtractorTest {
               "entities": [],
               "relations": [
                 {
-                  "sourceEntityName": "订单系统",
-                  "targetEntityName": "PostgreSQL",
-                  "type": "依赖",
-                  "description": "bad indexes",
+                  "source_entity": "订单系统",
+                  "target_entity": "PostgreSQL",
+                  "relationship_keywords": "依赖",
+                  "relationship_description": "bad indexes",
                   "weight": 1.0,
                   "supportingChunkIndexes": [3]
                 }
@@ -623,10 +623,10 @@ class KnowledgeExtractorTest {
                   "entities": [],
                   "relations": [
                     {
-                      "sourceEntityName": "订单系统",
-                      "targetEntityName": "PostgreSQL",
-                      "type": "依赖",
-                      "description": "订单系统依赖 PostgreSQL 进行事务存储",
+                      "source_entity": "订单系统",
+                      "target_entity": "PostgreSQL",
+                      "relationship_keywords": "依赖",
+                      "relationship_description": "订单系统依赖 PostgreSQL 进行事务存储",
                       "weight": 1.0,
                       "supportingChunkIndexes": []
                     }
@@ -670,10 +670,10 @@ class KnowledgeExtractorTest {
               "entities": [],
               "relations": [
                 {
-                  "sourceEntityName": "Alice",
-                  "targetEntityName": "Bob",
-                  "type": "research, collaboration",
-                  "description": "Alice and Bob collaborate on retrieval systems",
+                  "source_entity": "Alice",
+                  "target_entity": "Bob",
+                  "relationship_keywords": "research, collaboration",
+                  "relationship_description": "Alice and Bob collaborate on retrieval systems",
                   "weight": 0.9,
                   "supportingChunkIndexes": [0]
                 }

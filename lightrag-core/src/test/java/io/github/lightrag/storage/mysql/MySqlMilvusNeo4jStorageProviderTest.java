@@ -46,6 +46,7 @@ import java.util.concurrent.locks.ReentrantReadWriteLock;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
+import static io.github.lightrag.support.RelationIds.relationId;
 
 class MySqlMilvusNeo4jStorageProviderTest {
     @Test
@@ -588,10 +589,10 @@ class MySqlMilvusNeo4jStorageProviderTest {
                 1,
                 ChunkMergeStatus.SUCCEEDED,
                 ChunkGraphStatus.MATERIALIZED,
-                List.of("entity:alice"),
-                List.of("relation:entity:alice|works_with|entity:bob"),
-                List.of("entity:alice"),
-                List.of("relation:entity:alice|works_with|entity:bob"),
+                List.of("alice"),
+                List.of(relationId("alice", "bob")),
+                List.of("alice"),
+                List.of(relationId("alice", "bob")),
                 FailureStage.FINALIZING,
                 Instant.parse("2026-04-12T10:00:05Z"),
                 null
@@ -828,7 +829,7 @@ class MySqlMilvusNeo4jStorageProviderTest {
         @Override
         public List<GraphStore.RelationRecord> findRelations(String entityId) {
             return relations.values().stream()
-                .filter(relation -> relation.sourceEntityId().equals(entityId) || relation.targetEntityId().equals(entityId))
+                .filter(relation -> relation.srcId().equals(entityId) || relation.tgtId().equals(entityId))
                 .toList();
         }
 
@@ -929,7 +930,7 @@ class MySqlMilvusNeo4jStorageProviderTest {
                 @Override
                 public List<RelationRecord> findRelations(String entityId) {
                     return relations.values().stream()
-                        .filter(relation -> relation.sourceEntityId().equals(entityId) || relation.targetEntityId().equals(entityId))
+                        .filter(relation -> relation.srcId().equals(entityId) || relation.tgtId().equals(entityId))
                         .toList();
                 }
             };

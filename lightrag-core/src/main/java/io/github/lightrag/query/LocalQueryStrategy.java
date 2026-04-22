@@ -71,8 +71,8 @@ public final class LocalQueryStrategy implements QueryStrategy {
             for (var relationRecord : relationsByEntityId.getOrDefault(entityId, List.of())) {
                 var relationScore = entityScores.getOrDefault(entityId, 0.0d);
                 relationScores.merge(relationRecord.id(), relationScore, Math::max);
-                entityScores.merge(relationRecord.sourceEntityId(), relationScore, Math::max);
-                entityScores.merge(relationRecord.targetEntityId(), relationScore, Math::max);
+                entityScores.merge(relationRecord.srcId(), relationScore, Math::max);
+                entityScores.merge(relationRecord.tgtId(), relationScore, Math::max);
             }
         }
 
@@ -195,9 +195,9 @@ public final class LocalQueryStrategy implements QueryStrategy {
     private static Relation toRelation(GraphStore.RelationRecord relation) {
         return new Relation(
             relation.id(),
-            relation.sourceEntityId(),
-            relation.targetEntityId(),
-            relation.type(),
+            relation.srcId(),
+            relation.tgtId(),
+            relation.keywords(),
             relation.description(),
             relation.weight(),
             relation.sourceChunkIds()

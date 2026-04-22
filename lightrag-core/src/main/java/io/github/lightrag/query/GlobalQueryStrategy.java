@@ -71,8 +71,8 @@ public final class GlobalQueryStrategy implements QueryStrategy {
         var entityScores = new LinkedHashMap<String, Double>();
         var chunkScores = new LinkedHashMap<String, Double>();
         for (var relation : matchedRelations) {
-            entityScores.merge(relation.relation().sourceEntityId(), relation.score(), Math::max);
-            entityScores.merge(relation.relation().targetEntityId(), relation.score(), Math::max);
+            entityScores.merge(relation.relation().srcId(), relation.score(), Math::max);
+            entityScores.merge(relation.relation().tgtId(), relation.score(), Math::max);
             for (var chunkId : relation.relation().sourceChunkIds()) {
                 chunkScores.merge(chunkId, relation.score(), Math::max);
             }
@@ -144,9 +144,9 @@ public final class GlobalQueryStrategy implements QueryStrategy {
     private static Relation toRelation(GraphStore.RelationRecord relation) {
         return new Relation(
             relation.id(),
-            relation.sourceEntityId(),
-            relation.targetEntityId(),
-            relation.type(),
+            relation.srcId(),
+            relation.tgtId(),
+            relation.keywords(),
             relation.description(),
             relation.weight(),
             relation.sourceChunkIds()
