@@ -33,6 +33,7 @@ This design explicitly does not include:
 - changing the existing `LightRag.query(...)` return type
 - exposing internal `QueryContext` as public SDK API
 - adding REST controllers or HTTP response models
+- adding streaming structured query results in the first version
 - changing vector store schemas or query storage contracts
 - changing retrieval logic, reranking logic, or multi-hop behavior
 - adding path-level structured output in the first version
@@ -83,6 +84,7 @@ Behavior:
 - delegates to `QueryEngine`
 - reuses current query behavior and retrieval flow
 - returns a structured result with both final answer data and retrieval details
+- rejects `QueryRequest.stream() == true` in the first version with a clear `IllegalArgumentException`
 
 ### New Public Result Models
 
@@ -102,6 +104,7 @@ Rationale:
 - keeps the existing answer-oriented experience
 - avoids forcing callers to invoke two separate methods
 - preserves current context/reference semantics
+- intentionally reuses `QueryResult.Context` and `QueryResult.Reference` instead of duplicating equivalent public SDK types in the first version
 
 #### StructuredQueryEntity
 
@@ -173,6 +176,14 @@ The mapping happens after the query engine has completed retrieval, chunk limiti
 
 This preserves the existing query flow while adding a stable serialization boundary around the public result.
 
+The first version deliberately keeps `contexts` and `references` aligned with the existing `QueryResult` public model because:
+
+- they are already public SDK types
+- their semantics already match the desired structured query output
+- duplicating them would add API surface without adding new caller value
+
+The new API boundary is therefore created around entities, relations, and chunks, which are the missing structured retrieval payloads today.
+
 ## Query Flow
 
 The new structured query call should reuse the current query engine pipeline:
@@ -188,6 +199,11 @@ The new structured query call should reuse the current query engine pipeline:
 9. Return `StructuredQueryResult`
 
 No retrieval behavior changes are required.
+
+Streaming rule for the first version:
+
+- if `QueryRequest.stream()` is `true`, `queryStructured(...)` must fail fast with a clear `IllegalArgumentException`
+- non-streaming query modes continue to follow existing behavior
 
 ## Ordering Rules
 
@@ -232,6 +248,16 @@ Verify that existing `query(...)` behavior remains unchanged and existing query 
 ### 3. Ordering Stability
 
 Verify that entities, relations, and chunks in `StructuredQueryResult` appear in the same order as the internal retrieval output used to produce the answer.
+
+### 4. Query Flag Semantics
+
+Verify explicit structured-query behavior for current query flags:
+
+- `onlyNeedContext=true` returns assembled context in `answer` and still includes structured entities, relations, and chunks
+- `onlyNeedPrompt=true` returns rendered prompt in `answer` and still includes structured entities, relations, and chunks
+- `includeReferences=true` includes references exactly as current `query(...)` does
+- `includeReferences=false` preserves current reference behavior for non-reference queries
+- `stream=true` is rejected with a clear exception in the first version
 
 ## File Plan
 
