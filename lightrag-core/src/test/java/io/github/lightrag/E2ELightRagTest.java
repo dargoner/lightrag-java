@@ -13,6 +13,7 @@ import io.github.lightrag.api.GraphRelation;
 import io.github.lightrag.api.MergeEntitiesRequest;
 import io.github.lightrag.api.QueryRequest;
 import io.github.lightrag.api.QueryResult;
+import io.github.lightrag.api.StructuredQueryResult;
 import io.github.lightrag.indexing.RelationCanonicalizer;
 import io.github.lightrag.model.ChatModel;
 import io.github.lightrag.model.EmbeddingModel;
@@ -2039,6 +2040,38 @@ class E2ELightRagTest {
         assertThat(result.contexts())
             .extracting(QueryResult.Context::source)
             .containsExactly("team-notes.md");
+    }
+
+    @Test
+    void queryStructuredReturnsAnswerAndStructuredMatches() {
+        var storage = InMemoryStorageProvider.create();
+        var chatModel = new FakeChatModel();
+        var rag = LightRag.builder()
+            .chatModel(chatModel)
+            .embeddingModel(new FakeEmbeddingModel())
+            .storage(storage)
+            .build();
+
+        rag.ingest(WORKSPACE, List.of(
+            new Document("doc-1", "Title", "Alice works with Bob", Map.of("source", "team-notes.md"))
+        ));
+
+        StructuredQueryResult result = rag.queryStructured(WORKSPACE, QueryRequest.builder()
+            .query("Which company does Alice work at?")
+            .mode(QueryMode.LOCAL)
+            .topK(5)
+            .chunkTopK(5)
+            .includeReferences(true)
+            .build());
+
+        assertThat(result.answer()).isNotBlank();
+        assertThat(result.entities()).isNotEmpty();
+        assertThat(result.relations()).isNotEmpty();
+        assertThat(result.chunks()).isNotEmpty();
+        assertThat(result.entities().get(0).name()).isNotBlank();
+        assertThat(result.relations().get(0).srcId()).isNotBlank();
+        assertThat(result.relations().get(0).tgtId()).isNotBlank();
+        assertThat(result.chunks().get(0).documentId()).isNotBlank();
     }
 
     @Test

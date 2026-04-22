@@ -2,6 +2,7 @@ package io.github.lightrag.query;
 
 import io.github.lightrag.api.QueryMode;
 import io.github.lightrag.api.QueryRequest;
+import io.github.lightrag.api.StructuredQueryResult;
 import io.github.lightrag.model.ChatModel;
 import io.github.lightrag.model.RerankModel;
 import io.github.lightrag.types.Chunk;
@@ -514,6 +515,43 @@ class QueryEngineTest {
             .contains("---User Query---")
             .contains("which chunk?");
         assertThat(chatModel.callCount()).isZero();
+    }
+
+    @Test
+    void queryStructuredRejectsStreamingRequests() {
+        var engine = new QueryEngine(
+            new RecordingChatModel(),
+            new ContextAssembler(),
+            strategiesReturning(baseContext()),
+            null
+        );
+
+        assertThatThrownBy(() -> engine.queryStructured(QueryRequest.builder()
+            .query("test")
+            .mode(QueryMode.NAIVE)
+            .stream(true)
+            .build()))
+            .isInstanceOf(IllegalArgumentException.class)
+            .hasMessageContaining("stream");
+    }
+
+    @Test
+    void queryStructuredReturnsPromptForOnlyNeedPromptRequests() {
+        var chatModel = new RecordingChatModel();
+        var engine = new QueryEngine(
+            chatModel,
+            new ContextAssembler(),
+            strategiesReturning(baseContext()),
+            null
+        );
+
+        StructuredQueryResult result = engine.queryStructured(QueryRequest.builder()
+            .query("test")
+            .mode(QueryMode.NAIVE)
+            .onlyNeedPrompt(true)
+            .build());
+
+        assertThat(result.answer()).contains("test");
     }
 
     @Test
