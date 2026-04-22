@@ -201,8 +201,8 @@ Rows for `relations` will continue populating:
 The shared collection schema will be:
 
 - `pk_id VARCHAR(64)` primary key
-- `vector_id VARCHAR(512)`
-- `workspace_id VARCHAR(512)`
+- `vector_id VARCHAR(65535)`
+- `workspace_id VARCHAR(65535)`
 - `record_type VARCHAR(32)`
 - `dense_vector FLOAT_VECTOR(<dims>)`
 - `searchable_text VARCHAR(65535)`
@@ -234,6 +234,8 @@ Keep the current indexing strategy:
 - analyzer-enabled `full_text`
 
 No separate scalar index is required at the SDK design level for `workspace_id` or `record_type`; they are mandatory filter fields. If Milvus version-specific scalar indexing proves necessary later, that can be an implementation detail without changing the Java contract.
+
+`vector_id` and `workspace_id` deliberately use the same large varchar budget as other unrestricted text fields in Milvus-facing schema. This avoids introducing a new hidden SDK-level max length for existing IDs that are currently validated only as non-blank strings.
 
 ## Read/Write Behavior
 
