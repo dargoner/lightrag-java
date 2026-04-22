@@ -503,7 +503,7 @@ public class LightRagProperties {
         private String password;
         private String schema;
         private Integer vectorDimensions;
-        private String tablePrefix = "km_rag_";
+        private String tablePrefix = "lightrag_";
 
         public String getJdbcUrl() {
             return jdbcUrl;
@@ -597,7 +597,7 @@ public class LightRagProperties {
         private String jdbcUrl;
         private String username;
         private String password;
-        private String tablePrefix = "rag_";
+        private String tablePrefix = "lightrag_";
 
         public String getJdbcUrl() {
             return jdbcUrl;

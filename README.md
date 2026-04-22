@@ -894,7 +894,7 @@ var storage = new PostgresStorageProvider(
         "postgres",
         "public",
         1536,
-        "rag_"
+        "lightrag_"
     ),
     new FileSnapshotStore()
 );
@@ -946,7 +946,7 @@ var storage = new PostgresNeo4jStorageProvider(
         "postgres",
         "public",
         1536,
-        "rag_"
+        "lightrag_"
     ),
     new Neo4jGraphConfig(
         "bolt://localhost:7687",

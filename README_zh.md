@@ -356,7 +356,7 @@ lightrag:
       password: postgres
       schema: lightrag
       vector-dimensions: 1536
-      table-prefix: rag_
+      table-prefix: lightrag_
 ```
 
 ### Postgres + Neo4j 配置示例
@@ -379,7 +379,7 @@ lightrag:
       password: postgres
       schema: lightrag
       vector-dimensions: 1536
-      table-prefix: rag_
+      table-prefix: lightrag_
     neo4j:
       uri: bolt://localhost:7687
       username: neo4j

@@ -189,7 +189,9 @@ class LightRagAutoConfigurationTest {
             assertThat(properties.getWorkspace().getDefaultId()).isEqualTo("default");
             assertThat(properties.getWorkspace().getMaxActiveWorkspaces()).isEqualTo(32);
             assertThat(properties.getStorage().getPostgres().getSchema()).isNull();
-            assertThat(properties.getStorage().getPostgres().getTablePrefix()).isEqualTo("km_rag_");
+            assertThat(properties.getStorage().getPostgres().getTablePrefix()).isEqualTo("lightrag_");
+            assertThat(properties.getStorage().getMysql().getTablePrefix()).isEqualTo("lightrag_");
+            assertThat(properties.getStorage().getMilvus().getCollectionPrefix()).isEqualTo("rag_");
         });
     }
 

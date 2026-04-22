@@ -730,7 +730,7 @@ class MySqlMilvusNeo4jStorageProviderTest {
             container.getJdbcUrl(),
             container.getUsername(),
             container.getPassword(),
-            "rag_"
+            "lightrag_"
         );
     }
 

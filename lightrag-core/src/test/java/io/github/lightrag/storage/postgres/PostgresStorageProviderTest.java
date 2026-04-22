@@ -80,22 +80,22 @@ class PostgresStorageProviderTest {
                 config.password()
             )) {
                 assertThat(existingTables(connection, config.schema())).containsExactlyInAnyOrder(
-                    "rag_documents",
-                    "rag_chunks",
-                    "rag_document_status",
-                    "rag_document_graph_snapshots",
-                    "rag_chunk_graph_snapshots",
-                    "rag_document_graph_journals",
-                    "rag_chunk_graph_journals",
-                    "rag_entities",
-                    "rag_entity_aliases",
-                    "rag_entity_chunks",
-                    "rag_relations",
-                    "rag_schema_version",
-                    "rag_task",
-                    "rag_task_document",
-                    "rag_task_stage",
-                    "rag_vectors"
+                    "lightrag_documents",
+                    "lightrag_chunks",
+                    "lightrag_document_status",
+                    "lightrag_document_graph_snapshots",
+                    "lightrag_chunk_graph_snapshots",
+                    "lightrag_document_graph_journals",
+                    "lightrag_chunk_graph_journals",
+                    "lightrag_entities",
+                    "lightrag_entity_aliases",
+                    "lightrag_entity_chunks",
+                    "lightrag_relations",
+                    "lightrag_schema_version",
+                    "lightrag_task",
+                    "lightrag_task_document",
+                    "lightrag_task_stage",
+                    "lightrag_vectors"
                 );
                 assertThat(columnNames(connection, config, "documents")).contains("workspace_id");
                 assertThat(columnNames(connection, config, "chunks")).contains("workspace_id", "document_id");
@@ -290,7 +290,7 @@ class PostgresStorageProviderTest {
                     config.password()
                 )) {
                     connection.createStatement().execute("DROP TABLE " + config.qualifiedTableName("documents"));
-                    assertThat(existingTables(connection, config.schema())).doesNotContain("rag_documents");
+                    assertThat(existingTables(connection, config.schema())).doesNotContain("lightrag_documents");
                     assertThat(schemaVersion(connection, config)).contains(5);
                 }
             }
@@ -303,10 +303,10 @@ class PostgresStorageProviderTest {
                     config.password()
                 )
             ) {
-                assertThat(existingTables(connection, config.schema())).contains("rag_documents");
-                assertThat(existingTables(connection, config.schema())).contains("rag_document_status");
-                assertThat(existingTables(connection, config.schema())).contains("rag_task");
-                assertThat(existingTables(connection, config.schema())).contains("rag_task_stage");
+                assertThat(existingTables(connection, config.schema())).contains("lightrag_documents");
+                assertThat(existingTables(connection, config.schema())).contains("lightrag_document_status");
+                assertThat(existingTables(connection, config.schema())).contains("lightrag_task");
+                assertThat(existingTables(connection, config.schema())).contains("lightrag_task_stage");
                 assertThat(schemaVersion(connection, config)).contains(5);
             }
         }
@@ -481,7 +481,7 @@ class PostgresStorageProviderTest {
             container.getPassword(),
             "public",
             3,
-            "rag_"
+            "lightrag_"
         );
 
         try (
@@ -499,8 +499,8 @@ class PostgresStorageProviderTest {
             var effectiveConfig = (PostgresStorageConfig) readField(provider, "config");
             assertThat(effectiveConfig.schema()).isEqualTo("public");
             try (var connection = externalDataSource.getConnection()) {
-                assertThat(existingTables(connection, "public")).contains("rag_documents");
-                assertThat(existingTables(connection, declaredConfig.schema())).doesNotContain("rag_documents");
+                assertThat(existingTables(connection, "public")).contains("lightrag_documents");
+                assertThat(existingTables(connection, declaredConfig.schema())).doesNotContain("lightrag_documents");
             }
         }
     }
@@ -1243,7 +1243,7 @@ class PostgresStorageProviderTest {
             POSTGRES.getPassword(),
             schema,
             vectorDimensions,
-            "rag_"
+            "lightrag_"
         );
     }
 
@@ -1254,7 +1254,7 @@ class PostgresStorageProviderTest {
             POSTGRES.getPassword(),
             schema,
             vectorDimensions,
-            "rag_"
+            "lightrag_"
         );
     }
 
