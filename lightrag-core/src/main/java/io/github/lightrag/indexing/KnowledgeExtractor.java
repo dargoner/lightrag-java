@@ -48,6 +48,8 @@ public final class KnowledgeExtractor {
              - "type": one of these entity types whenever possible: %s
              - "description": concise but informative description based only on the input text
              - "aliases": optional list of aliases, abbreviations, or alternate names only when explicitly supported by the text
+           - Only include aliases when they are strict synonyms for the same entity, such as abbreviations, acronyms, full-name variants, or alternate spellings.
+           - Do not use aliases for categories, subtypes, examples, materials, counterparties, institutions, account variants, process steps, or entities connected by an explicit relationship.
            - If none of the provided entity types apply, use "Other".
            - Ensure consistent naming across the entire extraction.
            - If the entity name is case-insensitive, normalize it in title case.
@@ -199,7 +201,7 @@ public final class KnowledgeExtractor {
         var userPrompt = buildUserPrompt(chunk);
         var systemPrompt = buildSystemPrompt();
         var response = chatModel.generate(new ChatRequest(systemPrompt, userPrompt));
-        var current = parseExtractionResult(response);
+        var current = sanitizeAliasConflicts(parseExtractionResult(response));
 
         var history = new ArrayList<ChatRequest.ConversationMessage>();
         history.add(new ChatRequest.ConversationMessage("user", userPrompt));
@@ -212,8 +214,8 @@ public final class KnowledgeExtractor {
                 break;
             }
             var gleanResponse = chatModel.generate(new ChatRequest(systemPrompt, continuePrompt, history));
-            var gleaned = parseExtractionResult(gleanResponse);
-            current = merge(current, gleaned);
+            var gleaned = sanitizeAliasConflicts(parseExtractionResult(gleanResponse));
+            current = sanitizeAliasConflicts(merge(current, gleaned));
             history.add(new ChatRequest.ConversationMessage("user", continuePrompt));
             history.add(new ChatRequest.ConversationMessage("assistant", gleanResponse));
         }
@@ -776,6 +778,31 @@ public final class KnowledgeExtractor {
         );
     }
 
+    private static ExtractionResult sanitizeAliasConflicts(ExtractionResult result) {
+        var relationPairs = new LinkedHashSet<String>();
+        for (var relation : result.relations()) {
+            var source = normalizeRelationEndpoint(relation.sourceEntityName());
+            var target = normalizeRelationEndpoint(relation.targetEntityName());
+            if (!source.equals(target)) {
+                relationPairs.add(relationPairKey(source, target));
+            }
+        }
+
+        var sanitizedEntities = new ArrayList<ExtractedEntity>(result.entities().size());
+        for (var entity : result.entities()) {
+            var entityKey = normalizeRelationEndpoint(entity.name());
+            var aliases = entity.aliases().stream()
+                .filter(alias -> {
+                    var aliasKey = normalizeRelationEndpoint(alias);
+                    return !entityKey.equals(aliasKey) && !relationPairs.contains(relationPairKey(entityKey, aliasKey));
+                })
+                .toList();
+            sanitizedEntities.add(new ExtractedEntity(entity.name(), entity.type(), entity.description(), aliases));
+        }
+
+        return new ExtractionResult(List.copyOf(sanitizedEntities), result.relations(), result.warnings());
+    }
+
     private static String relationKey(ExtractedRelation relation) {
         var left = normalizeRelationEndpoint(relation.sourceEntityName());
         var right = normalizeRelationEndpoint(relation.targetEntityName());
@@ -786,6 +813,10 @@ public final class KnowledgeExtractor {
             + second
             + "\u0000"
             + canonicalKeywords(relation.keywords());
+    }
+
+    private static String relationPairKey(String left, String right) {
+        return left.compareTo(right) <= 0 ? left + "\u0000" + right : right + "\u0000" + left;
     }
 
     private static String normalizeRelationEndpoint(String value) {

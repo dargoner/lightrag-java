@@ -216,6 +216,38 @@ class GraphAssemblerTest {
         );
     }
 
+    @Test
+    void doesNotMergeAliasEndpointsWhenTheyHaveAnExplicitRelation() {
+        var assembler = new GraphAssembler();
+
+        var graph = assembler.assemble(List.of(
+            extraction(
+                "chunk-1",
+                List.of(
+                    new ExtractedEntity("提取申请", "业务", "提取业务", List.of("提取类型")),
+                    new ExtractedEntity("提取类型", "类型", "购买拍卖自住住房提取", List.of())
+                ),
+                List.of(new ExtractedRelation("提取申请", "提取类型", "关联类型", "提取申请属于该提取类型", 1.0d))
+            )
+        ));
+
+        assertThat(graph.entities()).containsExactly(
+            new Entity("提取申请", "提取申请", "业务", "提取业务", List.of(), List.of("chunk-1")),
+            new Entity("提取类型", "提取类型", "类型", "购买拍卖自住住房提取", List.of(), List.of("chunk-1"))
+        );
+        assertThat(graph.relations()).containsExactly(
+            new Relation(
+                relationId("提取申请", "提取类型"),
+                "提取申请",
+                "提取类型",
+                "关联类型",
+                "提取申请属于该提取类型",
+                1.0d,
+                List.of("chunk-1")
+            )
+        );
+    }
+
     private static GraphAssembler.ChunkExtraction extraction(
         String chunkId,
         List<ExtractedEntity> entities,

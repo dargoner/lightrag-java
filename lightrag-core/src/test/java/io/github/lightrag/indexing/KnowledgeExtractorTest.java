@@ -182,6 +182,47 @@ class KnowledgeExtractorTest {
     }
 
     @Test
+    void dropsAliasesThatWouldCollapseExplicitlyRelatedEntities() {
+        var extractor = new KnowledgeExtractor(new StubChatModel("""
+            {
+              "entities": [
+                {
+                  "name": "提取申请",
+                  "type": "业务",
+                  "description": "提取业务",
+                  "aliases": ["提取类型", "购房提取"]
+                },
+                {
+                  "name": "提取类型",
+                  "type": "类型",
+                  "description": "购买拍卖自住住房提取",
+                  "aliases": []
+                }
+              ],
+              "relations": [
+                {
+                  "source_entity": "提取申请",
+                  "target_entity": "提取类型",
+                  "relationship_keywords": "关联类型",
+                  "relationship_description": "提取申请属于该提取类型",
+                  "weight": 1.0
+                }
+              ]
+            }
+            """));
+
+        var result = extractor.extract(chunk("提取申请属于提取类型"));
+
+        assertThat(result.entities()).containsExactlyInAnyOrder(
+            new ExtractedEntity("提取申请", "业务", "提取业务", List.of("购房提取")),
+            new ExtractedEntity("提取类型", "类型", "购买拍卖自住住房提取", List.of())
+        );
+        assertThat(result.relations()).containsExactly(
+            new ExtractedRelation("提取申请", "提取类型", "关联类型", "提取申请属于该提取类型", 1.0d)
+        );
+    }
+
+    @Test
     void dropsRelationsWithMissingEndpointsAndDefaultsWeight() {
         var extractor = new KnowledgeExtractor(new StubChatModel("""
             {

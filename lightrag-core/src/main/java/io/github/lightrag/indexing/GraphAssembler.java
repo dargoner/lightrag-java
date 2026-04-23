@@ -21,13 +21,14 @@ public final class GraphAssembler {
 
     public Graph assemble(List<ChunkExtraction> extractions) {
         var batch = List.copyOf(Objects.requireNonNull(extractions, "extractions"));
+        var mergeGuard = MergeGuard.from(batch);
         var entitiesById = new LinkedHashMap<String, MutableEntity>();
         var entityIdByMergeKey = new LinkedHashMap<String, String>();
 
         for (var extraction : batch) {
             var chunkExtraction = Objects.requireNonNull(extraction, "extraction");
             for (var entity : chunkExtraction.extraction().entities()) {
-                mergeEntity(chunkExtraction.chunkId(), entity, entitiesById, entityIdByMergeKey);
+                mergeEntity(chunkExtraction.chunkId(), entity, entitiesById, entityIdByMergeKey, mergeGuard);
             }
         }
 
@@ -67,20 +68,22 @@ public final class GraphAssembler {
         String chunkId,
         ExtractedEntity extractedEntity,
         Map<String, MutableEntity> entitiesById,
-        Map<String, String> entityIdByMergeKey
+        Map<String, String> entityIdByMergeKey,
+        MergeGuard mergeGuard
     ) {
-        var candidateKeys = entityMergeKeys(extractedEntity);
+        var sanitizedEntity = mergeGuard.sanitize(extractedEntity);
+        var candidateKeys = entityMergeKeys(sanitizedEntity);
         var matchedIds = new LinkedHashSet<String>();
         for (var key : candidateKeys) {
             var matchedId = entityIdByMergeKey.get(key);
-            if (matchedId != null) {
+            if (matchedId != null && !mergeGuard.blocksMerge(sanitizedEntity, entitiesById.get(matchedId))) {
                 matchedIds.add(matchedId);
             }
         }
 
         MutableEntity entity;
         if (matchedIds.isEmpty()) {
-            entity = MutableEntity.create(extractedEntity);
+            entity = MutableEntity.create(sanitizedEntity);
             entitiesById.put(entity.id, entity);
         } else {
             var iterator = matchedIds.iterator();
@@ -91,7 +94,7 @@ public final class GraphAssembler {
                     entity.mergeFrom(duplicate);
                 }
             }
-            entity.mergeFrom(extractedEntity);
+            entity.mergeFrom(sanitizedEntity);
         }
 
         entity.addSourceChunkId(chunkId);
@@ -208,6 +211,59 @@ public final class GraphAssembler {
         public Graph {
             entities = List.copyOf(Objects.requireNonNull(entities, "entities"));
             relations = List.copyOf(Objects.requireNonNull(relations, "relations"));
+        }
+    }
+
+    private record MergeGuard(Set<String> relationPairs) {
+        private static MergeGuard from(List<ChunkExtraction> batch) {
+            var pairs = new LinkedHashSet<String>();
+            for (var extraction : batch) {
+                for (var relation : extraction.extraction().relations()) {
+                    var source = normalizeOptionalKey(relation.sourceEntityName());
+                    var target = normalizeOptionalKey(relation.targetEntityName());
+                    if (source == null || target == null || source.equals(target)) {
+                        continue;
+                    }
+                    pairs.add(relationPairKey(source, target));
+                }
+            }
+            return new MergeGuard(Set.copyOf(pairs));
+        }
+
+        private ExtractedEntity sanitize(ExtractedEntity entity) {
+            var normalizedName = normalizeKey(entity.name());
+            var aliases = entity.aliases().stream()
+                .filter(alias -> {
+                    var normalizedAlias = normalizeOptionalKey(alias);
+                    return normalizedAlias != null && !isRelatedPair(normalizedName, normalizedAlias);
+                })
+                .toList();
+            if (aliases.equals(entity.aliases())) {
+                return entity;
+            }
+            return new ExtractedEntity(entity.name(), entity.type(), entity.description(), aliases);
+        }
+
+        private boolean blocksMerge(ExtractedEntity incoming, MutableEntity existing) {
+            if (existing == null) {
+                return false;
+            }
+            for (var incomingKey : entityMergeKeys(incoming)) {
+                for (var existingKey : existing.mergeKeys()) {
+                    if (!incomingKey.equals(existingKey) && isRelatedPair(incomingKey, existingKey)) {
+                        return true;
+                    }
+                }
+            }
+            return false;
+        }
+
+        private boolean isRelatedPair(String left, String right) {
+            return relationPairs.contains(relationPairKey(left, right));
+        }
+
+        private static String relationPairKey(String left, String right) {
+            return left.compareTo(right) <= 0 ? left + "\u0000" + right : right + "\u0000" + left;
         }
     }
 
