@@ -99,14 +99,7 @@ public final class MixQueryStrategy implements QueryStrategy {
             query.chunkTopK()
         );
         var chunkVectorSearchMs = elapsedMillis(vectorSearchStartedAt);
-        var directChunks = new LinkedHashMap<String, ScoredChunk>();
-        for (var match : matches) {
-            storageProvider.chunkStore().load(match.id()).ifPresent(chunk -> directChunks.merge(
-                match.id(),
-                new ScoredChunk(match.id(), toChunk(chunk), match.score()),
-                (left, right) -> left.score() >= right.score() ? left : right
-            ));
-        }
+        var directChunks = loadDirectChunks(matches);
         return new DirectChunkPass(queryVector, directChunks, embedMs, chunkVectorSearchMs, query.chunkTopK(), matches.size());
     }
 
@@ -164,15 +157,27 @@ public final class MixQueryStrategy implements QueryStrategy {
             searchTopK
         );
         var chunkVectorSearchMs = elapsedMillis(vectorSearchStartedAt);
+        var directChunks = loadDirectChunks(matches);
+        return new DirectChunkPass(queryVector, directChunks, 0L, chunkVectorSearchMs, searchTopK, matches.size());
+    }
+
+    private LinkedHashMap<String, ScoredChunk> loadDirectChunks(List<io.github.lightrag.storage.VectorStore.VectorMatch> matches) {
         var directChunks = new LinkedHashMap<String, ScoredChunk>();
+        var chunksById = storageProvider.chunkStore().loadAll(matches.stream()
+            .map(io.github.lightrag.storage.VectorStore.VectorMatch::id)
+            .toList());
         for (var match : matches) {
-            storageProvider.chunkStore().load(match.id()).ifPresent(chunk -> directChunks.merge(
+            var chunk = chunksById.get(match.id());
+            if (chunk == null) {
+                continue;
+            }
+            directChunks.merge(
                 match.id(),
                 new ScoredChunk(match.id(), toChunk(chunk), match.score()),
                 (left, right) -> left.score() >= right.score() ? left : right
-            ));
+            );
         }
-        return new DirectChunkPass(queryVector, directChunks, 0L, chunkVectorSearchMs, searchTopK, matches.size());
+        return directChunks;
     }
 
     private static void mergeAdditionalChunks(

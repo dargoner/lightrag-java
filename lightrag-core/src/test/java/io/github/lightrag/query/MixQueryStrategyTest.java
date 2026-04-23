@@ -9,6 +9,7 @@ import io.github.lightrag.api.QueryRequest;
 import io.github.lightrag.model.EmbeddingModel;
 import io.github.lightrag.storage.HybridVectorStore;
 import io.github.lightrag.storage.InMemoryStorageProvider;
+import io.github.lightrag.storage.ChunkStore;
 import io.github.lightrag.storage.StorageProvider;
 import io.github.lightrag.storage.VectorStore;
 import io.github.lightrag.types.Chunk;
@@ -18,11 +19,13 @@ import org.junit.jupiter.api.Test;
 
 import java.util.List;
 import java.util.Map;
+import java.util.Optional;
 import java.util.concurrent.BrokenBarrierException;
 import java.util.concurrent.CyclicBarrier;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.TimeoutException;
 import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicInteger;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
@@ -139,6 +142,59 @@ class MixQueryStrategyTest {
         assertThat(context.matchedChunks())
             .extracting(match -> match.chunkId())
             .containsExactly("chunk-1", "chunk-3");
+    }
+
+    @Test
+    void mixLoadsDirectChunksInBatch() {
+        var delegate = InMemoryStorageProvider.create();
+        delegate.chunkStore().save(new ChunkStore.ChunkRecord(
+            "chunk-2",
+            "doc-2",
+            "Batch direct chunk two",
+            4,
+            0,
+            Map.of()
+        ));
+        delegate.chunkStore().save(new ChunkStore.ChunkRecord(
+            "chunk-3",
+            "doc-3",
+            "Batch direct chunk three",
+            4,
+            0,
+            Map.of()
+        ));
+        var vectorStore = new RecordingHybridVectorStore(List.of(
+            new VectorStore.VectorMatch("chunk-2", 0.92d),
+            new VectorStore.VectorMatch("chunk-3", 0.91d)
+        ));
+        var countingChunkStore = new CountingChunkStore(delegate.chunkStore());
+        var strategy = new MixQueryStrategy(
+            new FakeEmbeddingModel(Map.of("mix batch question", List.of(1.0d, 0.0d))),
+            new ChunkStoreOverrideStorageProvider(delegate, vectorStore, countingChunkStore),
+            request -> new QueryContext(
+                List.of(),
+                List.of(),
+                List.of(new ScoredChunk(
+                    "chunk-1",
+                    new Chunk("chunk-1", "doc-1", "Hybrid chunk", 4, 0, Map.of()),
+                    1.0d
+                )),
+                ""
+            ),
+            new ContextAssembler()
+        );
+
+        var context = strategy.retrieve(QueryRequest.builder()
+            .query("mix batch question")
+            .mode(QueryMode.MIX)
+            .chunkTopK(3)
+            .build());
+
+        assertThat(countingChunkStore.loadCalls()).isZero();
+        assertThat(countingChunkStore.loadAllCalls()).isEqualTo(1);
+        assertThat(context.matchedChunks())
+            .extracting(ScoredChunk::chunkId)
+            .containsExactly("chunk-1", "chunk-2", "chunk-3");
     }
 
     @Test
@@ -481,6 +537,107 @@ class MixQueryStrategyTest {
         @Override
         public io.github.lightrag.storage.SnapshotStore snapshotStore() {
             return delegate.snapshotStore();
+        }
+    }
+
+    private static final class ChunkStoreOverrideStorageProvider implements StorageProvider {
+        private final InMemoryStorageProvider delegate;
+        private final HybridVectorStore vectorStore;
+        private final ChunkStore chunkStore;
+
+        private ChunkStoreOverrideStorageProvider(
+            InMemoryStorageProvider delegate,
+            HybridVectorStore vectorStore,
+            ChunkStore chunkStore
+        ) {
+            this.delegate = delegate;
+            this.vectorStore = vectorStore;
+            this.chunkStore = chunkStore;
+        }
+
+        @Override
+        public io.github.lightrag.storage.DocumentStore documentStore() {
+            return delegate.documentStore();
+        }
+
+        @Override
+        public ChunkStore chunkStore() {
+            return chunkStore;
+        }
+
+        @Override
+        public io.github.lightrag.storage.GraphStore graphStore() {
+            return delegate.graphStore();
+        }
+
+        @Override
+        public VectorStore vectorStore() {
+            return vectorStore;
+        }
+
+        @Override
+        public io.github.lightrag.storage.DocumentStatusStore documentStatusStore() {
+            return delegate.documentStatusStore();
+        }
+
+        @Override
+        public io.github.lightrag.storage.TaskStore taskStore() {
+            return delegate.taskStore();
+        }
+
+        @Override
+        public io.github.lightrag.storage.TaskStageStore taskStageStore() {
+            return delegate.taskStageStore();
+        }
+
+        @Override
+        public io.github.lightrag.storage.SnapshotStore snapshotStore() {
+            return delegate.snapshotStore();
+        }
+    }
+
+    private static final class CountingChunkStore implements ChunkStore {
+        private final ChunkStore delegate;
+        private final AtomicInteger loadCalls = new AtomicInteger();
+        private final AtomicInteger loadAllCalls = new AtomicInteger();
+
+        private CountingChunkStore(ChunkStore delegate) {
+            this.delegate = delegate;
+        }
+
+        @Override
+        public void save(ChunkRecord chunk) {
+            delegate.save(chunk);
+        }
+
+        @Override
+        public Optional<ChunkRecord> load(String chunkId) {
+            loadCalls.incrementAndGet();
+            return delegate.load(chunkId);
+        }
+
+        @Override
+        public Map<String, ChunkRecord> loadAll(List<String> chunkIds) {
+            loadAllCalls.incrementAndGet();
+            return delegate.loadAll(chunkIds);
+        }
+
+        @Override
+        public List<ChunkRecord> list() {
+            return delegate.list();
+        }
+
+        @Override
+        public List<ChunkRecord> listByDocument(String documentId) {
+            return delegate.listByDocument(documentId);
+        }
+
+        private int loadCalls() {
+            return loadCalls.get();
+        }
+
+        private int loadAllCalls() {
+            return loadAllCalls.get();
         }
     }
 

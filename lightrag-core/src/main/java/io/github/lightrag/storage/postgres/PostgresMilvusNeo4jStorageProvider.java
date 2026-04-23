@@ -684,10 +684,7 @@ public final class PostgresMilvusNeo4jStorageProvider implements AtomicStoragePr
         var readLock = lock.readLock();
         readLock.lock();
         try {
-            if (exclusiveAdvisoryLockHeld.get()) {
-                return supplier.get();
-            }
-            return advisoryLockManager.withSharedLock(supplier::get);
+            return supplier.get();
         } finally {
             readLock.unlock();
         }

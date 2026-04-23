@@ -29,9 +29,14 @@ import io.github.lightrag.storage.VectorStorageAdapter;
 import io.github.lightrag.storage.VectorStore;
 import io.github.lightrag.storage.neo4j.Neo4jGraphSnapshot;
 import java.lang.reflect.Method;
+import java.lang.reflect.Proxy;
 import java.nio.file.Path;
+import java.sql.Connection;
+import java.sql.DriverManager;
+import java.sql.PreparedStatement;
 import java.sql.SQLException;
 import java.time.Instant;
+import java.util.Arrays;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
@@ -43,6 +48,7 @@ import java.util.concurrent.atomic.AtomicReference;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.locks.ReentrantReadWriteLock;
+import javax.sql.DataSource;
 import org.junit.jupiter.api.Test;
 import org.testcontainers.containers.PostgreSQLContainer;
 import org.testcontainers.junit.jupiter.Container;
@@ -162,6 +168,59 @@ class PostgresMilvusNeo4jStorageProviderTest {
                 if (providerLock.isWriteLockedByCurrentThread()) {
                     providerLock.writeLock().unlock();
                 }
+            }
+        }
+    }
+
+    @Test
+    void queryReadsDoNotHoldWorkspaceAdvisoryLock() throws Exception {
+        var config = newConfig();
+        try (var dataSource = newDataSource(config)) {
+            var selectStarted = new CountDownLatch(1);
+            var allowSelectToFinish = new CountDownLatch(1);
+            DataSource blockingDataSource = blockingChunkSelectDataSource(
+                dataSource,
+                config,
+                selectStarted,
+                allowSelectToFinish
+            );
+            try (var provider = new PostgresMilvusNeo4jStorageProvider(
+                blockingDataSource,
+                config,
+                new InMemorySnapshotStore(),
+                new WorkspaceScope("default"),
+                new RecordingGraphProjection(),
+                new RecordingMilvusProjection(),
+                new ReentrantReadWriteLock(true)
+            )) {
+                provider.chunkStore().save(new ChunkStore.ChunkRecord(
+                    "doc-1:0",
+                    "doc-1",
+                    "Body",
+                    4,
+                    0,
+                    Map.of("source", "test")
+                ));
+
+                var loadResult = new AtomicReference<Optional<ChunkStore.ChunkRecord>>();
+                var loadFailure = new AtomicReference<Throwable>();
+                var reader = new Thread(() -> {
+                    try {
+                        loadResult.set(provider.chunkStore().load("doc-1:0"));
+                    } catch (Throwable throwable) {
+                        loadFailure.set(throwable);
+                    }
+                });
+                reader.start();
+
+                assertThat(selectStarted.await(5, TimeUnit.SECONDS)).isTrue();
+                assertThat(tryExclusiveAdvisoryLock(config)).isTrue();
+
+                allowSelectToFinish.countDown();
+                reader.join(5000);
+
+                assertThat(loadFailure.get()).isNull();
+                assertThat(loadResult.get()).isPresent();
             }
         }
     }
@@ -584,6 +643,119 @@ class PostgresMilvusNeo4jStorageProviderTest {
         hikariConfig.setMaximumPoolSize(2);
         hikariConfig.setMinimumIdle(0);
         return new HikariDataSource(hikariConfig);
+    }
+
+    private static DataSource blockingChunkSelectDataSource(
+        DataSource delegate,
+        PostgresStorageConfig config,
+        CountDownLatch selectStarted,
+        CountDownLatch allowSelectToFinish
+    ) {
+        return (DataSource) Proxy.newProxyInstance(
+            DataSource.class.getClassLoader(),
+            new Class<?>[] {DataSource.class},
+            (proxy, method, args) -> {
+                if ("getConnection".equals(method.getName()) && (args == null || args.length == 0)) {
+                    return blockingConnection(
+                        delegate.getConnection(),
+                        config,
+                        selectStarted,
+                        allowSelectToFinish
+                    );
+                }
+                if ("getConnection".equals(method.getName()) && args != null && args.length == 2) {
+                    return blockingConnection(
+                        delegate.getConnection((String) args[0], (String) args[1]),
+                        config,
+                        selectStarted,
+                        allowSelectToFinish
+                    );
+                }
+                return method.invoke(delegate, args);
+            }
+        );
+    }
+
+    private static Connection blockingConnection(
+        Connection delegate,
+        PostgresStorageConfig config,
+        CountDownLatch selectStarted,
+        CountDownLatch allowSelectToFinish
+    ) {
+        return (Connection) Proxy.newProxyInstance(
+            Connection.class.getClassLoader(),
+            new Class<?>[] {Connection.class},
+            (proxy, method, args) -> {
+                if ("prepareStatement".equals(method.getName()) && args != null && args.length > 0 && args[0] instanceof String sql) {
+                    PreparedStatement statement = (PreparedStatement) method.invoke(delegate, args);
+                    if (isChunkLoadSql(sql, config)) {
+                        return blockingPreparedStatement(statement, selectStarted, allowSelectToFinish);
+                    }
+                    return statement;
+                }
+                return method.invoke(delegate, args);
+            }
+        );
+    }
+
+    private static PreparedStatement blockingPreparedStatement(
+        PreparedStatement delegate,
+        CountDownLatch selectStarted,
+        CountDownLatch allowSelectToFinish
+    ) {
+        return (PreparedStatement) Proxy.newProxyInstance(
+            PreparedStatement.class.getClassLoader(),
+            new Class<?>[] {PreparedStatement.class},
+            (proxy, method, args) -> {
+                if ("executeQuery".equals(method.getName()) && (args == null || args.length == 0)) {
+                    selectStarted.countDown();
+                    if (!allowSelectToFinish.await(5, TimeUnit.SECONDS)) {
+                        throw new IllegalStateException("Timed out waiting to finish blocked chunk SELECT");
+                    }
+                }
+                return method.invoke(delegate, args);
+            }
+        );
+    }
+
+    private static boolean isChunkLoadSql(String sql, PostgresStorageConfig config) {
+        return sql != null
+            && sql.contains("FROM " + config.qualifiedTableName("chunks"))
+            && sql.contains("WHERE workspace_id = ?")
+            && sql.contains("AND id = ?");
+    }
+
+    private static boolean tryExclusiveAdvisoryLock(PostgresStorageConfig config) throws SQLException {
+        try (var connection = DriverManager.getConnection(
+            config.jdbcUrl(),
+            config.username(),
+            config.password()
+        )) {
+            try (var statement = connection.prepareStatement("SELECT pg_try_advisory_lock(?)")) {
+                statement.setLong(1, deriveLockKey(config));
+                try (var resultSet = statement.executeQuery()) {
+                    resultSet.next();
+                    boolean acquired = resultSet.getBoolean(1);
+                    if (acquired) {
+                        try (var unlock = connection.prepareStatement("SELECT pg_advisory_unlock(?)")) {
+                            unlock.setLong(1, deriveLockKey(config));
+                            unlock.executeQuery();
+                        }
+                    }
+                    return acquired;
+                }
+            }
+        }
+    }
+
+    private static long deriveLockKey(PostgresStorageConfig config) {
+        try {
+            byte[] digest = java.security.MessageDigest.getInstance("SHA-256")
+                .digest((config.schema() + ":" + config.tablePrefix() + ":default").getBytes(java.nio.charset.StandardCharsets.UTF_8));
+            return java.nio.ByteBuffer.wrap(Arrays.copyOf(digest, Long.BYTES)).getLong();
+        } catch (java.security.NoSuchAlgorithmException exception) {
+            throw new IllegalStateException("SHA-256 digest is unavailable", exception);
+        }
     }
 
     private static int countRows(
