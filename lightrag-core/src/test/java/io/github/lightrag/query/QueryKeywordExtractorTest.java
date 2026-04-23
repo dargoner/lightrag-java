@@ -176,6 +176,57 @@ class QueryKeywordExtractorTest {
     }
 
     @Test
+    void hybridChineseQuestionBackfillsLowLevelKeywordsWhenModelOnlyReturnsHighLevelKeywords() {
+        var extractor = new QueryKeywordExtractor();
+
+        var resolved = extractor.resolve(QueryRequest.builder()
+            .query("提取条件是什么")
+            .mode(QueryMode.HYBRID)
+            .build(), new CountingKeywordChatModel("""
+                {"high_level_keywords":["提取条件"],"low_level_keywords":[]}
+                """));
+
+        assertThat(resolved.hlKeywords()).containsExactly("提取条件");
+        assertThat(resolved.llKeywords()).containsExactly("提取条件");
+    }
+
+    @Test
+    void hybridChineseLongQuestionBuildsDualFallbackKeywordSetsWhenModelReturnsNothing() {
+        var extractor = new QueryKeywordExtractor();
+        var query = "缴存单位不办理住房公积金缴存登记后，如果当事人拒不整改，后续处理步骤、办理期限和听证权分别怎么规定？";
+
+        var resolved = extractor.resolve(QueryRequest.builder()
+            .query(query)
+            .mode(QueryMode.HYBRID)
+            .build(), new CountingKeywordChatModel("{}"));
+
+        assertThat(resolved.hlKeywords())
+            .contains("后续处理步骤", "办理期限", "听证权");
+        assertThat(resolved.llKeywords()).contains("缴存单位不办理住房公积金缴存登记");
+        assertThat(resolved.llKeywords()).anyMatch(keyword -> keyword.contains("拒不整改"));
+        assertThat(resolved.llKeywords()).doesNotContain(query);
+    }
+
+    @Test
+    void hybridChineseProcessQuestionUsesGenericStructureFallbackInsteadOfBusinessDictionary() {
+        var extractor = new QueryKeywordExtractor();
+        var query = "在跨境订单履约流程中，从下单、支付确认，到仓库出库，再到末端派送，这几步的触发条件、处理时限和处理方式分别是什么？";
+
+        var resolved = extractor.resolve(QueryRequest.builder()
+            .query(query)
+            .mode(QueryMode.HYBRID)
+            .build(), new CountingKeywordChatModel("{}"));
+
+        assertThat(resolved.hlKeywords()).anyMatch(keyword -> keyword.contains("履约流程"));
+        assertThat(resolved.hlKeywords()).anyMatch(keyword -> keyword.contains("触发条件"));
+        assertThat(resolved.hlKeywords())
+            .contains("处理时限", "处理方式");
+        assertThat(resolved.llKeywords())
+            .contains("跨境订单履约流程", "下单", "支付确认", "仓库出库", "末端派送");
+        assertThat(resolved.llKeywords()).doesNotContain(query);
+    }
+
+    @Test
     void fallbackCopyPreservesMetadataFiltersAndConditions() {
         var extractor = new QueryKeywordExtractor();
         var metadataConditions = List.of(

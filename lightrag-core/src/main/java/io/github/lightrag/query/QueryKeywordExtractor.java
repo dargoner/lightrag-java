@@ -10,11 +10,19 @@ import org.slf4j.LoggerFactory;
 
 import java.util.List;
 import java.util.Objects;
+import java.util.Optional;
+import java.util.Set;
+import java.util.regex.Pattern;
 
 final class QueryKeywordExtractor {
     private static final Logger log = LoggerFactory.getLogger(QueryKeywordExtractor.class);
     private static final ObjectMapper OBJECT_MAPPER = new ObjectMapper();
     private static final int SHORT_LITERAL_QUERY_MAX_CODEPOINTS = 8;
+    private static final Pattern HIGH_LEVEL_CHINESE_PATTERN = Pattern.compile(
+        "([\\p{IsHan}A-Za-z0-9]{0,12}(?:条件|流程|步骤|期限|时限|权利|权|告知|规定|要求|材料|依据|标准|范围|方式|时间|责任|结果|影响|政策|情形|程序|路径|原因|目标|区别|联系|作用|问题|规则|办法|节点|状态))"
+    );
+    private static final Pattern SUBJECT_PREFIX_PATTERN = Pattern.compile("^(?:在)?(.+?(?:流程|过程|场景|问题|案件)?)(?:中|里|后|前|时)");
+    private static final Pattern PROCESS_ITEM_PATTERN = Pattern.compile("(?:从|再到|到)([^，。！？；;]+?)(?=(?:从|再到|到|这几步之间|$))");
 
     private static final String KEYWORD_EXTRACTION_PROMPT_TEMPLATE = """
         ---Role---
@@ -89,19 +97,24 @@ final class QueryKeywordExtractor {
         var prompt = KEYWORD_EXTRACTION_PROMPT_TEMPLATE.formatted(KEYWORD_EXTRACTION_EXAMPLES, request.query());
         var response = chatModel.generate(new ChatModel.ChatRequest("", prompt));
         var extracted = parseKeywords(response);
+        var resolved = completeKeywordsForMode(request, extracted);
         var elapsedMs = elapsedMillis(startedAt);
-        var fallbackApplied = extracted.highLevel().isEmpty() && extracted.lowLevel().isEmpty();
+        var fallbackApplied = resolved.highLevel().isEmpty() && resolved.lowLevel().isEmpty();
+        var dualPathBackfillApplied = !resolved.equals(extracted);
         log.info(
-            "LightRAG keyword extraction completed: mode={}, query={}, elapsedMs={}, highLevelCount={}, lowLevelCount={}, fallbackApplied={}",
+            "LightRAG keyword extraction completed: mode={}, query={}, elapsedMs={}, rawHighLevelCount={}, rawLowLevelCount={}, resolvedHighLevelCount={}, resolvedLowLevelCount={}, fallbackApplied={}, dualPathBackfillApplied={}",
             request.mode(),
             request.query(),
             elapsedMs,
             extracted.highLevel().size(),
             extracted.lowLevel().size(),
-            fallbackApplied
+            resolved.highLevel().size(),
+            resolved.lowLevel().size(),
+            fallbackApplied,
+            dualPathBackfillApplied
         );
-        if (!extracted.highLevel().isEmpty() || !extracted.lowLevel().isEmpty()) {
-            return copyWithKeywords(request, extracted.highLevel(), extracted.lowLevel());
+        if (!resolved.highLevel().isEmpty() || !resolved.lowLevel().isEmpty()) {
+            return copyWithKeywords(request, resolved.highLevel(), resolved.lowLevel());
         }
         return applyFallback(request);
     }
@@ -203,6 +216,117 @@ final class QueryKeywordExtractor {
             case LOCAL, HYBRID, MIX -> copyWithKeywords(request, List.of(), List.of(request.query()));
             default -> request;
         };
+    }
+
+    private static ExtractedKeywords completeKeywordsForMode(QueryRequest request, ExtractedKeywords extracted) {
+        if (request.mode() != QueryMode.HYBRID && request.mode() != QueryMode.MIX) {
+            return extracted;
+        }
+        if (!extracted.highLevel().isEmpty() && !extracted.lowLevel().isEmpty()) {
+            return extracted;
+        }
+        var derived = containsChinese(request.query())
+            ? deriveChineseDualPathKeywords(request.query())
+            : new ExtractedKeywords(List.of(), List.of());
+        var highLevel = extracted.highLevel().isEmpty() ? derived.highLevel() : extracted.highLevel();
+        var lowLevel = extracted.lowLevel().isEmpty() ? derived.lowLevel() : extracted.lowLevel();
+        if (highLevel.isEmpty() && !lowLevel.isEmpty()) {
+            highLevel = List.of(lowLevel.get(0));
+        }
+        if (lowLevel.isEmpty() && !highLevel.isEmpty()) {
+            lowLevel = List.of(highLevel.get(0));
+        }
+        return new ExtractedKeywords(highLevel, lowLevel);
+    }
+
+    private static ExtractedKeywords deriveChineseDualPathKeywords(String query) {
+        var normalized = normalizeQuery(query);
+        if (normalized == null) {
+            return new ExtractedKeywords(List.of(), List.of());
+        }
+        var highLevel = new java.util.LinkedHashSet<String>();
+        collectHighLevelCandidates(normalized, highLevel);
+
+        var lowLevel = new java.util.LinkedHashSet<String>();
+        extractSubjectPhrase(normalized).ifPresent(lowLevel::add);
+        collectProcessItems(normalized, lowLevel);
+        collectClauseFragments(normalized, highLevel, lowLevel);
+        return new ExtractedKeywords(List.copyOf(highLevel), List.copyOf(lowLevel));
+    }
+
+    private static void collectHighLevelCandidates(String query, Set<String> output) {
+        var matcher = HIGH_LEVEL_CHINESE_PATTERN.matcher(query);
+        while (matcher.find()) {
+            for (var token : matcher.group(1).split("(?:、|，|,|和)")) {
+                normalizeCandidate(token).ifPresent(output::add);
+            }
+        }
+    }
+
+    private static Optional<String> extractSubjectPhrase(String query) {
+        var matcher = SUBJECT_PREFIX_PATTERN.matcher(query);
+        if (!matcher.find()) {
+            return Optional.empty();
+        }
+        var candidate = matcher.group(1);
+        if (candidate.endsWith("案件")) {
+            candidate = candidate.substring(0, candidate.length() - 2);
+        }
+        return normalizeCandidate(candidate);
+    }
+
+    private static void collectProcessItems(String query, Set<String> output) {
+        var matcher = PROCESS_ITEM_PATTERN.matcher(query);
+        while (matcher.find()) {
+            for (var token : matcher.group(1).split("(?:、|，|,|或者|以及|和|及)")) {
+                normalizeCandidate(token).ifPresent(output::add);
+            }
+        }
+    }
+
+    private static void collectClauseFragments(String query, Set<String> highLevel, Set<String> lowLevel) {
+        for (var clause : query.split("[，,。！？；;]")) {
+            for (var token : clause.split("(?:、|以及|或者|并且|并|和|与|及)")) {
+                var candidate = normalizeCandidate(token);
+                if (candidate.isEmpty()) {
+                    continue;
+                }
+                var value = candidate.get();
+                if (value.length() > 24 || containsQuestionCue(value)) {
+                    continue;
+                }
+                var overlapsHighLevel = highLevel.stream().anyMatch(keyword -> keyword.equals(value) || keyword.contains(value));
+                if (!overlapsHighLevel) {
+                    lowLevel.add(value);
+                }
+            }
+        }
+    }
+
+    private static Optional<String> normalizeCandidate(String raw) {
+        if (raw == null) {
+            return Optional.empty();
+        }
+        var candidate = raw.trim()
+            .replaceAll("^[，,。！？；;：:、】【、\\s]+", "")
+            .replaceAll("[，,。！？；;：:、】【、\\s]+$", "")
+            .replaceAll("^(?:请问|关于|其中|如果|对于|对|在|从|到|再到)+", "")
+            .replaceAll("(?:分别怎么规定|分别是什么|怎么规定|如何规定|怎么处理|如何处理|这几步之间|是什么|是什么时候|什么|哪些|哪几步|哪一步|怎么|如何|吗|呢|后|前|时|中|里)+$", "")
+            .trim();
+        if (candidate.isEmpty()) {
+            return Optional.empty();
+        }
+        if (candidate.length() > 32) {
+            return Optional.empty();
+        }
+        return Optional.of(candidate);
+    }
+
+    private static boolean containsChinese(String query) {
+        if (query == null) {
+            return false;
+        }
+        return query.codePoints().anyMatch(codePoint -> Character.UnicodeScript.of(codePoint) == Character.UnicodeScript.HAN);
     }
 
     private static QueryRequest copyWithKeywords(QueryRequest request, List<String> hlKeywords, List<String> llKeywords) {
