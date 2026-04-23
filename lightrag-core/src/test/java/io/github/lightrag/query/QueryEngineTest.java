@@ -1,5 +1,9 @@
 package io.github.lightrag.query;
 
+import ch.qos.logback.classic.Level;
+import ch.qos.logback.classic.Logger;
+import ch.qos.logback.classic.spi.ILoggingEvent;
+import ch.qos.logback.core.read.ListAppender;
 import io.github.lightrag.api.QueryMode;
 import io.github.lightrag.api.QueryRequest;
 import io.github.lightrag.api.StructuredQueryResult;
@@ -16,6 +20,7 @@ import java.util.Map;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
+import org.slf4j.LoggerFactory;
 
 class QueryEngineTest {
     @Test
@@ -67,6 +72,38 @@ class QueryEngineTest {
         assertThat(strategy.lastRequest().maxHop()).isEqualTo(4);
         assertThat(strategy.lastRequest().pathTopK()).isEqualTo(5);
         assertThat(strategy.lastRequest().multiHopEnabled()).isFalse();
+    }
+
+    @Test
+    void logsRerankStageDurationWhenRerankIsActive() {
+        var logger = (Logger) LoggerFactory.getLogger(QueryEngine.class);
+        var appender = new ListAppender<ILoggingEvent>();
+        appender.start();
+        logger.addAppender(appender);
+        logger.setLevel(Level.INFO);
+        try {
+            var engine = new QueryEngine(
+                new RecordingChatModel(),
+                new ContextAssembler(),
+                strategiesReturning(new RecordingQueryStrategy(baseContext())),
+                new StubRerankModel(List.of(
+                    new RerankModel.RerankResult("chunk-3", 0.99d),
+                    new RerankModel.RerankResult("chunk-2", 0.88d),
+                    new RerankModel.RerankResult("chunk-1", 0.77d)
+                ))
+            );
+
+            engine.query(baseRequest());
+
+            assertThat(appender.list)
+                .extracting(ILoggingEvent::getFormattedMessage)
+                .anySatisfy(message -> {
+                    assertThat(message).contains("LightRAG query engine stages");
+                    assertThat(message).contains("rerankMs=");
+                });
+        } finally {
+            logger.detachAppender(appender);
+        }
     }
 
     @Test

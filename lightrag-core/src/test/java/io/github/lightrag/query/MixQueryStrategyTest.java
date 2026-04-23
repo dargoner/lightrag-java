@@ -1,5 +1,9 @@
 package io.github.lightrag.query;
 
+import ch.qos.logback.classic.Level;
+import ch.qos.logback.classic.Logger;
+import ch.qos.logback.classic.spi.ILoggingEvent;
+import ch.qos.logback.core.read.ListAppender;
 import io.github.lightrag.api.QueryMode;
 import io.github.lightrag.api.QueryRequest;
 import io.github.lightrag.model.EmbeddingModel;
@@ -14,9 +18,16 @@ import org.junit.jupiter.api.Test;
 
 import java.util.List;
 import java.util.Map;
+import java.util.concurrent.BrokenBarrierException;
+import java.util.concurrent.CyclicBarrier;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.TimeoutException;
+import java.util.concurrent.atomic.AtomicBoolean;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static io.github.lightrag.support.RelationIds.relationId;
+import org.slf4j.LoggerFactory;
 
 class MixQueryStrategyTest {
     @Test
@@ -299,6 +310,121 @@ class MixQueryStrategyTest {
         assertThat(vectorStore.recordedRequest.topK()).isGreaterThan(2);
     }
 
+    @Test
+    void logsDetailedStageDurationsForMixRetrieval() {
+        var logger = (Logger) LoggerFactory.getLogger(MixQueryStrategy.class);
+        var appender = new ListAppender<ILoggingEvent>();
+        appender.start();
+        logger.addAppender(appender);
+        logger.setLevel(Level.INFO);
+        try {
+            var delegate = InMemoryStorageProvider.create();
+            LocalQueryStrategyTest.seedGraph(delegate);
+            LocalQueryStrategyTest.seedVectors(delegate);
+            var embeddings = new FakeEmbeddingModel(Map.of("mix question", List.of(1.0d, 0.0d)));
+            var contextAssembler = new ContextAssembler();
+            var hybrid = new HybridQueryStrategy(
+                new LocalQueryStrategy(embeddings, delegate, contextAssembler),
+                new GlobalQueryStrategy(embeddings, delegate, contextAssembler),
+                contextAssembler
+            );
+            var strategy = new MixQueryStrategy(embeddings, delegate, hybrid, contextAssembler);
+
+            strategy.retrieve(QueryRequest.builder()
+                .query("mix question")
+                .mode(QueryMode.MIX)
+                .topK(1)
+                .chunkTopK(2)
+                .build());
+
+            assertThat(appender.list)
+                .extracting(ILoggingEvent::getFormattedMessage)
+                .anySatisfy(message -> {
+                    assertThat(message).contains("LightRAG mix retrieve completed");
+                    assertThat(message).contains("hybridMs=");
+                    assertThat(message).contains("embedMs=");
+                    assertThat(message).contains("chunkVectorSearchMs=");
+                    assertThat(message).contains("mergeFilterMs=");
+                    assertThat(message).contains("assembleMs=");
+                });
+        } finally {
+            logger.detachAppender(appender);
+        }
+    }
+
+    @Test
+    void mixStartsDirectChunkFirstPassConcurrentlyWithHybridRetrieval() {
+        var delegate = InMemoryStorageProvider.create();
+        delegate.chunkStore().save(new io.github.lightrag.storage.ChunkStore.ChunkRecord(
+            "chunk-1",
+            "doc-1",
+            "Parallel direct chunk",
+            4,
+            0,
+            Map.of()
+        ));
+        var barrier = new CyclicBarrier(2);
+        var hybridObservedParallelism = new AtomicBoolean(false);
+        var chunkObservedParallelism = new AtomicBoolean(false);
+        var strategy = new MixQueryStrategy(
+            new FakeEmbeddingModel(Map.of("mix parallel question", List.of(1.0d, 0.0d))),
+            new TestStorageProvider(delegate, new BarrierHybridVectorStore(
+                List.of(new VectorStore.VectorMatch("chunk-1", 0.90d)),
+                barrier,
+                chunkObservedParallelism
+            )),
+            request -> awaitParallelBranch(barrier, hybridObservedParallelism),
+            new ContextAssembler()
+        );
+
+        var context = strategy.retrieve(QueryRequest.builder()
+            .query("mix parallel question")
+            .mode(QueryMode.MIX)
+            .chunkTopK(1)
+            .build());
+
+        assertThat(hybridObservedParallelism.get()).isTrue();
+        assertThat(chunkObservedParallelism.get()).isTrue();
+        assertThat(context.matchedChunks())
+            .extracting(ScoredChunk::chunkId)
+            .containsExactly("chunk-1");
+    }
+
+    @Test
+    void mixPropagatesDirectChunkBranchFailure() {
+        var delegate = InMemoryStorageProvider.create();
+        var strategy = new MixQueryStrategy(
+            new FakeEmbeddingModel(Map.of("mix failure question", List.of(1.0d, 0.0d))),
+            new TestStorageProvider(delegate, new FailingHybridVectorStore(new IllegalStateException("chunk branch failed"))),
+            request -> new QueryContext(List.of(), List.of(), List.of(), ""),
+            new ContextAssembler()
+        );
+
+        assertThatThrownBy(() -> strategy.retrieve(QueryRequest.builder()
+            .query("mix failure question")
+            .mode(QueryMode.MIX)
+            .chunkTopK(1)
+            .build()))
+            .isInstanceOf(IllegalStateException.class)
+            .hasMessage("chunk branch failed");
+    }
+
+    private static QueryContext awaitParallelBranch(CyclicBarrier barrier, AtomicBoolean observedParallelism) {
+        try {
+            barrier.await(250, TimeUnit.MILLISECONDS);
+            observedParallelism.set(true);
+            return new QueryContext(List.of(), List.of(), List.of(), "");
+        } catch (TimeoutException | BrokenBarrierException exception) {
+            observedParallelism.set(false);
+            return new QueryContext(List.of(), List.of(), List.of(), "");
+        } catch (InterruptedException exception) {
+            Thread.currentThread().interrupt();
+            throw new IllegalStateException("parallel test interrupted", exception);
+        } catch (Exception exception) {
+            throw new IllegalStateException("parallel branch failed", exception);
+        }
+    }
+
     private record FakeEmbeddingModel(Map<String, List<Double>> vectorsByText) implements EmbeddingModel {
         @Override
         public List<List<Double>> embedAll(List<String> texts) {
@@ -383,6 +509,87 @@ class MixQueryStrategyTest {
         public List<VectorMatch> search(String namespace, SearchRequest request) {
             this.recordedRequest = request;
             return matches.stream().limit(request.topK()).toList();
+        }
+
+        @Override
+        public List<VectorRecord> list(String namespace) {
+            return List.of();
+        }
+    }
+
+    private static final class BarrierHybridVectorStore implements HybridVectorStore {
+        private final List<VectorMatch> matches;
+        private final CyclicBarrier barrier;
+        private final AtomicBoolean observedParallelism;
+        private SearchRequest recordedRequest;
+
+        private BarrierHybridVectorStore(List<VectorMatch> matches, CyclicBarrier barrier, AtomicBoolean observedParallelism) {
+            this.matches = matches;
+            this.barrier = barrier;
+            this.observedParallelism = observedParallelism;
+        }
+
+        @Override
+        public List<VectorMatch> search(String namespace, SearchRequest request) {
+            try {
+                barrier.await(250, TimeUnit.MILLISECONDS);
+                observedParallelism.set(true);
+                this.recordedRequest = request;
+                return matches.stream().limit(request.topK()).toList();
+            } catch (TimeoutException | BrokenBarrierException exception) {
+                observedParallelism.set(false);
+                this.recordedRequest = request;
+                return matches.stream().limit(request.topK()).toList();
+            } catch (InterruptedException exception) {
+                Thread.currentThread().interrupt();
+                throw new IllegalStateException("direct chunk barrier interrupted", exception);
+            } catch (Exception exception) {
+                throw new IllegalStateException("direct chunk barrier failed", exception);
+            }
+        }
+
+        @Override
+        public void saveAll(String namespace, List<VectorRecord> vectors) {
+        }
+
+        @Override
+        public void saveAllEnriched(String namespace, List<EnrichedVectorRecord> records) {
+        }
+
+        @Override
+        public List<VectorMatch> search(String namespace, List<Double> queryVector, int topK) {
+            return List.of();
+        }
+
+        @Override
+        public List<VectorRecord> list(String namespace) {
+            return List.of();
+        }
+    }
+
+    private static final class FailingHybridVectorStore implements HybridVectorStore {
+        private final RuntimeException failure;
+
+        private FailingHybridVectorStore(RuntimeException failure) {
+            this.failure = failure;
+        }
+
+        @Override
+        public void saveAll(String namespace, List<VectorRecord> vectors) {
+        }
+
+        @Override
+        public void saveAllEnriched(String namespace, List<EnrichedVectorRecord> records) {
+        }
+
+        @Override
+        public List<VectorMatch> search(String namespace, List<Double> queryVector, int topK) {
+            throw failure;
+        }
+
+        @Override
+        public List<VectorMatch> search(String namespace, SearchRequest request) {
+            throw failure;
         }
 
         @Override

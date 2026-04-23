@@ -317,9 +317,13 @@ public final class QueryEngine {
         var retrieveStartedAt = System.nanoTime();
         var retrievedContext = strategy.retrieve(retrievalRequest);
         var retrieveMs = elapsedMillis(retrieveStartedAt);
+        var rerankStartedAt = System.nanoTime();
         var rerankedChunks = rerankEnabled(resolvedQuery) && !useMultiHop
             ? rerankChunks(resolvedQuery, retrievedContext.matchedChunks())
             : retrievedContext.matchedChunks();
+        var rerankMs = rerankEnabled(resolvedQuery) && !useMultiHop
+            ? elapsedMillis(rerankStartedAt)
+            : 0L;
         var filteredChunks = QueryMetadataFilterSupport.filterChunks(resolvedQuery, rerankedChunks);
         var reusableMultiHopContext = useMultiHop
             && !retrievedContext.assembledContext().isBlank()
@@ -361,12 +365,13 @@ public final class QueryEngine {
             assembledContext
         );
         log.info(
-            "LightRAG query engine stages: mode={}, resolvedMode={}, query={}, keywordMs={}, retrieveMs={}, assembleMs={}, useMultiHop={}, rerankEnabled={}, entityCount={}, relationCount={}, chunkCount={}, elapsedMs={}",
+            "LightRAG query engine stages: mode={}, resolvedMode={}, query={}, keywordMs={}, retrieveMs={}, rerankMs={}, assembleMs={}, useMultiHop={}, rerankEnabled={}, entityCount={}, relationCount={}, chunkCount={}, elapsedMs={}",
             query.mode(),
             resolvedQuery.mode(),
             query.query(),
             keywordMs,
             retrieveMs,
+            rerankMs,
             assembleMs,
             useMultiHop,
             rerankEnabled(resolvedQuery) && !useMultiHop,

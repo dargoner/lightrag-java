@@ -11,6 +11,8 @@ import org.slf4j.LoggerFactory;
 import java.util.Comparator;
 import java.util.LinkedHashMap;
 import java.util.Objects;
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.CompletionException;
 
 public final class HybridQueryStrategy implements QueryStrategy {
     private static final Logger log = LoggerFactory.getLogger(HybridQueryStrategy.class);
@@ -28,34 +30,32 @@ public final class HybridQueryStrategy implements QueryStrategy {
     public QueryContext retrieve(QueryRequest request) {
         var query = Objects.requireNonNull(request, "request");
         var startedAt = System.nanoTime();
-        var localStartedAt = System.nanoTime();
-        var local = localStrategy.retrieve(query);
-        var localMs = elapsedMillis(localStartedAt);
-        var globalStartedAt = System.nanoTime();
-        var global = globalStrategy.retrieve(query);
-        var globalMs = elapsedMillis(globalStartedAt);
+        var localFuture = CompletableFuture.supplyAsync(() -> timedRetrieve(localStrategy, query));
+        var globalFuture = CompletableFuture.supplyAsync(() -> timedRetrieve(globalStrategy, query));
+        var local = awaitBranch(localFuture, globalFuture);
+        var global = awaitBranch(globalFuture, localFuture);
 
         var mergedEntities = new LinkedHashMap<String, ScoredEntity>();
-        for (var entity : local.matchedEntities()) {
+        for (var entity : local.context().matchedEntities()) {
             mergedEntities.put(entity.entityId(), entity);
         }
-        for (var entity : global.matchedEntities()) {
+        for (var entity : global.context().matchedEntities()) {
             mergedEntities.merge(entity.entityId(), entity, HybridQueryStrategy::pickEntity);
         }
 
         var mergedRelations = new LinkedHashMap<String, ScoredRelation>();
-        for (var relation : local.matchedRelations()) {
+        for (var relation : local.context().matchedRelations()) {
             mergedRelations.put(relation.relationId(), relation);
         }
-        for (var relation : global.matchedRelations()) {
+        for (var relation : global.context().matchedRelations()) {
             mergedRelations.merge(relation.relationId(), relation, HybridQueryStrategy::pickRelation);
         }
 
         var mergedChunks = new LinkedHashMap<String, ScoredChunk>();
-        for (var chunk : local.matchedChunks()) {
+        for (var chunk : local.context().matchedChunks()) {
             mergedChunks.put(chunk.chunkId(), chunk);
         }
-        for (var chunk : global.matchedChunks()) {
+        for (var chunk : global.context().matchedChunks()) {
             mergedChunks.merge(chunk.chunkId(), chunk, HybridQueryStrategy::pickChunk);
         }
 
@@ -82,16 +82,16 @@ public final class HybridQueryStrategy implements QueryStrategy {
             "LightRAG hybrid retrieve completed: mode={}, query={}, localMs={}, globalMs={}, assembleMs={}, elapsedMs={}, localEntityCount={}, localRelationCount={}, localChunkCount={}, globalEntityCount={}, globalRelationCount={}, globalChunkCount={}, entityCount={}, relationCount={}, chunkCount={}",
             query.mode(),
             query.query(),
-            localMs,
-            globalMs,
+            local.elapsedMs(),
+            global.elapsedMs(),
             assembleMs,
             elapsedMs,
-            local.matchedEntities().size(),
-            local.matchedRelations().size(),
-            local.matchedChunks().size(),
-            global.matchedEntities().size(),
-            global.matchedRelations().size(),
-            global.matchedChunks().size(),
+            local.context().matchedEntities().size(),
+            local.context().matchedRelations().size(),
+            local.context().matchedChunks().size(),
+            global.context().matchedEntities().size(),
+            global.context().matchedRelations().size(),
+            global.context().matchedChunks().size(),
             context.matchedEntities().size(),
             context.matchedRelations().size(),
             context.matchedChunks().size()
@@ -123,7 +123,38 @@ public final class HybridQueryStrategy implements QueryStrategy {
         return Comparator.comparingDouble(scoreExtractor).reversed().thenComparing(idExtractor);
     }
 
+    private static TimedQueryContext timedRetrieve(QueryStrategy strategy, QueryRequest query) {
+        var branchStartedAt = System.nanoTime();
+        return new TimedQueryContext(strategy.retrieve(query), elapsedMillis(branchStartedAt));
+    }
+
+    private static TimedQueryContext awaitBranch(
+        CompletableFuture<TimedQueryContext> target,
+        CompletableFuture<TimedQueryContext> peer
+    ) {
+        try {
+            return target.join();
+        } catch (CompletionException exception) {
+            peer.cancel(true);
+            throw unwrapCompletionException(exception);
+        }
+    }
+
+    private static RuntimeException unwrapCompletionException(CompletionException exception) {
+        var cause = exception.getCause();
+        if (cause instanceof RuntimeException runtimeException) {
+            return runtimeException;
+        }
+        if (cause instanceof Error error) {
+            throw error;
+        }
+        return new IllegalStateException("Hybrid query branch execution failed", cause);
+    }
+
     private static long elapsedMillis(long startedAt) {
         return (System.nanoTime() - startedAt) / 1_000_000L;
+    }
+
+    private record TimedQueryContext(QueryContext context, long elapsedMs) {
     }
 }

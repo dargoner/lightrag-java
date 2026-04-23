@@ -7,13 +7,18 @@ import io.github.lightrag.storage.StorageProvider;
 import io.github.lightrag.types.Chunk;
 import io.github.lightrag.types.QueryContext;
 import io.github.lightrag.types.ScoredChunk;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 import java.util.Comparator;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Objects;
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.CompletionException;
 
 public final class MixQueryStrategy implements QueryStrategy {
+    private static final Logger log = LoggerFactory.getLogger(MixQueryStrategy.class);
     private static final String CHUNK_NAMESPACE = "chunks";
     private static final int DIRECT_MATCH_SEARCH_GROWTH_FACTOR = 2;
 
@@ -37,68 +42,145 @@ public final class MixQueryStrategy implements QueryStrategy {
     @Override
     public QueryContext retrieve(QueryRequest request) {
         var query = Objects.requireNonNull(request, "request");
+        var startedAt = System.nanoTime();
         var metadataPlan = QueryMetadataFilterSupport.buildPlan(query);
-        var hybrid = hybridStrategy.retrieve(query);
-        var queryVector = embeddingModel.embedAll(List.of(query.query())).get(0);
-        var mergedChunks = new LinkedHashMap<String, ScoredChunk>();
-        for (var chunk : hybrid.matchedChunks()) {
-            mergedChunks.put(chunk.chunkId(), chunk);
-        }
-        var matchedChunks = mergeDirectChunkMatches(query, metadataPlan, queryVector, mergedChunks);
+        var hybridFuture = CompletableFuture.supplyAsync(() -> timedRetrieve(hybridStrategy, query));
+        var directChunkFuture = CompletableFuture.supplyAsync(() -> firstDirectChunkPass(query));
+        var hybrid = awaitBranch(hybridFuture, directChunkFuture);
+        var directChunkPass = awaitBranch(directChunkFuture, hybridFuture);
+        var mergeOutcome = mergeDirectChunkMatches(query, metadataPlan, hybrid.context(), directChunkPass);
+        var chunkVectorSearchMs = mergeOutcome.chunkVectorSearchMs();
+        var matchedChunks = mergeOutcome.matchedChunks();
+        var mergeFilterMs = mergeOutcome.mergeFilterMs();
         var context = new QueryContext(
-            QueryBudgeting.limitEntities(hybrid.matchedEntities(), query.maxEntityTokens()),
-            QueryBudgeting.limitRelations(hybrid.matchedRelations(), query.maxRelationTokens()),
+            QueryBudgeting.limitEntities(hybrid.context().matchedEntities(), query.maxEntityTokens()),
+            QueryBudgeting.limitRelations(hybrid.context().matchedRelations(), query.maxRelationTokens()),
             matchedChunks,
             ""
+        );
+        var assembleStartedAt = System.nanoTime();
+        var assembledContext = contextAssembler.assemble(context);
+        var assembleMs = elapsedMillis(assembleStartedAt);
+        log.info(
+            "LightRAG mix retrieve completed: mode={}, query={}, topK={}, chunkTopK={}, hybridMs={}, embedMs={}, chunkVectorSearchMs={}, mergeFilterMs={}, assembleMs={}, elapsedMs={}, entityCount={}, relationCount={}, chunkCount={}",
+            query.mode(),
+            query.query(),
+            query.topK(),
+            query.chunkTopK(),
+            hybrid.elapsedMs(),
+            directChunkPass.embedMs(),
+            chunkVectorSearchMs,
+            mergeFilterMs,
+            assembleMs,
+            elapsedMillis(startedAt),
+            context.matchedEntities().size(),
+            context.matchedRelations().size(),
+            context.matchedChunks().size()
         );
         return new QueryContext(
             context.matchedEntities(),
             context.matchedRelations(),
             context.matchedChunks(),
-            contextAssembler.assemble(context)
+            assembledContext
         );
     }
 
-    private List<ScoredChunk> mergeDirectChunkMatches(
+    private DirectChunkPass firstDirectChunkPass(QueryRequest query) {
+        var embedStartedAt = System.nanoTime();
+        var queryVector = embeddingModel.embedAll(List.of(query.query())).get(0);
+        var embedMs = elapsedMillis(embedStartedAt);
+        var vectorSearchStartedAt = System.nanoTime();
+        var matches = VectorSearches.search(
+            storageProvider.vectorStore(),
+            CHUNK_NAMESPACE,
+            queryVector,
+            query.query(),
+            VectorSearches.mergeKeywords(query.llKeywords(), query.hlKeywords()),
+            query.chunkTopK()
+        );
+        var chunkVectorSearchMs = elapsedMillis(vectorSearchStartedAt);
+        var directChunks = new LinkedHashMap<String, ScoredChunk>();
+        for (var match : matches) {
+            storageProvider.chunkStore().load(match.id()).ifPresent(chunk -> directChunks.merge(
+                match.id(),
+                new ScoredChunk(match.id(), toChunk(chunk), match.score()),
+                (left, right) -> left.score() >= right.score() ? left : right
+            ));
+        }
+        return new DirectChunkPass(queryVector, directChunks, embedMs, chunkVectorSearchMs, query.chunkTopK(), matches.size());
+    }
+
+    private MergeOutcome mergeDirectChunkMatches(
         QueryRequest query,
         MetadataFilterPlan metadataPlan,
-        List<Double> queryVector,
-        LinkedHashMap<String, ScoredChunk> mergedChunks
+        QueryContext hybrid,
+        DirectChunkPass firstPass
     ) {
-        var searchTopK = query.chunkTopK();
-        var previousMatchCount = -1;
-        while (true) {
-            var matches = VectorSearches.search(
-                storageProvider.vectorStore(),
-                CHUNK_NAMESPACE,
-                queryVector,
-                query.query(),
-                VectorSearches.mergeKeywords(query.llKeywords(), query.hlKeywords()),
-                searchTopK
-            );
-            for (var match : matches) {
-                storageProvider.chunkStore().load(match.id()).ifPresent(chunk -> mergedChunks.merge(
-                    match.id(),
-                    new ScoredChunk(match.id(), toChunk(chunk), match.score()),
-                    (left, right) -> left.score() >= right.score() ? left : right
-                ));
-            }
+        var mergedChunks = new LinkedHashMap<String, ScoredChunk>();
+        for (var chunk : hybrid.matchedChunks()) {
+            mergedChunks.put(chunk.chunkId(), chunk);
+        }
+        for (var chunk : firstPass.directChunks().values()) {
+            mergedChunks.merge(chunk.chunkId(), chunk, (left, right) -> left.score() >= right.score() ? left : right);
+        }
 
+        var searchTopK = firstPass.lastSearchTopK();
+        var previousMatchCount = -1;
+        long totalVectorSearchMs = firstPass.chunkVectorSearchMs();
+        long totalMergeFilterMs = 0L;
+        while (true) {
+            var mergeFilterStartedAt = System.nanoTime();
             var matchedChunks = QueryMetadataFilterSupport.filterChunks(metadataPlan, mergedChunks.values().stream()
                 .sorted(scoreOrder())
                 .toList()).stream()
                 .limit(query.chunkTopK())
                 .toList();
+            totalMergeFilterMs += elapsedMillis(mergeFilterStartedAt);
             if (metadataPlan.isEmpty()
                 || matchedChunks.size() >= query.chunkTopK()
-                || matches.size() < searchTopK
-                || matches.size() <= previousMatchCount
+                || firstPass.lastMatchCount() < searchTopK
+                || firstPass.lastMatchCount() <= previousMatchCount
                 || searchTopK == Integer.MAX_VALUE) {
-                return matchedChunks;
+                return new MergeOutcome(matchedChunks, totalVectorSearchMs, totalMergeFilterMs);
             }
 
-            previousMatchCount = matches.size();
+            previousMatchCount = firstPass.lastMatchCount();
             searchTopK = growSearchTopK(searchTopK);
+            var additionalOutcome = searchAdditionalDirectChunkMatches(query, firstPass.queryVector(), searchTopK);
+            totalVectorSearchMs += additionalOutcome.chunkVectorSearchMs();
+            mergeAdditionalChunks(mergedChunks, additionalOutcome.directChunks());
+            firstPass = additionalOutcome;
+        }
+    }
+
+    private DirectChunkPass searchAdditionalDirectChunkMatches(QueryRequest query, List<Double> queryVector, int searchTopK) {
+        var vectorSearchStartedAt = System.nanoTime();
+        var matches = VectorSearches.search(
+            storageProvider.vectorStore(),
+            CHUNK_NAMESPACE,
+            queryVector,
+            query.query(),
+            VectorSearches.mergeKeywords(query.llKeywords(), query.hlKeywords()),
+            searchTopK
+        );
+        var chunkVectorSearchMs = elapsedMillis(vectorSearchStartedAt);
+        var directChunks = new LinkedHashMap<String, ScoredChunk>();
+        for (var match : matches) {
+            storageProvider.chunkStore().load(match.id()).ifPresent(chunk -> directChunks.merge(
+                match.id(),
+                new ScoredChunk(match.id(), toChunk(chunk), match.score()),
+                (left, right) -> left.score() >= right.score() ? left : right
+            ));
+        }
+        return new DirectChunkPass(queryVector, directChunks, 0L, chunkVectorSearchMs, searchTopK, matches.size());
+    }
+
+    private static void mergeAdditionalChunks(
+        LinkedHashMap<String, ScoredChunk> mergedChunks,
+        LinkedHashMap<String, ScoredChunk> additionalChunks
+    ) {
+        for (var chunk : additionalChunks.values()) {
+            mergedChunks.merge(chunk.chunkId(), chunk, (left, right) -> left.score() >= right.score() ? left : right);
         }
     }
 
@@ -119,5 +201,50 @@ public final class MixQueryStrategy implements QueryStrategy {
 
     private static Comparator<ScoredChunk> scoreOrder() {
         return Comparator.comparingDouble(ScoredChunk::score).reversed().thenComparing(ScoredChunk::chunkId);
+    }
+
+    private static long elapsedMillis(long startedAt) {
+        return (System.nanoTime() - startedAt) / 1_000_000L;
+    }
+
+    private static TimedQueryContext timedRetrieve(QueryStrategy strategy, QueryRequest query) {
+        var branchStartedAt = System.nanoTime();
+        return new TimedQueryContext(strategy.retrieve(query), elapsedMillis(branchStartedAt));
+    }
+
+    private static <T> T awaitBranch(CompletableFuture<T> target, CompletableFuture<?> peer) {
+        try {
+            return target.join();
+        } catch (CompletionException exception) {
+            peer.cancel(true);
+            throw unwrapCompletionException(exception);
+        }
+    }
+
+    private static RuntimeException unwrapCompletionException(CompletionException exception) {
+        var cause = exception.getCause();
+        if (cause instanceof RuntimeException runtimeException) {
+            return runtimeException;
+        }
+        if (cause instanceof Error error) {
+            throw error;
+        }
+        return new IllegalStateException("Mix query branch execution failed", cause);
+    }
+
+    private record MergeOutcome(List<ScoredChunk> matchedChunks, long chunkVectorSearchMs, long mergeFilterMs) {
+    }
+
+    private record TimedQueryContext(QueryContext context, long elapsedMs) {
+    }
+
+    private record DirectChunkPass(
+        List<Double> queryVector,
+        LinkedHashMap<String, ScoredChunk> directChunks,
+        long embedMs,
+        long chunkVectorSearchMs,
+        int lastSearchTopK,
+        int lastMatchCount
+    ) {
     }
 }

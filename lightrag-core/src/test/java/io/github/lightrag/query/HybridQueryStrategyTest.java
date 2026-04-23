@@ -10,8 +10,14 @@ import org.junit.jupiter.api.Test;
 
 import java.util.List;
 import java.util.Map;
+import java.util.concurrent.BrokenBarrierException;
+import java.util.concurrent.CyclicBarrier;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.TimeoutException;
+import java.util.concurrent.atomic.AtomicBoolean;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static io.github.lightrag.support.RelationIds.relationId;
 
 class HybridQueryStrategyTest {
@@ -218,12 +224,70 @@ class HybridQueryStrategyTest {
             .containsExactly("chunk-2", "chunk-3");
     }
 
+    @Test
+    void hybridExecutesLocalAndGlobalBranchesConcurrently() {
+        var barrier = new CyclicBarrier(2);
+        var localObservedParallelism = new AtomicBoolean(false);
+        var globalObservedParallelism = new AtomicBoolean(false);
+        var contextAssembler = new ContextAssembler();
+        var strategy = new HybridQueryStrategy(
+            request -> awaitParallelBranch(barrier, localObservedParallelism),
+            request -> awaitParallelBranch(barrier, globalObservedParallelism),
+            contextAssembler
+        );
+
+        strategy.retrieve(QueryRequest.builder()
+            .query("hybrid concurrency question")
+            .mode(QueryMode.HYBRID)
+            .chunkTopK(1)
+            .build());
+
+        assertThat(localObservedParallelism.get()).isTrue();
+        assertThat(globalObservedParallelism.get()).isTrue();
+    }
+
+    @Test
+    void hybridPropagatesChildBranchFailure() {
+        var contextAssembler = new ContextAssembler();
+        var strategy = new HybridQueryStrategy(
+            request -> {
+                throw new IllegalStateException("local branch failed");
+            },
+            request -> new QueryContext(List.of(), List.of(), List.of(), ""),
+            contextAssembler
+        );
+
+        assertThatThrownBy(() -> strategy.retrieve(QueryRequest.builder()
+            .query("hybrid failure question")
+            .mode(QueryMode.HYBRID)
+            .chunkTopK(1)
+            .build()))
+            .isInstanceOf(IllegalStateException.class)
+            .hasMessage("local branch failed");
+    }
+
     private static ScoredChunk scoredChunk(String chunkId, String text, double score, Map<String, String> metadata) {
         return new ScoredChunk(
             chunkId,
             new io.github.lightrag.types.Chunk(chunkId, "doc-1", text, 4, 0, metadata),
             score
         );
+    }
+
+    private static QueryContext awaitParallelBranch(CyclicBarrier barrier, AtomicBoolean observedParallelism) {
+        try {
+            barrier.await(250, TimeUnit.MILLISECONDS);
+            observedParallelism.set(true);
+            return new QueryContext(List.of(), List.of(), List.of(), "");
+        } catch (TimeoutException | BrokenBarrierException exception) {
+            observedParallelism.set(false);
+            return new QueryContext(List.of(), List.of(), List.of(), "");
+        } catch (InterruptedException exception) {
+            Thread.currentThread().interrupt();
+            throw new IllegalStateException("parallel test interrupted", exception);
+        } catch (Exception exception) {
+            throw new IllegalStateException("parallel branch failed", exception);
+        }
     }
 
     private record FakeEmbeddingModel(Map<String, List<Double>> vectorsByText) implements EmbeddingModel {
