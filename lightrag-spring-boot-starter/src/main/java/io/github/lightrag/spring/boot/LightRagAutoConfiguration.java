@@ -65,6 +65,19 @@ public class LightRagAutoConfiguration {
         );
     }
 
+    @Bean("queryModel")
+    @ConditionalOnProperty(prefix = "lightrag.query-model", name = "base-url")
+    @ConditionalOnMissingBean(name = "queryModel")
+    ChatModel queryModel(LightRagProperties properties) {
+        var queryModel = properties.getQueryModel();
+        return new OpenAiCompatibleChatModel(
+            requireValue(queryModel.getBaseUrl(), "lightrag.query-model.base-url"),
+            requireValue(queryModel.getModel(), "lightrag.query-model.model"),
+            requireValue(queryModel.getApiKey(), "lightrag.query-model.api-key"),
+            queryModel.getTimeout()
+        );
+    }
+
     @Bean
     @ConditionalOnMissingBean
     EmbeddingModel embeddingModel(LightRagProperties properties) {

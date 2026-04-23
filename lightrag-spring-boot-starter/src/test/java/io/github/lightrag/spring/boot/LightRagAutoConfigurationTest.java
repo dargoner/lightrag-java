@@ -164,6 +164,27 @@ class LightRagAutoConfigurationTest {
     }
 
     @Test
+    void autoConfiguresQueryModelFromSpringProperties() {
+        contextRunner
+            .withPropertyValues(
+                "lightrag.query-model.base-url=http://localhost:11435/v1/",
+                "lightrag.query-model.model=qwen-query",
+                "lightrag.query-model.api-key=query-key",
+                "lightrag.query-model.timeout=PT21S"
+            )
+            .run(context -> {
+                var lightRag = context.getBean(LightRag.class);
+                var config = (io.github.lightrag.config.LightRagConfig) extractField(lightRag, "config");
+
+                assertThat(context).hasBean("queryModel");
+                assertThat(config.queryModel()).isSameAs(context.getBean("queryModel", ChatModel.class));
+                assertThat(config.queryModel()).isNotSameAs(context.getBean("chatModel", ChatModel.class));
+                assertThat(extractTimeout((OpenAiCompatibleChatModel) context.getBean("queryModel", ChatModel.class)))
+                    .isEqualTo(Duration.ofSeconds(21));
+            });
+    }
+
+    @Test
     void bindsPipelineWorkspaceAndDemoDefaults() {
         contextRunner.run(context -> {
             var properties = context.getBean(LightRagProperties.class);
@@ -193,6 +214,25 @@ class LightRagAutoConfigurationTest {
             assertThat(properties.getStorage().getMysql().getTablePrefix()).isEqualTo("lightrag_");
             assertThat(properties.getStorage().getMilvus().getCollectionPrefix()).isEqualTo("rag_");
         });
+    }
+
+    @Test
+    void bindsQueryModelProperties() {
+        contextRunner
+            .withPropertyValues(
+                "lightrag.query-model.base-url=http://localhost:11435/v1/",
+                "lightrag.query-model.model=qwen-query",
+                "lightrag.query-model.api-key=query-key",
+                "lightrag.query-model.timeout=PT21S"
+            )
+            .run(context -> {
+                var properties = context.getBean(LightRagProperties.class);
+
+                assertThat(properties.getQueryModel().getBaseUrl()).isEqualTo("http://localhost:11435/v1/");
+                assertThat(properties.getQueryModel().getModel()).isEqualTo("qwen-query");
+                assertThat(properties.getQueryModel().getApiKey()).isEqualTo("query-key");
+                assertThat(properties.getQueryModel().getTimeout()).isEqualTo(Duration.ofSeconds(21));
+            });
     }
 
     @Test

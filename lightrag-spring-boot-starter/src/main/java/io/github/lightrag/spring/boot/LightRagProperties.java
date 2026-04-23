@@ -10,6 +10,7 @@ import java.util.Locale;
 @ConfigurationProperties(prefix = "lightrag")
 public class LightRagProperties {
     private final ModelProperties chat = new ModelProperties();
+    private final ModelProperties queryModel = new ModelProperties();
     private final ModelProperties embedding = new ModelProperties();
     private final StorageProperties storage = new StorageProperties();
     private final IndexingProperties indexing = new IndexingProperties();
@@ -24,6 +25,10 @@ public class LightRagProperties {
 
     public ModelProperties getEmbedding() {
         return embedding;
+    }
+
+    public ModelProperties getQueryModel() {
+        return queryModel;
     }
 
     public StorageProperties getStorage() {
