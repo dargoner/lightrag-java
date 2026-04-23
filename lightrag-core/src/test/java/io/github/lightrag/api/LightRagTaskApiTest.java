@@ -2,7 +2,12 @@ package io.github.lightrag.api;
 
 import io.github.lightrag.model.ChatModel;
 import io.github.lightrag.model.EmbeddingModel;
+import io.github.lightrag.storage.AtomicStorageProvider;
 import io.github.lightrag.storage.InMemoryStorageProvider;
+import io.github.lightrag.storage.StorageProvider;
+import io.github.lightrag.storage.TaskDocumentStore;
+import io.github.lightrag.storage.TaskStageStore;
+import io.github.lightrag.storage.TaskStore;
 import io.github.lightrag.storage.memory.InMemoryGraphStore;
 import io.github.lightrag.types.Chunk;
 import io.github.lightrag.types.Document;
@@ -11,12 +16,16 @@ import org.junit.jupiter.api.Test;
 
 import java.time.Duration;
 import java.time.Instant;
+import java.util.ArrayList;
 import java.util.EnumSet;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
+import java.util.Optional;
+import java.util.concurrent.atomic.AtomicBoolean;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static io.github.lightrag.support.RelationIds.relationId;
 
 class LightRagTaskApiTest {
@@ -136,6 +145,7 @@ class LightRagTaskApiTest {
             .map(TaskEvent::eventType)
             .toList()).contains(
             TaskEventType.CHUNK_STARTED,
+            TaskEventType.CHUNK_PRIMARY_EXTRACTED,
             TaskEventType.CHUNK_GRAPH_READY,
             TaskEventType.CHUNK_VECTORS_READY,
             TaskEventType.CHUNK_SUCCEEDED
@@ -191,6 +201,10 @@ class LightRagTaskApiTest {
             .isLessThan(indexOfChunkEvent(chunkEvents, TaskEventType.CHUNK_VECTORS_READY, TaskEventScope.VECTOR, "chunk-1"));
         assertThat(indexOfChunkEvent(chunkEvents, TaskEventType.CHUNK_PENDING, TaskEventScope.GRAPH, "chunk-1"))
             .isLessThan(indexOfChunkEvent(chunkEvents, TaskEventType.CHUNK_STARTED, TaskEventScope.CHUNK, "chunk-1"));
+        assertThat(indexOfChunkEvent(chunkEvents, TaskEventType.CHUNK_STARTED, TaskEventScope.CHUNK, "chunk-1"))
+            .isLessThan(indexOfChunkEvent(chunkEvents, TaskEventType.CHUNK_PRIMARY_EXTRACTED, TaskEventScope.GRAPH, "chunk-1"));
+        assertThat(indexOfChunkEvent(chunkEvents, TaskEventType.CHUNK_PRIMARY_EXTRACTED, TaskEventScope.GRAPH, "chunk-1"))
+            .isLessThan(indexOfChunkEvent(chunkEvents, TaskEventType.CHUNK_GRAPH_READY, TaskEventScope.GRAPH, "chunk-1"));
     }
 
     @Test
@@ -241,6 +255,140 @@ class LightRagTaskApiTest {
         assertThat(rag.listTasks(WORKSPACE))
             .extracting(TaskSnapshot::taskId)
             .contains(taskId);
+    }
+
+    @Test
+    void getTaskRetriesInterruptedRecoveryAfterInitialStorageFailure() {
+        var delegate = InMemoryStorageProvider.create();
+        var requestedAt = Instant.now();
+        var taskId = "interrupted-task";
+        delegate.taskStore().save(new TaskStore.TaskRecord(
+            taskId,
+            WORKSPACE,
+            TaskType.INGEST_DOCUMENTS,
+            TaskStatus.RUNNING,
+            requestedAt,
+            requestedAt,
+            null,
+            "running",
+            null,
+            false,
+            Map.of()
+        ));
+        delegate.taskStageStore().save(new TaskStageStore.TaskStageRecord(
+            taskId,
+            TaskStage.PRIMARY_EXTRACTION,
+            TaskStageStatus.RUNNING,
+            3,
+            requestedAt,
+            null,
+            "extracting entities and relations",
+            null
+        ));
+        var storage = new FailOnceTaskListStorageProvider(delegate);
+        var rag = LightRag.builder()
+            .chatModel(new FakeChatModel())
+            .embeddingModel(new FakeEmbeddingModel())
+            .storage(storage)
+            .build();
+
+        assertThatThrownBy(() -> rag.getTask(WORKSPACE, taskId))
+            .isInstanceOf(IllegalStateException.class)
+            .hasMessage("simulated task store outage");
+
+        var snapshot = rag.getTask(WORKSPACE, taskId);
+
+        assertThat(snapshot.status()).isEqualTo(TaskStatus.FAILED);
+        assertThat(snapshot.errorMessage()).isEqualTo("task interrupted before completion");
+        assertThat(snapshot.stages())
+            .extracting(TaskStageSnapshot::status, TaskStageSnapshot::errorMessage)
+            .contains(org.assertj.core.groups.Tuple.tuple(
+                TaskStageStatus.FAILED,
+                "task interrupted before completion"
+            ));
+    }
+
+    @Test
+    void getTaskMarksAllInterruptedRunningStagesAsFailed() {
+        var delegate = InMemoryStorageProvider.create();
+        var requestedAt = Instant.now();
+        var taskId = "interrupted-multi-stage-task";
+        delegate.taskStore().save(new TaskStore.TaskRecord(
+            taskId,
+            WORKSPACE,
+            TaskType.INGEST_DOCUMENTS,
+            TaskStatus.RUNNING,
+            requestedAt,
+            requestedAt,
+            null,
+            "running",
+            null,
+            false,
+            Map.of()
+        ));
+        delegate.taskStageStore().save(new TaskStageStore.TaskStageRecord(
+            taskId,
+            TaskStage.PRIMARY_EXTRACTION,
+            TaskStageStatus.RUNNING,
+            4,
+            requestedAt,
+            null,
+            "extracting entities and relations",
+            null
+        ));
+        delegate.taskStageStore().save(new TaskStageStore.TaskStageRecord(
+            taskId,
+            TaskStage.GRAPH_ASSEMBLY,
+            TaskStageStatus.RUNNING,
+            6,
+            requestedAt,
+            null,
+            "assembling graph",
+            null
+        ));
+        delegate.taskStageStore().save(new TaskStageStore.TaskStageRecord(
+            taskId,
+            TaskStage.VECTOR_INDEXING,
+            TaskStageStatus.SUCCEEDED,
+            7,
+            requestedAt,
+            requestedAt.plusSeconds(5),
+            "embedded chunk vectors",
+            null
+        ));
+        var rag = LightRag.builder()
+            .chatModel(new FakeChatModel())
+            .embeddingModel(new FakeEmbeddingModel())
+            .storage(delegate)
+            .build();
+
+        var snapshot = rag.getTask(WORKSPACE, taskId);
+
+        assertThat(snapshot.status()).isEqualTo(TaskStatus.FAILED);
+        assertThat(snapshot.errorMessage()).isEqualTo("task interrupted before completion");
+        assertThat(snapshot.stages())
+            .filteredOn(stage -> stage.stage() == TaskStage.PRIMARY_EXTRACTION
+                || stage.stage() == TaskStage.GRAPH_ASSEMBLY)
+            .extracting(TaskStageSnapshot::stage, TaskStageSnapshot::status, TaskStageSnapshot::errorMessage)
+            .containsExactlyInAnyOrder(
+                org.assertj.core.groups.Tuple.tuple(
+                    TaskStage.PRIMARY_EXTRACTION,
+                    TaskStageStatus.FAILED,
+                    "task interrupted before completion"
+                ),
+                org.assertj.core.groups.Tuple.tuple(
+                    TaskStage.GRAPH_ASSEMBLY,
+                    TaskStageStatus.FAILED,
+                    "task interrupted before completion"
+                )
+            );
+        assertThat(snapshot.stages())
+            .filteredOn(stage -> stage.stage() == TaskStage.VECTOR_INDEXING)
+            .extracting(TaskStageSnapshot::status, TaskStageSnapshot::errorMessage)
+            .containsExactly(org.assertj.core.groups.Tuple.tuple(
+                TaskStageStatus.SUCCEEDED,
+                null
+            ));
     }
 
     @Test
@@ -603,6 +751,105 @@ class LightRagTaskApiTest {
         @Override
         public List<List<Double>> embedAll(List<String> texts) {
             throw new IllegalStateException(message);
+        }
+    }
+
+    private static final class FailOnceTaskListStorageProvider implements AtomicStorageProvider {
+        private final AtomicStorageProvider delegate;
+        private final AtomicBoolean failFirstList = new AtomicBoolean(true);
+        private final TaskStore taskStore;
+
+        private FailOnceTaskListStorageProvider(AtomicStorageProvider delegate) {
+            this.delegate = delegate;
+            this.taskStore = new TaskStore() {
+                @Override
+                public void save(TaskRecord taskRecord) {
+                    delegate.taskStore().save(taskRecord);
+                }
+
+                @Override
+                public Optional<TaskRecord> load(String taskId) {
+                    return delegate.taskStore().load(taskId);
+                }
+
+                @Override
+                public List<TaskRecord> list() {
+                    if (failFirstList.compareAndSet(true, false)) {
+                        throw new IllegalStateException("simulated task store outage");
+                    }
+                    return new ArrayList<>(delegate.taskStore().list());
+                }
+
+                @Override
+                public void delete(String taskId) {
+                    delegate.taskStore().delete(taskId);
+                }
+            };
+        }
+
+        @Override
+        public <T> T writeAtomically(AtomicOperation<T> operation) {
+            return delegate.writeAtomically(operation);
+        }
+
+        @Override
+        public void restore(io.github.lightrag.storage.SnapshotStore.Snapshot snapshot) {
+            delegate.restore(snapshot);
+        }
+
+        @Override
+        public io.github.lightrag.storage.DocumentStore documentStore() {
+            return delegate.documentStore();
+        }
+
+        @Override
+        public io.github.lightrag.storage.ChunkStore chunkStore() {
+            return delegate.chunkStore();
+        }
+
+        @Override
+        public io.github.lightrag.storage.GraphStore graphStore() {
+            return delegate.graphStore();
+        }
+
+        @Override
+        public io.github.lightrag.storage.VectorStore vectorStore() {
+            return delegate.vectorStore();
+        }
+
+        @Override
+        public io.github.lightrag.storage.DocumentStatusStore documentStatusStore() {
+            return delegate.documentStatusStore();
+        }
+
+        @Override
+        public TaskStore taskStore() {
+            return taskStore;
+        }
+
+        @Override
+        public TaskStageStore taskStageStore() {
+            return delegate.taskStageStore();
+        }
+
+        @Override
+        public TaskDocumentStore taskDocumentStore() {
+            return delegate.taskDocumentStore();
+        }
+
+        @Override
+        public io.github.lightrag.storage.SnapshotStore snapshotStore() {
+            return delegate.snapshotStore();
+        }
+
+        @Override
+        public io.github.lightrag.storage.DocumentGraphSnapshotStore documentGraphSnapshotStore() {
+            return delegate.documentGraphSnapshotStore();
+        }
+
+        @Override
+        public io.github.lightrag.storage.DocumentGraphJournalStore documentGraphJournalStore() {
+            return delegate.documentGraphJournalStore();
         }
     }
 }

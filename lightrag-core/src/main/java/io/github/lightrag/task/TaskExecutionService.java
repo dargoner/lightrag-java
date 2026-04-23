@@ -238,34 +238,40 @@ public final class TaskExecutionService implements AutoCloseable {
         if (!recoveredWorkspaces.add(workspaceId)) {
             return;
         }
-        for (var record : provider.taskStore().list()) {
-            if (record.status().isTerminal()) {
-                continue;
-            }
-            provider.taskStore().save(copyTask(
-                record,
-                TaskStatus.FAILED,
-                record.startedAt(),
-                Instant.now(),
-                record.summary(),
-                INTERRUPTED_MESSAGE,
-                record.cancelRequested()
-            ));
-            var stages = provider.taskStageStore().listByTask(record.taskId());
-            if (!stages.isEmpty()) {
-                var last = stages.get(stages.size() - 1);
-                if (last.status() == TaskStageStatus.RUNNING || last.status() == TaskStageStatus.PENDING) {
-                    provider.taskStageStore().save(new TaskStageStore.TaskStageRecord(
-                        last.taskId(),
-                        last.stage(),
-                        TaskStageStatus.FAILED,
-                        last.sequence(),
-                        last.startedAt(),
-                        Instant.now(),
-                        last.message(),
-                        INTERRUPTED_MESSAGE
-                    ));
+        var recovered = false;
+        try {
+            for (var record : provider.taskStore().list()) {
+                if (record.status().isTerminal()) {
+                    continue;
                 }
+                provider.taskStore().save(copyTask(
+                    record,
+                    TaskStatus.FAILED,
+                    record.startedAt(),
+                    Instant.now(),
+                    record.summary(),
+                    INTERRUPTED_MESSAGE,
+                    record.cancelRequested()
+                ));
+                for (var stage : provider.taskStageStore().listByTask(record.taskId())) {
+                    if (stage.status() == TaskStageStatus.RUNNING || stage.status() == TaskStageStatus.PENDING) {
+                        provider.taskStageStore().save(new TaskStageStore.TaskStageRecord(
+                            stage.taskId(),
+                            stage.stage(),
+                            TaskStageStatus.FAILED,
+                            stage.sequence(),
+                            stage.startedAt(),
+                            Instant.now(),
+                            stage.message(),
+                            INTERRUPTED_MESSAGE
+                        ));
+                    }
+                }
+            }
+            recovered = true;
+        } finally {
+            if (!recovered) {
+                recoveredWorkspaces.remove(workspaceId);
             }
         }
     }
@@ -619,6 +625,28 @@ public final class TaskExecutionService implements AutoCloseable {
                 "running",
                 message,
                 Map.of()
+            ));
+        }
+
+        @Override
+        public void onChunkPrimaryExtracted(
+            String documentId,
+            String chunkId,
+            int entityCount,
+            int relationCount,
+            String message
+        ) {
+            eventPublisher.publish(chunkEvent(
+                TaskEventType.CHUNK_PRIMARY_EXTRACTED,
+                TaskEventScope.GRAPH,
+                documentId,
+                chunkId,
+                "succeeded",
+                message,
+                Map.of(
+                    "entityCount", Integer.toString(entityCount),
+                    "relationCount", Integer.toString(relationCount)
+                )
             ));
         }
 

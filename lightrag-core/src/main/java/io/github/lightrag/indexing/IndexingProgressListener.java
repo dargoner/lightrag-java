@@ -46,6 +46,15 @@ public interface IndexingProgressListener {
     default void onChunkStarted(String documentId, String chunkId, String message) {
     }
 
+    default void onChunkPrimaryExtracted(
+        String documentId,
+        String chunkId,
+        int entityCount,
+        int relationCount,
+        String message
+    ) {
+    }
+
     default void onChunkGraphReady(String documentId, String chunkId, int entityCount, int relationCount, String message) {
     }
 

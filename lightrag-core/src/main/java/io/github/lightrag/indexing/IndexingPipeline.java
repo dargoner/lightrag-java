@@ -905,7 +905,17 @@ public final class IndexingPipeline {
             progressListener.onChunkStarted(chunk.documentId(), chunk.id(), "chunk processing started");
         }
         try {
-            return knowledgeExtractor.extract(chunk);
+            var extraction = knowledgeExtractor.extract(chunk);
+            if (publishChunkEvents) {
+                progressListener.onChunkPrimaryExtracted(
+                    chunk.documentId(),
+                    chunk.id(),
+                    extraction.entities().size(),
+                    extraction.relations().size(),
+                    "chunk primary extraction ready for " + chunk.id()
+                );
+            }
+            return extraction;
         } finally {
             logChunkExtractionFinished(chunk, startedAtNanos);
         }
