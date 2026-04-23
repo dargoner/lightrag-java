@@ -98,6 +98,10 @@ public final class GraphAssembler {
     ) {
         var sourceEntity = ensureEntity(chunkId, extractedRelation.sourceEntityName(), entitiesById, entityIdByMergeKey);
         var targetEntity = ensureEntity(chunkId, extractedRelation.targetEntityName(), entitiesById, entityIdByMergeKey);
+        // Drop self-loops after endpoint normalization so one bad extraction does not abort the batch.
+        if (sourceEntity.id.equals(targetEntity.id)) {
+            return;
+        }
         var canonicalRef = RelationCanonicalizer.canonicalize(sourceEntity.id, targetEntity.id);
         var mergeKey = relationMergeKey(canonicalRef.srcId(), canonicalRef.tgtId());
         var relationId = relationIdByMergeKey.get(mergeKey);

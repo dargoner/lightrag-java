@@ -181,6 +181,41 @@ class GraphAssemblerTest {
         );
     }
 
+    @Test
+    void skipsSelfLoopRelationsAfterEndpointNormalization() {
+        var assembler = new GraphAssembler();
+
+        var graph = assembler.assemble(List.of(
+            extraction(
+                "chunk-1",
+                List.of(
+                    new ExtractedEntity("Alice", "person", "Researcher", List.of()),
+                    new ExtractedEntity("Bob", "person", "Engineer", List.of())
+                ),
+                List.of(
+                    new ExtractedRelation(" Alice ", "alice", "same_as", "self loop", 0.4d),
+                    new ExtractedRelation("Alice", "Bob", "works_with", "valid edge", 0.8d)
+                )
+            )
+        ));
+
+        assertThat(graph.entities()).containsExactly(
+            new Entity("alice", "Alice", "person", "Researcher", List.of(), List.of("chunk-1")),
+            new Entity("bob", "Bob", "person", "Engineer", List.of(), List.of("chunk-1"))
+        );
+        assertThat(graph.relations()).containsExactly(
+            new Relation(
+                relationId("alice", "bob"),
+                "alice",
+                "bob",
+                "works_with",
+                "valid edge",
+                0.8d,
+                List.of("chunk-1")
+            )
+        );
+    }
+
     private static GraphAssembler.ChunkExtraction extraction(
         String chunkId,
         List<ExtractedEntity> entities,
