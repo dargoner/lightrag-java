@@ -3,6 +3,7 @@ package io.github.lightrag.api;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import io.github.lightrag.indexing.Chunker;
 import io.github.lightrag.indexing.FixedWindowChunker;
+import io.github.lightrag.indexing.StorageSnapshots;
 import io.github.lightrag.indexing.SmartChunker;
 import io.github.lightrag.indexing.SmartChunkerConfig;
 import io.github.lightrag.indexing.DocumentTypeHint;
@@ -606,8 +607,16 @@ class LightRagBuilderTest {
             executor.shutdownNow();
         }
 
-        assertThat(storageProvider.documentStore().contains("doc-slow")).isFalse();
         assertThat(rag.getDocumentStatus(WORKSPACE, "doc-slow").status()).isEqualTo(DocumentStatus.FAILED);
+        assertThat(storageProvider.documentStore().contains("doc-slow")).isTrue();
+        assertThat(storageProvider.chunkStore().listByDocument("doc-slow"))
+            .extracting(ChunkStore.ChunkRecord::id)
+            .containsExactly("doc-slow:0");
+        assertThat(storageProvider.vectorStore().list(StorageSnapshots.CHUNK_NAMESPACE))
+            .extracting(VectorStore.VectorRecord::id)
+            .contains("doc-slow:0");
+        assertThat(storageProvider.documentGraphSnapshotStore().loadDocument("doc-slow")).isPresent();
+        assertThat(storageProvider.graphStore().allEntities()).isEmpty();
     }
 
     @Test

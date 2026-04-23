@@ -639,6 +639,7 @@ public final class IndexingPipeline {
         progressListener.onDocumentStarted(source.id(), "document processing started");
         progressListener.onStageStarted(io.github.lightrag.api.TaskStage.CHUNKING, "chunking document " + source.id());
         var prepared = documentIngestor.prepare(List.of(source));
+        persistBaseDocumentState(source.id(), prepared);
         progressListener.onDocumentChunked(
             source.id(),
             prepared.chunks().size(),
@@ -651,17 +652,19 @@ public final class IndexingPipeline {
         var chunks = prepared.chunks();
         progressListener.onStageStarted(io.github.lightrag.api.TaskStage.VECTOR_INDEXING, "embedding chunks for " + source.id());
         var chunkVectors = chunkVectors(chunks);
+        persistChunkVectorState(chunks, chunkVectors);
         progressListener.onStageSucceeded(io.github.lightrag.api.TaskStage.VECTOR_INDEXING, "embedded chunk vectors for " + source.id());
         progressListener.onStageStarted(io.github.lightrag.api.TaskStage.GRAPH_ASSEMBLY, "assembling graph for " + source.id());
         var refinedExtractions = refineExtractions(chunks);
         var graph = graphAssembler.assemble(refinedExtractions);
+        persistExtractionSnapshotState(source.id(), prepared, refinedExtractions, graph);
         progressListener.onDocumentGraphReady(
             source.id(),
             graph.entities().size(),
             graph.relations().size(),
-            "assembled graph for " + source.id()
+            "persisted graph snapshots for " + source.id()
         );
-        progressListener.onStageSucceeded(io.github.lightrag.api.TaskStage.GRAPH_ASSEMBLY, "assembled graph for " + source.id());
+        progressListener.onStageSucceeded(io.github.lightrag.api.TaskStage.GRAPH_ASSEMBLY, "persisted graph snapshots for " + source.id());
         progressListener.onStageStarted(io.github.lightrag.api.TaskStage.VECTOR_INDEXING, "embedding graph vectors for " + source.id());
         var entityVectors = entityVectors(graph.entities());
         var relationVectors = relationVectors(graph.relations());
@@ -684,6 +687,7 @@ public final class IndexingPipeline {
         progressListener.onDocumentStarted(source.documentId(), "document processing started");
         progressListener.onStageStarted(io.github.lightrag.api.TaskStage.CHUNKING, "chunking document " + source.documentId());
         var prepared = documentIngestor.prepareParsed(source, Objects.requireNonNull(options, "options"));
+        persistBaseDocumentState(source.documentId(), prepared);
         progressListener.onDocumentChunked(
             source.documentId(),
             prepared.chunks().size(),
@@ -696,17 +700,19 @@ public final class IndexingPipeline {
         var chunks = prepared.chunks();
         progressListener.onStageStarted(io.github.lightrag.api.TaskStage.VECTOR_INDEXING, "embedding chunks for " + source.documentId());
         var chunkVectors = chunkVectors(chunks);
+        persistChunkVectorState(chunks, chunkVectors);
         progressListener.onStageSucceeded(io.github.lightrag.api.TaskStage.VECTOR_INDEXING, "embedded chunk vectors for " + source.documentId());
         progressListener.onStageStarted(io.github.lightrag.api.TaskStage.GRAPH_ASSEMBLY, "assembling graph for " + source.documentId());
         var refinedExtractions = refineExtractions(chunks);
         var graph = graphAssembler.assemble(refinedExtractions);
+        persistExtractionSnapshotState(source.documentId(), prepared, refinedExtractions, graph);
         progressListener.onDocumentGraphReady(
             source.documentId(),
             graph.entities().size(),
             graph.relations().size(),
-            "assembled graph for " + source.documentId()
+            "persisted graph snapshots for " + source.documentId()
         );
-        progressListener.onStageSucceeded(io.github.lightrag.api.TaskStage.GRAPH_ASSEMBLY, "assembled graph for " + source.documentId());
+        progressListener.onStageSucceeded(io.github.lightrag.api.TaskStage.GRAPH_ASSEMBLY, "persisted graph snapshots for " + source.documentId());
         progressListener.onStageStarted(io.github.lightrag.api.TaskStage.VECTOR_INDEXING, "embedding graph vectors for " + source.documentId());
         var entityVectors = entityVectors(graph.entities());
         var relationVectors = relationVectors(graph.relations());
@@ -737,8 +743,10 @@ public final class IndexingPipeline {
         );
         var chunks = prepared.chunks();
         publishPendingChunkTasks(source.documentId(), chunks);
+        persistBaseDocumentState(source.documentId(), prepared);
         progressListener.onStageStarted(io.github.lightrag.api.TaskStage.VECTOR_INDEXING, "embedding chunks for " + source.documentId());
         var chunkVectors = chunkVectors(chunks);
+        persistChunkVectorState(chunks, chunkVectors);
         for (var chunk : chunks) {
             progressListener.onChunkVectorsReady(
                 source.documentId(),
@@ -751,13 +759,14 @@ public final class IndexingPipeline {
         progressListener.onStageStarted(io.github.lightrag.api.TaskStage.GRAPH_ASSEMBLY, "assembling graph for " + source.documentId());
         var refinedExtractions = refineExtractions(chunks, true);
         var graph = graphAssembler.assemble(refinedExtractions);
+        persistExtractionSnapshotState(source.documentId(), prepared, refinedExtractions, graph);
         progressListener.onDocumentGraphReady(
             source.documentId(),
             graph.entities().size(),
             graph.relations().size(),
-            "assembled graph for " + source.documentId()
+            "persisted graph snapshots for " + source.documentId()
         );
-        progressListener.onStageSucceeded(io.github.lightrag.api.TaskStage.GRAPH_ASSEMBLY, "assembled graph for " + source.documentId());
+        progressListener.onStageSucceeded(io.github.lightrag.api.TaskStage.GRAPH_ASSEMBLY, "persisted graph snapshots for " + source.documentId());
         progressListener.onStageStarted(io.github.lightrag.api.TaskStage.VECTOR_INDEXING, "embedding graph vectors for " + source.documentId());
         var entityVectors = entityVectors(graph.entities());
         var relationVectors = relationVectors(graph.relations());
@@ -951,15 +960,13 @@ public final class IndexingPipeline {
     }
 
     private void commitComputedIngest(ComputedIngest computed, boolean publishChunkEvents) {
-        progressListener.onStageStarted(io.github.lightrag.api.TaskStage.COMMITTING, "committing storage mutations");
+        progressListener.onStageStarted(io.github.lightrag.api.TaskStage.COMMITTING, "materializing graph and final vectors");
         synchronized (storageMutationMonitor) {
             storageProvider.writeAtomically(storage -> {
-                documentIngestor.persist(computed.prepared(), storage);
-                saveChunkVectors(computed.prepared().chunks(), computed.chunkVectors(), storage.vectorStore());
                 saveGraph(computed.graph().entities(), computed.graph().relations(), storage);
                 saveEntityVectors(computed.graph().entities(), computed.entityVectors(), storage.vectorStore());
                 saveRelationVectors(computed.graph().relations(), computed.relationVectors(), storage.vectorStore());
-                persistDocumentGraphState(computed, storage);
+                finalizeDocumentGraphState(computed, storage);
                 storage.documentStatusStore().save(new DocumentStatusStore.StatusRecord(
                     computed.source().id(),
                     DocumentStatus.PROCESSED,
@@ -969,7 +976,7 @@ public final class IndexingPipeline {
                 return null;
             });
         }
-        progressListener.onStageSucceeded(io.github.lightrag.api.TaskStage.COMMITTING, "committed storage mutations");
+        progressListener.onStageSucceeded(io.github.lightrag.api.TaskStage.COMMITTING, "materialized graph and committed final state");
         if (publishChunkEvents) {
             for (var chunk : computed.prepared().chunks()) {
                 progressListener.onChunkSucceeded(
@@ -1016,6 +1023,31 @@ public final class IndexingPipeline {
         synchronized (storageMutationMonitor) {
             storageProvider.writeAtomically(storage -> {
                 storage.documentStatusStore().save(statusRecord);
+                return null;
+            });
+        }
+    }
+
+    private void persistBaseDocumentState(String documentId, DocumentIngestor.PreparedIngest prepared) {
+        synchronized (storageMutationMonitor) {
+            storageProvider.writeAtomically(storage -> {
+                documentIngestor.persist(prepared, storage);
+                var statusRecord = storage.documentStatusStore().load(documentId)
+                    .filter(existing -> existing.status() == DocumentStatus.FAILED)
+                    .orElseGet(() -> processingStatus(documentId));
+                storage.documentStatusStore().save(statusRecord);
+                return null;
+            });
+        }
+    }
+
+    private void persistChunkVectorState(
+        List<io.github.lightrag.types.Chunk> chunks,
+        List<VectorStore.VectorRecord> chunkVectors
+    ) {
+        synchronized (storageMutationMonitor) {
+            storageProvider.writeAtomically(storage -> {
+                saveChunkVectors(chunks, chunkVectors, storage.vectorStore());
                 return null;
             });
         }
@@ -1283,11 +1315,27 @@ public final class IndexingPipeline {
         return type.strip();
     }
 
-    private void persistDocumentGraphState(
-        ComputedIngest computed,
+    private void persistExtractionSnapshotState(
+        String documentId,
+        DocumentIngestor.PreparedIngest prepared,
+        List<GraphAssembler.ChunkExtraction> extractions,
+        GraphAssembler.Graph graph
+    ) {
+        synchronized (storageMutationMonitor) {
+            storageProvider.writeAtomically(storage -> {
+                initializeDocumentGraphState(documentId, prepared, extractions, graph, storage);
+                return null;
+            });
+        }
+    }
+
+    private void initializeDocumentGraphState(
+        String documentId,
+        DocumentIngestor.PreparedIngest prepared,
+        List<GraphAssembler.ChunkExtraction> extractions,
+        GraphAssembler.Graph graph,
         AtomicStorageProvider.AtomicStorageView storage
     ) {
-        var documentId = computed.source().id();
         var now = Instant.now();
         var snapshotVersion = storage.documentGraphSnapshotStore().loadDocument(documentId)
             .map(DocumentGraphSnapshotStore.DocumentGraphSnapshot::version)
@@ -1297,13 +1345,44 @@ public final class IndexingPipeline {
             snapshotVersion,
             SnapshotStatus.READY,
             SnapshotSource.PRIMARY_EXTRACTION,
-            computed.prepared().chunks().size(),
+            prepared.chunks().size(),
             now,
             now,
             null
         );
-        var chunkSnapshots = toChunkGraphSnapshots(documentId, computed.prepared().chunks(), computed.extractions(), now);
+        var chunkSnapshots = toChunkGraphSnapshots(documentId, prepared.chunks(), extractions, now);
         var documentJournal = new DocumentGraphJournalStore.DocumentGraphJournal(
+            documentId,
+            snapshotVersion,
+            GraphMaterializationStatus.NOT_STARTED,
+            GraphMaterializationMode.AUTO,
+            graph.entities().size(),
+            graph.relations().size(),
+            0,
+            0,
+            null,
+            now,
+            now,
+            null
+        );
+        var chunkJournals = toInitialChunkGraphJournals(documentId, snapshotVersion, extractions, now);
+        storage.documentGraphSnapshotStore().saveDocument(documentSnapshot);
+        storage.documentGraphSnapshotStore().saveChunks(documentId, chunkSnapshots);
+        storage.documentGraphJournalStore().delete(documentId);
+        storage.documentGraphJournalStore().appendDocument(documentJournal);
+        storage.documentGraphJournalStore().appendChunks(documentId, chunkJournals);
+    }
+
+    private void finalizeDocumentGraphState(
+        ComputedIngest computed,
+        AtomicStorageProvider.AtomicStorageView storage
+    ) {
+        var documentId = computed.source().id();
+        var now = Instant.now();
+        var snapshotVersion = storage.documentGraphSnapshotStore().loadDocument(documentId)
+            .map(DocumentGraphSnapshotStore.DocumentGraphSnapshot::version)
+            .orElseThrow(() -> new IllegalStateException("missing graph snapshot for " + documentId));
+        storage.documentGraphJournalStore().appendDocument(new DocumentGraphJournalStore.DocumentGraphJournal(
             documentId,
             snapshotVersion,
             GraphMaterializationStatus.MERGED,
@@ -1316,13 +1395,11 @@ public final class IndexingPipeline {
             now,
             now,
             null
+        ));
+        storage.documentGraphJournalStore().appendChunks(
+            documentId,
+            toSuccessfulChunkGraphJournals(documentId, snapshotVersion, computed.extractions(), now)
         );
-        var chunkJournals = toChunkGraphJournals(documentId, snapshotVersion, computed.extractions(), now);
-        storage.documentGraphSnapshotStore().saveDocument(documentSnapshot);
-        storage.documentGraphSnapshotStore().saveChunks(documentId, chunkSnapshots);
-        storage.documentGraphJournalStore().delete(documentId);
-        storage.documentGraphJournalStore().appendDocument(documentJournal);
-        storage.documentGraphJournalStore().appendChunks(documentId, chunkJournals);
     }
 
     private List<DocumentGraphSnapshotStore.ChunkGraphSnapshot> toChunkGraphSnapshots(
@@ -1366,7 +1443,36 @@ public final class IndexingPipeline {
             .toList();
     }
 
-    private List<DocumentGraphJournalStore.ChunkGraphJournal> toChunkGraphJournals(
+    private List<DocumentGraphJournalStore.ChunkGraphJournal> toInitialChunkGraphJournals(
+        String documentId,
+        int snapshotVersion,
+        List<GraphAssembler.ChunkExtraction> extractions,
+        Instant now
+    ) {
+        return extractions.stream()
+            .map(extraction -> {
+                var chunkGraph = graphAssembler.assemble(List.of(extraction));
+                var entityKeys = chunkGraph.entities().stream().map(Entity::id).toList();
+                var relationKeys = chunkGraph.relations().stream().map(Relation::id).toList();
+                return new DocumentGraphJournalStore.ChunkGraphJournal(
+                    documentId,
+                    extraction.chunkId(),
+                    snapshotVersion,
+                    ChunkMergeStatus.NOT_STARTED,
+                    ChunkGraphStatus.NOT_MATERIALIZED,
+                    entityKeys,
+                    relationKeys,
+                    List.of(),
+                    List.of(),
+                    null,
+                    now,
+                    null
+                );
+            })
+            .toList();
+    }
+
+    private List<DocumentGraphJournalStore.ChunkGraphJournal> toSuccessfulChunkGraphJournals(
         String documentId,
         int snapshotVersion,
         List<GraphAssembler.ChunkExtraction> extractions,

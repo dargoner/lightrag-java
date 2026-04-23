@@ -98,6 +98,11 @@ class LightRagTaskApiTest {
             TaskEventType.DOCUMENT_VECTORS_READY,
             TaskEventType.DOCUMENT_COMMITTED
         );
+        var documentEvents = events.stream()
+            .filter(event -> "doc-1".equals(event.documentId()))
+            .toList();
+        assertThat(indexOfDocumentEvent(documentEvents, TaskEventType.DOCUMENT_GRAPH_READY))
+            .isLessThan(indexOfDocumentEvent(documentEvents, TaskEventType.DOCUMENT_COMMITTED));
     }
 
     @Test
@@ -559,6 +564,15 @@ class LightRagTaskApiTest {
             }
         }
         throw new AssertionError("missing chunk event: " + eventType + ", scope=" + scope + ", chunkId=" + chunkId);
+    }
+
+    private static int indexOfDocumentEvent(List<TaskEvent> events, TaskEventType eventType) {
+        for (int index = 0; index < events.size(); index++) {
+            if (eventType == events.get(index).eventType()) {
+                return index;
+            }
+        }
+        throw new AssertionError("missing document event: " + eventType);
     }
 
     private static final class FakeChatModel implements ChatModel {
