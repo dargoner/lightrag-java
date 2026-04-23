@@ -297,6 +297,19 @@ public final class QueryEngine {
         if (strategy == null) {
             throw new IllegalStateException("No query strategy configured for mode: " + resolvedQuery.mode());
         }
+        log.info(
+            "LightRAG query resolved: requestedMode={}, resolvedMode={}, query={}, topK={}, chunkTopK={}, hlKeywords={}, llKeywords={}, useMultiHop={}, rerankRequested={}, rerankActive={}",
+            query.mode(),
+            resolvedQuery.mode(),
+            resolvedQuery.query(),
+            resolvedQuery.topK(),
+            resolvedQuery.chunkTopK(),
+            resolvedQuery.hlKeywords(),
+            resolvedQuery.llKeywords(),
+            useMultiHop,
+            resolvedQuery.enableRerank(),
+            rerankEnabled(resolvedQuery) && !useMultiHop
+        );
 
         var retrievalRequest = rerankEnabled(resolvedQuery) && !useMultiHop
             ? expandChunkRequest(resolvedQuery, rerankCandidateMultiplier)

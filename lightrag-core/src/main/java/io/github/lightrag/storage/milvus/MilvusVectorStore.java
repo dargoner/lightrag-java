@@ -2,6 +2,8 @@ package io.github.lightrag.storage.milvus;
 
 import io.github.lightrag.storage.HybridVectorStore;
 import io.github.lightrag.storage.VectorStore;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
@@ -15,6 +17,7 @@ import java.util.concurrent.ConcurrentHashMap;
 
 public final class MilvusVectorStore implements HybridVectorStore, AutoCloseable {
     private static final List<Float> DEFAULT_HYBRID_WEIGHTS = List.of(0.5f, 0.5f);
+    private static final Logger log = LoggerFactory.getLogger(MilvusVectorStore.class);
 
     private final MilvusClientAdapter clientAdapter;
     private final MilvusVectorConfig config;
@@ -111,6 +114,16 @@ public final class MilvusVectorStore implements HybridVectorStore, AutoCloseable
                         filter
                     ));
                 }
+                log.info(
+                    "LightRAG Milvus hybrid search: collection={}, namespace={}, topK={}, ranker={}, rrfK={}, queryText={}, keywords={}",
+                    collectionName,
+                    normalizedNamespace,
+                    searchRequest.topK(),
+                    hybridRankerType(),
+                    config.hybridRrfK(),
+                    queryText,
+                    searchRequest.keywords()
+                );
                 yield clientAdapter.hybridSearch(new MilvusClientAdapter.HybridSearchRequest(
                     collectionName,
                     requireVector(searchRequest.queryVector(), "hybrid"),

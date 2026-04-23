@@ -109,9 +109,13 @@ public final class GlobalQueryStrategy implements QueryStrategy {
         var assembleMs = elapsedMillis(assembleStartedAt);
         var elapsedMs = elapsedMillis(startedAt);
         log.info(
-            "LightRAG global retrieve completed: mode={}, query={}, embedMs={}, vectorSearchMs={}, graphMs={}, chunkMs={}, assembleMs={}, elapsedMs={}, entityCount={}, relationCount={}, chunkCount={}",
+            "LightRAG global retrieve completed: mode={}, query={}, embeddingText={}, hlKeywords={}, topK={}, chunkTopK={}, embedMs={}, vectorSearchMs={}, graphMs={}, chunkMs={}, assembleMs={}, elapsedMs={}, entityCount={}, relationCount={}, chunkCount={}",
             query.mode(),
             query.query(),
+            embeddingText,
+            query.hlKeywords(),
+            query.topK(),
+            query.chunkTopK(),
             embedMs,
             vectorSearchMs,
             graphMs,

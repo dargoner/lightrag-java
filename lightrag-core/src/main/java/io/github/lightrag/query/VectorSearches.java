@@ -2,12 +2,16 @@ package io.github.lightrag.query;
 
 import io.github.lightrag.storage.HybridVectorStore;
 import io.github.lightrag.storage.VectorStore;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Objects;
 
 final class VectorSearches {
+    private static final Logger log = LoggerFactory.getLogger(VectorSearches.class);
+
     private VectorSearches() {
     }
 
@@ -24,15 +28,36 @@ final class VectorSearches {
         var normalizedVector = List.copyOf(Objects.requireNonNull(queryVector, "queryVector"));
         var normalizedKeywords = normalizeKeywords(keywords);
         if (!(store instanceof HybridVectorStore hybridVectorStore)) {
+            log.info(
+                "LightRAG vector search dispatch: storeType={}, namespace={}, mode={}, topK={}, vectorDims={}, queryText={}, keywords={}",
+                store.getClass().getSimpleName(),
+                normalizedNamespace,
+                "SEMANTIC",
+                topK,
+                normalizedVector.size(),
+                queryText == null ? "" : queryText,
+                normalizedKeywords
+            );
             return store.search(normalizedNamespace, normalizedVector, topK);
         }
+        var mode = searchMode(normalizedVector, normalizedKeywords);
+        log.info(
+            "LightRAG vector search dispatch: storeType={}, namespace={}, mode={}, topK={}, vectorDims={}, queryText={}, keywords={}",
+            store.getClass().getSimpleName(),
+            normalizedNamespace,
+            mode,
+            topK,
+            normalizedVector.size(),
+            queryText == null ? "" : queryText,
+            normalizedKeywords
+        );
         return hybridVectorStore.search(
             normalizedNamespace,
             new HybridVectorStore.SearchRequest(
                 normalizedVector,
                 queryText == null ? "" : queryText,
                 normalizedKeywords,
-                searchMode(normalizedVector, normalizedKeywords),
+                mode,
                 topK
             )
         );

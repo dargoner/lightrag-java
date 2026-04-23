@@ -79,13 +79,19 @@ public final class HybridQueryStrategy implements QueryStrategy {
         var assembleMs = elapsedMillis(assembleStartedAt);
         var elapsedMs = elapsedMillis(startedAt);
         log.info(
-            "LightRAG hybrid retrieve completed: mode={}, query={}, localMs={}, globalMs={}, assembleMs={}, elapsedMs={}, entityCount={}, relationCount={}, chunkCount={}",
+            "LightRAG hybrid retrieve completed: mode={}, query={}, localMs={}, globalMs={}, assembleMs={}, elapsedMs={}, localEntityCount={}, localRelationCount={}, localChunkCount={}, globalEntityCount={}, globalRelationCount={}, globalChunkCount={}, entityCount={}, relationCount={}, chunkCount={}",
             query.mode(),
             query.query(),
             localMs,
             globalMs,
             assembleMs,
             elapsedMs,
+            local.matchedEntities().size(),
+            local.matchedRelations().size(),
+            local.matchedChunks().size(),
+            global.matchedEntities().size(),
+            global.matchedRelations().size(),
+            global.matchedChunks().size(),
             context.matchedEntities().size(),
             context.matchedRelations().size(),
             context.matchedChunks().size()
