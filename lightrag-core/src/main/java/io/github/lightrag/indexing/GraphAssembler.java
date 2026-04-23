@@ -5,7 +5,6 @@ import io.github.lightrag.types.ExtractedEntity;
 import io.github.lightrag.types.ExtractedRelation;
 import io.github.lightrag.types.ExtractionResult;
 import io.github.lightrag.types.Relation;
-
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
@@ -14,8 +13,12 @@ import java.util.Locale;
 import java.util.Map;
 import java.util.Objects;
 import java.util.Set;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 public final class GraphAssembler {
+    private static final Logger log = LoggerFactory.getLogger(GraphAssembler.class);
+
     public Graph assemble(List<ChunkExtraction> extractions) {
         var batch = List.copyOf(Objects.requireNonNull(extractions, "extractions"));
         var entitiesById = new LinkedHashMap<String, MutableEntity>();
@@ -30,18 +33,28 @@ public final class GraphAssembler {
 
         var relationsById = new LinkedHashMap<String, MutableRelation>();
         var relationIdByMergeKey = new LinkedHashMap<String, String>();
+        int skippedSelfLoopRelations = 0;
         for (var extraction : batch) {
             var chunkExtraction = Objects.requireNonNull(extraction, "extraction");
             for (var relation : chunkExtraction.extraction().relations()) {
-                mergeRelation(
+                if (!mergeRelation(
                     chunkExtraction.chunkId(),
                     relation,
                     entitiesById,
                     entityIdByMergeKey,
                     relationsById,
                     relationIdByMergeKey
-                );
+                )) {
+                    skippedSelfLoopRelations++;
+                }
             }
+        }
+        if (skippedSelfLoopRelations > 0) {
+            log.warn(
+                "graph_assembly_event=skip_self_loop skippedCount={} chunkExtractionCount={}",
+                skippedSelfLoopRelations,
+                batch.size()
+            );
         }
 
         return new Graph(
@@ -88,7 +101,7 @@ public final class GraphAssembler {
         }
     }
 
-    private static void mergeRelation(
+    private static boolean mergeRelation(
         String chunkId,
         ExtractedRelation extractedRelation,
         Map<String, MutableEntity> entitiesById,
@@ -100,7 +113,14 @@ public final class GraphAssembler {
         var targetEntity = ensureEntity(chunkId, extractedRelation.targetEntityName(), entitiesById, entityIdByMergeKey);
         // Drop self-loops after endpoint normalization so one bad extraction does not abort the batch.
         if (sourceEntity.id.equals(targetEntity.id)) {
-            return;
+            log.warn(
+                "graph_assembly_event=self_loop_relation_skipped chunkId={} sourceEntity={} targetEntity={} keywords={}",
+                chunkId,
+                extractedRelation.sourceEntityName(),
+                extractedRelation.targetEntityName(),
+                extractedRelation.keywords()
+            );
+            return false;
         }
         var canonicalRef = RelationCanonicalizer.canonicalize(sourceEntity.id, targetEntity.id);
         var mergeKey = relationMergeKey(canonicalRef.srcId(), canonicalRef.tgtId());
@@ -116,6 +136,7 @@ public final class GraphAssembler {
         relation.mergeFrom(extractedRelation);
         relation.addSourceChunkId(chunkId);
         relationIdByMergeKey.put(mergeKey, finalRelationId);
+        return true;
     }
 
     private static MutableEntity ensureEntity(
