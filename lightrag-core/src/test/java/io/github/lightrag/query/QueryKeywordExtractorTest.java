@@ -56,6 +56,45 @@ class QueryKeywordExtractorTest {
     }
 
     @Test
+    void keywordExtractionPromptRequiresSameLanguageKeywords() {
+        var model = new CountingKeywordChatModel("""
+            {"high_level_keywords":["住房公积金","租房提取"],"low_level_keywords":["办理流程","申请材料"]}
+            """);
+        var extractor = new QueryKeywordExtractor();
+
+        extractor.resolve(QueryRequest.builder()
+            .query("住房公积金租房提取怎么处理")
+            .mode(QueryMode.MIX)
+            .build(), model);
+
+        assertThat(model.lastUserPrompt())
+            .contains("same language as the user query")
+            .contains("For Chinese queries, return Chinese keywords")
+            .contains("住房公积金租房提取怎么处理")
+            .contains("住房公积金", "租房提取", "办理流程", "申请材料");
+    }
+
+    @Test
+    void chineseQueriesDropTranslatedKeywordsAndBackfillChineseDualPathKeywords() {
+        var model = new CountingKeywordChatModel("""
+            {"high_level_keywords":["Housing provident fund","Rent withdrawal"],"low_level_keywords":["租房提取","申请手续"]}
+            """);
+        var extractor = new QueryKeywordExtractor();
+
+        var resolved = extractor.resolve(QueryRequest.builder()
+            .query("住房公积金租房提取怎么处理")
+            .mode(QueryMode.MIX)
+            .build(), model);
+
+        assertThat(resolved.hlKeywords())
+            .allMatch(keyword -> keyword.codePoints()
+                .anyMatch(codePoint -> Character.UnicodeScript.of(codePoint) == Character.UnicodeScript.HAN));
+        assertThat(resolved.hlKeywords()).contains("租房提取");
+        assertThat(resolved.hlKeywords()).doesNotContain("Housing provident fund", "Rent withdrawal");
+        assertThat(resolved.llKeywords()).containsExactly("租房提取", "申请手续");
+    }
+
+    @Test
     void usesDeterministicKeywordsForShortLiteralHybridQueriesWithoutCallingModel() {
         var model = new CountingKeywordChatModel("""
             {"high_level_keywords":["ignored"],"low_level_keywords":["ignored"]}
@@ -248,6 +287,7 @@ class QueryKeywordExtractorTest {
     private static final class CountingKeywordChatModel implements ChatModel {
         private final String keywordResponse;
         private int keywordExtractionCallCount;
+        private String lastUserPrompt;
 
         private CountingKeywordChatModel(String keywordResponse) {
             this.keywordResponse = keywordResponse;
@@ -256,11 +296,16 @@ class QueryKeywordExtractorTest {
         @Override
         public String generate(ChatRequest request) {
             keywordExtractionCallCount++;
+            lastUserPrompt = request.userPrompt();
             return keywordResponse;
         }
 
         int keywordExtractionCallCount() {
             return keywordExtractionCallCount;
+        }
+
+        String lastUserPrompt() {
+            return lastUserPrompt;
         }
     }
 }

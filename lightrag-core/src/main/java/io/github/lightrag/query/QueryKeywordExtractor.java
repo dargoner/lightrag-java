@@ -37,6 +37,7 @@ final class QueryKeywordExtractor {
         - Return valid JSON only.
         - Use the keys "high_level_keywords" and "low_level_keywords".
         - Use concise words or meaningful phrases.
+        - Keep keywords in the same language as the user query. For Chinese queries, return Chinese keywords and do not translate them to English.
         - If the query is too vague, return empty arrays for both keys.
 
         ---Examples---
@@ -57,6 +58,9 @@ final class QueryKeywordExtractor {
 
         Query: "What is the role of education in reducing poverty?"
         Output: {"high_level_keywords":["Education","Poverty reduction"],"low_level_keywords":["School access","Literacy rates","Job training"]}
+
+        Query: "住房公积金租房提取怎么处理？"
+        Output: {"high_level_keywords":["住房公积金","租房提取"],"low_level_keywords":["住房公积金","租房提取","办理流程","申请材料"]}
         """;
 
     private final boolean automaticKeywordExtractionEnabled;
@@ -96,7 +100,7 @@ final class QueryKeywordExtractor {
         var startedAt = System.nanoTime();
         var prompt = KEYWORD_EXTRACTION_PROMPT_TEMPLATE.formatted(KEYWORD_EXTRACTION_EXAMPLES, request.query());
         var response = chatModel.generate(new ChatModel.ChatRequest("", prompt));
-        var extracted = parseKeywords(response);
+        var extracted = normalizeKeywordsForQueryLanguage(request, parseKeywords(response));
         var resolved = completeKeywordsForMode(request, extracted);
         var elapsedMs = elapsedMillis(startedAt);
         var fallbackApplied = resolved.highLevel().isEmpty() && resolved.lowLevel().isEmpty();
@@ -151,6 +155,22 @@ final class QueryKeywordExtractor {
             .map(com.fasterxml.jackson.databind.JsonNode::asText)
             .map(String::trim)
             .filter(keyword -> !keyword.isEmpty())
+            .toList();
+    }
+
+    private static ExtractedKeywords normalizeKeywordsForQueryLanguage(QueryRequest request, ExtractedKeywords keywords) {
+        if (!containsChinese(request.query())) {
+            return keywords;
+        }
+        return new ExtractedKeywords(
+            keepChineseKeywords(keywords.highLevel()),
+            keepChineseKeywords(keywords.lowLevel())
+        );
+    }
+
+    private static List<String> keepChineseKeywords(List<String> keywords) {
+        return keywords.stream()
+            .filter(QueryKeywordExtractor::containsChinese)
             .toList();
     }
 
