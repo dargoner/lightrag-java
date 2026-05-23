@@ -9,6 +9,7 @@ import io.github.lightrag.storage.TaskDocumentStore;
 import io.github.lightrag.storage.TaskStageStore;
 import io.github.lightrag.storage.TaskStore;
 import io.github.lightrag.storage.memory.InMemoryGraphStore;
+import io.github.lightrag.task.TaskExecutionService;
 import io.github.lightrag.types.Chunk;
 import io.github.lightrag.types.Document;
 import io.github.lightrag.types.PreChunkedDocument;
@@ -409,6 +410,39 @@ class LightRagTaskApiTest {
     }
 
     @Test
+    void taskExecutionSerializesWorkWithinSameWorkspace() throws Exception {
+        var storage = InMemoryStorageProvider.create();
+        try (var service = new TaskExecutionService(workspace -> storage)) {
+            var active = new java.util.concurrent.atomic.AtomicInteger();
+            var maxActive = new java.util.concurrent.atomic.AtomicInteger();
+            var firstStarted = new java.util.concurrent.CountDownLatch(1);
+            var releaseFirst = new java.util.concurrent.CountDownLatch(1);
+
+            var firstTaskId = service.submit(WORKSPACE, TaskType.INGEST_DOCUMENTS, Map.of(), ignored -> {
+                var running = active.incrementAndGet();
+                maxActive.accumulateAndGet(running, Math::max);
+                firstStarted.countDown();
+                await(releaseFirst);
+                active.decrementAndGet();
+            });
+            assertThat(firstStarted.await(2, java.util.concurrent.TimeUnit.SECONDS)).isTrue();
+
+            var secondTaskId = service.submit(WORKSPACE, TaskType.DELETE_DOCUMENT, Map.of(), ignored -> {
+                var running = active.incrementAndGet();
+                maxActive.accumulateAndGet(running, Math::max);
+                active.decrementAndGet();
+            });
+
+            Thread.sleep(100L);
+            assertThat(maxActive.get()).isEqualTo(1);
+            releaseFirst.countDown();
+            awaitTerminalTask(service, firstTaskId);
+            awaitTerminalTask(service, secondTaskId);
+            assertThat(maxActive.get()).isEqualTo(1);
+        }
+    }
+
+    @Test
     void submitIngestPersistsTaskDocumentSummary() {
         var rag = LightRag.builder()
             .chatModel(new FakeChatModel())
@@ -697,6 +731,31 @@ class LightRagTaskApiTest {
         }
         assertThat(snapshot.status().isTerminal()).isTrue();
         return snapshot;
+    }
+
+    private static TaskSnapshot awaitTerminalTask(TaskExecutionService service, String taskId) {
+        var deadline = Instant.now().plus(Duration.ofSeconds(5));
+        TaskSnapshot snapshot = service.getTask(WORKSPACE, taskId);
+        while (!snapshot.status().isTerminal() && Instant.now().isBefore(deadline)) {
+            try {
+                Thread.sleep(25L);
+            } catch (InterruptedException exception) {
+                Thread.currentThread().interrupt();
+                throw new AssertionError("Test interrupted", exception);
+            }
+            snapshot = service.getTask(WORKSPACE, taskId);
+        }
+        assertThat(snapshot.status().isTerminal()).isTrue();
+        return snapshot;
+    }
+
+    private static void await(java.util.concurrent.CountDownLatch latch) {
+        try {
+            assertThat(latch.await(2, java.util.concurrent.TimeUnit.SECONDS)).isTrue();
+        } catch (InterruptedException exception) {
+            Thread.currentThread().interrupt();
+            throw new AssertionError("Test interrupted", exception);
+        }
     }
 
     private static int indexOfChunkEvent(

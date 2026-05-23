@@ -6,6 +6,7 @@ import io.github.lightrag.storage.memory.InMemoryDocumentGraphSnapshotStore;
 import io.github.lightrag.storage.memory.InMemoryDocumentStore;
 import io.github.lightrag.storage.memory.InMemoryDocumentStatusStore;
 import io.github.lightrag.storage.memory.InMemoryGraphStore;
+import io.github.lightrag.storage.memory.InMemoryLlmCacheStore;
 import io.github.lightrag.storage.memory.InMemoryTaskStageStore;
 import io.github.lightrag.storage.memory.InMemoryTaskDocumentStore;
 import io.github.lightrag.storage.memory.InMemoryTaskStore;
@@ -33,6 +34,7 @@ public final class InMemoryStorageProvider implements AtomicStorageProvider {
     private final InMemoryTaskStore taskStore;
     private final InMemoryTaskStageStore taskStageStore;
     private final InMemoryTaskDocumentStore taskDocumentStore;
+    private final InMemoryLlmCacheStore llmCacheStore;
     private final DocumentGraphSnapshotStore documentGraphSnapshotStore;
     private final DocumentGraphJournalStore documentGraphJournalStore;
     private final java.util.Set<String> trackedDocumentGraphIds;
@@ -52,6 +54,7 @@ public final class InMemoryStorageProvider implements AtomicStorageProvider {
         this.taskStore = new InMemoryTaskStore(lock);
         this.taskStageStore = new InMemoryTaskStageStore(lock);
         this.taskDocumentStore = new InMemoryTaskDocumentStore(lock);
+        this.llmCacheStore = new InMemoryLlmCacheStore(lock);
         this.trackedDocumentGraphIds = new ConcurrentSkipListSet<>();
         this.documentGraphSnapshotStore = DocumentGraphStateSupport.trackedSnapshotStore(
             new InMemoryDocumentGraphSnapshotStore(lock),
@@ -110,6 +113,11 @@ public final class InMemoryStorageProvider implements AtomicStorageProvider {
     @Override
     public TaskDocumentStore taskDocumentStore() {
         return taskDocumentStore;
+    }
+
+    @Override
+    public LlmCacheStore llmCacheStore() {
+        return llmCacheStore;
     }
 
     @Override

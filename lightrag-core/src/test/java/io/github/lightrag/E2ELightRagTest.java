@@ -333,8 +333,43 @@ class E2ELightRagTest {
     }
 
     @Test
-    void deleteByDocumentWithLlmCacheDeletionFailsFastAndPersistsRetryMetadata() {
+    void deleteByDocumentWithLlmCacheDeletionRemovesCacheAndDocument() {
         var storage = InMemoryStorageProvider.create();
+        var rag = LightRag.builder()
+            .chatModel(new FakeChatModel())
+            .embeddingModel(new FakeEmbeddingModel())
+            .storage(storage)
+            .build();
+
+        rag.ingest(WORKSPACE, List.of(new Document("doc-cache-delete", "Title", "Alice works with Bob", Map.of())));
+        var chunk = storage.chunkStore().listByDocument("doc-cache-delete").get(0);
+        storage.chunkStore().save(new ChunkStore.ChunkRecord(
+            chunk.id(),
+            chunk.documentId(),
+            chunk.text(),
+            chunk.tokenCount(),
+            chunk.order(),
+            Map.of(DeletionPipeline.CHUNK_METADATA_LLM_CACHE_LIST, "cache-a,cache-b")
+        ));
+        storage.llmCacheStore().save(new io.github.lightrag.storage.LlmCacheStore.CacheRecord("cache-a", "cached extraction a"));
+        storage.llmCacheStore().save(new io.github.lightrag.storage.LlmCacheStore.CacheRecord("cache-b", "cached extraction b"));
+
+        var result = rag.deleteByDocumentId(
+            WORKSPACE,
+            "doc-cache-delete",
+            DeleteDocumentOptions.withLlmCacheDeletion()
+        );
+
+        assertThat(result.status()).isEqualTo("success");
+        assertThat(storage.documentStore().load("doc-cache-delete")).isEmpty();
+        assertThat(storage.documentStatusStore().load("doc-cache-delete")).isEmpty();
+        assertThat(storage.llmCacheStore().contains("cache-a")).isFalse();
+        assertThat(storage.llmCacheStore().contains("cache-b")).isFalse();
+    }
+
+    @Test
+    void deleteByDocumentWithUnsupportedLlmCacheDeletionFailsFastAndPersistsRetryMetadata() {
+        var storage = new AtomicOnlyStorageProvider();
         var rag = LightRag.builder()
             .chatModel(new FakeChatModel())
             .embeddingModel(new FakeEmbeddingModel())
@@ -368,6 +403,54 @@ class E2ELightRagTest {
             .containsKey(DeletionPipeline.METADATA_LAST_DELETION_ATTEMPT_AT);
         assertThat(status.metadata().get(DeletionPipeline.METADATA_DELETION_LLM_CACHE_IDS))
             .isEqualTo(List.of("cache-a", "cache-b"));
+    }
+
+    @Test
+    void deleteByDocumentCanRetryFailedLlmCacheCleanupFromPersistedMetadata() {
+        var delegate = InMemoryStorageProvider.create();
+        var storage = new FailOnceLlmCacheStorageProvider(delegate);
+        var rag = LightRag.builder()
+            .chatModel(new FakeChatModel())
+            .embeddingModel(new FakeEmbeddingModel())
+            .storage(storage)
+            .build();
+
+        rag.ingest(WORKSPACE, List.of(new Document("doc-cache-retry", "Title", "Alice works with Bob", Map.of())));
+        var chunk = delegate.chunkStore().listByDocument("doc-cache-retry").get(0);
+        delegate.chunkStore().save(new ChunkStore.ChunkRecord(
+            chunk.id(),
+            chunk.documentId(),
+            chunk.text(),
+            chunk.tokenCount(),
+            chunk.order(),
+            Map.of(DeletionPipeline.CHUNK_METADATA_LLM_CACHE_LIST, "cache-retry")
+        ));
+        delegate.llmCacheStore().save(new io.github.lightrag.storage.LlmCacheStore.CacheRecord("cache-retry", "cached extraction"));
+
+        assertThatThrownBy(() -> rag.deleteByDocumentId(
+            WORKSPACE,
+            "doc-cache-retry",
+            DeleteDocumentOptions.withLlmCacheDeletion()
+        ))
+            .isInstanceOf(IllegalStateException.class)
+            .hasMessageContaining("Failed to delete LLM cache");
+
+        assertThat(delegate.documentStore().load("doc-cache-retry")).isEmpty();
+        var failedStatus = delegate.documentStatusStore().load("doc-cache-retry").orElseThrow();
+        assertThat(failedStatus.metadata())
+            .containsEntry(DeletionPipeline.METADATA_DELETION_FAILED, true)
+            .containsEntry(DeletionPipeline.METADATA_DELETION_FAILURE_STAGE, "delete_llm_cache");
+        assertThat(delegate.llmCacheStore().contains("cache-retry")).isTrue();
+
+        var retry = rag.deleteByDocumentId(
+            WORKSPACE,
+            "doc-cache-retry",
+            DeleteDocumentOptions.withLlmCacheDeletion()
+        );
+
+        assertThat(retry.status()).isEqualTo("success");
+        assertThat(delegate.documentStatusStore().load("doc-cache-retry")).isEmpty();
+        assertThat(delegate.llmCacheStore().contains("cache-retry")).isFalse();
     }
 
     @Test
@@ -3713,6 +3796,112 @@ class E2ELightRagTest {
 
         int restoreCalls() {
             return restoreCalls;
+        }
+    }
+
+    private static final class FailOnceLlmCacheStorageProvider implements io.github.lightrag.storage.AtomicStorageProvider {
+        private final InMemoryStorageProvider delegate;
+        private final io.github.lightrag.storage.LlmCacheStore llmCacheStore;
+
+        private FailOnceLlmCacheStorageProvider(InMemoryStorageProvider delegate) {
+            this.delegate = delegate;
+            this.llmCacheStore = new io.github.lightrag.storage.LlmCacheStore() {
+                private final java.util.concurrent.atomic.AtomicBoolean failNextDelete =
+                    new java.util.concurrent.atomic.AtomicBoolean(true);
+
+                @Override
+                public void save(CacheRecord record) {
+                    delegate.llmCacheStore().save(record);
+                }
+
+                @Override
+                public boolean contains(String cacheId) {
+                    return delegate.llmCacheStore().contains(cacheId);
+                }
+
+                @Override
+                public void delete(List<String> cacheIds) {
+                    if (failNextDelete.compareAndSet(true, false)) {
+                        throw new IllegalStateException("simulated cache delete failure");
+                    }
+                    delegate.llmCacheStore().delete(cacheIds);
+                }
+
+                @Override
+                public void drop() {
+                    delegate.llmCacheStore().drop();
+                }
+            };
+        }
+
+        @Override
+        public <T> T writeAtomically(AtomicOperation<T> operation) {
+            return delegate.writeAtomically(operation);
+        }
+
+        @Override
+        public void restore(SnapshotStore.Snapshot snapshot) {
+            delegate.restore(snapshot);
+        }
+
+        @Override
+        public DocumentStore documentStore() {
+            return delegate.documentStore();
+        }
+
+        @Override
+        public ChunkStore chunkStore() {
+            return delegate.chunkStore();
+        }
+
+        @Override
+        public GraphStore graphStore() {
+            return delegate.graphStore();
+        }
+
+        @Override
+        public VectorStore vectorStore() {
+            return delegate.vectorStore();
+        }
+
+        @Override
+        public io.github.lightrag.storage.DocumentStatusStore documentStatusStore() {
+            return delegate.documentStatusStore();
+        }
+
+        @Override
+        public io.github.lightrag.storage.TaskStore taskStore() {
+            return delegate.taskStore();
+        }
+
+        @Override
+        public io.github.lightrag.storage.TaskStageStore taskStageStore() {
+            return delegate.taskStageStore();
+        }
+
+        @Override
+        public io.github.lightrag.storage.TaskDocumentStore taskDocumentStore() {
+            return delegate.taskDocumentStore();
+        }
+
+        @Override
+        public io.github.lightrag.storage.LlmCacheStore llmCacheStore() {
+            return llmCacheStore;
+        }
+
+        @Override
+        public SnapshotStore snapshotStore() {
+            return delegate.snapshotStore();
+        }
+
+        @Override
+        public io.github.lightrag.storage.DocumentGraphSnapshotStore documentGraphSnapshotStore() {
+            return delegate.documentGraphSnapshotStore();
+        }
+
+        @Override
+        public io.github.lightrag.storage.DocumentGraphJournalStore documentGraphJournalStore() {
+            return delegate.documentGraphJournalStore();
         }
     }
 }

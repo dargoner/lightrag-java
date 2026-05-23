@@ -342,6 +342,11 @@ public final class LightRag implements AutoCloseable {
         return newDeletionPipeline(resolveProvider(scope)).deleteByDocumentId(documentId, options);
     }
 
+    public void clearCache(String workspaceId) {
+        var scope = resolveScope(workspaceId);
+        resolveProvider(scope).llmCacheStore().drop();
+    }
+
     public QueryResult query(String workspaceId, QueryRequest request) {
         var scope = resolveScope(workspaceId);
         return newQueryEngine(resolveProvider(scope)).query(request);

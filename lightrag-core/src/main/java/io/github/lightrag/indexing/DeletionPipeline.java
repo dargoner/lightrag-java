@@ -7,7 +7,9 @@ import io.github.lightrag.storage.DocumentGraphJournalStore;
 import io.github.lightrag.storage.DocumentGraphSnapshotStore;
 import io.github.lightrag.storage.DocumentStore;
 import io.github.lightrag.storage.GraphStore;
+import io.github.lightrag.storage.LlmCacheStore;
 import io.github.lightrag.storage.SnapshotStore;
+import io.github.lightrag.storage.StorageProvider;
 import io.github.lightrag.storage.VectorStore;
 import io.github.lightrag.types.Document;
 
@@ -138,8 +140,12 @@ public final class DeletionPipeline {
         var targetStatus = beforeSnapshot.documentStatuses().stream()
             .filter(statusRecord -> statusRecord.documentId().equals(targetId))
             .findFirst();
-        var cacheIds = collectDeletionLlmCacheIds(beforeSnapshot, targetId, targetStatus.orElse(null));
-        failFastForUnsupportedLlmCacheDeletion(targetId, deleteOptions, targetStatus.orElse(null), cacheIds);
+        var targetStatusRecord = targetStatus.orElse(null);
+        var cacheIds = collectDeletionLlmCacheIds(beforeSnapshot, targetId, targetStatusRecord);
+        var deletionStage = "initializing";
+        if (deleteOptions.deleteLlmCache() && !cacheIds.isEmpty()) {
+            requireLlmCacheStore(targetId, retryStatusRecord(targetId, targetStatusRecord), cacheIds);
+        }
         var remainingDocuments = beforeSnapshot.documents().stream()
             .filter(document -> !document.id().equals(targetId))
             .map(DeletionPipeline::toDocument)
@@ -154,6 +160,18 @@ public final class DeletionPipeline {
             .toList();
         if (remainingDocuments.size() == beforeSnapshot.documents().size()) {
             if (targetStatus.isPresent()) {
+                deletionStage = "delete_llm_cache";
+                if (deleteOptions.deleteLlmCache() && !cacheIds.isEmpty()) {
+                    targetStatusRecord = updateDeleteRetryState(
+                        targetStatusRecord,
+                        deletionStage,
+                        cacheIds,
+                        false,
+                        null
+                    );
+                    deleteLlmCacheOrMarkRetryFailed(targetId, targetStatusRecord, cacheIds);
+                }
+                deletionStage = "delete_doc_entries";
                 storageProvider.documentStatusStore().delete(targetId);
                 StorageSnapshots.persistIfConfigured(storageProvider, snapshotPath);
                 return DeletionResult.success(
@@ -165,19 +183,46 @@ public final class DeletionPipeline {
         }
 
         try {
+            deletionStage = "rebuild_remaining_documents";
             storageProvider.restore(StorageSnapshots.empty());
             if (remainingDocuments.isEmpty()) {
                 restoreStatuses(preservedStatuses);
-                StorageSnapshots.persistIfConfigured(storageProvider, snapshotPath);
-                return DeletionResult.success(targetId, "Document " + targetId + " successfully deleted");
+            } else {
+                indexingPipeline.ingest(remainingDocuments);
+                restoreStatuses(preservedStatuses);
             }
-            indexingPipeline.ingest(remainingDocuments);
-            restoreStatuses(preservedStatuses);
+
+            if (deleteOptions.deleteLlmCache() && !cacheIds.isEmpty()) {
+                deletionStage = "delete_llm_cache";
+                var retryStatusRecord = retryStatusRecord(targetId, targetStatusRecord);
+                retryStatusRecord = updateDeleteRetryState(
+                    retryStatusRecord,
+                    deletionStage,
+                    cacheIds,
+                    false,
+                    null
+                );
+                deleteLlmCacheOrMarkRetryFailed(targetId, retryStatusRecord, cacheIds);
+                storageProvider.documentStatusStore().delete(targetId);
+            }
             StorageSnapshots.persistIfConfigured(storageProvider, snapshotPath);
             return DeletionResult.success(targetId, "Document " + targetId + " successfully deleted");
         } catch (RuntimeException | Error failure) {
+            if ("delete_llm_cache".equals(deletionStage)) {
+                StorageSnapshots.persistIfConfigured(storageProvider, snapshotPath);
+                throw failure;
+            }
             try {
                 storageProvider.restore(beforeSnapshot);
+                if (targetStatusRecord != null && !cacheIds.isEmpty()) {
+                    updateDeleteRetryState(
+                        targetStatusRecord,
+                        deletionStage,
+                        cacheIds,
+                        true,
+                        failure.getMessage()
+                    );
+                }
                 StorageSnapshots.persistIfConfigured(storageProvider, snapshotPath);
             } catch (RuntimeException | Error restoreFailure) {
                 failure.addSuppressed(restoreFailure);
@@ -353,22 +398,50 @@ public final class DeletionPipeline {
         }
     }
 
-    private void failFastForUnsupportedLlmCacheDeletion(
+    private void deleteLlmCacheOrMarkRetryFailed(
         String documentId,
-        DeleteDocumentOptions options,
         io.github.lightrag.storage.DocumentStatusStore.StatusRecord statusRecord,
         List<String> cacheIds
     ) {
-        if (!options.deleteLlmCache() || cacheIds.isEmpty() || statusRecord == null) {
+        if (cacheIds.isEmpty()) {
             return;
         }
-        var message = "LLM cache deletion requested for document " + documentId
-            + " but Java LLM cache storage is not configured";
-        updateDeleteRetryState(statusRecord, "delete_llm_cache", cacheIds, true, message);
-        throw new UnsupportedOperationException(message);
+        var cacheStore = requireLlmCacheStore(documentId, statusRecord, cacheIds);
+        try {
+            cacheStore.delete(cacheIds);
+            var remainingCacheIds = cacheIds.stream()
+                .filter(cacheStore::contains)
+                .toList();
+            if (!remainingCacheIds.isEmpty()) {
+                throw new IllegalStateException(remainingCacheIds.size() + " LLM cache entries still exist after delete");
+            }
+            updateDeleteRetryState(statusRecord, "delete_llm_cache", cacheIds, false, null);
+        } catch (RuntimeException failure) {
+            var message = "Failed to delete LLM cache for document " + documentId + ": " + failure.getMessage();
+            updateDeleteRetryState(statusRecord, "delete_llm_cache", cacheIds, true, message);
+            throw new IllegalStateException(message, failure);
+        }
     }
 
-    private void updateDeleteRetryState(
+    private LlmCacheStore requireLlmCacheStore(
+        String documentId,
+        io.github.lightrag.storage.DocumentStatusStore.StatusRecord statusRecord,
+        List<String> cacheIds
+    ) {
+        try {
+            return storageProvider.llmCacheStore();
+        } catch (UnsupportedOperationException exception) {
+            if (!StorageProvider.LLM_CACHE_STORE_UNSUPPORTED_MESSAGE.equals(exception.getMessage())) {
+                throw exception;
+            }
+            var message = "LLM cache deletion requested for document " + documentId
+                + " but Java LLM cache storage is not configured";
+            updateDeleteRetryState(statusRecord, "delete_llm_cache", cacheIds, true, message);
+            throw new UnsupportedOperationException(message, exception);
+        }
+    }
+
+    private io.github.lightrag.storage.DocumentStatusStore.StatusRecord updateDeleteRetryState(
         io.github.lightrag.storage.DocumentStatusStore.StatusRecord statusRecord,
         String deletionStage,
         List<String> cacheIds,
@@ -387,13 +460,30 @@ public final class DeletionPipeline {
             metadata.remove(METADATA_DELETION_FAILED);
             metadata.remove(METADATA_DELETION_FAILURE_STAGE);
         }
-        storageProvider.documentStatusStore().save(new io.github.lightrag.storage.DocumentStatusStore.StatusRecord(
+        var updated = new io.github.lightrag.storage.DocumentStatusStore.StatusRecord(
             statusRecord.documentId(),
             statusRecord.status(),
             statusRecord.summary(),
             failed ? errorMessage : statusRecord.errorMessage(),
             metadata
-        ));
+        );
+        storageProvider.documentStatusStore().save(updated);
+        return updated;
+    }
+
+    private static io.github.lightrag.storage.DocumentStatusStore.StatusRecord retryStatusRecord(
+        String documentId,
+        io.github.lightrag.storage.DocumentStatusStore.StatusRecord statusRecord
+    ) {
+        if (statusRecord != null) {
+            return statusRecord;
+        }
+        return new io.github.lightrag.storage.DocumentStatusStore.StatusRecord(
+            documentId,
+            io.github.lightrag.api.DocumentStatus.FAILED,
+            "",
+            "document status did not exist before deletion"
+        );
     }
 
     private static List<String> collectDeletionLlmCacheIds(

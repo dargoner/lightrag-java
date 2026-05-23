@@ -36,6 +36,7 @@ import java.util.concurrent.Executors;
 import java.util.concurrent.Future;
 import java.util.concurrent.ThreadFactory;
 import java.util.concurrent.atomic.AtomicLong;
+import java.util.concurrent.locks.ReentrantLock;
 import java.util.function.Function;
 
 public final class TaskExecutionService implements AutoCloseable {
@@ -47,6 +48,7 @@ public final class TaskExecutionService implements AutoCloseable {
     private final ExecutorService executor;
     private final ConcurrentMap<String, Future<?>> runningTasks = new ConcurrentHashMap<>();
     private final Set<String> recoveredWorkspaces = ConcurrentHashMap.newKeySet();
+    private final ConcurrentMap<String, ReentrantLock> workspaceLocks = new ConcurrentHashMap<>();
 
     public TaskExecutionService(Function<String, AtomicStorageProvider> providerResolver) {
         this(providerResolver, List.of());
@@ -210,26 +212,39 @@ public final class TaskExecutionService implements AutoCloseable {
             metadata,
             combinePublishers(eventPublisher, listeners)
         );
-        var startedAt = Instant.now();
-        var queueWaitMs = Math.max(0L, Duration.between(requestedAt, startedAt).toMillis());
-        reporter.updateMetadata(Map.of("queueWaitMs", Long.toString(queueWaitMs)));
-        log.info("task_event=PERF taskId={} workspaceId={} scope=task phase=queue_wait durationMs={}",
-            taskId, workspaceId, queueWaitMs);
+        var workspaceLock = workspaceLocks.computeIfAbsent(workspaceId, ignored -> new ReentrantLock(true));
+        var lockAcquired = false;
+        Instant startedAt = null;
         try {
+            workspaceLock.lockInterruptibly();
+            lockAcquired = true;
+            startedAt = Instant.now();
+            var queueWaitMs = Math.max(0L, Duration.between(requestedAt, startedAt).toMillis());
+            reporter.updateMetadata(Map.of("queueWaitMs", Long.toString(queueWaitMs)));
+            log.info("task_event=PERF taskId={} workspaceId={} scope=task phase=queue_wait durationMs={}",
+                taskId, workspaceId, queueWaitMs);
             reporter.markRunning("running");
             reporter.onStageStarted(TaskStage.PREPARING, "starting task");
             reporter.onStageSucceeded(TaskStage.PREPARING, "task started");
             work.run(reporter);
             reporter.complete("completed");
+        } catch (InterruptedException exception) {
+            Thread.currentThread().interrupt();
+            reporter.cancel("task cancelled before workspace pipeline slot was acquired");
         } catch (TaskCancelledException exception) {
             reporter.cancel(exception.getMessage());
         } catch (Throwable failure) {
             reporter.fail(failure);
         } finally {
-            var totalDurationMs = Math.max(0L, Duration.between(startedAt, Instant.now()).toMillis());
-            reporter.updateMetadata(Map.of("totalDurationMs", Long.toString(totalDurationMs)));
-            log.info("task_event=PERF taskId={} workspaceId={} scope=task phase=total durationMs={}",
-                taskId, workspaceId, totalDurationMs);
+            if (lockAcquired) {
+                workspaceLock.unlock();
+            }
+            if (startedAt != null) {
+                var totalDurationMs = Math.max(0L, Duration.between(startedAt, Instant.now()).toMillis());
+                reporter.updateMetadata(Map.of("totalDurationMs", Long.toString(totalDurationMs)));
+                log.info("task_event=PERF taskId={} workspaceId={} scope=task phase=total durationMs={}",
+                    taskId, workspaceId, totalDurationMs);
+            }
             runningTasks.remove(taskKey(workspaceId, taskId));
         }
     }

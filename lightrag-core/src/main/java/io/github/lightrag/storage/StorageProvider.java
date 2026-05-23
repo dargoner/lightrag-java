@@ -7,6 +7,8 @@ public interface StorageProvider {
         "documentGraphJournalStore is not supported by this provider";
     String TASK_DOCUMENT_STORE_UNSUPPORTED_MESSAGE =
         "taskDocumentStore is not supported by this provider";
+    String LLM_CACHE_STORE_UNSUPPORTED_MESSAGE =
+        "llmCacheStore is not supported by this provider";
 
     DocumentStore documentStore();
 
@@ -24,6 +26,10 @@ public interface StorageProvider {
 
     default TaskDocumentStore taskDocumentStore() {
         throw new UnsupportedOperationException(TASK_DOCUMENT_STORE_UNSUPPORTED_MESSAGE);
+    }
+
+    default LlmCacheStore llmCacheStore() {
+        throw new UnsupportedOperationException(LLM_CACHE_STORE_UNSUPPORTED_MESSAGE);
     }
 
     SnapshotStore snapshotStore();
