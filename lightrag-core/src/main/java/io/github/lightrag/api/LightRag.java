@@ -227,6 +227,32 @@ public final class LightRag implements AutoCloseable {
         );
     }
 
+    public String submitDeleteByDocumentId(String workspaceId, String documentId) {
+        return submitDeleteByDocumentId(workspaceId, documentId, DeleteDocumentOptions.defaults(), TaskSubmitOptions.defaults());
+    }
+
+    public String submitDeleteByDocumentId(
+        String workspaceId,
+        String documentId,
+        DeleteDocumentOptions deleteOptions,
+        TaskSubmitOptions submitOptions
+    ) {
+        var normalizedDocumentId = requireNonBlank(documentId, "documentId");
+        var resolvedDeleteOptions = Objects.requireNonNull(deleteOptions, "deleteOptions");
+        var resolvedSubmitOptions = Objects.requireNonNull(submitOptions, "submitOptions");
+        return taskExecutionService.submit(
+            workspaceId,
+            TaskType.DELETE_DOCUMENT,
+            Map.of(
+                "documentId", normalizedDocumentId,
+                "deleteLlmCache", Boolean.toString(resolvedDeleteOptions.deleteLlmCache())
+            ),
+            resolvedSubmitOptions.listeners(),
+            progressListener -> newDeletionPipeline(resolveProvider(resolveScope(workspaceId)), progressListener)
+                .deleteByDocumentId(normalizedDocumentId, resolvedDeleteOptions)
+        );
+    }
+
     public TaskSnapshot getTask(String workspaceId, String taskId) {
         return taskExecutionService.getTask(workspaceId, taskId);
     }
@@ -308,8 +334,12 @@ public final class LightRag implements AutoCloseable {
      * LightRag indexing pipeline.
      */
     public DeletionResult deleteByDocumentId(String workspaceId, String documentId) {
+        return deleteByDocumentId(workspaceId, documentId, DeleteDocumentOptions.defaults());
+    }
+
+    public DeletionResult deleteByDocumentId(String workspaceId, String documentId, DeleteDocumentOptions options) {
         var scope = resolveScope(workspaceId);
-        return newDeletionPipeline(resolveProvider(scope)).deleteByDocumentId(documentId);
+        return newDeletionPipeline(resolveProvider(scope)).deleteByDocumentId(documentId, options);
     }
 
     public QueryResult query(String workspaceId, QueryRequest request) {

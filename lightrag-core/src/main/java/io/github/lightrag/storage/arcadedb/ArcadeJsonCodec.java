@@ -19,6 +19,8 @@ final class ArcadeJsonCodec {
 
     private static final TypeReference<Map<String, String>> STRING_MAP = new TypeReference<>() {
     };
+    private static final TypeReference<Map<String, Object>> OBJECT_MAP = new TypeReference<>() {
+    };
     private static final TypeReference<List<String>> STRING_LIST = new TypeReference<>() {
     };
     private static final TypeReference<List<Double>> DOUBLE_LIST = new TypeReference<>() {
@@ -43,6 +45,10 @@ final class ArcadeJsonCodec {
 
     static Map<String, String> readStringMap(Object value) {
         return convert(value, STRING_MAP);
+    }
+
+    static Map<String, Object> readObjectMap(Object value) {
+        return convert(value, OBJECT_MAP);
     }
 
     static List<String> readStringList(Object value) {

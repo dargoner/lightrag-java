@@ -146,6 +146,7 @@ public final class ArcadeSchemaManager {
             "CREATE PROPERTY IF NOT EXISTS DocumentStatus.status STRING",
             "CREATE PROPERTY IF NOT EXISTS DocumentStatus.summary STRING",
             "CREATE PROPERTY IF NOT EXISTS DocumentStatus.errorMessage STRING",
+            "CREATE PROPERTY IF NOT EXISTS DocumentStatus.metadata STRING",
             "CREATE INDEX IF NOT EXISTS ON DocumentStatus (workspaceId, documentId) UNIQUE",
 
             "CREATE DOCUMENT TYPE IF NOT EXISTS Task",

@@ -55,6 +55,7 @@ public final class PostgresSchemaManager {
                     } else {
                         replayAppliedMigrations(statement, currentVersion.get());
                     }
+                    ensureDocumentStatusMetadataColumn(connection, statement);
                     validateWorkspaceColumns(connection);
                     validateVectorDimensions(connection);
                     connection.commit();
@@ -208,6 +209,7 @@ public final class PostgresSchemaManager {
                     status TEXT NOT NULL,
                     summary TEXT NOT NULL DEFAULT '',
                     error_message TEXT,
+                    metadata JSONB NOT NULL DEFAULT '{}'::jsonb,
                     PRIMARY KEY (workspace_id, document_id)
                 )
                 """.formatted(config.qualifiedTableName("document_status"))
@@ -390,6 +392,20 @@ public final class PostgresSchemaManager {
                 "Detected legacy PostgreSQL schema without workspace column isolation; automatic migration is not supported"
             );
         }
+    }
+
+    private void ensureDocumentStatusMetadataColumn(Connection connection, Statement statement) throws SQLException {
+        if (bootstrapStatements != null
+            || !storageTableExists(connection, "document_status")
+            || columnExists(connection, "document_status", "metadata")) {
+            return;
+        }
+        statement.execute(
+            """
+                ALTER TABLE %s
+                ADD COLUMN metadata JSONB NOT NULL DEFAULT '{}'::jsonb
+                """.formatted(config.qualifiedTableName("document_status"))
+        );
     }
 
     private void validateWorkspaceColumns(Connection connection) throws SQLException {

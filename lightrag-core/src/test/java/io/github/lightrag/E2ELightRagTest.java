@@ -4,6 +4,7 @@ import io.github.lightrag.api.LightRag;
 import io.github.lightrag.api.QueryMode;
 import io.github.lightrag.api.CreateEntityRequest;
 import io.github.lightrag.api.CreateRelationRequest;
+import io.github.lightrag.api.DeleteDocumentOptions;
 import io.github.lightrag.api.DeletionResult;
 import io.github.lightrag.api.DocumentIngestOptions;
 import io.github.lightrag.api.EditEntityRequest;
@@ -17,6 +18,10 @@ import io.github.lightrag.api.MergeEntitiesRequest;
 import io.github.lightrag.api.QueryRequest;
 import io.github.lightrag.api.QueryResult;
 import io.github.lightrag.api.StructuredQueryResult;
+import io.github.lightrag.api.TaskStatus;
+import io.github.lightrag.api.TaskSnapshot;
+import io.github.lightrag.api.TaskType;
+import io.github.lightrag.indexing.DeletionPipeline;
 import io.github.lightrag.indexing.RelationCanonicalizer;
 import io.github.lightrag.model.ChatModel;
 import io.github.lightrag.model.EmbeddingModel;
@@ -304,6 +309,65 @@ class E2ELightRagTest {
             .isInstanceOf(java.util.NoSuchElementException.class)
             .hasMessageContaining("document status does not exist");
         assertThat(rag.listDocumentStatuses(WORKSPACE)).isEmpty();
+    }
+
+    @Test
+    void submitDeleteByDocumentRunsThroughAsyncTaskPipeline() throws Exception {
+        var storage = InMemoryStorageProvider.create();
+        var rag = LightRag.builder()
+            .chatModel(new FakeChatModel())
+            .embeddingModel(new FakeEmbeddingModel())
+            .storage(storage)
+            .build();
+
+        rag.ingest(WORKSPACE, List.of(new Document("doc-async-delete", "Title", "Alice works with Bob", Map.of())));
+        var taskId = rag.submitDeleteByDocumentId(WORKSPACE, "doc-async-delete");
+        var task = awaitTerminalTask(rag, taskId);
+
+        assertThat(task.taskType()).isEqualTo(TaskType.DELETE_DOCUMENT);
+        assertThat(task.status()).isEqualTo(TaskStatus.SUCCEEDED);
+        assertThat(task.metadata()).containsEntry("documentId", "doc-async-delete");
+        assertThat(storage.documentStore().load("doc-async-delete")).isEmpty();
+        assertThat(storage.chunkStore().listByDocument("doc-async-delete")).isEmpty();
+        assertThat(rag.listDocumentStatuses(WORKSPACE)).isEmpty();
+    }
+
+    @Test
+    void deleteByDocumentWithLlmCacheDeletionFailsFastAndPersistsRetryMetadata() {
+        var storage = InMemoryStorageProvider.create();
+        var rag = LightRag.builder()
+            .chatModel(new FakeChatModel())
+            .embeddingModel(new FakeEmbeddingModel())
+            .storage(storage)
+            .build();
+
+        rag.ingest(WORKSPACE, List.of(new Document("doc-cache-delete", "Title", "Alice works with Bob", Map.of())));
+        var chunk = storage.chunkStore().listByDocument("doc-cache-delete").get(0);
+        storage.chunkStore().save(new ChunkStore.ChunkRecord(
+            chunk.id(),
+            chunk.documentId(),
+            chunk.text(),
+            chunk.tokenCount(),
+            chunk.order(),
+            Map.of(DeletionPipeline.CHUNK_METADATA_LLM_CACHE_LIST, "cache-a,cache-b")
+        ));
+
+        assertThatThrownBy(() -> rag.deleteByDocumentId(
+            WORKSPACE,
+            "doc-cache-delete",
+            DeleteDocumentOptions.withLlmCacheDeletion()
+        ))
+            .isInstanceOf(UnsupportedOperationException.class)
+            .hasMessageContaining("LLM cache deletion requested");
+
+        assertThat(storage.documentStore().load("doc-cache-delete")).isPresent();
+        var status = storage.documentStatusStore().load("doc-cache-delete").orElseThrow();
+        assertThat(status.metadata())
+            .containsEntry(DeletionPipeline.METADATA_DELETION_FAILED, true)
+            .containsEntry(DeletionPipeline.METADATA_DELETION_FAILURE_STAGE, "delete_llm_cache")
+            .containsKey(DeletionPipeline.METADATA_LAST_DELETION_ATTEMPT_AT);
+        assertThat(status.metadata().get(DeletionPipeline.METADATA_DELETION_LLM_CACHE_IDS))
+            .isEqualTo(List.of("cache-a", "cache-b"));
     }
 
     @Test
@@ -3569,6 +3633,17 @@ class E2ELightRagTest {
         } catch (Exception exception) {
             throw new RuntimeException(exception);
         }
+    }
+
+    private static TaskSnapshot awaitTerminalTask(LightRag rag, String taskId) throws InterruptedException {
+        for (int attempt = 0; attempt < 100; attempt++) {
+            var task = rag.getTask(WORKSPACE, taskId);
+            if (task.status().isTerminal()) {
+                return task;
+            }
+            Thread.sleep(20L);
+        }
+        throw new AssertionError("task did not finish: " + taskId);
     }
 
     private static final class AtomicOnlyStorageProvider implements io.github.lightrag.storage.AtomicStorageProvider {

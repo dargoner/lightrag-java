@@ -14,6 +14,8 @@ public final class MySqlJsonCodec {
     private static final ObjectMapper OBJECT_MAPPER = new ObjectMapper();
     private static final TypeReference<Map<String, String>> STRING_MAP = new TypeReference<>() {
     };
+    private static final TypeReference<Map<String, Object>> OBJECT_MAP = new TypeReference<>() {
+    };
     private static final TypeReference<List<String>> STRING_LIST = new TypeReference<>() {
     };
     private static final TypeReference<List<DocumentGraphSnapshotStore.ExtractedEntityRecord>> EXTRACTED_ENTITY_LIST =
@@ -32,6 +34,14 @@ public final class MySqlJsonCodec {
 
     public static Map<String, String> readStringMap(String value) {
         return readJson(value, STRING_MAP);
+    }
+
+    public static String writeObjectMap(Map<String, Object> value) {
+        return writeJson(Objects.requireNonNull(value, "value"));
+    }
+
+    public static Map<String, Object> readObjectMap(String value) {
+        return readJson(value, OBJECT_MAP);
     }
 
     public static String writeStringList(List<String> value) {

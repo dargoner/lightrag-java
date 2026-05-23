@@ -35,12 +35,13 @@ public final class PostgresDocumentStatusStore implements DocumentStatusStore {
         connectionAccess.withConnection(connection -> {
             try (var statement = connection.prepareStatement(
                 """
-                INSERT INTO %s (workspace_id, document_id, status, summary, error_message)
-                VALUES (?, ?, ?, ?, ?)
+                INSERT INTO %s (workspace_id, document_id, status, summary, error_message, metadata)
+                VALUES (?, ?, ?, ?, ?, ?::jsonb)
                 ON CONFLICT (workspace_id, document_id) DO UPDATE
                 SET status = EXCLUDED.status,
                     summary = EXCLUDED.summary,
-                    error_message = EXCLUDED.error_message
+                    error_message = EXCLUDED.error_message,
+                    metadata = EXCLUDED.metadata
                 """.formatted(tableName)
             )) {
                 statement.setString(1, workspaceId);
@@ -48,6 +49,7 @@ public final class PostgresDocumentStatusStore implements DocumentStatusStore {
                 statement.setString(3, record.status().name());
                 statement.setString(4, record.summary());
                 statement.setString(5, record.errorMessage());
+                statement.setString(6, JdbcJsonCodec.writeObjectMap(record.metadata()));
                 statement.executeUpdate();
                 return null;
             }
@@ -60,7 +62,7 @@ public final class PostgresDocumentStatusStore implements DocumentStatusStore {
         return connectionAccess.withConnection(connection -> {
             try (var statement = connection.prepareStatement(
                 """
-                SELECT document_id, status, summary, error_message
+                SELECT document_id, status, summary, error_message, metadata
                 FROM %s
                 WHERE workspace_id = ?
                   AND document_id = ?
@@ -83,7 +85,7 @@ public final class PostgresDocumentStatusStore implements DocumentStatusStore {
         return connectionAccess.withConnection(connection -> {
             try (var statement = connection.prepareStatement(
                 """
-                SELECT document_id, status, summary, error_message
+                SELECT document_id, status, summary, error_message, metadata
                 FROM %s
                 WHERE workspace_id = ?
                 ORDER BY document_id
@@ -125,7 +127,8 @@ public final class PostgresDocumentStatusStore implements DocumentStatusStore {
             resultSet.getString("document_id"),
             DocumentStatus.valueOf(resultSet.getString("status")),
             resultSet.getString("summary"),
-            resultSet.getString("error_message")
+            resultSet.getString("error_message"),
+            JdbcJsonCodec.readObjectMap(resultSet.getString("metadata"))
         );
     }
 }

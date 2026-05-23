@@ -53,6 +53,7 @@ public final class MySqlSchemaManager {
                     } else {
                         replayAppliedMigrations(statement, currentVersion.get());
                     }
+                    ensureDocumentStatusMetadataColumn(connection, statement);
                     validateWorkspaceColumns(connection);
                     connection.commit();
                 } catch (RuntimeException exception) {
@@ -143,6 +144,7 @@ public final class MySqlSchemaManager {
                     status VARCHAR(64) NOT NULL,
                     summary TEXT NOT NULL,
                     error_message TEXT NULL,
+                    metadata LONGTEXT NOT NULL,
                     PRIMARY KEY (workspace_id, document_id)
                 )
                 """.formatted(config.qualifiedTableName("document_status"))
@@ -350,6 +352,19 @@ public final class MySqlSchemaManager {
                 throw new IllegalStateException("MySQL shared workspace table is missing workspace_id: " + tableName);
             }
         }
+    }
+
+    private void ensureDocumentStatusMetadataColumn(Connection connection, Statement statement) throws SQLException {
+        if (!storageTableExists(connection, "document_status")
+            || columnExists(connection, "document_status", "metadata")) {
+            return;
+        }
+        statement.execute(
+            """
+                ALTER TABLE %s
+                ADD COLUMN metadata LONGTEXT NULL
+                """.formatted(config.qualifiedTableName("document_status"))
+        );
     }
 
     private boolean storageTableExists(Connection connection, String baseTableName) throws SQLException {

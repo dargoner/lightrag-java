@@ -21,6 +21,7 @@ public final class ArcadeDocumentStatusStore extends ArcadeStoreSupport implemen
         properties.put("status", record.status().name());
         properties.put("summary", record.summary());
         properties.put("errorMessage", record.errorMessage());
+        properties.put("metadata", ArcadeJsonCodec.writeJson(record.metadata()));
         upsertByWorkspaceId("DocumentStatus", "documentId", record.documentId(), properties);
     }
 
@@ -48,7 +49,7 @@ public final class ArcadeDocumentStatusStore extends ArcadeStoreSupport implemen
     }
 
     private String selectBase() {
-        return "SELECT documentId, status, summary, errorMessage FROM DocumentStatus";
+        return "SELECT documentId, status, summary, errorMessage, metadata FROM DocumentStatus";
     }
 
     private StatusRecord readStatus(Map<String, Object> row) {
@@ -56,7 +57,8 @@ public final class ArcadeDocumentStatusStore extends ArcadeStoreSupport implemen
             ArcadeRecordMapper.string(row, "documentId"),
             DocumentStatus.valueOf(ArcadeRecordMapper.string(row, "status")),
             ArcadeRecordMapper.string(row, "summary"),
-            ArcadeRecordMapper.nullableString(row, "errorMessage")
+            ArcadeRecordMapper.nullableString(row, "errorMessage"),
+            row.get("metadata") == null ? Map.of() : ArcadeJsonCodec.readObjectMap(row.get("metadata"))
         );
     }
 }

@@ -16,6 +16,8 @@ This report records the current Java alignment status against the local upstream
 - Rerank failure visibility: Java propagates configured reranker failures instead of silently using the original retrieval order; if no reranker is configured, rerank remains inactive.
 - Deletion result shape: Java document/entity/relation deletion now returns `DeletionResult(status, docId, message, statusCode, filePath)` with upstream-compatible status strings.
 - Document deletion and KG rebuild: Java deletes the target document/status and rebuilds remaining document-derived graph state through the current indexing pipeline; failed status-only records can also be deleted.
+- Async deletion entry: Java exposes `submitDeleteByDocumentId(...)` through the existing task runtime, giving document deletion the same submitted-task surface as ingest/rebuild/materialization.
+- Deletion retry metadata: Java document status records now carry metadata and persist upstream-style `deletion_llm_cache_ids`, `last_deletion_attempt_at`, `deletion_failed`, and `deletion_failure_stage` when LLM cache cleanup is requested but unavailable.
 - Entity/relation deletion: Java removes entity/relation graph records, vectors, and per-chunk graph tracking while preserving source documents and chunks.
 - ArcadeDB hybrid retrieval: Java has dense + BM25 retrieval paths and Java-side RRF fusion because ArcadeDB does not expose a confirmed native `vector.fuse`/RRF operator in the verified path.
 - Metadata filtering: Java supports structured metadata filter expressions over regular and dynamic metadata fields, with database-side EQ/IN where implemented and Java-side composition where the backend cannot push down the exact expression.
@@ -23,7 +25,7 @@ This report records the current Java alignment status against the local upstream
 ## Partially Aligned
 
 - Paragraph chunking is aligned for F/R/V/P selection, table row slicing, bridge text, part suffixes, and hierarchy-aware merge constraints. Remaining differences are lower-level native sidecar details such as exact upstream anchor-position selection heuristics.
-- Original LightRAG document deletion is incremental and retry-aware around `doc_status`, chunk tracking, and LLM cache deletion. Java uses a simpler safe rebuild path and does not implement upstream's full async pipeline lock/retry state.
+- Original LightRAG document deletion is incremental around per-entity/per-relation chunk tracking. Java uses a simpler safe rebuild path after document removal, while preserving retry metadata for cache-cleanup failures.
 - Deletion failures still throw Java exceptions for existing transactional/rebuild failures instead of always returning `DeletionResult(status="fail")`; this preserves current Java error semantics.
 - MinerU parsing is present for PDFs, Office documents, HTML, and image OCR through the Java parsing pipeline. Parser failures now surface directly instead of downgrading to Tika, but Java does not implement the full upstream multimodal analysis lifecycle.
 
@@ -31,8 +33,8 @@ This report records the current Java alignment status against the local upstream
 
 - VLM role and RagAnything-style multimodal platform: upstream has `VLM` role configuration, `i/t/e` modality switches, sidecar analysis files, and VLM analysis workers. Java currently has no complete vision-model request pipeline or multimodal sidecar write-back stage, so this is intentionally not fabricated in this alignment pass.
 - Docling/native parser routing and parser-hint DSL: upstream has a broad file-processing router (`LIGHTRAG_PARSER`, filename hints, parser queues). Java currently keeps the smaller `plain -> MinerU` parsing chain and reports MinerU configuration/runtime problems directly.
-- Upstream async pipeline queue/worker model: Java has task runtime support, but not the same upstream parse/analyze/process queue topology.
-- LLM cache deletion tied to document deletion: Java does not currently expose upstream-equivalent extraction LLM cache records for deletion.
+- Upstream async parse/analyze/process queue topology: Java has submitted task support for ingest/delete/rebuild/materialization, but not the same multi-stage parser worker queue and shared `pipeline_status` contract.
+- LLM cache storage: Java can preserve deletion retry metadata and fails fast when cache deletion is requested, but does not currently expose upstream-equivalent extraction LLM cache records or a cache store to delete from.
 
 ## Verification
 
@@ -41,10 +43,12 @@ This report records the current Java alignment status against the local upstream
 - `.\gradlew.bat :lightrag-core:test --rerun-tasks --tests io.github.lightrag.indexing.DocumentIngestorTest --tests io.github.lightrag.E2ELightRagTest`
 - `.\gradlew.bat :lightrag-spring-boot-starter:test --rerun-tasks --tests io.github.lightrag.spring.boot.LightRagAutoConfigurationTest`
 - `.\gradlew.bat :lightrag-core:test --rerun-tasks --tests io.github.lightrag.indexing.ChunkingOrchestratorTest`
+- `.\gradlew.bat :lightrag-core:test --tests io.github.lightrag.E2ELightRagTest`
+- `.\gradlew.bat :lightrag-core:test --tests io.github.lightrag.storage.mysql.MySqlStoresTest --tests io.github.lightrag.storage.postgres.PostgresStorageProviderTest --tests io.github.lightrag.storage.arcadedb.ArcadeStorageProviderTest`
 - Earlier in this alignment sequence: chunking/Spring targeted tests for `F/R/V/P` and keyword role wiring passed.
 
 ## Remaining Recommended Order
 
 1. If VLM is required, first design a minimal Java VLM model interface and sidecar analysis result schema before adding Spring role properties.
 2. If exact paragraph native-sidecar parity is required, port upstream's remaining anchor-position heuristics into `ParagraphSemanticChunker`.
-3. If upstream delete retry parity is required, design document status retry metadata and cache-id tracking before changing deletion failure behavior.
+3. If actual LLM cache deletion is required, introduce a Java LLM cache store first; document deletion already fails fast and records retry metadata when cache deletion is requested without that store.
