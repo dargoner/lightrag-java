@@ -93,6 +93,7 @@ class LightRagAutoConfigurationTest {
                 var config = (io.github.lightrag.config.LightRagConfig) extractField(lightRag, "config");
 
                 assertThat(config.queryModel()).isSameAs(context.getBean("queryModel", ChatModel.class));
+                assertThat(config.keywordModel()).isSameAs(context.getBean("keywordModel", ChatModel.class));
                 assertThat(config.extractionModel()).isSameAs(context.getBean("extractionModel", ChatModel.class));
                 assertThat(config.summaryModel()).isSameAs(context.getBean("summaryModel", ChatModel.class));
             });
@@ -108,6 +109,7 @@ class LightRagAutoConfigurationTest {
                 var defaultChatModel = context.getBean(ChatModel.class);
 
                 assertThat(config.queryModel()).isSameAs(defaultChatModel);
+                assertThat(config.keywordModel()).isSameAs(defaultChatModel);
                 assertThat(config.extractionModel()).isSameAs(defaultChatModel);
                 assertThat(config.summaryModel()).isSameAs(defaultChatModel);
             });
@@ -125,6 +127,7 @@ class LightRagAutoConfigurationTest {
                 assertThat(defaultChatModel).isInstanceOf(OpenAiCompatibleChatModel.class);
                 assertThat(config.defaultChatModel()).isSameAs(defaultChatModel);
                 assertThat(config.queryModel()).isSameAs(context.getBean("queryModel", ChatModel.class));
+                assertThat(config.keywordModel()).isSameAs(context.getBean("keywordModel", ChatModel.class));
                 assertThat(config.extractionModel()).isSameAs(context.getBean("extractionModel", ChatModel.class));
                 assertThat(config.summaryModel()).isSameAs(context.getBean("summaryModel", ChatModel.class));
             });
@@ -142,6 +145,7 @@ class LightRagAutoConfigurationTest {
                 assertThat(context.getBeansOfType(ChatModel.class)).hasSize(1);
                 assertThat(config.defaultChatModel()).isSameAs(defaultChatModel);
                 assertThat(config.queryModel()).isSameAs(defaultChatModel);
+                assertThat(config.keywordModel()).isSameAs(defaultChatModel);
                 assertThat(config.extractionModel()).isSameAs(defaultChatModel);
                 assertThat(config.summaryModel()).isSameAs(defaultChatModel);
             });
@@ -158,6 +162,7 @@ class LightRagAutoConfigurationTest {
 
                 assertThat(config.defaultChatModel()).isSameAs(defaultChatModel);
                 assertThat(config.queryModel()).isSameAs(context.getBean("queryModel", ChatModel.class));
+                assertThat(config.keywordModel()).isSameAs(context.getBean("keywordModel", ChatModel.class));
                 assertThat(config.extractionModel()).isSameAs(context.getBean("extractionModel", ChatModel.class));
                 assertThat(config.summaryModel()).isSameAs(context.getBean("summaryModel", ChatModel.class));
             });
@@ -181,6 +186,27 @@ class LightRagAutoConfigurationTest {
                 assertThat(config.queryModel()).isNotSameAs(context.getBean("chatModel", ChatModel.class));
                 assertThat(extractTimeout((OpenAiCompatibleChatModel) context.getBean("queryModel", ChatModel.class)))
                     .isEqualTo(Duration.ofSeconds(21));
+            });
+    }
+
+    @Test
+    void autoConfiguresKeywordModelFromSpringProperties() {
+        contextRunner
+            .withPropertyValues(
+                "lightrag.keyword-model.base-url=http://localhost:11436/v1/",
+                "lightrag.keyword-model.model=qwen-keyword",
+                "lightrag.keyword-model.api-key=keyword-key",
+                "lightrag.keyword-model.timeout=PT22S"
+            )
+            .run(context -> {
+                var lightRag = context.getBean(LightRag.class);
+                var config = (io.github.lightrag.config.LightRagConfig) extractField(lightRag, "config");
+
+                assertThat(context).hasBean("keywordModel");
+                assertThat(config.keywordModel()).isSameAs(context.getBean("keywordModel", ChatModel.class));
+                assertThat(config.keywordModel()).isNotSameAs(context.getBean("chatModel", ChatModel.class));
+                assertThat(extractTimeout((OpenAiCompatibleChatModel) context.getBean("keywordModel", ChatModel.class)))
+                    .isEqualTo(Duration.ofSeconds(22));
             });
     }
 
@@ -864,6 +890,11 @@ class LightRagAutoConfigurationTest {
             return request -> "query";
         }
 
+        @Bean("keywordModel")
+        ChatModel keywordModel() {
+            return request -> "keyword";
+        }
+
         @Bean("extractionModel")
         ChatModel extractionModel() {
             return request -> "{\"entities\":[],\"relations\":[]}";
@@ -887,6 +918,11 @@ class LightRagAutoConfigurationTest {
         @Bean("queryModel")
         ChatModel queryModel() {
             return request -> "query";
+        }
+
+        @Bean("keywordModel")
+        ChatModel keywordModel() {
+            return request -> "keyword";
         }
 
         @Bean("extractionModel")
@@ -919,6 +955,11 @@ class LightRagAutoConfigurationTest {
         @Bean("queryModel")
         ChatModel queryModel() {
             return request -> "query";
+        }
+
+        @Bean("keywordModel")
+        ChatModel keywordModel() {
+            return request -> "keyword";
         }
 
         @Bean("extractionModel")

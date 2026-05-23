@@ -38,6 +38,7 @@ public final class LightRagBuilder {
 
     private ChatModel chatModel;
     private ChatModel queryModel;
+    private ChatModel keywordModel;
     private ChatModel extractionModel;
     private ChatModel summaryModel;
     private EmbeddingModel embeddingModel;
@@ -74,6 +75,11 @@ public final class LightRagBuilder {
 
     public LightRagBuilder queryModel(ChatModel queryModel) {
         this.queryModel = Objects.requireNonNull(queryModel, "queryModel");
+        return this;
+    }
+
+    public LightRagBuilder keywordModel(ChatModel keywordModel) {
+        this.keywordModel = Objects.requireNonNull(keywordModel, "keywordModel");
         return this;
     }
 
@@ -320,6 +326,7 @@ public final class LightRagBuilder {
         return new LightRag(new LightRagConfig(
             chatModel,
             queryModel,
+            keywordModel,
             extractionModel,
             summaryModel,
             embeddingModel,

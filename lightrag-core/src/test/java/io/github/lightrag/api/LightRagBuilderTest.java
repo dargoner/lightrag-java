@@ -135,12 +135,14 @@ class LightRagBuilderTest {
     void usesDedicatedCapabilityModelsWhenProvided() {
         var defaultChatModel = new FakeChatModel();
         var queryModel = new FakeChatModel();
+        var keywordModel = new FakeChatModel();
         var extractionModel = new FakeChatModel();
         var summaryModel = new FakeChatModel();
 
         var rag = LightRag.builder()
             .chatModel(defaultChatModel)
             .queryModel(queryModel)
+            .keywordModel(keywordModel)
             .extractionModel(extractionModel)
             .summaryModel(summaryModel)
             .embeddingModel(new FakeEmbeddingModel())
@@ -149,6 +151,7 @@ class LightRagBuilderTest {
 
         assertThat(rag.config().defaultChatModel()).isSameAs(defaultChatModel);
         assertThat(rag.config().queryModel()).isSameAs(queryModel);
+        assertThat(rag.config().keywordModel()).isSameAs(keywordModel);
         assertThat(rag.config().extractionModel()).isSameAs(extractionModel);
         assertThat(rag.config().summaryModel()).isSameAs(summaryModel);
     }
@@ -164,6 +167,7 @@ class LightRagBuilderTest {
             .build();
 
         assertThat(rag.config().queryModel()).isSameAs(defaultChatModel);
+        assertThat(rag.config().keywordModel()).isSameAs(defaultChatModel);
         assertThat(rag.config().extractionModel()).isSameAs(defaultChatModel);
         assertThat(rag.config().summaryModel()).isSameAs(defaultChatModel);
     }
@@ -186,6 +190,7 @@ class LightRagBuilderTest {
 
         assertThat(config.defaultChatModel()).isSameAs(chatModel);
         assertThat(config.queryModel()).isSameAs(chatModel);
+        assertThat(config.keywordModel()).isSameAs(chatModel);
         assertThat(config.extractionModel()).isSameAs(chatModel);
         assertThat(config.summaryModel()).isSameAs(chatModel);
     }
@@ -700,6 +705,13 @@ class LightRagBuilderTest {
         assertThatThrownBy(() -> LightRag.builder().queryModel(null))
             .isInstanceOf(NullPointerException.class)
             .hasMessage("queryModel");
+    }
+
+    @Test
+    void rejectsNullKeywordModel() {
+        assertThatThrownBy(() -> LightRag.builder().keywordModel(null))
+            .isInstanceOf(NullPointerException.class)
+            .hasMessage("keywordModel");
     }
 
     @Test

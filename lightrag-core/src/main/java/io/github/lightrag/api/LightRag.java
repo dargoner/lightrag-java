@@ -613,6 +613,7 @@ public final class LightRag implements AutoCloseable {
         strategies.put(QueryMode.MIX, mix);
         return new QueryEngine(
             config.queryModel(),
+            config.keywordModel(),
             contextAssembler,
             strategies,
             config.rerankModel(),

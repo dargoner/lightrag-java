@@ -366,6 +366,36 @@ class QueryEngineTest {
     }
 
     @Test
+    void usesDedicatedKeywordModelForAutomaticKeywordExtraction() {
+        var responseModel = new RecordingChatModel("final answer");
+        var keywordModel = new RecordingChatModel("keyword unused answer")
+            .withKeywordExtractionResponse("""
+                {"high_level_keywords":["organization"],"low_level_keywords":["alice"]}
+                """);
+        var strategy = new RecordingQueryStrategy(baseContext());
+        var engine = new QueryEngine(
+            responseModel,
+            keywordModel,
+            new ContextAssembler(),
+            strategiesReturning(strategy),
+            null
+        );
+
+        var result = engine.query(QueryRequest.builder()
+            .query("which chunk?")
+            .mode(QueryMode.LOCAL)
+            .chunkTopK(3)
+            .build());
+
+        assertThat(result.answer()).isEqualTo("final answer");
+        assertThat(strategy.lastRequest().llKeywords()).containsExactly("alice");
+        assertThat(keywordModel.keywordExtractionCallCount()).isEqualTo(1);
+        assertThat(keywordModel.callCount()).isZero();
+        assertThat(responseModel.keywordExtractionCallCount()).isZero();
+        assertThat(responseModel.callCount()).isEqualTo(1);
+    }
+
+    @Test
     void usesQueryLevelModelOverrideForStreamingGeneration() {
         var defaultModel = new RecordingChatModel().withStreamResponse("default");
         var overrideModel = new RecordingChatModel().withStreamResponse("override ", "stream");

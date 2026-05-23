@@ -13,6 +13,7 @@ import java.util.Objects;
 public record LightRagConfig(
     ChatModel chatModel,
     ChatModel queryModel,
+    ChatModel keywordModel,
     ChatModel extractionModel,
     ChatModel summaryModel,
     EmbeddingModel embeddingModel,
@@ -33,6 +34,7 @@ public record LightRagConfig(
     ) {
         this(
             chatModel,
+            null,
             null,
             null,
             null,
@@ -57,6 +59,10 @@ public record LightRagConfig(
 
     public ChatModel queryModel() {
         return queryModel != null ? queryModel : chatModel;
+    }
+
+    public ChatModel keywordModel() {
+        return keywordModel != null ? keywordModel : chatModel;
     }
 
     public ChatModel extractionModel() {

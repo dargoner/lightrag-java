@@ -81,6 +81,19 @@ public class LightRagAutoConfiguration {
         );
     }
 
+    @Bean("keywordModel")
+    @ConditionalOnProperty(prefix = "lightrag.keyword-model", name = "base-url")
+    @ConditionalOnMissingBean(name = "keywordModel")
+    ChatModel keywordModel(LightRagProperties properties) {
+        var keywordModel = properties.getKeywordModel();
+        return new OpenAiCompatibleChatModel(
+            requireValue(keywordModel.getBaseUrl(), "lightrag.keyword-model.base-url"),
+            requireValue(keywordModel.getModel(), "lightrag.keyword-model.model"),
+            requireValue(keywordModel.getApiKey(), "lightrag.keyword-model.api-key"),
+            keywordModel.getTimeout()
+        );
+    }
+
     @Bean
     @ConditionalOnMissingBean
     EmbeddingModel embeddingModel(LightRagProperties properties) {
@@ -253,6 +266,7 @@ public class LightRagAutoConfiguration {
         EmbeddingModel embeddingModel,
         WorkspaceStorageProvider workspaceStorageProvider,
         @Qualifier("queryModel") ObjectProvider<ChatModel> queryModelProvider,
+        @Qualifier("keywordModel") ObjectProvider<ChatModel> keywordModelProvider,
         @Qualifier("extractionModel") ObjectProvider<ChatModel> extractionModelProvider,
         @Qualifier("summaryModel") ObjectProvider<ChatModel> summaryModelProvider,
         ObjectProvider<Chunker> chunker,
@@ -271,6 +285,10 @@ public class LightRagAutoConfiguration {
         var configuredQueryModel = queryModelProvider.getIfAvailable();
         if (configuredQueryModel != null) {
             builder.queryModel(configuredQueryModel);
+        }
+        var configuredKeywordModel = keywordModelProvider.getIfAvailable();
+        if (configuredKeywordModel != null) {
+            builder.keywordModel(configuredKeywordModel);
         }
         var configuredExtractionModel = extractionModelProvider.getIfAvailable();
         if (configuredExtractionModel != null) {
@@ -318,7 +336,12 @@ public class LightRagAutoConfiguration {
     }
 
     static final class DefaultChatModelCondition implements Condition {
-        private static final Set<String> DEDICATED_CHAT_MODEL_BEANS = Set.of("queryModel", "extractionModel", "summaryModel");
+        private static final Set<String> DEDICATED_CHAT_MODEL_BEANS = Set.of(
+            "queryModel",
+            "keywordModel",
+            "extractionModel",
+            "summaryModel"
+        );
 
         @Override
         public boolean matches(ConditionContext context, AnnotatedTypeMetadata metadata) {

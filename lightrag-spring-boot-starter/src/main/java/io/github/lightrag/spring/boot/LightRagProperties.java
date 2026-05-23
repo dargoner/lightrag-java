@@ -11,6 +11,7 @@ import java.util.Locale;
 public class LightRagProperties {
     private final ModelProperties chat = new ModelProperties();
     private final ModelProperties queryModel = new ModelProperties();
+    private final ModelProperties keywordModel = new ModelProperties();
     private final ModelProperties embedding = new ModelProperties();
     private final StorageProperties storage = new StorageProperties();
     private final IndexingProperties indexing = new IndexingProperties();
@@ -29,6 +30,10 @@ public class LightRagProperties {
 
     public ModelProperties getQueryModel() {
         return queryModel;
+    }
+
+    public ModelProperties getKeywordModel() {
+        return keywordModel;
     }
 
     public StorageProperties getStorage() {

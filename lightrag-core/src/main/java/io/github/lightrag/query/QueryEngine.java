@@ -108,6 +108,7 @@ public final class QueryEngine {
         """;
 
     private final ChatModel chatModel;
+    private final ChatModel keywordModel;
     private final ContextAssembler contextAssembler;
     private final Map<QueryMode, QueryStrategy> strategies;
     private final RerankModel rerankModel;
@@ -128,6 +129,16 @@ public final class QueryEngine {
 
     public QueryEngine(
         ChatModel chatModel,
+        ChatModel keywordModel,
+        ContextAssembler contextAssembler,
+        Map<QueryMode, QueryStrategy> strategies,
+        RerankModel rerankModel
+    ) {
+        this(chatModel, keywordModel, contextAssembler, strategies, rerankModel, true, 2);
+    }
+
+    public QueryEngine(
+        ChatModel chatModel,
         ContextAssembler contextAssembler,
         Map<QueryMode, QueryStrategy> strategies,
         RerankModel rerankModel,
@@ -136,6 +147,30 @@ public final class QueryEngine {
     ) {
         this(
             chatModel,
+            null,
+            contextAssembler,
+            strategies,
+            rerankModel,
+            automaticKeywordExtractionEnabled,
+            rerankCandidateMultiplier,
+            null,
+            null,
+            new PathAwareAnswerSynthesizer()
+        );
+    }
+
+    public QueryEngine(
+        ChatModel chatModel,
+        ChatModel keywordModel,
+        ContextAssembler contextAssembler,
+        Map<QueryMode, QueryStrategy> strategies,
+        RerankModel rerankModel,
+        boolean automaticKeywordExtractionEnabled,
+        int rerankCandidateMultiplier
+    ) {
+        this(
+            chatModel,
+            keywordModel,
             contextAssembler,
             strategies,
             rerankModel,
@@ -158,7 +193,24 @@ public final class QueryEngine {
         QueryStrategy multiHopStrategy,
         PathAwareAnswerSynthesizer pathAwareAnswerSynthesizer
     ) {
+        this(chatModel, null, contextAssembler, strategies, rerankModel, automaticKeywordExtractionEnabled,
+            rerankCandidateMultiplier, queryIntentClassifier, multiHopStrategy, pathAwareAnswerSynthesizer);
+    }
+
+    public QueryEngine(
+        ChatModel chatModel,
+        ChatModel keywordModel,
+        ContextAssembler contextAssembler,
+        Map<QueryMode, QueryStrategy> strategies,
+        RerankModel rerankModel,
+        boolean automaticKeywordExtractionEnabled,
+        int rerankCandidateMultiplier,
+        QueryIntentClassifier queryIntentClassifier,
+        QueryStrategy multiHopStrategy,
+        PathAwareAnswerSynthesizer pathAwareAnswerSynthesizer
+    ) {
         this.chatModel = Objects.requireNonNull(chatModel, "chatModel");
+        this.keywordModel = keywordModel == null ? chatModel : keywordModel;
         this.contextAssembler = Objects.requireNonNull(contextAssembler, "contextAssembler");
         this.strategies = Map.copyOf(new EnumMap<>(Objects.requireNonNull(strategies, "strategies")));
         this.rerankModel = rerankModel;
@@ -289,8 +341,9 @@ public final class QueryEngine {
     private QueryExecution executeStandardQuery(QueryRequest query) {
         var startedAt = System.nanoTime();
         var responseModel = selectChatModel(query);
+        var keywordExtractionModel = selectKeywordModel(query);
         var keywordStartedAt = System.nanoTime();
-        var resolvedQuery = keywordExtractor.resolve(query, responseModel);
+        var resolvedQuery = keywordExtractor.resolve(query, keywordExtractionModel);
         var keywordMs = elapsedMillis(keywordStartedAt);
         var useMultiHop = shouldUseMultiHop(resolvedQuery);
         var strategy = useMultiHop ? multiHopStrategy : strategies.get(resolvedQuery.mode());
@@ -441,6 +494,10 @@ public final class QueryEngine {
 
     private ChatModel selectChatModel(QueryRequest request) {
         return request.modelFunc() != null ? request.modelFunc() : chatModel;
+    }
+
+    private ChatModel selectKeywordModel(QueryRequest request) {
+        return request.modelFunc() != null ? request.modelFunc() : keywordModel;
     }
 
     private static long elapsedMillis(long startedAt) {
