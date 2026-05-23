@@ -10,7 +10,6 @@ import io.github.lightrag.indexing.MineruDocumentAdapter;
 import io.github.lightrag.indexing.MineruParsingProvider;
 import io.github.lightrag.indexing.MineruSelfHostedClient;
 import io.github.lightrag.indexing.PlainTextParsingProvider;
-import io.github.lightrag.indexing.TikaFallbackParsingProvider;
 import io.github.lightrag.model.ChatModel;
 import io.github.lightrag.model.EmbeddingModel;
 import io.github.lightrag.model.RerankModel;
@@ -188,14 +187,12 @@ public class LightRagAutoConfiguration {
     @Bean
     @ConditionalOnMissingBean
     DocumentParsingOrchestrator documentParsingOrchestrator(
-        LightRagProperties properties,
         ObjectProvider<MineruParsingProvider> mineruParsingProvider
     ) {
-        var parsing = properties.getIndexing().getParsing();
         return new DocumentParsingOrchestrator(
             new PlainTextParsingProvider(),
             mineruParsingProvider.getIfAvailable(),
-            parsing.isTikaFallbackEnabled() ? new TikaFallbackParsingProvider() : null
+            null
         );
     }
 

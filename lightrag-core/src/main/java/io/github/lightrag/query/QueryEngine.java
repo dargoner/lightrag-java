@@ -401,6 +401,7 @@ public final class QueryEngine {
         if (strategy == null) {
             throw new IllegalStateException("No query strategy configured for mode: " + resolvedQuery.mode());
         }
+        var rerankActive = rerankEnabled(resolvedQuery) && !useMultiHop;
         log.info(
             "LightRAG query resolved: requestedMode={}, resolvedMode={}, query={}, topK={}, chunkTopK={}, hlKeywords={}, llKeywords={}, useMultiHop={}, rerankRequested={}, rerankActive={}",
             query.mode(),
@@ -412,21 +413,20 @@ public final class QueryEngine {
             resolvedQuery.llKeywords(),
             useMultiHop,
             resolvedQuery.enableRerank(),
-            rerankEnabled(resolvedQuery) && !useMultiHop
+            rerankActive
         );
 
-        var retrievalRequest = rerankEnabled(resolvedQuery) && !useMultiHop
+        var retrievalRequest = rerankActive
             ? expandChunkRequest(resolvedQuery, rerankCandidateMultiplier)
             : resolvedQuery;
         var retrieveStartedAt = System.nanoTime();
         var retrievedContext = strategy.retrieve(retrievalRequest);
         var retrieveMs = elapsedMillis(retrieveStartedAt);
         var rerankStartedAt = System.nanoTime();
-        var rerankActive = rerankEnabled(resolvedQuery) && !useMultiHop;
         var rerankedChunks = rerankActive
-            ? rerankChunksOrFallback(resolvedQuery, retrievedContext.matchedChunks())
+            ? rerankChunks(resolvedQuery, retrievedContext.matchedChunks())
             : retrievedContext.matchedChunks();
-        var rerankMs = rerankEnabled(resolvedQuery) && !useMultiHop
+        var rerankMs = rerankActive
             ? elapsedMillis(rerankStartedAt)
             : 0L;
         var filteredChunks = QueryMetadataFilterSupport.filterChunks(resolvedQuery, rerankedChunks);
@@ -665,17 +665,6 @@ public final class QueryEngine {
         return ordered.stream()
             .limit(request.chunkTopK())
             .toList();
-    }
-
-    private List<ScoredChunk> rerankChunksOrFallback(QueryRequest request, List<ScoredChunk> matchedChunks) {
-        try {
-            return rerankChunks(request, matchedChunks);
-        } catch (RuntimeException exception) {
-            log.warn("LightRAG rerank failed; using original chunk order", exception);
-            return matchedChunks.stream()
-                .limit(request.chunkTopK())
-                .toList();
-        }
     }
 
     private static boolean sameChunkIds(List<ScoredChunk> left, List<ScoredChunk> right) {

@@ -78,7 +78,7 @@ class DocumentParsingOrchestratorTest {
     }
 
     @Test
-    void fallsBackToTikaWhenMineruIsUnavailableForPdf() {
+    void failsWhenMineruIsUnavailableForPdf() {
         var orchestrator = new DocumentParsingOrchestrator(
             new PlainTextParsingProvider(),
             new MineruParsingProvider(
@@ -94,18 +94,13 @@ class DocumentParsingOrchestratorTest {
             Map.of("source", "upload")
         );
 
-        var parsed = orchestrator.parse(source, DocumentIngestOptions.defaults());
-
-        assertThat(parsed.plainText()).isEqualTo("Recovered from tika");
-        assertThat(parsed.metadata())
-            .containsEntry("parse_mode", "tika")
-            .containsEntry("parse_backend", "tika")
-            .containsEntry("parse_error_reason", "mineru offline")
-            .containsEntry("source", "upload");
+        assertThatThrownBy(() -> orchestrator.parse(source, DocumentIngestOptions.defaults()))
+            .isInstanceOf(MineruUnavailableException.class)
+            .hasMessageContaining("mineru offline");
     }
 
     @Test
-    void fallsBackToTikaWhenMineruProviderIsMissingForPdf() {
+    void failsWhenMineruProviderIsMissingForPdf() {
         var orchestrator = new DocumentParsingOrchestrator(
             new PlainTextParsingProvider(),
             null,
@@ -118,13 +113,9 @@ class DocumentParsingOrchestratorTest {
             Map.of()
         );
 
-        var parsed = orchestrator.parse(source, DocumentIngestOptions.defaults());
-
-        assertThat(parsed.plainText()).isEqualTo("Recovered without mineru provider");
-        assertThat(parsed.metadata())
-            .containsEntry("parse_mode", "tika")
-            .containsEntry("parse_backend", "tika")
-            .containsEntry("parse_error_reason", "MinerU provider is not configured");
+        assertThatThrownBy(() -> orchestrator.parse(source, DocumentIngestOptions.defaults()))
+            .isInstanceOf(MineruUnavailableException.class)
+            .hasMessageContaining("MinerU provider is not configured");
     }
 
     @Test
@@ -173,7 +164,7 @@ class DocumentParsingOrchestratorTest {
     }
 
     @Test
-    void fallsBackToTikaWhenMineruThrowsUnexpectedRuntimeExceptionForHtml() {
+    void failsWhenMineruThrowsUnexpectedRuntimeExceptionForHtml() {
         var orchestrator = new DocumentParsingOrchestrator(
             new PlainTextParsingProvider(),
             new MineruParsingProvider(
@@ -189,17 +180,13 @@ class DocumentParsingOrchestratorTest {
             Map.of()
         );
 
-        var parsed = orchestrator.parse(source, DocumentIngestOptions.defaults());
-
-        assertThat(parsed.plainText()).isEqualTo("Recovered after runtime failure");
-        assertThat(parsed.metadata())
-            .containsEntry("parse_mode", "tika")
-            .containsEntry("parse_backend", "tika")
-            .containsEntry("parse_error_reason", "socket reset");
+        assertThatThrownBy(() -> orchestrator.parse(source, DocumentIngestOptions.defaults()))
+            .isInstanceOf(IllegalStateException.class)
+            .hasMessageContaining("socket reset");
     }
 
     @Test
-    void recordsParseModeBackendAndErrorReasonOnDowngrade() {
+    void preservesOriginalMineruErrorInsteadOfRecordingDowngradeMetadata() {
         var orchestrator = new DocumentParsingOrchestrator(
             new PlainTextParsingProvider(),
             new MineruParsingProvider(
@@ -215,13 +202,9 @@ class DocumentParsingOrchestratorTest {
             Map.of("workspace", "alpha")
         );
 
-        var parsed = orchestrator.parse(source, DocumentIngestOptions.defaults());
-
-        assertThat(parsed.metadata())
-            .containsEntry("parse_mode", "tika")
-            .containsEntry("parse_backend", "tika")
-            .containsEntry("parse_error_reason", "timeout contacting mineru")
-            .containsEntry("workspace", "alpha");
+        assertThatThrownBy(() -> orchestrator.parse(source, DocumentIngestOptions.defaults()))
+            .isInstanceOf(MineruUnavailableException.class)
+            .hasMessageContaining("timeout contacting mineru");
     }
 
     private static final class FailingMineruClient implements MineruClient {

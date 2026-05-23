@@ -12,7 +12,6 @@ public final class DocumentParsingOrchestrator {
     private final PlainTextParsingProvider plainTextProvider;
     private final LightRagSidecarParsingProvider sidecarProvider;
     private final MineruParsingProvider mineruProvider;
-    private final TikaFallbackParsingProvider tikaProvider;
 
     public DocumentParsingOrchestrator(PlainTextParsingProvider plainTextProvider) {
         this(plainTextProvider, null, null);
@@ -26,7 +25,6 @@ public final class DocumentParsingOrchestrator {
         this.plainTextProvider = Objects.requireNonNull(plainTextProvider, "plainTextProvider");
         this.sidecarProvider = new LightRagSidecarParsingProvider();
         this.mineruProvider = mineruProvider;
-        this.tikaProvider = tikaProvider;
     }
 
     public ParsedDocument parse(RawDocumentSource source) {
@@ -58,37 +56,11 @@ public final class DocumentParsingOrchestrator {
         }
         if (imageSource || complexSource) {
             if (mineruProvider == null) {
-                if (imageSource) {
-                    throw new MineruUnavailableException("MinerU provider is not configured");
-                }
-                if (tikaProvider == null) {
-                    throw new MineruUnavailableException("No parser is configured for complex document: " + source.fileName());
-                }
-                return downgradeToTika(source, "MinerU provider is not configured");
+                throw new MineruUnavailableException("MinerU provider is not configured");
             }
-            try {
-                return mineruProvider.parse(source);
-            } catch (RuntimeException exception) {
-                if (imageSource || tikaProvider == null) {
-                    throw exception;
-                }
-                return downgradeToTika(source, exception.getMessage());
-            }
+            return mineruProvider.parse(source);
         }
         throw unsupportedMediaType(source);
-    }
-
-    private ParsedDocument downgradeToTika(RawDocumentSource source, String reason) {
-        var downgraded = tikaProvider.parse(source);
-        var metadata = new LinkedHashMap<String, String>(downgraded.metadata());
-        metadata.put("parse_error_reason", reason == null ? "MinerU parsing unavailable" : reason);
-        return new ParsedDocument(
-            downgraded.documentId(),
-            downgraded.title(),
-            downgraded.plainText(),
-            downgraded.blocks(),
-            Map.copyOf(metadata)
-        );
     }
 
     private static IllegalArgumentException unsupportedMediaType(RawDocumentSource source) {

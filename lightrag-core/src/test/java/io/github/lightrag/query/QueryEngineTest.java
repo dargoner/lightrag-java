@@ -121,6 +121,7 @@ class QueryEngineTest {
             .mode(QueryMode.LOCAL)
             .chunkTopK(3)
             .includeReferences(true)
+            .enableRerank(false)
             .build());
 
         assertThat(result.references())
@@ -169,6 +170,7 @@ class QueryEngineTest {
                     "80"
                 )
             ))
+            .enableRerank(false)
             .build());
 
         assertThat(strategy.lastRequest().metadataFilters()).containsEntry("source", List.of("alpha.txt"));
@@ -202,6 +204,7 @@ class QueryEngineTest {
             .chunkTopK(3)
             .responseType("Bullet Points")
             .userPrompt("Answer in one sentence.")
+            .enableRerank(false)
             .build());
 
         assertThat(chatModel.lastRequest().systemPrompt())
@@ -238,6 +241,7 @@ class QueryEngineTest {
             .mode(QueryMode.NAIVE)
             .chunkTopK(3)
             .responseType("Single Paragraph")
+            .enableRerank(false)
             .build());
 
         assertThat(chatModel.lastRequest().systemPrompt())
@@ -274,6 +278,7 @@ class QueryEngineTest {
             .mode(QueryMode.LOCAL)
             .chunkTopK(3)
             .conversationHistory(history)
+            .enableRerank(false)
             .build());
 
         assertThat(chatModel.lastRequest().conversationHistory()).containsExactlyElementsOf(history);
@@ -295,6 +300,7 @@ class QueryEngineTest {
             .chunkTopK(3)
             .includeReferences(true)
             .stream(true)
+            .enableRerank(false)
             .build());
 
         assertThat(result.streaming()).isTrue();
@@ -329,6 +335,7 @@ class QueryEngineTest {
             .mode(QueryMode.LOCAL)
             .chunkTopK(3)
             .modelFunc(overrideModel)
+            .enableRerank(false)
             .build());
 
         assertThat(result.answer()).isEqualTo("override answer");
@@ -356,6 +363,7 @@ class QueryEngineTest {
             .mode(QueryMode.LOCAL)
             .chunkTopK(3)
             .modelFunc(overrideModel)
+            .enableRerank(false)
             .build());
 
         assertThat(result.answer()).isEqualTo("override answer");
@@ -385,6 +393,7 @@ class QueryEngineTest {
             .query("which chunk?")
             .mode(QueryMode.LOCAL)
             .chunkTopK(3)
+            .enableRerank(false)
             .build());
 
         assertThat(result.answer()).isEqualTo("final answer");
@@ -412,6 +421,7 @@ class QueryEngineTest {
             .chunkTopK(3)
             .stream(true)
             .modelFunc(overrideModel)
+            .enableRerank(false)
             .build());
 
         assertThat(readAll(result.answerStream())).containsExactly("override ", "stream");
@@ -434,6 +444,7 @@ class QueryEngineTest {
             .mode(QueryMode.LOCAL)
             .chunkTopK(3)
             .stream(true)
+            .enableRerank(false)
             .build())) {
             assertThat(result.streaming()).isTrue();
         }
@@ -458,6 +469,7 @@ class QueryEngineTest {
             .chunkTopK(3)
             .onlyNeedPrompt(true)
             .modelFunc(overrideModel)
+            .enableRerank(false)
             .build());
 
         assertThat(defaultModel.callCount()).isZero();
@@ -576,6 +588,7 @@ class QueryEngineTest {
             .chunkTopK(3)
             .onlyNeedContext(true)
             .onlyNeedPrompt(true)
+            .enableRerank(false)
             .build());
 
         assertThat(result.answer())
@@ -618,6 +631,7 @@ class QueryEngineTest {
             .query("test")
             .mode(QueryMode.NAIVE)
             .onlyNeedPrompt(true)
+            .enableRerank(false)
             .build());
 
         assertThat(result.answer()).contains("test");
@@ -642,6 +656,7 @@ class QueryEngineTest {
                 new ChatModel.ChatRequest.ConversationMessage("user", "Earlier question"),
                 new ChatModel.ChatRequest.ConversationMessage("assistant", "Earlier answer")
             ))
+            .enableRerank(false)
             .build());
 
         assertThat(chatModel.lastRequest().systemPrompt())
@@ -824,6 +839,7 @@ class QueryEngineTest {
             .mode(QueryMode.LOCAL)
             .chunkTopK(3)
             .maxTotalTokens(1)
+            .enableRerank(false)
             .build());
 
         assertThat(result.contexts()).isEmpty();
@@ -927,7 +943,7 @@ class QueryEngineTest {
     }
 
     @Test
-    void fallsBackToRetrievalOrderWhenRerankFails() {
+    void propagatesRerankFailure() {
         var engine = new QueryEngine(
             new RecordingChatModel(),
             new ContextAssembler(),
@@ -937,11 +953,9 @@ class QueryEngineTest {
             }
         );
 
-        var result = engine.query(baseRequest());
-
-        assertThat(result.contexts())
-            .extracting(context -> context.sourceId())
-            .containsExactly("chunk-1", "chunk-2", "chunk-3");
+        assertThatThrownBy(() -> engine.query(baseRequest()))
+            .isInstanceOf(IllegalStateException.class)
+            .hasMessage("rerank failure");
     }
 
     @Test
@@ -1319,6 +1333,7 @@ class QueryEngineTest {
         engine.query(QueryRequest.builder()
             .query("Atlas 通过谁影响知识图谱组？")
             .mode(QueryMode.NAIVE)
+            .enableRerank(false)
             .build());
 
         assertThat(defaultStrategy.lastRequest()).isNotNull();

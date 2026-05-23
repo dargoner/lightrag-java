@@ -364,7 +364,7 @@ public class LightRagProperties {
     }
 
     public static class ParsingProperties {
-        private boolean tikaFallbackEnabled = true;
+        private boolean tikaFallbackEnabled;
         private final MineruProperties mineru = new MineruProperties();
 
         public boolean isTikaFallbackEnabled() {

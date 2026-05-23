@@ -328,7 +328,7 @@ Raw-source ingest keeps parser backend selection internal:
 
 - `.txt`, `.md`, `.markdown`: direct UTF-8 plain-text parsing
 - upstream LightRAG sidecar `*.blocks.jsonl` files: parsed directly as structured blocks with `parse_mode=sidecar`
-- `.pdf`, `.doc`, `.docx`, `.ppt`, `.pptx`, `.html`, `.htm`: `MinerU` first, then `Tika` fallback when enabled
+- `.pdf`, `.doc`, `.docx`, `.ppt`, `.pptx`, `.html`, `.htm`: `MinerU`; missing or failed MinerU parsing raises the original error instead of downgrading to `Tika`
 - `.png`, `.jpg`, `.jpeg`, `.webp`, `.gif`, `.bmp`: `MinerU` only; there is no OCR fallback outside MinerU
 - images and figures inside documents are first converted by `MinerU` into OCR text, captions, or layout text blocks before `SmartChunker` runs; pure visual content does not currently get its own image embedding path
 - sidecar drawings/tables/equations analysis files are not executed by Java yet; inline sidecar placeholders are preserved as text and chunk metadata
@@ -364,7 +364,7 @@ lightrag:
       parent-child-window-size: 400
       parent-child-overlap: 40
     parsing:
-      tika-fallback-enabled: true
+      tika-fallback-enabled: false
       mineru:
         enabled: false
         mode: DISABLED
@@ -404,7 +404,7 @@ For lightweight operations visibility, the demo also exposes:
 - `/actuator/health`: application health plus a `lightrag` component with storage type and async ingest flags
 - `/actuator/info`: static runtime info such as storage type, async ingest setting, and default query mode
 
-Use `POST /documents/ingest` when you already have structured `Document` JSON payloads. Use `POST /documents/upload` when you want the demo to pass raw file bytes into the SDK and let the parsing pipeline choose `plain -> MinerU -> Tika` automatically.
+Use `POST /documents/ingest` when you already have structured `Document` JSON payloads. Use `POST /documents/upload` when you want the demo to pass raw file bytes into the SDK and let the parsing pipeline choose `plain -> MinerU` automatically.
 
 The upload endpoint accepts `multipart/form-data` with one or more `files` parts, an optional `async=true|false` query parameter, and an optional `preset=GENERAL|LAW|BOOK|QA|FIGURE` override. Supported file types are:
 
@@ -435,8 +435,7 @@ Current demo limits:
 
 Parsing behavior for upload jobs:
 
-- office, pdf, and html files prefer `MinerU`; if `MinerU` is unavailable, the pipeline downgrades to `Tika` when fallback is enabled
-- image files require `MinerU`; the job fails instead of pretending OCR succeeded with empty text
+- office, pdf, html, and image files require `MinerU`; if `MinerU` is unavailable or fails, the job fails with the parser error instead of downgrading to another parser
 - chunking still follows `DocumentIngestOptions`, so you can keep the default smart strategy or switch to regex/manual chunking in SDK integrations
 
 Each uploaded file becomes a `RawDocumentSource` with:
@@ -611,8 +610,8 @@ Notes:
 - rerank is especially useful with `MIX` queries because the engine expands the internal candidate window before reranking
 - rerank changes chunk order only; exposed context IDs/texts still come from the original retrieval records
 - `minRerankScore(...)` defaults to `0.0`, matching upstream `MIN_RERANK_SCORE`; when set above `0.0`, chunks below the reranker score threshold are filtered out
-- if `enableRerank(true)` is used without configuring a rerank model, Java treats it as a deterministic no-op in this phase
-- if the configured rerank model fails, Java falls back to the original retrieved chunk order for that query
+- if `enableRerank(true)` is used without configuring a rerank model, rerank is inactive for that query
+- if the configured rerank model fails, Java propagates the reranker error instead of falling back to the original retrieved chunk order
 
 ## Query Prompt Controls
 

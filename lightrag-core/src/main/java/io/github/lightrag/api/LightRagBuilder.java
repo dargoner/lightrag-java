@@ -118,8 +118,8 @@ public final class LightRagBuilder {
     }
 
     /**
-     * Configures an optional second-stage chunk reranker. If queries keep rerank enabled but no model is configured,
-     * Java treats that as a deterministic no-op and does not emit upstream-style warnings in this phase.
+     * Configures the second-stage chunk reranker. If a configured reranker fails during query execution,
+     * Java propagates the error instead of falling back to the original retrieval order.
      */
     public LightRagBuilder rerankModel(RerankModel rerankModel) {
         this.rerankModel = Objects.requireNonNull(rerankModel, "rerankModel");
