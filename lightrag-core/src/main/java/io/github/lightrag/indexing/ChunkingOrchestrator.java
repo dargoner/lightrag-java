@@ -17,11 +17,28 @@ public final class ChunkingOrchestrator {
     private final DocumentTypeResolver documentTypeResolver;
     private final SmartChunker smartChunkerOverride;
     private final ParagraphSemanticChunker paragraphChunkerOverride;
+    private final RecursiveCharacterChunker recursiveChunkerOverride;
     private final RegexChunker regexChunkerOverride;
     private final FixedWindowChunker fixedChunkerOverride;
 
     public ChunkingOrchestrator() {
-        this(new DocumentTypeResolver(), null, null, null, null);
+        this(new DocumentTypeResolver(), null, null, null, null, null);
+    }
+
+    ChunkingOrchestrator(
+        DocumentTypeResolver documentTypeResolver,
+        SmartChunker smartChunker,
+        ParagraphSemanticChunker paragraphChunker,
+        RecursiveCharacterChunker recursiveChunker,
+        RegexChunker regexChunker,
+        FixedWindowChunker fixedChunker
+    ) {
+        this.documentTypeResolver = Objects.requireNonNull(documentTypeResolver, "documentTypeResolver");
+        this.smartChunkerOverride = smartChunker;
+        this.paragraphChunkerOverride = paragraphChunker;
+        this.recursiveChunkerOverride = recursiveChunker;
+        this.regexChunkerOverride = regexChunker;
+        this.fixedChunkerOverride = fixedChunker;
     }
 
     ChunkingOrchestrator(
@@ -31,11 +48,7 @@ public final class ChunkingOrchestrator {
         RegexChunker regexChunker,
         FixedWindowChunker fixedChunker
     ) {
-        this.documentTypeResolver = Objects.requireNonNull(documentTypeResolver, "documentTypeResolver");
-        this.smartChunkerOverride = smartChunker;
-        this.paragraphChunkerOverride = paragraphChunker;
-        this.regexChunkerOverride = regexChunker;
-        this.fixedChunkerOverride = fixedChunker;
+        this(documentTypeResolver, smartChunker, paragraphChunker, null, regexChunker, fixedChunker);
     }
 
     ChunkingOrchestrator(
@@ -44,7 +57,7 @@ public final class ChunkingOrchestrator {
         RegexChunker regexChunker,
         FixedWindowChunker fixedChunker
     ) {
-        this(documentTypeResolver, smartChunker, null, regexChunker, fixedChunker);
+        this(documentTypeResolver, smartChunker, null, null, regexChunker, fixedChunker);
     }
 
     public ChunkingResult chunk(ParsedDocument document, DocumentIngestOptions options) {
@@ -60,6 +73,7 @@ public final class ChunkingOrchestrator {
         var result = switch (initialMode) {
             case REGEX -> regexChunker(profile).chunk(parsed, profile.regexConfig());
             case PARAGRAPH -> paragraphChunker(profile).chunk(parsed);
+            case RECURSIVE -> recursiveChunker(profile).chunk(parsed);
             case SMART -> smartChunk(parsed, profile);
             case FIXED -> fixedChunk(parsed, profile);
         };
@@ -70,6 +84,7 @@ public final class ChunkingOrchestrator {
         return switch (Objects.requireNonNull(profile, "profile").strategyOverride()) {
             case SMART -> ChunkingMode.SMART;
             case PARAGRAPH -> ChunkingMode.PARAGRAPH;
+            case RECURSIVE -> ChunkingMode.RECURSIVE;
             case REGEX -> ChunkingMode.REGEX;
             case FIXED -> ChunkingMode.FIXED;
             case AUTO -> profile.hasRegexRules() ? ChunkingMode.REGEX : ChunkingMode.SMART;
@@ -149,7 +164,13 @@ public final class ChunkingOrchestrator {
     private ParagraphSemanticChunker paragraphChunker(ChunkingProfile profile) {
         return paragraphChunkerOverride != null
             ? paragraphChunkerOverride
-            : new ParagraphSemanticChunker(profile.smartChunkerConfig(), fixedChunker(profile));
+            : new ParagraphSemanticChunker(profile.smartChunkerConfig(), recursiveChunker(profile));
+    }
+
+    private RecursiveCharacterChunker recursiveChunker(ChunkingProfile profile) {
+        return recursiveChunkerOverride != null
+            ? recursiveChunkerOverride
+            : profile.recursiveCharacterChunker();
     }
 
     private RegexChunker regexChunker(ChunkingProfile profile) {

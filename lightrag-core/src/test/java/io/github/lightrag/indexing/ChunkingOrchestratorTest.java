@@ -59,7 +59,7 @@ class ChunkingOrchestratorTest {
                     .overlapTokens(10)
                     .semanticMergeEnabled(false)
                     .build(),
-                new FixedWindowChunker(80, 10)
+                new RecursiveCharacterChunker(80, 10)
             ),
             new RegexChunker(new FixedWindowChunker(80, 10)),
             new FixedWindowChunker(80, 10)
@@ -123,7 +123,7 @@ class ChunkingOrchestratorTest {
                     .overlapTokens(5)
                     .semanticMergeEnabled(false)
                     .build(),
-                new FixedWindowChunker(45, 5)
+                new RecursiveCharacterChunker(45, 5)
             ),
             new RegexChunker(new FixedWindowChunker(45, 5)),
             new FixedWindowChunker(45, 5)
@@ -172,7 +172,7 @@ class ChunkingOrchestratorTest {
                     .overlapTokens(10)
                     .semanticMergeEnabled(false)
                     .build(),
-                new FixedWindowChunker(80, 10)
+                new RecursiveCharacterChunker(80, 10)
             ),
             new RegexChunker(new FixedWindowChunker(80, 10)),
             new FixedWindowChunker(80, 10)
@@ -228,7 +228,7 @@ class ChunkingOrchestratorTest {
                     .overlapTokens(5)
                     .semanticMergeEnabled(false)
                     .build(),
-                new FixedWindowChunker(60, 5)
+                new RecursiveCharacterChunker(60, 5)
             ),
             new RegexChunker(new FixedWindowChunker(60, 5)),
             new FixedWindowChunker(60, 5)
@@ -248,17 +248,31 @@ class ChunkingOrchestratorTest {
             RegexChunkerConfig.empty()
         ));
 
-        assertThat(result.effectiveMode()).isEqualTo(ChunkingMode.FIXED);
-        assertThat(result.downgradedToFixed()).isTrue();
-        assertThat(result.fallbackReason()).contains("upstream P falls back to R");
+        assertThat(result.effectiveMode()).isEqualTo(ChunkingMode.RECURSIVE);
+        assertThat(result.downgradedToFixed()).isFalse();
+        assertThat(result.fallbackReason()).contains("upstream P fallback to R applied");
     }
 
     @Test
-    void rejectsUnsupportedUpstreamRecursiveAndVectorAliases() {
-        assertThatThrownBy(() -> ChunkingStrategyOverride.fromExternalName("R"))
-            .isInstanceOf(IllegalArgumentException.class)
-            .hasMessageContaining("recursive character chunking is not implemented");
+    void acceptsUpstreamRecursiveAliasAsRecursiveStrategy() {
+        var options = new DocumentIngestOptions(
+            DocumentTypeHint.AUTO,
+            ChunkGranularity.MEDIUM,
+            "R"
+        );
+        var profile = new ChunkingProfile(
+            DocumentType.GENERIC,
+            ChunkGranularity.MEDIUM,
+            options.strategyOverride(),
+            RegexChunkerConfig.empty()
+        );
 
+        assertThat(options.strategyOverride()).isEqualTo(ChunkingStrategyOverride.RECURSIVE);
+        assertThat(ChunkingOrchestrator.resolveInitialMode(profile)).isEqualTo(ChunkingMode.RECURSIVE);
+    }
+
+    @Test
+    void rejectsUnsupportedUpstreamVectorAlias() {
         assertThatThrownBy(() -> ChunkingStrategyOverride.fromExternalName("V"))
             .isInstanceOf(IllegalArgumentException.class)
             .hasMessageContaining("vector breakpoint chunking is not implemented");

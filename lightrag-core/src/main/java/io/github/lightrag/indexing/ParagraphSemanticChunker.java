@@ -29,9 +29,9 @@ public final class ParagraphSemanticChunker {
     static final String METADATA_TABLE_ROLE = "paragraph_semantic.table_role";
 
     private final SmartChunkerConfig config;
-    private final FixedWindowChunker fallbackChunker;
+    private final RecursiveCharacterChunker fallbackChunker;
 
-    public ParagraphSemanticChunker(SmartChunkerConfig config, FixedWindowChunker fallbackChunker) {
+    public ParagraphSemanticChunker(SmartChunkerConfig config, RecursiveCharacterChunker fallbackChunker) {
         this.config = Objects.requireNonNull(config, "config");
         this.fallbackChunker = Objects.requireNonNull(fallbackChunker, "fallbackChunker");
     }
@@ -39,7 +39,7 @@ public final class ParagraphSemanticChunker {
     public ChunkingResult chunk(ParsedDocument document) {
         var source = Objects.requireNonNull(document, "document");
         if (source.blocks().isEmpty()) {
-            return fallbackToFixed(source, "paragraph semantic sidecar blocks are unavailable");
+            return fallbackToRecursive(source, "paragraph semantic sidecar blocks are unavailable");
         }
 
         var targetMax = Math.max(config.maxTokens(), 1);
@@ -65,20 +65,20 @@ public final class ParagraphSemanticChunker {
         }
 
         if (splitBlocks.isEmpty()) {
-            return fallbackToFixed(source, "paragraph semantic sidecar contains no content rows");
+            return fallbackToRecursive(source, "paragraph semantic sidecar contains no content rows");
         }
 
         var merged = mergeSmallBlocks(splitBlocks, targetMax, targetIdeal, smallTailThreshold);
         return new ChunkingResult(toChunks(source, merged), ChunkingMode.PARAGRAPH, false, null);
     }
 
-    private ChunkingResult fallbackToFixed(ParsedDocument document, String reason) {
-        var source = new Document(document.documentId(), document.title(), document.plainText(), document.metadata());
+    private ChunkingResult fallbackToRecursive(ParsedDocument document, String reason) {
+        var fallback = fallbackChunker.chunk(document);
         return new ChunkingResult(
-            fallbackChunker.chunk(source),
-            ChunkingMode.FIXED,
-            true,
-            reason + "; upstream P falls back to R, Java recursive chunker is not implemented"
+            fallback.chunks(),
+            ChunkingMode.RECURSIVE,
+            false,
+            reason + "; upstream P fallback to R applied"
         );
     }
 

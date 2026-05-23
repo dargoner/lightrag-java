@@ -51,4 +51,12 @@ public record ChunkingProfile(
             case COARSE -> new FixedWindowChunker(1_600, 160);
         };
     }
+
+    public RecursiveCharacterChunker recursiveCharacterChunker() {
+        return switch (chunkGranularity) {
+            case FINE -> new RecursiveCharacterChunker(500, 60);
+            case MEDIUM -> new RecursiveCharacterChunker(1_000, 100);
+            case COARSE -> new RecursiveCharacterChunker(1_600, 160);
+        };
+    }
 }

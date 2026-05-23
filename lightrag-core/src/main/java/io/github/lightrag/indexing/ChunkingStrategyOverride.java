@@ -6,6 +6,7 @@ public enum ChunkingStrategyOverride {
     AUTO,
     SMART,
     PARAGRAPH,
+    RECURSIVE,
     REGEX,
     FIXED;
 
@@ -17,9 +18,9 @@ public enum ChunkingStrategyOverride {
             case "AUTO" -> AUTO;
             case "F", "FIX", "FIXED" -> FIXED;
             case "P", "PARAGRAPH", "PARAGRAPH_SEMANTIC" -> PARAGRAPH;
+            case "R", "RECURSIVE" -> RECURSIVE;
             case "SMART" -> SMART;
             case "REGEX" -> REGEX;
-            case "R", "RECURSIVE" -> throw unsupported(value, "recursive character chunking is not implemented");
             case "V", "VECTOR", "SEMANTIC_VECTOR" -> throw unsupported(value, "vector breakpoint chunking is not implemented");
             default -> throw new IllegalArgumentException("unsupported chunking strategy: " + value);
         };
