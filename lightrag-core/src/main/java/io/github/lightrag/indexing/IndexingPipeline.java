@@ -444,11 +444,13 @@ public final class IndexingPipeline {
 
     private void ingestSequentially(Document document) {
         var source = Objects.requireNonNull(document, "document");
+        var beforeDocument = StorageSnapshots.capture(storageProvider);
         saveStatus(processingStatus(source.id()));
         try {
             commitComputedIngest(computeDocument(source));
             persistSnapshotIfConfigured();
         } catch (RuntimeException | Error failure) {
+            restoreBeforeFailedDocument(source.id(), beforeDocument, failure);
             markDocumentFailed(source.id(), failure);
             persistSnapshotIfConfigured();
             throw failure;
@@ -457,11 +459,13 @@ public final class IndexingPipeline {
 
     private void ingestParsedSequentially(ParsedDocument parsedDocument, io.github.lightrag.api.DocumentIngestOptions options) {
         var source = Objects.requireNonNull(parsedDocument, "parsedDocument");
+        var beforeDocument = StorageSnapshots.capture(storageProvider);
         saveStatus(processingStatus(source.documentId()));
         try {
             commitComputedIngest(computeDocument(source, options));
             persistSnapshotIfConfigured();
         } catch (RuntimeException | Error failure) {
+            restoreBeforeFailedDocument(source.documentId(), beforeDocument, failure);
             markDocumentFailed(source.documentId(), failure);
             persistSnapshotIfConfigured();
             throw failure;
@@ -470,11 +474,13 @@ public final class IndexingPipeline {
 
     private void ingestPreChunkedSequentially(PreChunkedDocument document) {
         var source = Objects.requireNonNull(document, "document");
+        var beforeDocument = StorageSnapshots.capture(storageProvider);
         saveStatus(processingStatus(source.documentId()));
         try {
             commitComputedIngest(computeDocument(source), true);
             persistSnapshotIfConfigured();
         } catch (RuntimeException | Error failure) {
+            restoreBeforeFailedDocument(source.documentId(), beforeDocument, failure);
             markPreChunkedDocumentFailed(source, failure);
             persistSnapshotIfConfigured();
             throw failure;
@@ -632,6 +638,23 @@ public final class IndexingPipeline {
         for (var document : documents) {
             markPreChunkedDocumentFailed(document, errorMessage);
         }
+    }
+
+    private void restoreBeforeFailedDocument(String documentId, SnapshotStore.Snapshot beforeDocument, Throwable failure) {
+        if (hasNewGraphSnapshot(documentId, beforeDocument)) {
+            return;
+        }
+        try {
+            storageProvider.restore(beforeDocument);
+        } catch (RuntimeException | Error restoreFailure) {
+            failure.addSuppressed(restoreFailure);
+        }
+    }
+
+    private boolean hasNewGraphSnapshot(String documentId, SnapshotStore.Snapshot beforeDocument) {
+        var hadSnapshotBefore = beforeDocument.documentGraphSnapshots().stream()
+            .anyMatch(snapshot -> snapshot.documentId().equals(documentId));
+        return !hadSnapshotBefore && storageProvider.documentGraphSnapshotStore().loadDocument(documentId).isPresent();
     }
 
     private ComputedIngest computeDocument(Document document) {

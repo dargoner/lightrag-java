@@ -21,6 +21,8 @@ import io.github.lightrag.storage.InMemoryStorageProvider;
 import io.github.lightrag.storage.SnapshotStore;
 import io.github.lightrag.storage.StorageProvider;
 import io.github.lightrag.storage.WorkspaceStorageProvider;
+import io.github.lightrag.storage.arcadedb.ArcadeDbConfig;
+import io.github.lightrag.storage.arcadedb.ArcadeStorageProvider;
 import io.github.lightrag.storage.milvus.MilvusVectorConfig;
 import io.github.lightrag.storage.mysql.MySqlMilvusNeo4jStorageProvider;
 import io.github.lightrag.storage.mysql.MySqlStorageConfig;
@@ -44,6 +46,7 @@ import org.springframework.context.annotation.ConditionContext;
 import org.springframework.core.type.AnnotatedTypeMetadata;
 
 import javax.sql.DataSource;
+import java.net.URI;
 import java.sql.SQLException;
 import java.util.Arrays;
 import java.util.Locale;
@@ -223,6 +226,11 @@ public class LightRagAutoConfiguration {
                     neo4jConfig(properties),
                     snapshotStore
                 );
+            case ARCADEDB -> new ArcadeStorageProvider(
+                arcadeDbConfig(properties),
+                snapshotStore,
+                properties.getWorkspace().getDefaultId()
+            );
         };
     }
 
@@ -384,6 +392,19 @@ public class LightRagAutoConfiguration {
         );
     }
 
+    private static ArcadeDbConfig arcadeDbConfig(LightRagProperties properties) {
+        var arcadedb = properties.getStorage().getArcadedb();
+        return ArcadeDbConfig.builder()
+            .baseUrl(URI.create(requireValue(arcadedb.getBaseUrl(), "lightrag.storage.arcadedb.base-url")))
+            .database(requireValue(arcadedb.getDatabase(), "lightrag.storage.arcadedb.database"))
+            .username(requireValue(arcadedb.getUsername(), "lightrag.storage.arcadedb.username"))
+            .password(arcadedb.getPassword() == null ? "" : arcadedb.getPassword())
+            .vectorDimensions(requireInteger(arcadedb.getVectorDimensions(), "lightrag.storage.arcadedb.vector-dimensions"))
+            .timeout(arcadedb.getTimeout())
+            .initSchema(arcadedb.isInitSchema())
+            .build();
+    }
+
     private static String requireValue(String value, String key) {
         if (value == null || value.isBlank()) {
             throw new IllegalStateException(key + " is required");
@@ -424,6 +445,13 @@ public class LightRagAutoConfiguration {
     private static <T> T requireValue(T value, String message) {
         if (value == null) {
             throw new IllegalStateException(message);
+        }
+        return value;
+    }
+
+    private static int requireInteger(Integer value, String key) {
+        if (value == null) {
+            throw new IllegalStateException(key + " is required");
         }
         return value;
     }

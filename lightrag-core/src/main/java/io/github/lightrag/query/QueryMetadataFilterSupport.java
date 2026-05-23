@@ -1,6 +1,7 @@
 package io.github.lightrag.query;
 
 import io.github.lightrag.api.QueryRequest;
+import io.github.lightrag.storage.FilteredVectorStore;
 import io.github.lightrag.types.ScoredChunk;
 
 import java.util.List;
@@ -39,5 +40,25 @@ public final class QueryMetadataFilterSupport {
         var prefiltered = filterChunks(plan, chunks);
         var expanded = parentChunkExpander.expand(prefiltered.stream().limit(limit).toList(), limit);
         return filterChunks(plan, expanded);
+    }
+
+    public static FilteredVectorStore.MetadataFilter toVectorFilter(MetadataFilterPlan plan) {
+        Objects.requireNonNull(plan, "plan");
+        if (plan.isEmpty() || !plan.pushdownSummary().hasEarlyApplicablePredicates()) {
+            return FilteredVectorStore.MetadataFilter.empty();
+        }
+        var conditions = plan.normalizedConditions().stream()
+            .filter(MetadataFilterPlan.NormalizedMetadataCondition::isEarlyApplicable)
+            .map(condition -> new FilteredVectorStore.Condition(
+                condition.field(),
+                condition.operator(),
+                condition.stringValues()
+            ))
+            .toList();
+        return new FilteredVectorStore.MetadataFilter(plan.normalizedFilters(), conditions);
+    }
+
+    public static FilteredVectorStore.MetadataFilter toVectorFilter(QueryRequest request) {
+        return toVectorFilter(buildPlan(request));
     }
 }

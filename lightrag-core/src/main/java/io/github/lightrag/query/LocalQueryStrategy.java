@@ -4,6 +4,7 @@ import io.github.lightrag.api.QueryRequest;
 import io.github.lightrag.model.EmbeddingModel;
 import io.github.lightrag.storage.ChunkStore;
 import io.github.lightrag.storage.GraphStore;
+import io.github.lightrag.storage.OneShotRetrievalStore;
 import io.github.lightrag.storage.StorageProvider;
 import io.github.lightrag.types.Chunk;
 import io.github.lightrag.types.Entity;
@@ -53,19 +54,84 @@ public final class LocalQueryStrategy implements QueryStrategy {
         var relationScores = new LinkedHashMap<String, Double>();
 
         var vectorSearchStartedAt = System.nanoTime();
-        for (var match : VectorSearches.search(
+        var entityMatches = VectorSearches.search(
             storageProvider.vectorStore(),
             ENTITY_NAMESPACE,
             queryVector,
             query.query(),
             query.llKeywords(),
+            QueryMetadataFilterSupport.toVectorFilter(metadataPlan),
             query.topK()
-        )) {
+        );
+        for (var match : entityMatches) {
             entityScores.merge(match.id(), match.score(), Math::max);
         }
         var vectorSearchMs = elapsedMillis(vectorSearchStartedAt);
 
         var graphStartedAt = System.nanoTime();
+        var retrieval = retrieveLocal(entityMatches, entityScores, relationScores);
+        var matchedEntities = retrieval.result().entities();
+        var matchedRelations = retrieval.result().relations();
+        var limitedEntities = QueryBudgeting.limitEntities(matchedEntities, query.maxEntityTokens());
+        var limitedRelations = QueryBudgeting.limitRelations(matchedRelations, query.maxRelationTokens());
+        var graphMs = elapsedMillis(graphStartedAt);
+        var chunkStartedAt = System.nanoTime();
+        var matchedChunks = QueryMetadataFilterSupport.expandAndFilter(
+            metadataPlan,
+            retrieval.result().chunks().isEmpty()
+                ? collectChunks(limitedEntities, limitedRelations)
+                : retainChunks(retrieval.result().chunks(), limitedEntities, limitedRelations),
+            parentChunkExpander,
+            query.chunkTopK()
+        );
+        var chunkMs = elapsedMillis(chunkStartedAt);
+
+        var context = new QueryContext(
+            limitedEntities,
+            limitedRelations,
+            matchedChunks,
+            ""
+        );
+        var assembleStartedAt = System.nanoTime();
+        var assembledContext = contextAssembler.assemble(context);
+        var assembleMs = elapsedMillis(assembleStartedAt);
+        var elapsedMs = elapsedMillis(startedAt);
+        log.info(
+            "LightRAG local retrieve completed: mode={}, query={}, embeddingText={}, llKeywords={}, topK={}, chunkTopK={}, oneShot={}, embedMs={}, vectorSearchMs={}, graphMs={}, chunkMs={}, assembleMs={}, elapsedMs={}, entityCount={}, relationCount={}, chunkCount={}",
+            query.mode(),
+            query.query(),
+            embeddingText,
+            query.llKeywords(),
+            query.topK(),
+            query.chunkTopK(),
+            retrieval.oneShotUsed(),
+            embedMs,
+            vectorSearchMs,
+            graphMs,
+            chunkMs,
+            assembleMs,
+            elapsedMs,
+            limitedEntities.size(),
+            limitedRelations.size(),
+            matchedChunks.size()
+        );
+        return new QueryContext(
+            context.matchedEntities(),
+            context.matchedRelations(),
+            context.matchedChunks(),
+            assembledContext
+        );
+    }
+
+    private LocalRetrieval retrieveLocal(
+        List<io.github.lightrag.storage.VectorStore.VectorMatch> entityMatches,
+        LinkedHashMap<String, Double> entityScores,
+        LinkedHashMap<String, Double> relationScores
+    ) {
+        if (storageProvider instanceof OneShotRetrievalStore oneShotRetrievalStore) {
+            return new LocalRetrieval(oneShotRetrievalStore.retrieveLocal(entityMatches), true);
+        }
+
         var relationsByEntityId = storageProvider.graphStore().findRelations(List.copyOf(entityScores.keySet()));
         for (var entityId : List.copyOf(entityScores.keySet())) {
             for (var relationRecord : relationsByEntityId.getOrDefault(entityId, List.of())) {
@@ -84,52 +150,27 @@ public final class LocalQueryStrategy implements QueryStrategy {
             .map(relation -> new ScoredRelation(relation.id(), toRelation(relation), relationScores.getOrDefault(relation.id(), 0.0d)))
             .sorted(scoreOrder(ScoredRelation::score, ScoredRelation::relationId))
             .toList();
-        var limitedEntities = QueryBudgeting.limitEntities(matchedEntities, query.maxEntityTokens());
-        var limitedRelations = QueryBudgeting.limitRelations(matchedRelations, query.maxRelationTokens());
-        var graphMs = elapsedMillis(graphStartedAt);
-        var chunkStartedAt = System.nanoTime();
-        var matchedChunks = QueryMetadataFilterSupport.expandAndFilter(
-            metadataPlan,
-            collectChunks(limitedEntities, limitedRelations),
-            parentChunkExpander,
-            query.chunkTopK()
-        );
-        var chunkMs = elapsedMillis(chunkStartedAt);
+        return new LocalRetrieval(new OneShotRetrievalStore.LocalRetrievalResult(matchedEntities, matchedRelations, List.of()), false);
+    }
 
-        var context = new QueryContext(
-            limitedEntities,
-            limitedRelations,
-            matchedChunks,
-            ""
-        );
-        var assembleStartedAt = System.nanoTime();
-        var assembledContext = contextAssembler.assemble(context);
-        var assembleMs = elapsedMillis(assembleStartedAt);
-        var elapsedMs = elapsedMillis(startedAt);
-        log.info(
-            "LightRAG local retrieve completed: mode={}, query={}, embeddingText={}, llKeywords={}, topK={}, chunkTopK={}, embedMs={}, vectorSearchMs={}, graphMs={}, chunkMs={}, assembleMs={}, elapsedMs={}, entityCount={}, relationCount={}, chunkCount={}",
-            query.mode(),
-            query.query(),
-            embeddingText,
-            query.llKeywords(),
-            query.topK(),
-            query.chunkTopK(),
-            embedMs,
-            vectorSearchMs,
-            graphMs,
-            chunkMs,
-            assembleMs,
-            elapsedMs,
-            limitedEntities.size(),
-            limitedRelations.size(),
-            matchedChunks.size()
-        );
-        return new QueryContext(
-            context.matchedEntities(),
-            context.matchedRelations(),
-            context.matchedChunks(),
-            assembledContext
-        );
+    private record LocalRetrieval(OneShotRetrievalStore.LocalRetrievalResult result, boolean oneShotUsed) {
+    }
+
+    private static List<ScoredChunk> retainChunks(
+        List<ScoredChunk> chunks,
+        List<ScoredEntity> matchedEntities,
+        List<ScoredRelation> matchedRelations
+    ) {
+        var chunkIds = new java.util.LinkedHashSet<String>();
+        for (var entity : matchedEntities) {
+            chunkIds.addAll(entity.entity().sourceChunkIds());
+        }
+        for (var relation : matchedRelations) {
+            chunkIds.addAll(relation.relation().sourceChunkIds());
+        }
+        return chunks.stream()
+            .filter(chunk -> chunkIds.contains(chunk.chunkId()))
+            .toList();
     }
 
     private List<ScoredChunk> collectChunks(

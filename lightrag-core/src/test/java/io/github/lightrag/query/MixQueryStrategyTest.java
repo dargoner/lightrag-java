@@ -7,9 +7,11 @@ import ch.qos.logback.core.read.ListAppender;
 import io.github.lightrag.api.QueryMode;
 import io.github.lightrag.api.QueryRequest;
 import io.github.lightrag.model.EmbeddingModel;
+import io.github.lightrag.storage.BatchVectorStore;
 import io.github.lightrag.storage.HybridVectorStore;
 import io.github.lightrag.storage.InMemoryStorageProvider;
 import io.github.lightrag.storage.ChunkStore;
+import io.github.lightrag.storage.OneShotRetrievalStore;
 import io.github.lightrag.storage.StorageProvider;
 import io.github.lightrag.storage.VectorStore;
 import io.github.lightrag.types.Chunk;
@@ -20,6 +22,7 @@ import org.junit.jupiter.api.Test;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
+import java.util.Objects;
 import java.util.concurrent.BrokenBarrierException;
 import java.util.concurrent.CyclicBarrier;
 import java.util.concurrent.TimeUnit;
@@ -195,6 +198,129 @@ class MixQueryStrategyTest {
         assertThat(context.matchedChunks())
             .extracting(ScoredChunk::chunkId)
             .containsExactly("chunk-1", "chunk-2", "chunk-3");
+    }
+
+    @Test
+    void mixUsesOneShotDirectChunkRetrievalWhenAvailable() {
+        var delegate = InMemoryStorageProvider.create();
+        var chunk = new ChunkStore.ChunkRecord(
+            "chunk-2",
+            "doc-2",
+            "One shot direct chunk two",
+            4,
+            0,
+            Map.of()
+        );
+        delegate.chunkStore().save(chunk);
+        var vectorStore = new RecordingHybridVectorStore(List.of(
+            new VectorStore.VectorMatch("chunk-2", 0.92d)
+        ));
+        var chunkStore = new CountingChunkStore(delegate.chunkStore());
+        var oneShot = new RecordingOneShotRetrievalStore(delegate, chunkStore, Map.of("chunk-2", chunk));
+        var strategy = new MixQueryStrategy(
+            new FakeEmbeddingModel(Map.of("mix one shot question", List.of(1.0d, 0.0d))),
+            oneShot.withVectorStore(vectorStore),
+            request -> new QueryContext(
+                List.of(),
+                List.of(),
+                List.of(new ScoredChunk(
+                    "chunk-1",
+                    new Chunk("chunk-1", "doc-1", "Hybrid chunk", 4, 0, Map.of()),
+                    1.0d
+                )),
+                ""
+            ),
+            new ContextAssembler()
+        );
+
+        var context = strategy.retrieve(QueryRequest.builder()
+            .query("mix one shot question")
+            .mode(QueryMode.MIX)
+            .chunkTopK(2)
+            .build());
+
+        assertThat(oneShot.retrieveChunksCalls.get()).isEqualTo(1);
+        assertThat(chunkStore.loadAllCalls()).isZero();
+        assertThat(context.matchedChunks())
+            .extracting(ScoredChunk::chunkId)
+            .containsExactly("chunk-1", "chunk-2");
+    }
+
+    @Test
+    void mixUsesOneShotMixRetrievalWhenAvailable() {
+        var delegate = InMemoryStorageProvider.create();
+        var vectorStore = new NamespaceRecordingVectorStore(Map.of(
+            "entities", List.of(new VectorStore.VectorMatch("alice", 0.95d)),
+            "relations", List.of(new VectorStore.VectorMatch(relationId("alice", "bob"), 0.90d)),
+            "chunks", List.of(new VectorStore.VectorMatch("chunk-2", 0.85d))
+        ));
+        var oneShot = new RecordingMixOneShotRetrievalStore(delegate, vectorStore);
+        var hybridCalled = new AtomicBoolean(false);
+        var strategy = new MixQueryStrategy(
+            new FakeEmbeddingModel(Map.of("mix one shot aggregate question", List.of(1.0d, 0.0d))),
+            oneShot,
+            request -> {
+                hybridCalled.set(true);
+                return new QueryContext(List.of(), List.of(), List.of(), "");
+            },
+            new ContextAssembler()
+        );
+
+        var context = strategy.retrieve(QueryRequest.builder()
+            .query("mix one shot aggregate question")
+            .mode(QueryMode.MIX)
+            .topK(1)
+            .chunkTopK(2)
+            .build());
+
+        assertThat(hybridCalled).isFalse();
+        assertThat(oneShot.retrieveMixCalls.get()).isEqualTo(1);
+        assertThat(oneShot.retrieveChunksCalls.get()).isZero();
+        assertThat(vectorStore.namespaces()).containsExactly("entities", "relations", "chunks");
+        assertThat(context.matchedChunks())
+            .extracting(ScoredChunk::chunkId)
+            .containsExactly("chunk-1", "chunk-2");
+    }
+
+    @Test
+    void oneShotMixBatchesEmbeddingsAndVectorSearches() {
+        var delegate = InMemoryStorageProvider.create();
+        var vectorStore = new RecordingBatchVectorStore(Map.of(
+            "entities", List.of(new VectorStore.VectorMatch("alice", 0.95d)),
+            "relations", List.of(new VectorStore.VectorMatch(relationId("alice", "bob"), 0.90d)),
+            "chunks", List.of(new VectorStore.VectorMatch("chunk-2", 0.85d))
+        ));
+        var oneShot = new RecordingMixOneShotRetrievalStore(delegate, vectorStore);
+        var embeddings = new RecordingEmbeddingModel(Map.of(
+            "mix batch aggregate question", List.of(1.0d, 0.0d),
+            "alice", List.of(0.9d, 0.1d),
+            "organization", List.of(0.1d, 0.9d)
+        ));
+        var strategy = new MixQueryStrategy(
+            embeddings,
+            oneShot,
+            request -> new QueryContext(List.of(), List.of(), List.of(), ""),
+            new ContextAssembler()
+        );
+
+        strategy.retrieve(QueryRequest.builder()
+            .query("mix batch aggregate question")
+            .mode(QueryMode.MIX)
+            .llKeywords(List.of("alice"))
+            .hlKeywords(List.of("organization"))
+            .topK(1)
+            .chunkTopK(2)
+            .build());
+
+        assertThat(embeddings.calls.get()).isEqualTo(1);
+        assertThat(embeddings.batches).containsExactly(List.of(
+            "mix batch aggregate question",
+            "alice",
+            "organization"
+        ));
+        assertThat(vectorStore.batchCalls.get()).isEqualTo(1);
+        assertThat(vectorStore.searchCalls.get()).isZero();
+        assertThat(vectorStore.recordedKeys).containsExactly("entities", "relations", "chunks");
     }
 
     @Test
@@ -397,6 +523,7 @@ class MixQueryStrategyTest {
                 .extracting(ILoggingEvent::getFormattedMessage)
                 .anySatisfy(message -> {
                     assertThat(message).contains("LightRAG mix retrieve completed");
+                    assertThat(message).contains("directOneShot=");
                     assertThat(message).contains("hybridMs=");
                     assertThat(message).contains("embedMs=");
                     assertThat(message).contains("chunkVectorSearchMs=");
@@ -484,6 +611,25 @@ class MixQueryStrategyTest {
     private record FakeEmbeddingModel(Map<String, List<Double>> vectorsByText) implements EmbeddingModel {
         @Override
         public List<List<Double>> embedAll(List<String> texts) {
+            return texts.stream()
+                .map(text -> vectorsByText.getOrDefault(text, List.of(0.0d, 0.0d)))
+                .toList();
+        }
+    }
+
+    private static final class RecordingEmbeddingModel implements EmbeddingModel {
+        private final Map<String, List<Double>> vectorsByText;
+        private final AtomicInteger calls = new AtomicInteger();
+        private final java.util.ArrayList<List<String>> batches = new java.util.ArrayList<>();
+
+        private RecordingEmbeddingModel(Map<String, List<Double>> vectorsByText) {
+            this.vectorsByText = vectorsByText;
+        }
+
+        @Override
+        public List<List<Double>> embedAll(List<String> texts) {
+            calls.incrementAndGet();
+            batches.add(List.copyOf(texts));
             return texts.stream()
                 .map(text -> vectorsByText.getOrDefault(text, List.of(0.0d, 0.0d)))
                 .toList();
@@ -596,6 +742,198 @@ class MixQueryStrategyTest {
         }
     }
 
+    private static final class RecordingOneShotRetrievalStore implements StorageProvider, OneShotRetrievalStore {
+        private final InMemoryStorageProvider delegate;
+        private final ChunkStore chunkStore;
+        private final Map<String, ChunkStore.ChunkRecord> seededChunks;
+        private final AtomicInteger retrieveChunksCalls = new AtomicInteger();
+        private VectorStore vectorStore;
+
+        private RecordingOneShotRetrievalStore(
+            InMemoryStorageProvider delegate,
+            ChunkStore chunkStore,
+            Map<String, ChunkStore.ChunkRecord> seededChunks
+        ) {
+            this.delegate = delegate;
+            this.chunkStore = chunkStore;
+            this.seededChunks = seededChunks;
+        }
+
+        private RecordingOneShotRetrievalStore withVectorStore(VectorStore vectorStore) {
+            this.vectorStore = vectorStore;
+            return this;
+        }
+
+        @Override
+        public LocalRetrievalResult retrieveLocal(List<VectorStore.VectorMatch> entityMatches) {
+            return new LocalRetrievalResult(List.of(), List.of(), List.of());
+        }
+
+        @Override
+        public GlobalRetrievalResult retrieveGlobal(List<VectorStore.VectorMatch> relationMatches) {
+            return new GlobalRetrievalResult(List.of(), List.of(), List.of());
+        }
+
+        @Override
+        public DirectChunkRetrievalResult retrieveChunks(List<VectorStore.VectorMatch> chunkMatches) {
+            retrieveChunksCalls.incrementAndGet();
+            var chunks = chunkMatches.stream()
+                .map(match -> {
+                    var chunk = seededChunks.get(match.id());
+                    return chunk == null ? null : new ScoredChunk(match.id(), new Chunk(
+                        chunk.id(),
+                        chunk.documentId(),
+                        chunk.text(),
+                        chunk.tokenCount(),
+                        chunk.order(),
+                        chunk.metadata()
+                    ), match.score());
+                })
+                .filter(Objects::nonNull)
+                .toList();
+            return new DirectChunkRetrievalResult(chunks);
+        }
+
+        @Override
+        public VectorStore vectorStore() {
+            return vectorStore != null ? vectorStore : delegate.vectorStore();
+        }
+
+        @Override
+        public io.github.lightrag.storage.DocumentStore documentStore() {
+            return delegate.documentStore();
+        }
+
+        @Override
+        public ChunkStore chunkStore() {
+            return chunkStore;
+        }
+
+        @Override
+        public io.github.lightrag.storage.GraphStore graphStore() {
+            return delegate.graphStore();
+        }
+
+        @Override
+        public io.github.lightrag.storage.DocumentStatusStore documentStatusStore() {
+            return delegate.documentStatusStore();
+        }
+
+        @Override
+        public io.github.lightrag.storage.TaskStore taskStore() {
+            return delegate.taskStore();
+        }
+
+        @Override
+        public io.github.lightrag.storage.TaskStageStore taskStageStore() {
+            return delegate.taskStageStore();
+        }
+
+        @Override
+        public io.github.lightrag.storage.SnapshotStore snapshotStore() {
+            return delegate.snapshotStore();
+        }
+    }
+
+    private static final class RecordingMixOneShotRetrievalStore implements StorageProvider, OneShotRetrievalStore {
+        private final InMemoryStorageProvider delegate;
+        private final VectorStore vectorStore;
+        private final AtomicInteger retrieveMixCalls = new AtomicInteger();
+        private final AtomicInteger retrieveChunksCalls = new AtomicInteger();
+
+        private RecordingMixOneShotRetrievalStore(InMemoryStorageProvider delegate, VectorStore vectorStore) {
+            this.delegate = delegate;
+            this.vectorStore = vectorStore;
+        }
+
+        @Override
+        public boolean supportsMixRetrieval() {
+            return true;
+        }
+
+        @Override
+        public LocalRetrievalResult retrieveLocal(List<VectorStore.VectorMatch> entityMatches) {
+            return new LocalRetrievalResult(List.of(), List.of(), List.of());
+        }
+
+        @Override
+        public GlobalRetrievalResult retrieveGlobal(List<VectorStore.VectorMatch> relationMatches) {
+            return new GlobalRetrievalResult(List.of(), List.of(), List.of());
+        }
+
+        @Override
+        public DirectChunkRetrievalResult retrieveChunks(List<VectorStore.VectorMatch> chunkMatches) {
+            retrieveChunksCalls.incrementAndGet();
+            return new DirectChunkRetrievalResult(List.of());
+        }
+
+        @Override
+        public MixRetrievalResult retrieveMix(
+            List<VectorStore.VectorMatch> entityMatches,
+            List<VectorStore.VectorMatch> relationMatches,
+            List<VectorStore.VectorMatch> chunkMatches
+        ) {
+            retrieveMixCalls.incrementAndGet();
+            assertThat(entityMatches).extracting(VectorStore.VectorMatch::id).containsExactly("alice");
+            assertThat(relationMatches).extracting(VectorStore.VectorMatch::id).containsExactly(relationId("alice", "bob"));
+            assertThat(chunkMatches).extracting(VectorStore.VectorMatch::id).containsExactly("chunk-2");
+            return new MixRetrievalResult(
+                List.of(),
+                List.of(),
+                List.of(new ScoredChunk(
+                    "chunk-1",
+                    new Chunk("chunk-1", "doc-1", "Graph chunk", 4, 0, Map.of()),
+                    0.95d
+                )),
+                List.of(new ScoredChunk(
+                    "chunk-2",
+                    new Chunk("chunk-2", "doc-2", "Direct chunk", 4, 0, Map.of()),
+                    0.85d
+                ))
+            );
+        }
+
+        @Override
+        public VectorStore vectorStore() {
+            return vectorStore;
+        }
+
+        @Override
+        public io.github.lightrag.storage.DocumentStore documentStore() {
+            return delegate.documentStore();
+        }
+
+        @Override
+        public ChunkStore chunkStore() {
+            return delegate.chunkStore();
+        }
+
+        @Override
+        public io.github.lightrag.storage.GraphStore graphStore() {
+            return delegate.graphStore();
+        }
+
+        @Override
+        public io.github.lightrag.storage.DocumentStatusStore documentStatusStore() {
+            return delegate.documentStatusStore();
+        }
+
+        @Override
+        public io.github.lightrag.storage.TaskStore taskStore() {
+            return delegate.taskStore();
+        }
+
+        @Override
+        public io.github.lightrag.storage.TaskStageStore taskStageStore() {
+            return delegate.taskStageStore();
+        }
+
+        @Override
+        public io.github.lightrag.storage.SnapshotStore snapshotStore() {
+            return delegate.snapshotStore();
+        }
+    }
+
     private static final class CountingChunkStore implements ChunkStore {
         private final ChunkStore delegate;
         private final AtomicInteger loadCalls = new AtomicInteger();
@@ -666,6 +1004,83 @@ class MixQueryStrategyTest {
         public List<VectorMatch> search(String namespace, SearchRequest request) {
             this.recordedRequest = request;
             return matches.stream().limit(request.topK()).toList();
+        }
+
+        @Override
+        public List<VectorRecord> list(String namespace) {
+            return List.of();
+        }
+    }
+
+    private static final class NamespaceRecordingVectorStore implements HybridVectorStore {
+        private final Map<String, List<VectorMatch>> matchesByNamespace;
+        private final java.util.ArrayList<String> namespaces = new java.util.ArrayList<>();
+
+        private NamespaceRecordingVectorStore(Map<String, List<VectorMatch>> matchesByNamespace) {
+            this.matchesByNamespace = matchesByNamespace;
+        }
+
+        @Override
+        public void saveAll(String namespace, List<VectorRecord> vectors) {
+        }
+
+        @Override
+        public void saveAllEnriched(String namespace, List<EnrichedVectorRecord> records) {
+        }
+
+        @Override
+        public List<VectorMatch> search(String namespace, List<Double> queryVector, int topK) {
+            namespaces.add(namespace);
+            return matchesByNamespace.getOrDefault(namespace, List.of()).stream().limit(topK).toList();
+        }
+
+        @Override
+        public List<VectorMatch> search(String namespace, SearchRequest request) {
+            namespaces.add(namespace);
+            return matchesByNamespace.getOrDefault(namespace, List.of()).stream().limit(request.topK()).toList();
+        }
+
+        @Override
+        public List<VectorRecord> list(String namespace) {
+            return List.of();
+        }
+
+        private List<String> namespaces() {
+            return List.copyOf(namespaces);
+        }
+    }
+
+    private static final class RecordingBatchVectorStore implements BatchVectorStore {
+        private final Map<String, List<VectorMatch>> matchesByKey;
+        private final AtomicInteger batchCalls = new AtomicInteger();
+        private final AtomicInteger searchCalls = new AtomicInteger();
+        private final java.util.ArrayList<String> recordedKeys = new java.util.ArrayList<>();
+
+        private RecordingBatchVectorStore(Map<String, List<VectorMatch>> matchesByKey) {
+            this.matchesByKey = matchesByKey;
+        }
+
+        @Override
+        public void saveAll(String namespace, List<VectorRecord> vectors) {
+        }
+
+        @Override
+        public List<VectorMatch> search(String namespace, List<Double> queryVector, int topK) {
+            searchCalls.incrementAndGet();
+            return matchesByKey.getOrDefault(namespace, List.of()).stream().limit(topK).toList();
+        }
+
+        @Override
+        public Map<String, List<VectorMatch>> batchSearch(List<SearchSpec> searches) {
+            batchCalls.incrementAndGet();
+            var results = new java.util.LinkedHashMap<String, List<VectorMatch>>();
+            for (var search : searches) {
+                recordedKeys.add(search.key());
+                results.put(search.key(), matchesByKey.getOrDefault(search.key(), List.of()).stream()
+                    .limit(search.topK())
+                    .toList());
+            }
+            return Map.copyOf(results);
         }
 
         @Override

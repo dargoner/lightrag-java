@@ -42,6 +42,7 @@ public final class NaiveQueryStrategy implements QueryStrategy {
                 queryVector,
                 query.query(),
                 List.of(),
+                QueryMetadataFilterSupport.toVectorFilter(metadataPlan),
                 query.chunkTopK()
             ).stream()
             .map(match -> storageProvider.chunkStore().load(match.id())

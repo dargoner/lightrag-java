@@ -6,6 +6,8 @@ import io.github.lightrag.storage.InMemoryStorageProvider;
 import io.github.lightrag.storage.SnapshotStore;
 import io.github.lightrag.storage.StorageProvider;
 import io.github.lightrag.storage.WorkspaceStorageProvider;
+import io.github.lightrag.storage.arcadedb.ArcadeDbConfig;
+import io.github.lightrag.storage.arcadedb.ArcadeStorageProvider;
 import io.github.lightrag.storage.milvus.MilvusVectorConfig;
 import io.github.lightrag.storage.mysql.MySqlMilvusNeo4jStorageProvider;
 import io.github.lightrag.storage.mysql.MySqlStorageConfig;
@@ -17,6 +19,7 @@ import io.github.lightrag.storage.postgres.PostgresStorageProvider;
 import org.springframework.beans.factory.ObjectProvider;
 
 import javax.sql.DataSource;
+import java.net.URI;
 import java.nio.file.Path;
 import java.sql.SQLException;
 import java.util.List;
@@ -195,6 +198,7 @@ public final class SpringWorkspaceStorageProvider implements WorkspaceStoragePro
                     snapshotStore,
                     scope
                 );
+            case ARCADEDB -> new ArcadeStorageProvider(arcadeDbConfig(), snapshotStore, scope.workspaceId());
         };
     }
 
@@ -253,6 +257,19 @@ public final class SpringWorkspaceStorageProvider implements WorkspaceStoragePro
         );
     }
 
+    private ArcadeDbConfig arcadeDbConfig() {
+        var arcadedb = properties.getStorage().getArcadedb();
+        return ArcadeDbConfig.builder()
+            .baseUrl(URI.create(requireValue(arcadedb.getBaseUrl(), "lightrag.storage.arcadedb.base-url")))
+            .database(requireValue(arcadedb.getDatabase(), "lightrag.storage.arcadedb.database"))
+            .username(requireValue(arcadedb.getUsername(), "lightrag.storage.arcadedb.username"))
+            .password(arcadedb.getPassword() == null ? "" : arcadedb.getPassword())
+            .vectorDimensions(requireInteger(arcadedb.getVectorDimensions(), "lightrag.storage.arcadedb.vector-dimensions"))
+            .timeout(arcadedb.getTimeout())
+            .initSchema(arcadedb.isInitSchema())
+            .build();
+    }
+
     private Optional<Path> configuredSnapshotPath() {
         var configuredSnapshotPath = properties.getSnapshotPath();
         if (configuredSnapshotPath == null || configuredSnapshotPath.isBlank()) {
@@ -308,7 +325,8 @@ public final class SpringWorkspaceStorageProvider implements WorkspaceStoragePro
             && !(storageProvider instanceof PostgresStorageProvider)
             && !(storageProvider instanceof PostgresNeo4jStorageProvider)
             && !(storageProvider instanceof PostgresMilvusNeo4jStorageProvider)
-            && !(storageProvider instanceof MySqlMilvusNeo4jStorageProvider);
+            && !(storageProvider instanceof MySqlMilvusNeo4jStorageProvider)
+            && !(storageProvider instanceof ArcadeStorageProvider);
     }
 
     private static String slug(String workspaceId) {
@@ -332,6 +350,13 @@ public final class SpringWorkspaceStorageProvider implements WorkspaceStoragePro
 
     private static String requireValue(String value, String key) {
         if (value == null || value.isBlank()) {
+            throw new IllegalStateException(key + " is required");
+        }
+        return value;
+    }
+
+    private static int requireInteger(Integer value, String key) {
+        if (value == null) {
             throw new IllegalStateException(key + " is required");
         }
         return value;

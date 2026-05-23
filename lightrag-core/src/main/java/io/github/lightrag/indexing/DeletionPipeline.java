@@ -114,7 +114,8 @@ public final class DeletionPipeline {
             .collect(java.util.stream.Collectors.toCollection(LinkedHashSet::new));
         var preservedStatuses = beforeSnapshot.documentStatuses().stream()
             .filter(statusRecord -> !statusRecord.documentId().equals(targetId))
-            .filter(statusRecord -> !remainingDocumentIds.contains(statusRecord.documentId()))
+            .filter(statusRecord -> statusRecord.status() == io.github.lightrag.api.DocumentStatus.FAILED
+                || !remainingDocumentIds.contains(statusRecord.documentId()))
             .toList();
         if (remainingDocuments.size() == beforeSnapshot.documents().size()) {
             return;

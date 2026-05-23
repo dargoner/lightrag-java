@@ -31,7 +31,19 @@ public final class HybridVectorPayloads {
                     vector.id(),
                     vector.vector(),
                     chunk.text(),
-                    chunkKeywords(chunk)
+                    chunkKeywords(chunk),
+                    "",
+                    "",
+                    metadataValue(chunk, "file_path", "filePath"),
+                    chunk.documentId(),
+                    chunk.id(),
+                    metadataValue(chunk, "content_type", "contentType", "smart_chunker.content_type"),
+                    metadataValue(chunk, "section_path", "sectionPath", "smart_chunker.section_path"),
+                    metadataValue(chunk, "source"),
+                    metadataValue(chunk, "tenant_id", "tenantId"),
+                    metadataValue(chunk, "created_at", "createdAt"),
+                    Boolean.parseBoolean(metadataValueOrDefault(chunk, "true", "searchable")),
+                    chunk.metadata()
                 );
             })
             .toList();
@@ -76,7 +88,16 @@ public final class HybridVectorPayloads {
                     relationKeywords(relation),
                     relation.srcId(),
                     relation.tgtId(),
-                    relation.filePath()
+                    relation.filePath(),
+                    "",
+                    relation.sourceId(),
+                    "",
+                    "",
+                    "",
+                    "",
+                    "",
+                    true,
+                    Map.of()
                 );
             })
             .toList();
@@ -134,6 +155,26 @@ public final class HybridVectorPayloads {
             normalized.add(value.strip());
         }
         return List.copyOf(normalized);
+    }
+
+    private static String metadataValue(Chunk chunk, String key, String... aliases) {
+        var metadata = chunk.metadata();
+        var value = metadata.get(key);
+        if (value != null) {
+            return value;
+        }
+        for (var alias : aliases) {
+            value = metadata.get(alias);
+            if (value != null) {
+                return value;
+            }
+        }
+        return "";
+    }
+
+    private static String metadataValueOrDefault(Chunk chunk, String defaultValue, String key, String... aliases) {
+        var value = metadataValue(chunk, key, aliases);
+        return value.isBlank() ? defaultValue : value;
     }
 
     private static <T> Map<String, T> indexById(List<T> values, java.util.function.Function<T, String> idExtractor) {

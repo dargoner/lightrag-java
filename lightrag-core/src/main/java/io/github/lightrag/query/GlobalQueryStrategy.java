@@ -4,6 +4,7 @@ import io.github.lightrag.api.QueryRequest;
 import io.github.lightrag.model.EmbeddingModel;
 import io.github.lightrag.storage.ChunkStore;
 import io.github.lightrag.storage.GraphStore;
+import io.github.lightrag.storage.OneShotRetrievalStore;
 import io.github.lightrag.storage.StorageProvider;
 import io.github.lightrag.types.Chunk;
 import io.github.lightrag.types.Entity;
@@ -50,49 +51,30 @@ public final class GlobalQueryStrategy implements QueryStrategy {
         var embedMs = elapsedMillis(embedStartedAt);
         var relationScores = new LinkedHashMap<String, Double>();
         var vectorSearchStartedAt = System.nanoTime();
-        for (var match : VectorSearches.search(
+        var relationMatches = VectorSearches.search(
             storageProvider.vectorStore(),
             RELATION_NAMESPACE,
             queryVector,
             query.query(),
             query.hlKeywords(),
+            QueryMetadataFilterSupport.toVectorFilter(metadataPlan),
             query.topK()
-        )) {
+        );
+        for (var match : relationMatches) {
             relationScores.merge(match.id(), match.score(), Math::max);
         }
         var vectorSearchMs = elapsedMillis(vectorSearchStartedAt);
 
         var graphStartedAt = System.nanoTime();
-        var matchedRelations = QueryBudgeting.limitRelations(storageProvider.graphStore().loadRelations(List.copyOf(relationScores.keySet())).stream()
-            .map(relation -> new ScoredRelation(relation.id(), toRelation(relation), relationScores.getOrDefault(relation.id(), 0.0d)))
-            .sorted(scoreOrder(ScoredRelation::score, ScoredRelation::relationId))
-            .toList(), query.maxRelationTokens());
-
-        var entityScores = new LinkedHashMap<String, Double>();
-        var chunkScores = new LinkedHashMap<String, Double>();
-        for (var relation : matchedRelations) {
-            entityScores.merge(relation.relation().srcId(), relation.score(), Math::max);
-            entityScores.merge(relation.relation().tgtId(), relation.score(), Math::max);
-            for (var chunkId : relation.relation().sourceChunkIds()) {
-                chunkScores.merge(chunkId, relation.score(), Math::max);
-            }
-        }
-
-        var matchedEntities = QueryBudgeting.limitEntities(storageProvider.graphStore().loadEntities(List.copyOf(entityScores.keySet())).stream()
-            .map(entity -> new ScoredEntity(entity.id(), toEntity(entity), entityScores.getOrDefault(entity.id(), 0.0d)))
-            .sorted(scoreOrder(ScoredEntity::score, ScoredEntity::entityId))
-            .toList(), query.maxEntityTokens());
+        var retrieval = retrieveGlobal(relationMatches, relationScores);
+        var matchedRelations = QueryBudgeting.limitRelations(retrieval.result().relations(), query.maxRelationTokens());
+        var matchedEntities = QueryBudgeting.limitEntities(retrieval.result().entities(), query.maxEntityTokens());
         var graphMs = elapsedMillis(graphStartedAt);
         var chunkStartedAt = System.nanoTime();
-        var chunksById = storageProvider.chunkStore().loadAll(List.copyOf(chunkScores.keySet()));
-        var matchedChunks = QueryMetadataFilterSupport.expandAndFilter(metadataPlan, chunkScores.entrySet().stream()
-            .map(entry -> {
-                var chunk = chunksById.get(entry.getKey());
-                return chunk == null ? null : new ScoredChunk(entry.getKey(), toChunk(chunk), entry.getValue());
-            })
-            .filter(Objects::nonNull)
-            .sorted(scoreOrder(ScoredChunk::score, ScoredChunk::chunkId))
-            .toList(),
+        var matchedChunks = QueryMetadataFilterSupport.expandAndFilter(metadataPlan,
+            retrieval.result().chunks().isEmpty()
+                ? collectChunks(matchedRelations)
+                : retainChunks(retrieval.result().chunks(), matchedRelations),
             parentChunkExpander,
             query.chunkTopK()
         );
@@ -109,13 +91,14 @@ public final class GlobalQueryStrategy implements QueryStrategy {
         var assembleMs = elapsedMillis(assembleStartedAt);
         var elapsedMs = elapsedMillis(startedAt);
         log.info(
-            "LightRAG global retrieve completed: mode={}, query={}, embeddingText={}, hlKeywords={}, topK={}, chunkTopK={}, embedMs={}, vectorSearchMs={}, graphMs={}, chunkMs={}, assembleMs={}, elapsedMs={}, entityCount={}, relationCount={}, chunkCount={}",
+            "LightRAG global retrieve completed: mode={}, query={}, embeddingText={}, hlKeywords={}, topK={}, chunkTopK={}, oneShot={}, embedMs={}, vectorSearchMs={}, graphMs={}, chunkMs={}, assembleMs={}, elapsedMs={}, entityCount={}, relationCount={}, chunkCount={}",
             query.mode(),
             query.query(),
             embeddingText,
             query.hlKeywords(),
             query.topK(),
             query.chunkTopK(),
+            retrieval.oneShotUsed(),
             embedMs,
             vectorSearchMs,
             graphMs,
@@ -132,6 +115,64 @@ public final class GlobalQueryStrategy implements QueryStrategy {
             context.matchedChunks(),
             assembledContext
         );
+    }
+
+    private GlobalRetrieval retrieveGlobal(
+        List<io.github.lightrag.storage.VectorStore.VectorMatch> relationMatches,
+        LinkedHashMap<String, Double> relationScores
+    ) {
+        if (storageProvider instanceof OneShotRetrievalStore oneShotRetrievalStore) {
+            return new GlobalRetrieval(oneShotRetrievalStore.retrieveGlobal(relationMatches), true);
+        }
+
+        var matchedRelations = storageProvider.graphStore().loadRelations(List.copyOf(relationScores.keySet())).stream()
+            .map(relation -> new ScoredRelation(relation.id(), toRelation(relation), relationScores.getOrDefault(relation.id(), 0.0d)))
+            .sorted(scoreOrder(ScoredRelation::score, ScoredRelation::relationId))
+            .toList();
+
+        var entityScores = new LinkedHashMap<String, Double>();
+        for (var relation : matchedRelations) {
+            entityScores.merge(relation.relation().srcId(), relation.score(), Math::max);
+            entityScores.merge(relation.relation().tgtId(), relation.score(), Math::max);
+        }
+
+        var matchedEntities = storageProvider.graphStore().loadEntities(List.copyOf(entityScores.keySet())).stream()
+            .map(entity -> new ScoredEntity(entity.id(), toEntity(entity), entityScores.getOrDefault(entity.id(), 0.0d)))
+            .sorted(scoreOrder(ScoredEntity::score, ScoredEntity::entityId))
+            .toList();
+        return new GlobalRetrieval(new OneShotRetrievalStore.GlobalRetrievalResult(matchedEntities, matchedRelations, List.of()), false);
+    }
+
+    private record GlobalRetrieval(OneShotRetrievalStore.GlobalRetrievalResult result, boolean oneShotUsed) {
+    }
+
+    private List<ScoredChunk> collectChunks(List<ScoredRelation> matchedRelations) {
+        var chunkScores = new LinkedHashMap<String, Double>();
+        for (var relation : matchedRelations) {
+            for (var chunkId : relation.relation().sourceChunkIds()) {
+                chunkScores.merge(chunkId, relation.score(), Math::max);
+            }
+        }
+
+        var chunksById = storageProvider.chunkStore().loadAll(List.copyOf(chunkScores.keySet()));
+        return chunkScores.entrySet().stream()
+            .map(entry -> {
+                var chunk = chunksById.get(entry.getKey());
+                return chunk == null ? null : new ScoredChunk(entry.getKey(), toChunk(chunk), entry.getValue());
+            })
+            .filter(Objects::nonNull)
+            .sorted(scoreOrder(ScoredChunk::score, ScoredChunk::chunkId))
+            .toList();
+    }
+
+    private static List<ScoredChunk> retainChunks(List<ScoredChunk> chunks, List<ScoredRelation> matchedRelations) {
+        var chunkIds = new java.util.LinkedHashSet<String>();
+        for (var relation : matchedRelations) {
+            chunkIds.addAll(relation.relation().sourceChunkIds());
+        }
+        return chunks.stream()
+            .filter(chunk -> chunkIds.contains(chunk.chunkId()))
+            .toList();
     }
 
     private static Entity toEntity(GraphStore.EntityRecord entity) {

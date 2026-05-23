@@ -104,6 +104,7 @@ public class LightRagProperties {
         private final MySqlProperties mysql = new MySqlProperties();
         private final MilvusProperties milvus = new MilvusProperties();
         private final Neo4jProperties neo4j = new Neo4jProperties();
+        private final ArcadeDbProperties arcadedb = new ArcadeDbProperties();
 
         public Type getType() {
             return type;
@@ -127,6 +128,10 @@ public class LightRagProperties {
 
         public Neo4jProperties getNeo4j() {
             return neo4j;
+        }
+
+        public ArcadeDbProperties getArcadedb() {
+            return arcadedb;
         }
     }
 
@@ -499,7 +504,74 @@ public class LightRagProperties {
         POSTGRES,
         POSTGRES_NEO4J,
         POSTGRES_MILVUS_NEO4J,
-        MYSQL_MILVUS_NEO4J
+        MYSQL_MILVUS_NEO4J,
+        ARCADEDB
+    }
+
+    public static class ArcadeDbProperties {
+        private String baseUrl = "http://localhost:2480";
+        private String database = "lightrag";
+        private String username = "root";
+        private String password = "";
+        private Integer vectorDimensions;
+        private Duration timeout = Duration.ofSeconds(30);
+        private boolean initSchema = true;
+
+        public String getBaseUrl() {
+            return baseUrl;
+        }
+
+        public void setBaseUrl(String baseUrl) {
+            this.baseUrl = baseUrl;
+        }
+
+        public String getDatabase() {
+            return database;
+        }
+
+        public void setDatabase(String database) {
+            this.database = database;
+        }
+
+        public String getUsername() {
+            return username;
+        }
+
+        public void setUsername(String username) {
+            this.username = username;
+        }
+
+        public String getPassword() {
+            return password;
+        }
+
+        public void setPassword(String password) {
+            this.password = password;
+        }
+
+        public Integer getVectorDimensions() {
+            return vectorDimensions;
+        }
+
+        public void setVectorDimensions(Integer vectorDimensions) {
+            this.vectorDimensions = vectorDimensions;
+        }
+
+        public Duration getTimeout() {
+            return timeout;
+        }
+
+        public void setTimeout(Duration timeout) {
+            this.timeout = timeout;
+        }
+
+        public boolean isInitSchema() {
+            return initSchema;
+        }
+
+        public void setInitSchema(boolean initSchema) {
+            this.initSchema = initSchema;
+        }
     }
 
     public static class PostgresProperties {
