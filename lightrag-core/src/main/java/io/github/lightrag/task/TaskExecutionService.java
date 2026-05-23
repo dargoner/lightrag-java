@@ -420,6 +420,9 @@ public final class TaskExecutionService implements AutoCloseable {
         private volatile TaskStage currentStage;
         private final Map<String, String> initialMetadata;
         private final TaskEventPublisher eventPublisher;
+        private final ConcurrentMap<TaskStage, Instant> stageStartedAt = new ConcurrentHashMap<>();
+        private final ConcurrentMap<String, Instant> documentStartedAt = new ConcurrentHashMap<>();
+        private final ConcurrentMap<String, Instant> chunkStartedAt = new ConcurrentHashMap<>();
 
         private TaskReporter(
             AtomicStorageProvider provider,
@@ -442,12 +445,14 @@ public final class TaskExecutionService implements AutoCloseable {
             checkCancelled();
             currentStage = Objects.requireNonNull(stage, "stage");
             var existing = existingStage(stage);
+            var startedAt = existing == null || existing.startedAt() == null ? Instant.now() : existing.startedAt();
+            stageStartedAt.put(stage, startedAt);
             provider.taskStageStore().save(new TaskStageStore.TaskStageRecord(
                 taskId,
                 stage,
                 TaskStageStatus.RUNNING,
                 sequence(stage),
-                existing == null || existing.startedAt() == null ? Instant.now() : existing.startedAt(),
+                startedAt,
                 null,
                 message,
                 null
@@ -459,17 +464,29 @@ public final class TaskExecutionService implements AutoCloseable {
         public void onStageSucceeded(TaskStage stage, String message) {
             checkCancelled();
             var existing = existingStage(stage);
+            var finishedAt = Instant.now();
+            var startedAt = existing == null || existing.startedAt() == null
+                ? stageStartedAt.getOrDefault(stage, finishedAt)
+                : existing.startedAt();
+            var durationMs = durationMillis(startedAt, finishedAt);
+            updateMetadata(Map.of("stage." + stage.name() + ".durationMs", Long.toString(durationMs)));
             provider.taskStageStore().save(new TaskStageStore.TaskStageRecord(
                 taskId,
                 stage,
                 TaskStageStatus.SUCCEEDED,
                 sequence(stage),
-                existing == null || existing.startedAt() == null ? Instant.now() : existing.startedAt(),
-                Instant.now(),
+                startedAt,
+                finishedAt,
                 message,
                 null
             ));
-            eventPublisher.publish(stageEvent(stage, TaskEventType.STAGE_SUCCEEDED, "succeeded", message));
+            eventPublisher.publish(stageEvent(
+                stage,
+                TaskEventType.STAGE_SUCCEEDED,
+                "succeeded",
+                message,
+                Map.of("durationMs", Long.toString(durationMs))
+            ));
         }
 
         @Override
@@ -489,6 +506,7 @@ public final class TaskExecutionService implements AutoCloseable {
 
         @Override
         public void onDocumentStarted(String documentId, String message) {
+            documentStartedAt.put(documentId, Instant.now());
             upsertDocumentRecord(documentId, existing -> new TaskDocumentStore.TaskDocumentRecord(
                 taskId,
                 documentId,
@@ -585,6 +603,7 @@ public final class TaskExecutionService implements AutoCloseable {
 
         @Override
         public void onDocumentCommitted(String documentId, String message) {
+            var durationMs = elapsedSince(documentStartedAt.remove(documentId));
             upsertDocumentRecord(documentId, existing -> new TaskDocumentStore.TaskDocumentRecord(
                 taskId,
                 documentId,
@@ -597,11 +616,17 @@ public final class TaskExecutionService implements AutoCloseable {
                 existing.relationVectorCount(),
                 null
             ));
-            eventPublisher.publish(documentEvent(documentId, TaskEventType.DOCUMENT_COMMITTED, message, Map.of()));
+            eventPublisher.publish(documentEvent(
+                documentId,
+                TaskEventType.DOCUMENT_COMMITTED,
+                message,
+                Map.of("durationMs", Long.toString(durationMs))
+            ));
         }
 
         @Override
         public void onDocumentFailed(String documentId, String message) {
+            var durationMs = elapsedSince(documentStartedAt.remove(documentId));
             upsertDocumentRecord(documentId, existing -> new TaskDocumentStore.TaskDocumentRecord(
                 taskId,
                 documentId,
@@ -614,7 +639,12 @@ public final class TaskExecutionService implements AutoCloseable {
                 existing.relationVectorCount(),
                 message
             ));
-            eventPublisher.publish(documentEvent(documentId, TaskEventType.DOCUMENT_FAILED, message, Map.of()));
+            eventPublisher.publish(documentEvent(
+                documentId,
+                TaskEventType.DOCUMENT_FAILED,
+                message,
+                Map.of("durationMs", Long.toString(durationMs))
+            ));
         }
 
         @Override
@@ -632,6 +662,7 @@ public final class TaskExecutionService implements AutoCloseable {
 
         @Override
         public void onChunkStarted(String documentId, String chunkId, String message) {
+            chunkStartedAt.put(chunkEventKey(documentId, chunkId), Instant.now());
             eventPublisher.publish(chunkEvent(
                 TaskEventType.CHUNK_STARTED,
                 TaskEventScope.CHUNK,
@@ -696,6 +727,7 @@ public final class TaskExecutionService implements AutoCloseable {
 
         @Override
         public void onChunkSucceeded(String documentId, String chunkId, String message) {
+            var durationMs = elapsedSince(chunkStartedAt.remove(chunkEventKey(documentId, chunkId)));
             eventPublisher.publish(chunkEvent(
                 TaskEventType.CHUNK_SUCCEEDED,
                 TaskEventScope.CHUNK,
@@ -703,12 +735,13 @@ public final class TaskExecutionService implements AutoCloseable {
                 chunkId,
                 "succeeded",
                 message,
-                Map.of()
+                Map.of("durationMs", Long.toString(durationMs))
             ));
         }
 
         @Override
         public void onChunkFailed(String documentId, String chunkId, String message) {
+            var durationMs = elapsedSince(chunkStartedAt.remove(chunkEventKey(documentId, chunkId)));
             eventPublisher.publish(chunkEvent(
                 TaskEventType.CHUNK_FAILED,
                 TaskEventScope.CHUNK,
@@ -716,7 +749,7 @@ public final class TaskExecutionService implements AutoCloseable {
                 chunkId,
                 "failed",
                 message,
-                Map.of()
+                Map.of("durationMs", Long.toString(durationMs))
             ));
         }
 
@@ -863,6 +896,18 @@ public final class TaskExecutionService implements AutoCloseable {
         }
 
         private TaskEvent stageEvent(TaskStage stage, TaskEventType eventType, String status, String message) {
+            return stageEvent(stage, eventType, status, message, Map.of());
+        }
+
+        private TaskEvent stageEvent(
+            TaskStage stage,
+            TaskEventType eventType,
+            String status,
+            String message,
+            Map<String, String> extraAttributes
+        ) {
+            var attributes = new LinkedHashMap<String, String>(loadMetadata());
+            attributes.putAll(extraAttributes);
             return new TaskEvent(
                 UUID.randomUUID().toString(),
                 eventType,
@@ -876,7 +921,7 @@ public final class TaskExecutionService implements AutoCloseable {
                 stage,
                 status,
                 message,
-                loadMetadata()
+                attributes
             );
         }
 
@@ -957,6 +1002,21 @@ public final class TaskExecutionService implements AutoCloseable {
                 return initialMetadata;
             }
             return new LinkedHashMap<>(task.metadata());
+        }
+
+        private static long elapsedSince(Instant startedAt) {
+            if (startedAt == null) {
+                return 0L;
+            }
+            return durationMillis(startedAt, Instant.now());
+        }
+
+        private static long durationMillis(Instant startedAt, Instant finishedAt) {
+            return Math.max(0L, Duration.between(startedAt, finishedAt).toMillis());
+        }
+
+        private static String chunkEventKey(String documentId, String chunkId) {
+            return documentId + "::" + chunkId;
         }
     }
 }

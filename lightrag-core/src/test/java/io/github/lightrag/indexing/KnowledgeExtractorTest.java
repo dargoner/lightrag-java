@@ -1,5 +1,8 @@
 package io.github.lightrag.indexing;
 
+import io.github.lightrag.api.GraphExtractionExample;
+import io.github.lightrag.api.GraphExtractionNode;
+import io.github.lightrag.api.GraphExtractionRelation;
 import io.github.lightrag.indexing.refinement.RefinedRelationPatch;
 import io.github.lightrag.indexing.refinement.RefinementScope;
 import io.github.lightrag.indexing.refinement.RefinementWindow;
@@ -537,6 +540,43 @@ class KnowledgeExtractorTest {
         assertThat(chatModel.requests().get(1).userPrompt())
             .contains("Do not repeat entities or relationships that were already extracted correctly.")
             .contains("Return only incremental JSON using the same schema as before.");
+    }
+
+    @Test
+    void promptIncludesWorkspaceRelationTypesAndGraphExamples() {
+        var chatModel = new RecordingChatModel("""
+            {
+              "entities": [],
+              "relations": []
+            }
+            """);
+        var extractor = new KnowledgeExtractor(
+            chatModel,
+            0,
+            10_000,
+            "Chinese",
+            List.of("Person", "Organization"),
+            List.of("Author", "Alias"),
+            List.of(new GraphExtractionExample(
+                "Alice wrote Retrieval Notes.",
+                List.of(
+                    new GraphExtractionNode("Alice", List.of("researcher")),
+                    new GraphExtractionNode("Retrieval Notes", List.of("document"))
+                ),
+                List.of(new GraphExtractionRelation("Alice", "Retrieval Notes", "Author"))
+            )),
+            false
+        );
+
+        extractor.extract(chunk("Alice wrote Retrieval Notes."));
+
+        assertThat(chatModel.requests()).hasSize(1);
+        assertThat(chatModel.requests().get(0).systemPrompt())
+            .contains("Allowed relationship keywords/types are: Author, Alias")
+            .contains("Knowledge-base Graph Examples")
+            .contains("Alice wrote Retrieval Notes.")
+            .contains("Alice -> Retrieval Notes type: Author")
+            .contains("still return the JSON schema below");
     }
 
     @Test

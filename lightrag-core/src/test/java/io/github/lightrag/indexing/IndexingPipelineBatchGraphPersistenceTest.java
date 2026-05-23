@@ -56,6 +56,21 @@ class IndexingPipelineBatchGraphPersistenceTest {
         );
     }
 
+    @Test
+    void ingestEmbedsEntityAndRelationVectorsInOneBatch() {
+        var embeddingModel = new RecordingEmbeddingModel();
+        var pipeline = new IndexingPipeline(
+            new FakeChatModel(),
+            embeddingModel,
+            InMemoryStorageProvider.create(),
+            null
+        );
+
+        pipeline.ingest(List.of(new Document("doc-1", "Title", "Alice works with Bob", Map.of())));
+
+        assertThat(embeddingModel.batchSizes()).containsExactly(1, 3);
+    }
+
     private static String entityKey(String name) {
         return "" + name.strip().toLowerCase(Locale.ROOT);
     }
@@ -77,6 +92,20 @@ class IndexingPipelineBatchGraphPersistenceTest {
         @Override
         public List<List<Double>> embedAll(List<String> texts) {
             return texts.stream().map(text -> List.of((double) text.length(), 1.0d)).toList();
+        }
+    }
+
+    private static final class RecordingEmbeddingModel implements EmbeddingModel {
+        private final List<Integer> batchSizes = new java.util.ArrayList<>();
+
+        @Override
+        public List<List<Double>> embedAll(List<String> texts) {
+            batchSizes.add(texts.size());
+            return texts.stream().map(text -> List.of((double) text.length(), 1.0d)).toList();
+        }
+
+        private List<Integer> batchSizes() {
+            return List.copyOf(batchSizes);
         }
     }
 

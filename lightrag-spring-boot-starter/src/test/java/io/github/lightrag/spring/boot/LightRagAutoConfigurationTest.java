@@ -1,6 +1,7 @@
 package io.github.lightrag.spring.boot;
 
 import io.github.lightrag.api.LightRag;
+import io.github.lightrag.api.GraphExtractionOptionsProvider;
 import io.github.lightrag.api.WorkspaceScope;
 import io.github.lightrag.indexing.Chunker;
 import io.github.lightrag.indexing.ChunkingStrategyOverride;
@@ -38,6 +39,7 @@ import java.nio.file.Files;
 import java.time.Duration;
 import java.util.List;
 import java.util.Map;
+import java.util.Optional;
 import java.util.concurrent.atomic.AtomicReference;
 
 import static org.assertj.core.api.Assertions.assertThat;
@@ -60,10 +62,20 @@ class LightRagAutoConfigurationTest {
             "lightrag.indexing.chunking.overlap=1",
             "lightrag.indexing.embedding-batch-size=2",
             "lightrag.indexing.max-parallel-insert=3",
+            "lightrag.indexing.chunk-extract-parallelism=4",
             "lightrag.indexing.entity-extract-max-gleaning=2",
             "lightrag.indexing.max-extract-input-tokens=4096",
             "lightrag.indexing.language=Chinese",
             "lightrag.indexing.entity-types=Person,Organization",
+            "lightrag.indexing.graph-enabled=true",
+            "lightrag.indexing.relation-types=Author,Alias",
+            "lightrag.indexing.graph-examples[0].text=Alice wrote Retrieval Notes.",
+            "lightrag.indexing.graph-examples[0].nodes[0].name=Alice",
+            "lightrag.indexing.graph-examples[0].nodes[0].attributes[0]=researcher",
+            "lightrag.indexing.graph-examples[0].nodes[1].name=Retrieval Notes",
+            "lightrag.indexing.graph-examples[0].relations[0].node1=Alice",
+            "lightrag.indexing.graph-examples[0].relations[0].node2=Retrieval Notes",
+            "lightrag.indexing.graph-examples[0].relations[0].type=Author",
             "lightrag.query.default-mode=GLOBAL",
             "lightrag.query.default-top-k=12",
             "lightrag.query.default-chunk-top-k=18",
@@ -192,6 +204,18 @@ class LightRagAutoConfigurationTest {
     }
 
     @Test
+    void autoConfiguresGraphExtractionOptionsProviderBean() {
+        contextRunner
+            .withUserConfiguration(GraphExtractionOptionsProviderConfiguration.class)
+            .run(context -> {
+                var lightRag = context.getBean(LightRag.class);
+
+                assertThat(extractField(lightRag, "graphExtractionOptionsProvider"))
+                    .isSameAs(context.getBean(GraphExtractionOptionsProvider.class));
+            });
+    }
+
+    @Test
     void autoConfiguresKeywordModelFromSpringProperties() {
         contextRunner
             .withPropertyValues(
@@ -244,6 +268,7 @@ class LightRagAutoConfigurationTest {
             assertThat(properties.getIndexing().getChunking().getOverlap()).isEqualTo(1);
             assertThat(properties.getIndexing().getEmbeddingBatchSize()).isEqualTo(2);
             assertThat(properties.getIndexing().getMaxParallelInsert()).isEqualTo(3);
+            assertThat(properties.getIndexing().getChunkExtractParallelism()).isEqualTo(4);
             assertThat(properties.getIndexing().getEntityExtractMaxGleaning()).isEqualTo(2);
             assertThat(properties.getIndexing().getMaxExtractInputTokens()).isEqualTo(4_096);
             assertThat(properties.getIndexing().getLanguage()).isEqualTo("Chinese");
@@ -498,10 +523,14 @@ class LightRagAutoConfigurationTest {
             assertThat(extractField(lightRag, "minRerankScore")).isEqualTo(0.25d);
             assertThat(extractField(lightRag, "embeddingBatchSize")).isEqualTo(2);
             assertThat(extractField(lightRag, "maxParallelInsert")).isEqualTo(3);
+            assertThat(extractField(lightRag, "chunkExtractParallelism")).isEqualTo(4);
             assertThat(extractField(lightRag, "entityExtractMaxGleaning")).isEqualTo(2);
             assertThat(extractField(lightRag, "maxExtractInputTokens")).isEqualTo(4_096);
             assertThat(extractField(lightRag, "entityExtractionLanguage")).isEqualTo("Chinese");
             assertThat(extractField(lightRag, "entityTypes")).isEqualTo(List.of("Person", "Organization"));
+            assertThat(extractField(lightRag, "graphExtractionEnabled")).isEqualTo(true);
+            assertThat(extractField(lightRag, "relationTypes")).isEqualTo(List.of("Author", "Alias"));
+            assertThat((List<?>) extractField(lightRag, "graphExtractionExamples")).hasSize(1);
         });
     }
 
@@ -859,6 +888,29 @@ class LightRagAutoConfigurationTest {
     }
 
     @Test
+    void failsFastWhenChunkExtractParallelismIsInvalid() {
+        new ApplicationContextRunner()
+            .withConfiguration(AutoConfigurations.of(LightRagAutoConfiguration.class))
+            .withPropertyValues(
+                "lightrag.chat.base-url=http://localhost:11434/v1/",
+                "lightrag.chat.model=qwen2.5:7b",
+                "lightrag.chat.api-key=dummy",
+                "lightrag.embedding.base-url=http://localhost:11434/v1/",
+                "lightrag.embedding.model=nomic-embed-text",
+                "lightrag.embedding.api-key=dummy",
+                "lightrag.storage.type=in-memory",
+                "lightrag.indexing.chunk-extract-parallelism=0"
+            )
+            .run(context -> {
+                assertThat(context).hasFailed();
+                assertThat(context.getStartupFailure())
+                    .rootCause()
+                    .isInstanceOf(IllegalArgumentException.class)
+                    .hasMessage("chunkExtractParallelism must be positive");
+            });
+    }
+
+    @Test
     void failsFastWhenMaxExtractInputTokensIsInvalid() {
         new ApplicationContextRunner()
             .withConfiguration(AutoConfigurations.of(LightRagAutoConfiguration.class))
@@ -959,6 +1011,14 @@ class LightRagAutoConfigurationTest {
             return texts -> texts.stream()
                 .map(text -> List.of((double) text.length()))
                 .toList();
+        }
+    }
+
+    @Configuration(proxyBeanMethods = false)
+    static class GraphExtractionOptionsProviderConfiguration {
+        @Bean
+        GraphExtractionOptionsProvider graphExtractionOptionsProvider() {
+            return scope -> Optional.empty();
         }
     }
 

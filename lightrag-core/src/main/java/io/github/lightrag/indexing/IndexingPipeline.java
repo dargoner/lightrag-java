@@ -5,6 +5,7 @@ import io.github.lightrag.api.ChunkExtractStatus;
 import io.github.lightrag.api.ChunkGraphStatus;
 import io.github.lightrag.api.ChunkMergeStatus;
 import io.github.lightrag.api.FailureStage;
+import io.github.lightrag.api.GraphExtractionExample;
 import io.github.lightrag.api.GraphMaterializationMode;
 import io.github.lightrag.api.GraphMaterializationStatus;
 import io.github.lightrag.api.SnapshotSource;
@@ -37,6 +38,7 @@ import org.slf4j.LoggerFactory;
 
 import java.nio.file.Path;
 import java.time.Instant;
+import java.util.ArrayList;
 import java.util.Collection;
 import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
@@ -68,6 +70,9 @@ public final class IndexingPipeline {
     private final int maxExtractInputTokens;
     private final String entityExtractionLanguage;
     private final List<String> entityTypes;
+    private final boolean graphExtractionEnabled;
+    private final List<String> relationTypes;
+    private final List<GraphExtractionExample> graphExtractionExamples;
     private final ExtractionRefinementOptions extractionRefinementOptions;
     private final IndexingProgressListener progressListener;
     private final Object storageMutationMonitor = new Object();
@@ -104,6 +109,9 @@ public final class IndexingPipeline {
             maxExtractInputTokens,
             entityExtractionLanguage,
             entityTypes,
+            true,
+            List.of(),
+            List.of(),
             embeddingSemanticMergeEnabled,
             embeddingSemanticMergeThreshold,
             extractionRefinementOptions,
@@ -144,6 +152,9 @@ public final class IndexingPipeline {
             maxExtractInputTokens,
             entityExtractionLanguage,
             entityTypes,
+            true,
+            List.of(),
+            List.of(),
             embeddingSemanticMergeEnabled,
             embeddingSemanticMergeThreshold,
             extractionRefinementOptions,
@@ -161,10 +172,58 @@ public final class IndexingPipeline {
         DocumentParsingOrchestrator documentParsingOrchestrator,
         int embeddingBatchSize,
         int maxParallelInsert,
+        int chunkExtractParallelism,
         int entityExtractMaxGleaning,
         int maxExtractInputTokens,
         String entityExtractionLanguage,
         List<String> entityTypes,
+        boolean embeddingSemanticMergeEnabled,
+        double embeddingSemanticMergeThreshold,
+        ExtractionRefinementOptions extractionRefinementOptions,
+        IndexingProgressListener progressListener
+    ) {
+        this(
+            extractionModel,
+            summaryModel,
+            embeddingModel,
+            storageProvider,
+            snapshotPath,
+            chunker,
+            documentParsingOrchestrator,
+            embeddingBatchSize,
+            maxParallelInsert,
+            chunkExtractParallelism,
+            entityExtractMaxGleaning,
+            maxExtractInputTokens,
+            entityExtractionLanguage,
+            entityTypes,
+            true,
+            List.of(),
+            List.of(),
+            embeddingSemanticMergeEnabled,
+            embeddingSemanticMergeThreshold,
+            extractionRefinementOptions,
+            progressListener
+        );
+    }
+
+    public IndexingPipeline(
+        ChatModel extractionModel,
+        ChatModel summaryModel,
+        EmbeddingModel embeddingModel,
+        AtomicStorageProvider storageProvider,
+        Path snapshotPath,
+        Chunker chunker,
+        DocumentParsingOrchestrator documentParsingOrchestrator,
+        int embeddingBatchSize,
+        int maxParallelInsert,
+        int entityExtractMaxGleaning,
+        int maxExtractInputTokens,
+        String entityExtractionLanguage,
+        List<String> entityTypes,
+        boolean graphExtractionEnabled,
+        List<String> relationTypes,
+        List<GraphExtractionExample> graphExtractionExamples,
         boolean embeddingSemanticMergeEnabled,
         double embeddingSemanticMergeThreshold,
         ExtractionRefinementOptions extractionRefinementOptions,
@@ -185,6 +244,9 @@ public final class IndexingPipeline {
             maxExtractInputTokens,
             entityExtractionLanguage,
             entityTypes,
+            graphExtractionEnabled,
+            relationTypes,
+            graphExtractionExamples,
             embeddingSemanticMergeEnabled,
             embeddingSemanticMergeThreshold,
             extractionRefinementOptions,
@@ -225,6 +287,9 @@ public final class IndexingPipeline {
             maxExtractInputTokens,
             entityExtractionLanguage,
             entityTypes,
+            true,
+            List.of(),
+            List.of(),
             embeddingSemanticMergeEnabled,
             embeddingSemanticMergeThreshold,
             extractionRefinementOptions,
@@ -266,6 +331,9 @@ public final class IndexingPipeline {
             maxExtractInputTokens,
             entityExtractionLanguage,
             entityTypes,
+            true,
+            List.of(),
+            List.of(),
             embeddingSemanticMergeEnabled,
             embeddingSemanticMergeThreshold,
             extractionRefinementOptions,
@@ -288,6 +356,9 @@ public final class IndexingPipeline {
         int maxExtractInputTokens,
         String entityExtractionLanguage,
         List<String> entityTypes,
+        boolean graphExtractionEnabled,
+        List<String> relationTypes,
+        List<GraphExtractionExample> graphExtractionExamples,
         boolean embeddingSemanticMergeEnabled,
         double embeddingSemanticMergeThreshold,
         ExtractionRefinementOptions extractionRefinementOptions,
@@ -308,6 +379,9 @@ public final class IndexingPipeline {
         this.entityTypes = entityTypes == null || entityTypes.isEmpty()
             ? KnowledgeExtractor.DEFAULT_ENTITY_TYPES
             : List.copyOf(entityTypes);
+        this.graphExtractionEnabled = graphExtractionEnabled;
+        this.relationTypes = relationTypes == null ? List.of() : List.copyOf(relationTypes);
+        this.graphExtractionExamples = graphExtractionExamples == null ? List.of() : List.copyOf(graphExtractionExamples);
         this.extractionRefinementOptions = extractionRefinementOptions == null
             ? ExtractionRefinementOptions.disabled()
             : extractionRefinementOptions;
@@ -328,6 +402,8 @@ public final class IndexingPipeline {
             this.maxExtractInputTokens,
             this.entityExtractionLanguage,
             this.entityTypes,
+            this.relationTypes,
+            this.graphExtractionExamples,
             this.extractionRefinementOptions.allowDeterministicAttributionFallback()
         );
         this.graphAssembler = new GraphAssembler();
@@ -678,13 +754,14 @@ public final class IndexingPipeline {
         var chunkVectors = chunkVectors(chunks);
         persistChunkVectorState(chunks, chunkVectors);
         progressListener.onStageSucceeded(io.github.lightrag.api.TaskStage.VECTOR_INDEXING, "embedded chunk vectors for " + source.id());
-        if (skipKnowledgeGraph(source.metadata())) {
+        if (!graphExtractionEnabled || skipKnowledgeGraph(source.metadata())) {
             return withoutKnowledgeGraph(source, prepared, chunkVectors);
         }
         progressListener.onStageStarted(io.github.lightrag.api.TaskStage.GRAPH_ASSEMBLY, "assembling graph for " + source.id());
         var refinedExtractions = refineExtractions(chunks);
         var graph = graphAssembler.assemble(refinedExtractions);
-        persistExtractionSnapshotState(source.id(), prepared, refinedExtractions, graph);
+        var chunkGraphKeys = chunkGraphKeys(refinedExtractions);
+        persistExtractionSnapshotState(source.id(), prepared, refinedExtractions, graph, chunkGraphKeys);
         progressListener.onDocumentGraphReady(
             source.id(),
             graph.entities().size(),
@@ -693,17 +770,25 @@ public final class IndexingPipeline {
         );
         progressListener.onStageSucceeded(io.github.lightrag.api.TaskStage.GRAPH_ASSEMBLY, "persisted graph snapshots for " + source.id());
         progressListener.onStageStarted(io.github.lightrag.api.TaskStage.VECTOR_INDEXING, "embedding graph vectors for " + source.id());
-        var entityVectors = entityVectors(graph.entities());
-        var relationVectors = relationVectors(graph.relations());
+        var graphVectors = graphVectors(graph);
         progressListener.onDocumentVectorsReady(
             source.id(),
             chunkVectors.size(),
-            entityVectors.size(),
-            relationVectors.size(),
+            graphVectors.entityVectors().size(),
+            graphVectors.relationVectors().size(),
             "embedded document vectors for " + source.id()
         );
         progressListener.onStageSucceeded(io.github.lightrag.api.TaskStage.VECTOR_INDEXING, "embedded graph vectors for " + source.id());
-        return new ComputedIngest(source, prepared, refinedExtractions, chunkVectors, graph, entityVectors, relationVectors);
+        return new ComputedIngest(
+            source,
+            prepared,
+            refinedExtractions,
+            chunkVectors,
+            graph,
+            graphVectors.entityVectors(),
+            graphVectors.relationVectors(),
+            chunkGraphKeys
+        );
     }
 
     private ComputedIngest computeDocument(
@@ -729,13 +814,14 @@ public final class IndexingPipeline {
         var chunkVectors = chunkVectors(chunks);
         persistChunkVectorState(chunks, chunkVectors);
         progressListener.onStageSucceeded(io.github.lightrag.api.TaskStage.VECTOR_INDEXING, "embedded chunk vectors for " + source.documentId());
-        if (options.processOptions().skipKnowledgeGraph()) {
+        if (!graphExtractionEnabled || options.processOptions().skipKnowledgeGraph()) {
             return withoutKnowledgeGraph(toDocument(source), prepared, chunkVectors);
         }
         progressListener.onStageStarted(io.github.lightrag.api.TaskStage.GRAPH_ASSEMBLY, "assembling graph for " + source.documentId());
         var refinedExtractions = refineExtractions(chunks);
         var graph = graphAssembler.assemble(refinedExtractions);
-        persistExtractionSnapshotState(source.documentId(), prepared, refinedExtractions, graph);
+        var chunkGraphKeys = chunkGraphKeys(refinedExtractions);
+        persistExtractionSnapshotState(source.documentId(), prepared, refinedExtractions, graph, chunkGraphKeys);
         progressListener.onDocumentGraphReady(
             source.documentId(),
             graph.entities().size(),
@@ -744,17 +830,25 @@ public final class IndexingPipeline {
         );
         progressListener.onStageSucceeded(io.github.lightrag.api.TaskStage.GRAPH_ASSEMBLY, "persisted graph snapshots for " + source.documentId());
         progressListener.onStageStarted(io.github.lightrag.api.TaskStage.VECTOR_INDEXING, "embedding graph vectors for " + source.documentId());
-        var entityVectors = entityVectors(graph.entities());
-        var relationVectors = relationVectors(graph.relations());
+        var graphVectors = graphVectors(graph);
         progressListener.onDocumentVectorsReady(
             source.documentId(),
             chunkVectors.size(),
-            entityVectors.size(),
-            relationVectors.size(),
+            graphVectors.entityVectors().size(),
+            graphVectors.relationVectors().size(),
             "embedded document vectors for " + source.documentId()
         );
         progressListener.onStageSucceeded(io.github.lightrag.api.TaskStage.VECTOR_INDEXING, "embedded graph vectors for " + source.documentId());
-        return new ComputedIngest(toDocument(source), prepared, refinedExtractions, chunkVectors, graph, entityVectors, relationVectors);
+        return new ComputedIngest(
+            toDocument(source),
+            prepared,
+            refinedExtractions,
+            chunkVectors,
+            graph,
+            graphVectors.entityVectors(),
+            graphVectors.relationVectors(),
+            chunkGraphKeys
+        );
     }
 
     private ComputedIngest computeDocument(PreChunkedDocument preChunkedDocument) {
@@ -785,7 +879,7 @@ public final class IndexingPipeline {
                 "embedded chunk vector for " + chunk.id()
             );
         }
-        if (skipKnowledgeGraph(source.metadata())) {
+        if (!graphExtractionEnabled || skipKnowledgeGraph(source.metadata())) {
             return withoutKnowledgeGraph(
                 new Document(source.documentId(), source.title(), "", source.metadata()),
                 prepared,
@@ -796,7 +890,8 @@ public final class IndexingPipeline {
         progressListener.onStageStarted(io.github.lightrag.api.TaskStage.GRAPH_ASSEMBLY, "assembling graph for " + source.documentId());
         var refinedExtractions = refineExtractions(chunks, true);
         var graph = graphAssembler.assemble(refinedExtractions);
-        persistExtractionSnapshotState(source.documentId(), prepared, refinedExtractions, graph);
+        var chunkGraphKeys = chunkGraphKeys(refinedExtractions);
+        persistExtractionSnapshotState(source.documentId(), prepared, refinedExtractions, graph, chunkGraphKeys);
         progressListener.onDocumentGraphReady(
             source.documentId(),
             graph.entities().size(),
@@ -805,13 +900,12 @@ public final class IndexingPipeline {
         );
         progressListener.onStageSucceeded(io.github.lightrag.api.TaskStage.GRAPH_ASSEMBLY, "persisted graph snapshots for " + source.documentId());
         progressListener.onStageStarted(io.github.lightrag.api.TaskStage.VECTOR_INDEXING, "embedding graph vectors for " + source.documentId());
-        var entityVectors = entityVectors(graph.entities());
-        var relationVectors = relationVectors(graph.relations());
+        var graphVectors = graphVectors(graph);
         progressListener.onDocumentVectorsReady(
             source.documentId(),
             chunkVectors.size(),
-            entityVectors.size(),
-            relationVectors.size(),
+            graphVectors.entityVectors().size(),
+            graphVectors.relationVectors().size(),
             "embedded document vectors for " + source.documentId()
         );
         progressListener.onStageSucceeded(io.github.lightrag.api.TaskStage.VECTOR_INDEXING, "embedded graph vectors for " + source.documentId());
@@ -821,8 +915,9 @@ public final class IndexingPipeline {
             refinedExtractions,
             chunkVectors,
             graph,
-            entityVectors,
-            relationVectors
+            graphVectors.entityVectors(),
+            graphVectors.relationVectors(),
+            chunkGraphKeys
         );
     }
 
@@ -1017,7 +1112,7 @@ public final class IndexingPipeline {
     ) {
         var emptyExtractions = List.<GraphAssembler.ChunkExtraction>of();
         var emptyGraph = new GraphAssembler.Graph(List.of(), List.of());
-        persistExtractionSnapshotState(source.id(), prepared, emptyExtractions, emptyGraph);
+        persistExtractionSnapshotState(source.id(), prepared, emptyExtractions, emptyGraph, Map.of());
         progressListener.onDocumentGraphReady(source.id(), 0, 0, "knowledge graph skipped for " + source.id());
         return new ComputedIngest(
             source,
@@ -1026,7 +1121,8 @@ public final class IndexingPipeline {
             chunkVectors,
             emptyGraph,
             List.of(),
-            List.of()
+            List.of(),
+            Map.of()
         );
     }
 
@@ -1339,6 +1435,32 @@ public final class IndexingPipeline {
         return toVectorRecords(relations.stream().map(Relation::id).toList(), embeddings);
     }
 
+    private GraphVectors graphVectors(GraphAssembler.Graph graph) {
+        var entities = graph.entities();
+        var relations = graph.relations();
+        if (entities.isEmpty() && relations.isEmpty()) {
+            return new GraphVectors(List.of(), List.of());
+        }
+        var texts = new ArrayList<String>(entities.size() + relations.size());
+        for (var entity : entities) {
+            texts.add(entitySummary(entity));
+        }
+        for (var relation : relations) {
+            texts.add(relationSummary(relation));
+        }
+        var embeddings = embeddingBatcher.embedAll(texts);
+        var entityVectors = new ArrayList<VectorStore.VectorRecord>(entities.size());
+        for (int index = 0; index < entities.size(); index++) {
+            entityVectors.add(new VectorStore.VectorRecord(entities.get(index).id(), embeddings.get(index)));
+        }
+        var relationVectors = new ArrayList<VectorStore.VectorRecord>(relations.size());
+        var relationOffset = entities.size();
+        for (int index = 0; index < relations.size(); index++) {
+            relationVectors.add(new VectorStore.VectorRecord(relations.get(index).id(), embeddings.get(relationOffset + index)));
+        }
+        return new GraphVectors(List.copyOf(entityVectors), List.copyOf(relationVectors));
+    }
+
     private DocumentChunkPreparationStrategy chunkPreparationStrategy(
         Chunker chunker,
         boolean embeddingSemanticMergeEnabled,
@@ -1432,11 +1554,12 @@ public final class IndexingPipeline {
         String documentId,
         DocumentIngestor.PreparedIngest prepared,
         List<GraphAssembler.ChunkExtraction> extractions,
-        GraphAssembler.Graph graph
+        GraphAssembler.Graph graph,
+        Map<String, ChunkGraphKeys> chunkGraphKeys
     ) {
         synchronized (storageMutationMonitor) {
             storageProvider.writeAtomically(storage -> {
-                initializeDocumentGraphState(documentId, prepared, extractions, graph, storage);
+                initializeDocumentGraphState(documentId, prepared, extractions, graph, chunkGraphKeys, storage);
                 return null;
             });
         }
@@ -1447,6 +1570,7 @@ public final class IndexingPipeline {
         DocumentIngestor.PreparedIngest prepared,
         List<GraphAssembler.ChunkExtraction> extractions,
         GraphAssembler.Graph graph,
+        Map<String, ChunkGraphKeys> chunkGraphKeys,
         AtomicStorageProvider.AtomicStorageView storage
     ) {
         var now = Instant.now();
@@ -1478,7 +1602,7 @@ public final class IndexingPipeline {
             now,
             null
         );
-        var chunkJournals = toInitialChunkGraphJournals(documentId, snapshotVersion, extractions, now);
+        var chunkJournals = toInitialChunkGraphJournals(documentId, snapshotVersion, extractions, chunkGraphKeys, now);
         storage.documentGraphSnapshotStore().saveDocument(documentSnapshot);
         storage.documentGraphSnapshotStore().saveChunks(documentId, chunkSnapshots);
         storage.documentGraphJournalStore().delete(documentId);
@@ -1511,7 +1635,7 @@ public final class IndexingPipeline {
         ));
         storage.documentGraphJournalStore().appendChunks(
             documentId,
-            toSuccessfulChunkGraphJournals(documentId, snapshotVersion, computed.extractions(), now)
+            toSuccessfulChunkGraphJournals(documentId, snapshotVersion, computed.extractions(), computed.chunkGraphKeys(), now)
         );
     }
 
@@ -1560,21 +1684,20 @@ public final class IndexingPipeline {
         String documentId,
         int snapshotVersion,
         List<GraphAssembler.ChunkExtraction> extractions,
+        Map<String, ChunkGraphKeys> chunkGraphKeys,
         Instant now
     ) {
         return extractions.stream()
             .map(extraction -> {
-                var chunkGraph = graphAssembler.assemble(List.of(extraction));
-                var entityKeys = chunkGraph.entities().stream().map(Entity::id).toList();
-                var relationKeys = chunkGraph.relations().stream().map(Relation::id).toList();
+                var keys = requireChunkGraphKeys(extraction.chunkId(), chunkGraphKeys);
                 return new DocumentGraphJournalStore.ChunkGraphJournal(
                     documentId,
                     extraction.chunkId(),
                     snapshotVersion,
                     ChunkMergeStatus.NOT_STARTED,
                     ChunkGraphStatus.NOT_MATERIALIZED,
-                    entityKeys,
-                    relationKeys,
+                    keys.entityKeys(),
+                    keys.relationKeys(),
                     List.of(),
                     List.of(),
                     null,
@@ -1589,29 +1712,57 @@ public final class IndexingPipeline {
         String documentId,
         int snapshotVersion,
         List<GraphAssembler.ChunkExtraction> extractions,
+        Map<String, ChunkGraphKeys> chunkGraphKeys,
         Instant now
     ) {
         return extractions.stream()
             .map(extraction -> {
-                var chunkGraph = graphAssembler.assemble(List.of(extraction));
-                var entityKeys = chunkGraph.entities().stream().map(Entity::id).toList();
-                var relationKeys = chunkGraph.relations().stream().map(Relation::id).toList();
+                var keys = requireChunkGraphKeys(extraction.chunkId(), chunkGraphKeys);
                 return new DocumentGraphJournalStore.ChunkGraphJournal(
                     documentId,
                     extraction.chunkId(),
                     snapshotVersion,
                     ChunkMergeStatus.SUCCEEDED,
                     ChunkGraphStatus.MATERIALIZED,
-                    entityKeys,
-                    relationKeys,
-                    entityKeys,
-                    relationKeys,
+                    keys.entityKeys(),
+                    keys.relationKeys(),
+                    keys.entityKeys(),
+                    keys.relationKeys(),
                     FailureStage.FINALIZING,
                     now,
                     null
                 );
             })
             .toList();
+    }
+
+    private Map<String, ChunkGraphKeys> chunkGraphKeys(List<GraphAssembler.ChunkExtraction> extractions) {
+        if (extractions.isEmpty()) {
+            return Map.of();
+        }
+        var keysByChunkId = new LinkedHashMap<String, ChunkGraphKeys>(extractions.size());
+        for (var extraction : extractions) {
+            var chunkGraph = graphAssembler.assemble(List.of(extraction));
+            keysByChunkId.put(
+                extraction.chunkId(),
+                new ChunkGraphKeys(
+                    chunkGraph.entities().stream().map(Entity::id).toList(),
+                    chunkGraph.relations().stream().map(Relation::id).toList()
+                )
+            );
+        }
+        return java.util.Collections.unmodifiableMap(keysByChunkId);
+    }
+
+    private static ChunkGraphKeys requireChunkGraphKeys(
+        String chunkId,
+        Map<String, ChunkGraphKeys> chunkGraphKeys
+    ) {
+        var keys = chunkGraphKeys.get(chunkId);
+        if (keys == null) {
+            throw new IllegalStateException("missing chunk graph keys for " + chunkId);
+        }
+        return keys;
     }
 
     private static List<String> union(List<String> left, List<String> right) {
@@ -1621,6 +1772,19 @@ public final class IndexingPipeline {
         return List.copyOf(merged);
     }
 
+    private record GraphVectors(
+        List<VectorStore.VectorRecord> entityVectors,
+        List<VectorStore.VectorRecord> relationVectors
+    ) {
+    }
+
+    private record ChunkGraphKeys(List<String> entityKeys, List<String> relationKeys) {
+        private ChunkGraphKeys {
+            entityKeys = List.copyOf(Objects.requireNonNull(entityKeys, "entityKeys"));
+            relationKeys = List.copyOf(Objects.requireNonNull(relationKeys, "relationKeys"));
+        }
+    }
+
     private record ComputedIngest(
         Document source,
         DocumentIngestor.PreparedIngest prepared,
@@ -1628,7 +1792,8 @@ public final class IndexingPipeline {
         List<VectorStore.VectorRecord> chunkVectors,
         GraphAssembler.Graph graph,
         List<VectorStore.VectorRecord> entityVectors,
-        List<VectorStore.VectorRecord> relationVectors
+        List<VectorStore.VectorRecord> relationVectors,
+        Map<String, ChunkGraphKeys> chunkGraphKeys
     ) {
     }
 

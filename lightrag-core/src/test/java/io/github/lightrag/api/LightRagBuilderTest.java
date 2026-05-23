@@ -358,6 +358,15 @@ class LightRagBuilderTest {
             .maxExtractInputTokens(4_096)
             .entityExtractionLanguage("Chinese")
             .entityTypes(List.of("Person", "Organization"))
+            .relationTypes(List.of("Author", "Alias"))
+            .graphExtractionExamples(List.of(new GraphExtractionExample(
+                "Alice wrote Retrieval Notes.",
+                List.of(
+                    new GraphExtractionNode("Alice", List.of("researcher")),
+                    new GraphExtractionNode("Retrieval Notes", List.of("document"))
+                ),
+                List.of(new GraphExtractionRelation("Alice", "Retrieval Notes", "Author"))
+            )))
             .build();
 
         assertThat(rag.chunker()).isSameAs(chunker);
@@ -371,6 +380,88 @@ class LightRagBuilderTest {
         assertThat(rag.maxExtractInputTokens()).isEqualTo(4_096);
         assertThat(rag.entityExtractionLanguage()).isEqualTo("Chinese");
         assertThat(rag.entityTypes()).containsExactly("Person", "Organization");
+        assertThat(rag.graphExtractionEnabled()).isTrue();
+        assertThat(rag.relationTypes()).containsExactly("Author", "Alias");
+        assertThat(rag.graphExtractionExamples()).hasSize(1);
+    }
+
+    @Test
+    void resolvesGraphExtractionOptionsFromWorkspaceProviderBeforeGlobalDefaults() {
+        var chatModel = new RecordingPromptChatModel();
+        var rag = LightRag.builder()
+            .chatModel(chatModel)
+            .embeddingModel(new FakeEmbeddingModel())
+            .storage(InMemoryStorageProvider.create())
+            .entityExtractionLanguage("GlobalLang")
+            .entityTypes(List.of("GlobalType"))
+            .relationTypes(List.of("GlobalRelation"))
+            .graphExtractionExamples(List.of(new GraphExtractionExample(
+                "Global text",
+                List.of(
+                    new GraphExtractionNode("Global A", List.of()),
+                    new GraphExtractionNode("Global B", List.of())
+                ),
+                List.of(new GraphExtractionRelation("Global A", "Global B", "GlobalRelation"))
+            )))
+            .entityExtractMaxGleaning(0)
+            .graphExtractionOptionsProvider(scope -> {
+                if (scope.workspaceId().equals("alpha")) {
+                    return Optional.of(GraphExtractionOptions.builder()
+                        .language("AlphaLang")
+                        .entityTypes(List.of("AlphaType"))
+                        .relationTypes(List.of("AlphaRelation"))
+                        .examples(List.of(new GraphExtractionExample(
+                            "Alpha text",
+                            List.of(
+                                new GraphExtractionNode("Alpha A", List.of()),
+                                new GraphExtractionNode("Alpha B", List.of())
+                            ),
+                            List.of(new GraphExtractionRelation("Alpha A", "Alpha B", "AlphaRelation"))
+                        )))
+                        .build());
+                }
+                return Optional.empty();
+            })
+            .build();
+
+        rag.ingest("alpha", List.of(new Document("doc-alpha", "Title", "alpha content", Map.of())));
+        rag.ingest("beta", List.of(new Document("doc-beta", "Title", "beta content", Map.of())));
+
+        assertThat(chatModel.systemPrompts()).hasSize(2);
+        assertThat(chatModel.systemPrompts().get(0))
+            .contains("AlphaLang")
+            .contains("AlphaType")
+            .contains("AlphaRelation")
+            .contains("Alpha text")
+            .doesNotContain("GlobalType");
+        assertThat(chatModel.systemPrompts().get(1))
+            .contains("GlobalLang")
+            .contains("GlobalType")
+            .contains("GlobalRelation")
+            .contains("Global text")
+            .doesNotContain("AlphaType");
+    }
+
+    @Test
+    void graphExtractionOptionsProviderCanDisableKnowledgeGraphPerWorkspace() {
+        var chatModel = new RecordingPromptChatModel();
+        var storageProvider = InMemoryStorageProvider.create();
+        var rag = LightRag.builder()
+            .chatModel(chatModel)
+            .embeddingModel(new FakeEmbeddingModel())
+            .storage(storageProvider)
+            .graphExtractionOptionsProvider(scope -> Optional.of(GraphExtractionOptions.builder()
+                .enabled(false)
+                .build()))
+            .build();
+
+        rag.ingest(WORKSPACE, List.of(new Document("doc-disabled", "Title", "content", Map.of())));
+
+        assertThat(chatModel.systemPrompts()).isEmpty();
+        assertThat(storageProvider.graphStore().allEntities()).isEmpty();
+        assertThatThrownBy(() -> rag.materializeDocumentGraph(WORKSPACE, "doc-disabled", GraphMaterializationMode.REBUILD))
+            .isInstanceOf(IllegalStateException.class)
+            .hasMessageContaining("knowledge graph extraction is disabled");
     }
 
     @Test
@@ -1267,6 +1358,25 @@ class LightRagBuilderTest {
                   "relations": []
                 }
                 """;
+        }
+    }
+
+    private static final class RecordingPromptChatModel implements ChatModel {
+        private final List<String> systemPrompts = new ArrayList<>();
+
+        @Override
+        public String generate(ChatRequest request) {
+            systemPrompts.add(request.systemPrompt());
+            return """
+                {
+                  "entities": [],
+                  "relations": []
+                }
+                """;
+        }
+
+        private List<String> systemPrompts() {
+            return List.copyOf(systemPrompts);
         }
     }
 

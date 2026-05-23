@@ -116,6 +116,10 @@ Task snapshots include:
 - requested / started / finished timestamps
 - summary, error message, and cancel flag
 - stage snapshots such as `PARSING`, `CHUNKING`, `PRIMARY_EXTRACTION`, `GRAPH_ASSEMBLY`, `VECTOR_INDEXING`, `COMMITTING`, and `COMPLETED`
+- pipeline tunables in task metadata, including `maxParallelInsert`, `embeddingBatchSize`, `chunkExtractParallelism`, and graph extraction counts
+- performance metadata such as `queueWaitMs`, `totalDurationMs`, and `stage.<STAGE>.durationMs`
+
+Task events also carry structured performance attributes. `STAGE_SUCCEEDED`, `DOCUMENT_COMMITTED` / `DOCUMENT_FAILED`, and `CHUNK_SUCCEEDED` / `CHUNK_FAILED` include `durationMs`, so external monitors do not need to infer latency from logs. This follows the same operational direction as WeKnora's batch stats logs while keeping the Java SDK storage-neutral.
 
 Current storage support for task persistence and stage monitoring:
 
@@ -372,10 +376,24 @@ lightrag:
         api-key: ${MINERU_API_KEY:}
     embedding-batch-size: 32
     max-parallel-insert: 4
+    chunk-extract-parallelism: 4
     entity-extract-max-gleaning: 1
     max-extract-input-tokens: 20480
     language: Chinese
     entity-types: Person,Organization
+    graph-enabled: true
+    relation-types: Author,Alias
+    graph-examples:
+      - text: Alice wrote Retrieval Notes.
+        nodes:
+          - name: Alice
+            attributes: [researcher]
+          - name: Retrieval Notes
+            attributes: [document]
+        relations:
+          - node1: Alice
+            node2: Retrieval Notes
+            type: Author
 ```
 
 `ingest.preset` is the primary product-facing option. Supported values are `GENERAL`, `LAW`, `BOOK`, `QA`, and `FIGURE`.
@@ -395,6 +413,8 @@ If no request-level `preset` override is provided, those legacy properties still
 `max-extract-input-tokens` caps the estimated extraction context budget before a glean pass is skipped.
 `language` controls the language used in entity descriptions and extraction guidance. It defaults to `English`.
 `entity-types` narrows or extends the preferred extraction taxonomy. The default list is `Person, Creature, Organization, Location, Event, Concept, Method, Content, Data, Artifact, NaturalObject, Other`.
+`graph-enabled` controls whether indexing builds the knowledge graph for this configuration scope. If it is `false`, graph materialization APIs fail fast for that workspace.
+`relation-types` and `graph-examples` align with WeKnora-style KB graph settings: relation tags constrain relationship keywords, while `text/nodes/relations` examples are injected as extraction prompt hints.
 When `max-parallel-insert` is greater than `1`, custom `Chunker`, `ChatModel`, and `EmbeddingModel` implementations must be safe for concurrent use.
 
 If the application provides its own `Chunker` bean, the starter backs off and uses that bean instead.
@@ -1048,6 +1068,7 @@ var rag = LightRag.builder()
     .chunker(new FixedWindowChunker(600, 80))
     .embeddingBatchSize(32)
     .maxParallelInsert(4)
+    .chunkExtractParallelism(4)
     .entityExtractMaxGleaning(1)
     .maxExtractInputTokens(20_480)
     .entityExtractionLanguage("Chinese")
@@ -1061,13 +1082,53 @@ var rag = LightRag.builder()
 - `chunker(...)`: replaces the default fixed-window chunker used during ingest
 - `embeddingBatchSize(...)`: caps the number of texts per embedding request during indexing
 - `maxParallelInsert(...)`: caps how many documents `ingest(...)` processes concurrently
+- `chunkExtractParallelism(...)`: caps how many chunks run LLM entity/relation extraction concurrently within one document
 - `entityExtractMaxGleaning(...)`: controls how many follow-up extraction passes run per chunk
 - `maxExtractInputTokens(...)`: caps estimated extraction context before gleaning is skipped
 - `entityExtractionLanguage(...)`: changes the language used in extraction-time guidance and generated descriptions
 - `entityTypes(...)`: overrides the preferred entity taxonomy used in extraction prompts
+- `graphExtractionEnabled(...)`: enables or disables knowledge-graph construction for the resolved configuration scope
+- `relationTypes(...)`: supplies WeKnora-style relation tags used as allowed relationship keywords/types in the extraction prompt
+- `graphExtractionExamples(...)`: supplies WeKnora-style `text/nodes/relations` few-shot examples for graph extraction
 - `automaticQueryKeywordExtraction(...)`: turns graph-mode keyword extraction on or off
 - `rerankCandidateMultiplier(...)`: controls how far `QueryEngine` expands `chunkTopK` before reranking
 - `minRerankScore(...)`: filters reranked chunks below the configured score threshold; default `0.0` keeps all reranked candidates
+
+Workspace-specific graph extraction settings can be supplied through `GraphExtractionOptionsProvider`. LightRAG resolves
+settings in this order: provider result for the current `WorkspaceScope`, then global builder/Spring settings, then built-in
+defaults.
+
+```java
+var rag = LightRag.builder()
+    .chatModel(chatModel)
+    .embeddingModel(embeddingModel)
+    .storage(storage)
+    .entityExtractionLanguage("English")
+    .entityTypes(List.of("Person", "Organization"))
+    .graphExtractionOptionsProvider(scope -> {
+        if (scope.workspaceId().equals("finance")) {
+            return Optional.of(GraphExtractionOptions.builder()
+                .language("Chinese")
+                .entityTypes(List.of("Company", "Policy", "Metric"))
+                .relationTypes(List.of("Author", "Alias"))
+                .examples(List.of(new GraphExtractionExample(
+                    "Alice wrote Retrieval Notes.",
+                    List.of(
+                        new GraphExtractionNode("Alice", List.of("researcher")),
+                        new GraphExtractionNode("Retrieval Notes", List.of("document"))
+                    ),
+                    List.of(new GraphExtractionRelation("Alice", "Retrieval Notes", "Author"))
+                )))
+                .entityExtractMaxGleaning(0)
+                .chunkExtractParallelism(4)
+                .build());
+        }
+        return Optional.empty();
+    })
+    .build();
+```
+
+With Spring Boot, declare a `GraphExtractionOptionsProvider` bean; the starter wires it into `LightRag` automatically.
 
 Defaults in this phase:
 
@@ -1078,6 +1139,8 @@ Defaults in this phase:
 - max extract input tokens: `20480`
 - entity extraction language: `English`
 - entity types: `Person, Creature, Organization, Location, Event, Concept, Method, Content, Data, Artifact, NaturalObject, Other`
+- graph extraction enabled: `true`
+- relation types and graph examples: empty
 - automatic keyword extraction: `true`
 - rerank candidate multiplier: `2`
 - min rerank score: `0.0`
@@ -1094,6 +1157,7 @@ lightrag:
       overlap: 80
     embedding-batch-size: 32
     max-parallel-insert: 4
+    chunk-extract-parallelism: 4
     entity-extract-max-gleaning: 1
     max-extract-input-tokens: 20480
     language: Chinese

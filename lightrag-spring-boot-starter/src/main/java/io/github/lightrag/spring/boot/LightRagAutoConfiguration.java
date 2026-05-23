@@ -1,6 +1,7 @@
 package io.github.lightrag.spring.boot;
 
 import io.github.lightrag.api.LightRag;
+import io.github.lightrag.api.GraphExtractionOptionsProvider;
 import io.github.lightrag.indexing.Chunker;
 import io.github.lightrag.indexing.DocumentParsingOrchestrator;
 import io.github.lightrag.indexing.FixedWindowChunker;
@@ -282,6 +283,7 @@ public class LightRagAutoConfiguration {
         ObjectProvider<Chunker> chunker,
         ObjectProvider<DocumentParsingOrchestrator> documentParsingOrchestrator,
         ObjectProvider<RerankModel> rerankModel,
+        ObjectProvider<GraphExtractionOptionsProvider> graphExtractionOptionsProvider,
         LightRagProperties properties
     ) {
         var query = properties.getQuery();
@@ -313,10 +315,14 @@ public class LightRagAutoConfiguration {
             builder.embeddingBatchSize(properties.getIndexing().getEmbeddingBatchSize());
         }
         builder.maxParallelInsert(properties.getIndexing().getMaxParallelInsert());
+        builder.chunkExtractParallelism(properties.getIndexing().getChunkExtractParallelism());
         builder.entityExtractMaxGleaning(properties.getIndexing().getEntityExtractMaxGleaning());
         builder.maxExtractInputTokens(properties.getIndexing().getMaxExtractInputTokens());
         builder.entityExtractionLanguage(properties.getIndexing().getLanguage());
         builder.entityTypes(properties.getIndexing().getEntityTypes());
+        builder.graphExtractionEnabled(properties.getIndexing().isGraphEnabled());
+        builder.relationTypes(properties.getIndexing().getRelationTypes());
+        builder.graphExtractionExamples(properties.getIndexing().graphExtractionExamples());
         var configuredChunker = chunker.getIfAvailable();
         if (configuredChunker != null) {
             builder.chunker(configuredChunker);
@@ -328,6 +334,10 @@ public class LightRagAutoConfiguration {
         var configuredRerankModel = rerankModel.getIfAvailable();
         if (configuredRerankModel != null) {
             builder.rerankModel(configuredRerankModel);
+        }
+        var configuredGraphExtractionOptionsProvider = graphExtractionOptionsProvider.getIfAvailable();
+        if (configuredGraphExtractionOptionsProvider != null) {
+            builder.graphExtractionOptionsProvider(configuredGraphExtractionOptionsProvider);
         }
         return builder.build();
     }

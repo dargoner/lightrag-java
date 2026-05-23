@@ -106,6 +106,27 @@ git push origin v0.2.1
 - `PostgresStorageProvider`
 - `PostgresNeo4jStorageProvider`
 
+### 异步任务与流水线监控
+
+SDK 内置异步任务运行时，适合长耗时 ingest、图谱重建和图谱修复：
+
+- `submitIngest(workspaceId, documents)`
+- `submitIngestSources(workspaceId, sources, options)`
+- `submitRebuild(workspaceId)`
+- `getTask(workspaceId, taskId)`
+- `listTasks(workspaceId)`
+- `cancelTask(workspaceId, taskId)`
+
+`TaskSnapshot` 会持久化任务状态、请求/开始/结束时间、错误信息、cancel 标记，以及 `PARSING`、`CHUNKING`、`PRIMARY_EXTRACTION`、`GRAPH_ASSEMBLY`、`VECTOR_INDEXING`、`COMMITTING`、`COMPLETED` 等阶段快照。
+
+参考 WeKnora 的批处理 stats 思路，Java 版现在也会把关键性能字段结构化写入任务 metadata 和事件 attributes：
+
+- `queueWaitMs`、`totalDurationMs`
+- `stage.<STAGE>.durationMs`
+- `maxParallelInsert`、`embeddingBatchSize`、`chunkExtractParallelism`
+- `graphExtractionEnabled`、`entityTypeCount`、`relationTypeCount`、`graphExtractionExampleCount`
+- `STAGE_SUCCEEDED`、`DOCUMENT_COMMITTED` / `DOCUMENT_FAILED`、`CHUNK_SUCCEEDED` / `CHUNK_FAILED` 事件会携带 `durationMs`
+
 ## 快速开始
 
 下面是最小 Java 用法：
@@ -309,11 +330,25 @@ lightrag:
         base-url: http://127.0.0.1:8000
         api-key: ${MINERU_API_KEY:}
     embedding-batch-size: 32
+    chunk-extract-parallelism: 4
     max-parallel-insert: 4
     entity-extract-max-gleaning: 1
     max-extract-input-tokens: 20480
     language: Chinese
     entity-types: Person,Organization
+    graph-enabled: true
+    relation-types: Author,Alias
+    graph-examples:
+      - text: Alice wrote Retrieval Notes.
+        nodes:
+          - name: Alice
+            attributes: [researcher]
+          - name: Retrieval Notes
+            attributes: [document]
+        relations:
+          - node1: Alice
+            node2: Retrieval Notes
+            type: Author
 ```
 
 `ingest.preset` 现在是默认推荐的产品化配置入口，支持 `GENERAL`、`LAW`、`BOOK`、`QA`、`FIGURE`。
@@ -332,6 +367,8 @@ lightrag:
 `max-extract-input-tokens` 用来限制补抽前允许的估算上下文预算，超过后会跳过该轮补抽。
 `language` 用来控制实体描述和抽取提示语默认使用的语言，默认值是 `English`。
 `entity-types` 用来覆盖抽取阶段优先使用的实体类型列表；默认值是 `Person, Creature, Organization, Location, Event, Concept, Method, Content, Data, Artifact, NaturalObject, Other`。
+`graph-enabled` 用来控制当前配置作用域是否构建知识图谱；如果关闭，对应 workspace 的图谱重建/修复接口会直接报错。
+`relation-types` 和 `graph-examples` 对齐 WeKnora 的知识库图谱设置：`relation-types` 对应关系标签，`graph-examples` 对应 `text/nodes/relations` few-shot 示例，会进入抽取 prompt。
 当 `max-parallel-insert` 大于 `1` 时，自定义 `Chunker`、`ChatModel`、`EmbeddingModel` 实现需要具备并发安全性。
 
 如果不配置这两个字段，starter 默认仍然使用 `window-size=1000`、`overlap=100`。
@@ -501,12 +538,45 @@ Starter 还额外暴露了几项 pipeline 配置：
 - `lightrag.indexing.parsing.mineru.api-key`
 - `lightrag.indexing.embedding-batch-size`
 - `lightrag.indexing.max-parallel-insert`
+- `lightrag.indexing.chunk-extract-parallelism`
 - `lightrag.indexing.entity-extract-max-gleaning`
 - `lightrag.indexing.max-extract-input-tokens`
 - `lightrag.indexing.language`
 - `lightrag.indexing.entity-types`
+- `lightrag.indexing.graph-enabled`
+- `lightrag.indexing.relation-types`
+- `lightrag.indexing.graph-examples`
 - `lightrag.query.automatic-keyword-extraction`
 - `lightrag.query.rerank-candidate-multiplier`
+
+如果每个知识库需要独立的图谱抽取设置，可以实现 `GraphExtractionOptionsProvider`。解析顺序是：
+当前 `WorkspaceScope` 对应的 provider 配置 -> 全局 Builder/Spring 配置 -> 内置默认值。
+
+```java
+@Bean
+GraphExtractionOptionsProvider graphExtractionOptionsProvider() {
+    return scope -> {
+        if (scope.workspaceId().equals("finance")) {
+            return Optional.of(GraphExtractionOptions.builder()
+                .language("Chinese")
+                .entityTypes(List.of("Company", "Policy", "Metric"))
+                .relationTypes(List.of("Author", "Alias"))
+                .examples(List.of(new GraphExtractionExample(
+                    "Alice wrote Retrieval Notes.",
+                    List.of(
+                        new GraphExtractionNode("Alice", List.of("researcher")),
+                        new GraphExtractionNode("Retrieval Notes", List.of("document"))
+                    ),
+                    List.of(new GraphExtractionRelation("Alice", "Retrieval Notes", "Author"))
+                )))
+                .entityExtractMaxGleaning(0)
+                .chunkExtractParallelism(4)
+                .build());
+        }
+        return Optional.empty();
+    };
+}
+```
 
 模型超时也可以直接通过 Starter 配置：
 

@@ -35,6 +35,7 @@ import io.github.lightrag.types.RawDocumentSource;
 
 import java.nio.file.Path;
 import java.util.EnumMap;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.NoSuchElementException;
@@ -54,9 +55,14 @@ public final class LightRag implements AutoCloseable {
     private final int maxExtractInputTokens;
     private final String entityExtractionLanguage;
     private final List<String> entityTypes;
+    private final boolean graphExtractionEnabled;
+    private final List<String> relationTypes;
+    private final List<GraphExtractionExample> graphExtractionExamples;
     private final boolean embeddingSemanticMergeEnabled;
     private final double embeddingSemanticMergeThreshold;
     private final ExtractionRefinementOptions extractionRefinementOptions;
+    private final GraphExtractionOptions globalGraphExtractionOptions;
+    private final GraphExtractionOptionsProvider graphExtractionOptionsProvider;
     private final DocumentParsingOrchestrator documentParsingOrchestrator;
     private final List<TaskEventListener> taskEventListeners;
     private final TaskExecutionService taskExecutionService;
@@ -69,9 +75,13 @@ public final class LightRag implements AutoCloseable {
             io.github.lightrag.indexing.KnowledgeExtractor.DEFAULT_MAX_EXTRACT_INPUT_TOKENS,
             io.github.lightrag.indexing.KnowledgeExtractor.DEFAULT_LANGUAGE,
             io.github.lightrag.indexing.KnowledgeExtractor.DEFAULT_ENTITY_TYPES,
+            true,
+            List.of(),
+            List.of(),
             LightRagBuilder.DEFAULT_EMBEDDING_SEMANTIC_MERGE_ENABLED,
             LightRagBuilder.DEFAULT_EMBEDDING_SEMANTIC_MERGE_THRESHOLD,
             ExtractionRefinementOptions.disabled(),
+            GraphExtractionOptionsProvider.none(),
             List.of());
     }
 
@@ -82,9 +92,13 @@ public final class LightRag implements AutoCloseable {
             io.github.lightrag.indexing.KnowledgeExtractor.DEFAULT_MAX_EXTRACT_INPUT_TOKENS,
             io.github.lightrag.indexing.KnowledgeExtractor.DEFAULT_LANGUAGE,
             io.github.lightrag.indexing.KnowledgeExtractor.DEFAULT_ENTITY_TYPES,
+            true,
+            List.of(),
+            List.of(),
             LightRagBuilder.DEFAULT_EMBEDDING_SEMANTIC_MERGE_ENABLED,
             LightRagBuilder.DEFAULT_EMBEDDING_SEMANTIC_MERGE_THRESHOLD,
             ExtractionRefinementOptions.disabled(),
+            GraphExtractionOptionsProvider.none(),
             List.of());
     }
 
@@ -102,9 +116,13 @@ public final class LightRag implements AutoCloseable {
         int maxExtractInputTokens,
         String entityExtractionLanguage,
         List<String> entityTypes,
+        boolean graphExtractionEnabled,
+        List<String> relationTypes,
+        List<GraphExtractionExample> graphExtractionExamples,
         boolean embeddingSemanticMergeEnabled,
         double embeddingSemanticMergeThreshold,
         ExtractionRefinementOptions extractionRefinementOptions,
+        GraphExtractionOptionsProvider graphExtractionOptionsProvider,
         List<TaskEventListener> taskEventListeners
     ) {
         this.config = config;
@@ -119,9 +137,26 @@ public final class LightRag implements AutoCloseable {
         this.maxExtractInputTokens = maxExtractInputTokens;
         this.entityExtractionLanguage = Objects.requireNonNull(entityExtractionLanguage, "entityExtractionLanguage");
         this.entityTypes = List.copyOf(Objects.requireNonNull(entityTypes, "entityTypes"));
+        this.graphExtractionEnabled = graphExtractionEnabled;
+        this.relationTypes = List.copyOf(Objects.requireNonNull(relationTypes, "relationTypes"));
+        this.graphExtractionExamples = List.copyOf(Objects.requireNonNull(graphExtractionExamples, "graphExtractionExamples"));
         this.embeddingSemanticMergeEnabled = embeddingSemanticMergeEnabled;
         this.embeddingSemanticMergeThreshold = embeddingSemanticMergeThreshold;
         this.extractionRefinementOptions = Objects.requireNonNull(extractionRefinementOptions, "extractionRefinementOptions");
+        this.globalGraphExtractionOptions = new GraphExtractionOptions(
+            graphExtractionEnabled,
+            chunkExtractParallelism,
+            entityExtractMaxGleaning,
+            maxExtractInputTokens,
+            entityExtractionLanguage,
+            entityTypes,
+            relationTypes,
+            graphExtractionExamples
+        );
+        this.graphExtractionOptionsProvider = Objects.requireNonNull(
+            graphExtractionOptionsProvider,
+            "graphExtractionOptionsProvider"
+        );
         this.documentParsingOrchestrator = documentParsingOrchestrator;
         this.taskEventListeners = List.copyOf(Objects.requireNonNull(taskEventListeners, "taskEventListeners"));
         this.taskExecutionService = new TaskExecutionService(
@@ -145,17 +180,17 @@ public final class LightRag implements AutoCloseable {
 
     public void ingest(String workspaceId, List<Document> documents) {
         var scope = resolveScope(workspaceId);
-        newIndexingPipeline(resolveProvider(scope)).ingest(documents);
+        newIndexingPipeline(scope, resolveProvider(scope)).ingest(documents);
     }
 
     public void ingestSources(String workspaceId, List<RawDocumentSource> sources, DocumentIngestOptions options) {
         var scope = resolveScope(workspaceId);
-        newIndexingPipeline(resolveProvider(scope)).ingestSources(sources, options);
+        newIndexingPipeline(scope, resolveProvider(scope)).ingestSources(sources, options);
     }
 
     public void ingestPreChunked(String workspaceId, List<PreChunkedDocument> documents) {
         var scope = resolveScope(workspaceId);
-        newIndexingPipeline(resolveProvider(scope)).ingestPreChunked(List.copyOf(Objects.requireNonNull(documents, "documents")));
+        newIndexingPipeline(scope, resolveProvider(scope)).ingestPreChunked(List.copyOf(Objects.requireNonNull(documents, "documents")));
     }
 
     public String submitIngest(String workspaceId, List<Document> documents) {
@@ -165,12 +200,15 @@ public final class LightRag implements AutoCloseable {
     public String submitIngest(String workspaceId, List<Document> documents, TaskSubmitOptions options) {
         var normalizedDocuments = List.copyOf(Objects.requireNonNull(documents, "documents"));
         var submitOptions = Objects.requireNonNull(options, "options");
+        var scope = resolveScope(workspaceId);
         return taskExecutionService.submit(
-            workspaceId,
+            scope.workspaceId(),
             TaskType.INGEST_DOCUMENTS,
-            Map.of("documentCount", Integer.toString(normalizedDocuments.size())),
+            pipelineMetadata(scope, Map.of("documentCount", Integer.toString(normalizedDocuments.size()))),
             submitOptions.listeners(),
-            progressListener -> newIndexingPipeline(resolveProvider(resolveScope(workspaceId)), progressListener).ingest(normalizedDocuments)
+            progressListener -> {
+                newIndexingPipeline(scope, resolveProvider(scope), progressListener).ingest(normalizedDocuments);
+            }
         );
     }
 
@@ -181,13 +219,16 @@ public final class LightRag implements AutoCloseable {
     ) {
         var normalizedDocuments = List.copyOf(Objects.requireNonNull(documents, "documents"));
         var submitOptions = Objects.requireNonNull(options, "options");
+        var scope = resolveScope(workspaceId);
         return taskExecutionService.submit(
-            workspaceId,
+            scope.workspaceId(),
             TaskType.INGEST_DOCUMENTS,
-            Map.of("documentCount", Integer.toString(normalizedDocuments.size())),
+            pipelineMetadata(scope, Map.of("documentCount", Integer.toString(normalizedDocuments.size()))),
             submitOptions.listeners(),
-            progressListener -> newIndexingPipeline(resolveProvider(resolveScope(workspaceId)), progressListener)
-                .ingestPreChunked(normalizedDocuments)
+            progressListener -> {
+                newIndexingPipeline(scope, resolveProvider(scope), progressListener)
+                    .ingestPreChunked(normalizedDocuments);
+            }
         );
     }
 
@@ -204,13 +245,16 @@ public final class LightRag implements AutoCloseable {
         var normalizedSources = List.copyOf(Objects.requireNonNull(sources, "sources"));
         var resolvedOptions = Objects.requireNonNull(options, "options");
         var taskSubmitOptions = Objects.requireNonNull(submitOptions, "submitOptions");
+        var scope = resolveScope(workspaceId);
         return taskExecutionService.submit(
-            workspaceId,
+            scope.workspaceId(),
             TaskType.INGEST_SOURCES,
-            Map.of("sourceCount", Integer.toString(normalizedSources.size())),
+            pipelineMetadata(scope, Map.of("sourceCount", Integer.toString(normalizedSources.size()))),
             taskSubmitOptions.listeners(),
-            progressListener -> newIndexingPipeline(resolveProvider(resolveScope(workspaceId)), progressListener)
-                .ingestSources(normalizedSources, resolvedOptions)
+            progressListener -> {
+                newIndexingPipeline(scope, resolveProvider(scope), progressListener)
+                    .ingestSources(normalizedSources, resolvedOptions);
+            }
         );
     }
 
@@ -220,12 +264,15 @@ public final class LightRag implements AutoCloseable {
 
     public String submitRebuild(String workspaceId, TaskSubmitOptions options) {
         var submitOptions = Objects.requireNonNull(options, "options");
+        var scope = resolveScope(workspaceId);
         return taskExecutionService.submit(
-            workspaceId,
+            scope.workspaceId(),
             TaskType.REBUILD_GRAPH,
-            Map.of(),
+            pipelineMetadata(scope, Map.of()),
             submitOptions.listeners(),
-            progressListener -> newDeletionPipeline(resolveProvider(resolveScope(workspaceId)), progressListener).rebuildAllDocuments()
+            progressListener -> {
+                newDeletionPipeline(scope, resolveProvider(scope), progressListener).rebuildAllDocuments();
+            }
         );
     }
 
@@ -242,16 +289,19 @@ public final class LightRag implements AutoCloseable {
         var normalizedDocumentId = requireNonBlank(documentId, "documentId");
         var resolvedDeleteOptions = Objects.requireNonNull(deleteOptions, "deleteOptions");
         var resolvedSubmitOptions = Objects.requireNonNull(submitOptions, "submitOptions");
+        var scope = resolveScope(workspaceId);
         return taskExecutionService.submit(
-            workspaceId,
+            scope.workspaceId(),
             TaskType.DELETE_DOCUMENT,
-            Map.of(
+            pipelineMetadata(scope, Map.of(
                 "documentId", normalizedDocumentId,
                 "deleteLlmCache", Boolean.toString(resolvedDeleteOptions.deleteLlmCache())
-            ),
+            )),
             resolvedSubmitOptions.listeners(),
-            progressListener -> newDeletionPipeline(resolveProvider(resolveScope(workspaceId)), progressListener)
-                .deleteByDocumentId(normalizedDocumentId, resolvedDeleteOptions)
+            progressListener -> {
+                newDeletionPipeline(scope, resolveProvider(scope), progressListener)
+                    .deleteByDocumentId(normalizedDocumentId, resolvedDeleteOptions);
+            }
         );
     }
 
@@ -285,32 +335,32 @@ public final class LightRag implements AutoCloseable {
 
     public GraphEntity createEntity(String workspaceId, CreateEntityRequest request) {
         var scope = resolveScope(workspaceId);
-        return newGraphManagementPipeline(resolveProvider(scope)).createEntity(request);
+        return newGraphManagementPipeline(scope, resolveProvider(scope)).createEntity(request);
     }
 
     public GraphRelation createRelation(String workspaceId, CreateRelationRequest request) {
         var scope = resolveScope(workspaceId);
-        return newGraphManagementPipeline(resolveProvider(scope)).createRelation(request);
+        return newGraphManagementPipeline(scope, resolveProvider(scope)).createRelation(request);
     }
 
     public GraphEntity editEntity(String workspaceId, EditEntityRequest request) {
         var scope = resolveScope(workspaceId);
-        return newGraphManagementPipeline(resolveProvider(scope)).editEntity(request);
+        return newGraphManagementPipeline(scope, resolveProvider(scope)).editEntity(request);
     }
 
     public GraphRelation updateRelation(String workspaceId, UpdateRelationRequest request) {
         var scope = resolveScope(workspaceId);
-        return newGraphManagementPipeline(resolveProvider(scope)).updateRelation(request);
+        return newGraphManagementPipeline(scope, resolveProvider(scope)).updateRelation(request);
     }
 
     public void deleteRelation(String workspaceId, DeleteRelationRequest request) {
         var scope = resolveScope(workspaceId);
-        newGraphManagementPipeline(resolveProvider(scope)).deleteRelation(request);
+        newGraphManagementPipeline(scope, resolveProvider(scope)).deleteRelation(request);
     }
 
     public GraphEntity mergeEntities(String workspaceId, MergeEntitiesRequest request) {
         var scope = resolveScope(workspaceId);
-        return newGraphManagementPipeline(resolveProvider(scope)).mergeEntities(request);
+        return newGraphManagementPipeline(scope, resolveProvider(scope)).mergeEntities(request);
     }
 
     /**
@@ -319,7 +369,7 @@ public final class LightRag implements AutoCloseable {
      */
     public DeletionResult deleteByEntity(String workspaceId, String entityName) {
         var scope = resolveScope(workspaceId);
-        return newDeletionPipeline(resolveProvider(scope)).deleteByEntity(entityName);
+        return newDeletionPipeline(scope, resolveProvider(scope)).deleteByEntity(entityName);
     }
 
     /**
@@ -328,7 +378,7 @@ public final class LightRag implements AutoCloseable {
      */
     public DeletionResult deleteByRelation(String workspaceId, String sourceEntityName, String targetEntityName) {
         var scope = resolveScope(workspaceId);
-        return newDeletionPipeline(resolveProvider(scope)).deleteByRelation(sourceEntityName, targetEntityName);
+        return newDeletionPipeline(scope, resolveProvider(scope)).deleteByRelation(sourceEntityName, targetEntityName);
     }
 
     /**
@@ -341,7 +391,7 @@ public final class LightRag implements AutoCloseable {
 
     public DeletionResult deleteByDocumentId(String workspaceId, String documentId, DeleteDocumentOptions options) {
         var scope = resolveScope(workspaceId);
-        return newDeletionPipeline(resolveProvider(scope)).deleteByDocumentId(documentId, options);
+        return newDeletionPipeline(scope, resolveProvider(scope)).deleteByDocumentId(documentId, options);
     }
 
     public void clearCache(String workspaceId) {
@@ -376,7 +426,7 @@ public final class LightRag implements AutoCloseable {
 
     public DocumentGraphInspection inspectDocumentGraph(String workspaceId, String documentId) {
         var scope = resolveScope(workspaceId);
-        return newGraphMaterializationPipeline(resolveProvider(scope)).inspect(documentId);
+        return newGraphMaterializationPipeline(scope, resolveProvider(scope)).inspect(documentId);
     }
 
     public DocumentGraphMaterializationResult materializeDocumentGraph(
@@ -385,27 +435,27 @@ public final class LightRag implements AutoCloseable {
         GraphMaterializationMode mode
     ) {
         var scope = resolveScope(workspaceId);
-        return newGraphMaterializationPipeline(resolveProvider(scope)).materialize(documentId, mode);
+        return newGraphMaterializationPipeline(scope, resolveProvider(scope)).materialize(documentId, mode);
     }
 
     public DocumentChunkGraphStatus getDocumentChunkGraphStatus(String workspaceId, String documentId, String chunkId) {
         var scope = resolveScope(workspaceId);
-        return newGraphMaterializationPipeline(resolveProvider(scope)).getChunkStatus(documentId, chunkId);
+        return newGraphMaterializationPipeline(scope, resolveProvider(scope)).getChunkStatus(documentId, chunkId);
     }
 
     public List<DocumentChunkGraphStatus> listDocumentChunkGraphStatuses(String workspaceId, String documentId) {
         var scope = resolveScope(workspaceId);
-        return newGraphMaterializationPipeline(resolveProvider(scope)).listChunkStatuses(documentId);
+        return newGraphMaterializationPipeline(scope, resolveProvider(scope)).listChunkStatuses(documentId);
     }
 
     public ChunkGraphMaterializationResult resumeChunkGraph(String workspaceId, String documentId, String chunkId) {
         var scope = resolveScope(workspaceId);
-        return newGraphMaterializationPipeline(resolveProvider(scope)).resumeChunk(documentId, chunkId);
+        return newGraphMaterializationPipeline(scope, resolveProvider(scope)).resumeChunk(documentId, chunkId);
     }
 
     public ChunkGraphMaterializationResult repairChunkGraph(String workspaceId, String documentId, String chunkId) {
         var scope = resolveScope(workspaceId);
-        return newGraphMaterializationPipeline(resolveProvider(scope)).repairChunk(documentId, chunkId);
+        return newGraphMaterializationPipeline(scope, resolveProvider(scope)).repairChunk(documentId, chunkId);
     }
 
     public String submitDocumentGraphMaterialization(
@@ -413,23 +463,26 @@ public final class LightRag implements AutoCloseable {
         String documentId,
         GraphMaterializationMode mode
     ) {
-        resolveScope(workspaceId);
+        var scope = resolveScope(workspaceId);
         var normalizedDocumentId = Objects.requireNonNull(documentId, "documentId");
         var requestedMode = Objects.requireNonNull(mode, "mode");
         return taskExecutionService.submit(
-            workspaceId,
+            scope.workspaceId(),
             TaskType.MATERIALIZE_DOCUMENT_GRAPH,
-            Map.of(
+            pipelineMetadata(scope, Map.of(
                 "documentId", normalizedDocumentId,
                 "requestedMode", requestedMode.name()
-            ),
-            progressListener -> newGraphMaterializationPipeline(
-                resolveProvider(resolveScope(workspaceId)),
-                progressListener,
-                progressListener instanceof TaskMetadataReporter metadataReporter
-                    ? metadataReporter
-                    : TaskMetadataReporter.noop()
-            ).materialize(normalizedDocumentId, requestedMode)
+            )),
+            progressListener -> {
+                newGraphMaterializationPipeline(
+                    scope,
+                    resolveProvider(scope),
+                    progressListener,
+                    progressListener instanceof TaskMetadataReporter metadataReporter
+                        ? metadataReporter
+                        : TaskMetadataReporter.noop()
+                ).materialize(normalizedDocumentId, requestedMode);
+            }
         );
     }
 
@@ -439,21 +492,22 @@ public final class LightRag implements AutoCloseable {
         String chunkId,
         GraphChunkAction action
     ) {
-        resolveScope(workspaceId);
+        var scope = resolveScope(workspaceId);
         var normalizedDocumentId = Objects.requireNonNull(documentId, "documentId");
         var normalizedChunkId = Objects.requireNonNull(chunkId, "chunkId");
         var requestedAction = Objects.requireNonNull(action, "action");
         return taskExecutionService.submit(
-            workspaceId,
+            scope.workspaceId(),
             TaskType.MATERIALIZE_CHUNK_GRAPH,
-            Map.of(
+            pipelineMetadata(scope, Map.of(
                 "documentId", normalizedDocumentId,
                 "chunkId", normalizedChunkId,
                 "requestedAction", requestedAction.name()
-            ),
+            )),
             progressListener -> {
                 var pipeline = newGraphMaterializationPipeline(
-                    resolveProvider(resolveScope(workspaceId)),
+                    scope,
+                    resolveProvider(scope),
                     progressListener,
                     progressListener instanceof TaskMetadataReporter metadataReporter
                         ? metadataReporter
@@ -532,6 +586,18 @@ public final class LightRag implements AutoCloseable {
         return entityTypes;
     }
 
+    boolean graphExtractionEnabled() {
+        return graphExtractionEnabled;
+    }
+
+    List<String> relationTypes() {
+        return relationTypes;
+    }
+
+    List<GraphExtractionExample> graphExtractionExamples() {
+        return graphExtractionExamples;
+    }
+
     boolean embeddingSemanticMergeEnabled() {
         return embeddingSemanticMergeEnabled;
     }
@@ -567,15 +633,17 @@ public final class LightRag implements AutoCloseable {
         );
     }
 
-    private IndexingPipeline newIndexingPipeline(AtomicStorageProvider storageProvider) {
-        return newIndexingPipeline(storageProvider, IndexingProgressListener.noop());
+    private IndexingPipeline newIndexingPipeline(WorkspaceScope scope, AtomicStorageProvider storageProvider) {
+        return newIndexingPipeline(scope, storageProvider, IndexingProgressListener.noop());
     }
 
     private IndexingPipeline newIndexingPipeline(
+        WorkspaceScope scope,
         AtomicStorageProvider storageProvider,
         IndexingProgressListener progressListener
     ) {
         var llmCacheStore = storageProvider.llmCacheStore();
+        var graphExtractionOptions = resolveGraphExtractionOptions(scope);
         return new IndexingPipeline(
             cachedModel("extract", config.extractionModel(), llmCacheStore),
             cachedModel("summary", config.summaryModel(), llmCacheStore),
@@ -586,11 +654,14 @@ public final class LightRag implements AutoCloseable {
             documentParsingOrchestrator,
             embeddingBatchSize,
             maxParallelInsert,
-            chunkExtractParallelism,
-            entityExtractMaxGleaning,
-            maxExtractInputTokens,
-            entityExtractionLanguage,
-            entityTypes,
+            graphExtractionOptions.resolvedChunkExtractParallelism(),
+            graphExtractionOptions.resolvedEntityExtractMaxGleaning(),
+            graphExtractionOptions.resolvedMaxExtractInputTokens(),
+            graphExtractionOptions.resolvedLanguage(),
+            graphExtractionOptions.resolvedEntityTypes(),
+            graphExtractionOptions.resolvedEnabled(),
+            graphExtractionOptions.resolvedRelationTypes(),
+            graphExtractionOptions.resolvedExamples(),
             embeddingSemanticMergeEnabled,
             embeddingSemanticMergeThreshold,
             extractionRefinementOptions,
@@ -598,31 +669,37 @@ public final class LightRag implements AutoCloseable {
         );
     }
 
-    private DeletionPipeline newDeletionPipeline(AtomicStorageProvider storageProvider) {
-        return newDeletionPipeline(storageProvider, IndexingProgressListener.noop());
+    private DeletionPipeline newDeletionPipeline(WorkspaceScope scope, AtomicStorageProvider storageProvider) {
+        return newDeletionPipeline(scope, storageProvider, IndexingProgressListener.noop());
     }
 
     private DeletionPipeline newDeletionPipeline(
+        WorkspaceScope scope,
         AtomicStorageProvider storageProvider,
         IndexingProgressListener progressListener
     ) {
-        return new DeletionPipeline(storageProvider, newIndexingPipeline(storageProvider, progressListener), config.snapshotPath());
+        return new DeletionPipeline(storageProvider, newIndexingPipeline(scope, storageProvider, progressListener), config.snapshotPath());
     }
 
-    private GraphManagementPipeline newGraphManagementPipeline(AtomicStorageProvider storageProvider) {
-        return new GraphManagementPipeline(storageProvider, newIndexingPipeline(storageProvider), config.snapshotPath());
+    private GraphManagementPipeline newGraphManagementPipeline(WorkspaceScope scope, AtomicStorageProvider storageProvider) {
+        return new GraphManagementPipeline(storageProvider, newIndexingPipeline(scope, storageProvider), config.snapshotPath());
     }
 
-    private GraphMaterializationPipeline newGraphMaterializationPipeline(AtomicStorageProvider storageProvider) {
-        return newGraphMaterializationPipeline(storageProvider, IndexingProgressListener.noop(), TaskMetadataReporter.noop());
+    private GraphMaterializationPipeline newGraphMaterializationPipeline(WorkspaceScope scope, AtomicStorageProvider storageProvider) {
+        return newGraphMaterializationPipeline(scope, storageProvider, IndexingProgressListener.noop(), TaskMetadataReporter.noop());
     }
 
     private GraphMaterializationPipeline newGraphMaterializationPipeline(
+        WorkspaceScope scope,
         AtomicStorageProvider storageProvider,
         IndexingProgressListener progressListener,
         TaskMetadataReporter metadataReporter
     ) {
         var llmCacheStore = storageProvider.llmCacheStore();
+        var graphExtractionOptions = resolveGraphExtractionOptions(scope);
+        if (!graphExtractionOptions.resolvedEnabled()) {
+            throw new IllegalStateException("knowledge graph extraction is disabled for workspace " + scope.workspaceId());
+        }
         return new GraphMaterializationPipeline(
             cachedModel("extract", config.extractionModel(), llmCacheStore),
             config.embeddingModel(),
@@ -631,11 +708,40 @@ public final class LightRag implements AutoCloseable {
             config.snapshotPath(),
             metadataReporter,
             progressListener,
-            entityExtractMaxGleaning,
-            maxExtractInputTokens,
-            entityExtractionLanguage,
-            entityTypes
+            graphExtractionOptions.resolvedEntityExtractMaxGleaning(),
+            graphExtractionOptions.resolvedMaxExtractInputTokens(),
+            graphExtractionOptions.resolvedLanguage(),
+            graphExtractionOptions.resolvedEntityTypes(),
+            graphExtractionOptions.resolvedRelationTypes(),
+            graphExtractionOptions.resolvedExamples()
         );
+    }
+
+    private GraphExtractionOptions resolveGraphExtractionOptions(WorkspaceScope scope) {
+        var normalizedScope = Objects.requireNonNull(scope, "scope");
+        return Objects.requireNonNull(
+                graphExtractionOptionsProvider.resolve(normalizedScope),
+                "graphExtractionOptionsProvider.resolve"
+            )
+            .map(options -> options.mergeOver(globalGraphExtractionOptions))
+            .orElse(globalGraphExtractionOptions)
+            .mergeOver(GraphExtractionOptions.defaults());
+    }
+
+    private Map<String, String> pipelineMetadata(WorkspaceScope scope, Map<String, String> baseMetadata) {
+        var graphOptions = resolveGraphExtractionOptions(scope);
+        var metadata = new LinkedHashMap<String, String>(Objects.requireNonNull(baseMetadata, "baseMetadata"));
+        metadata.put("maxParallelInsert", Integer.toString(maxParallelInsert));
+        metadata.put("embeddingBatchSize", Integer.toString(embeddingBatchSize));
+        metadata.put("chunkExtractParallelism", Integer.toString(graphOptions.resolvedChunkExtractParallelism()));
+        metadata.put("entityExtractMaxGleaning", Integer.toString(graphOptions.resolvedEntityExtractMaxGleaning()));
+        metadata.put("maxExtractInputTokens", Integer.toString(graphOptions.resolvedMaxExtractInputTokens()));
+        metadata.put("graphExtractionEnabled", Boolean.toString(graphOptions.resolvedEnabled()));
+        metadata.put("entityTypeCount", Integer.toString(graphOptions.resolvedEntityTypes().size()));
+        metadata.put("relationTypeCount", Integer.toString(graphOptions.resolvedRelationTypes().size()));
+        metadata.put("graphExtractionExampleCount", Integer.toString(graphOptions.resolvedExamples().size()));
+        metadata.put("embeddingSemanticMergeEnabled", Boolean.toString(embeddingSemanticMergeEnabled));
+        return Map.copyOf(metadata);
     }
 
     private QueryEngine newQueryEngine(AtomicStorageProvider storageProvider) {

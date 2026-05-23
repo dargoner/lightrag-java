@@ -4,6 +4,7 @@ import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import io.github.lightrag.exception.ExtractionException;
+import io.github.lightrag.api.GraphExtractionExample;
 import io.github.lightrag.indexing.refinement.RefinedEntityPatch;
 import io.github.lightrag.indexing.refinement.RefinedRelationPatch;
 import io.github.lightrag.indexing.refinement.RefinedWindowExtraction;
@@ -67,6 +68,7 @@ public final class KnowledgeExtractor {
              - "relationship_description": concise explanation of the relationship
              - "weight": optional confidence or importance score; omit it if uncertain
            - The "relationship_keywords" field must act like high-level relationship keywords, not a database-specific edge label.
+%s
 
         3. Output Rules:
            - Return JSON only.
@@ -140,6 +142,8 @@ public final class KnowledgeExtractor {
     private final int maxExtractInputTokens;
     private final String language;
     private final List<String> entityTypes;
+    private final List<String> relationTypes;
+    private final List<GraphExtractionExample> examples;
     private final boolean allowDeterministicAttributionFallback;
 
     public KnowledgeExtractor(ChatModel chatModel) {
@@ -175,6 +179,28 @@ public final class KnowledgeExtractor {
         List<String> entityTypes,
         boolean allowDeterministicAttributionFallback
     ) {
+        this(
+            chatModel,
+            entityExtractMaxGleaning,
+            maxExtractInputTokens,
+            language,
+            entityTypes,
+            List.of(),
+            List.of(),
+            allowDeterministicAttributionFallback
+        );
+    }
+
+    public KnowledgeExtractor(
+        ChatModel chatModel,
+        int entityExtractMaxGleaning,
+        int maxExtractInputTokens,
+        String language,
+        List<String> entityTypes,
+        List<String> relationTypes,
+        List<GraphExtractionExample> examples,
+        boolean allowDeterministicAttributionFallback
+    ) {
         this.chatModel = Objects.requireNonNull(chatModel, "chatModel");
         if (entityExtractMaxGleaning < 0) {
             throw new IllegalArgumentException("entityExtractMaxGleaning must not be negative");
@@ -192,6 +218,12 @@ public final class KnowledgeExtractor {
             throw new IllegalArgumentException("entityTypes must not be empty");
         }
         this.entityTypes = normalizedEntityTypes;
+        this.relationTypes = relationTypes == null
+            ? List.of()
+            : List.copyOf(relationTypes).stream()
+                .map(type -> requireNonBlank(type, "relationTypes entry"))
+                .toList();
+        this.examples = examples == null ? List.of() : List.copyOf(examples);
         this.allowDeterministicAttributionFallback = allowDeterministicAttributionFallback;
     }
 
@@ -634,7 +666,49 @@ public final class KnowledgeExtractor {
     }
 
     private String buildSystemPrompt() {
-        return SYSTEM_PROMPT_TEMPLATE.formatted(String.join(", ", entityTypes), language);
+        return SYSTEM_PROMPT_TEMPLATE.formatted(
+            String.join(", ", entityTypes),
+            renderGraphExtractionGuidance(),
+            language
+        );
+    }
+
+    private String renderGraphExtractionGuidance() {
+        if (relationTypes.isEmpty() && examples.isEmpty()) {
+            return "";
+        }
+        var guidance = new StringBuilder();
+        if (!relationTypes.isEmpty()) {
+            guidance.append("\n           - Allowed relationship keywords/types are: ")
+                .append(String.join(", ", relationTypes))
+                .append(". Select relationship_keywords from this list and skip relationships that do not fit.");
+        }
+        if (!examples.isEmpty()) {
+            guidance.append("\n\n        Knowledge-base Graph Examples:");
+            for (int index = 0; index < examples.size(); index++) {
+                var example = examples.get(index);
+                guidance.append("\n           Example ").append(index + 1).append(" Input: ")
+                    .append(example.text().replace('\n', ' ').strip());
+                guidance.append("\n           Example ").append(index + 1).append(" Nodes:");
+                for (var node : example.nodes()) {
+                    guidance.append("\n             - ").append(node.name());
+                    if (!node.attributes().isEmpty()) {
+                        guidance.append(" attributes: ").append(String.join("; ", node.attributes()));
+                    }
+                }
+                guidance.append("\n           Example ").append(index + 1).append(" Relations:");
+                for (var relation : example.relations()) {
+                    guidance.append("\n             - ")
+                        .append(relation.node1())
+                        .append(" -> ")
+                        .append(relation.node2())
+                        .append(" type: ")
+                        .append(relation.type());
+                }
+            }
+            guidance.append("\n           Use these examples as extraction hints, but still return the JSON schema below.");
+        }
+        return guidance.toString();
     }
 
     private String buildWindowSystemPrompt() {

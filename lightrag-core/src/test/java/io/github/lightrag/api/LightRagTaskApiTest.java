@@ -393,11 +393,16 @@ class LightRagTaskApiTest {
     }
 
     @Test
-    void submitIngestStoresQueueAndTotalTimingMetadata() {
+    void submitIngestStoresPipelineTunablesAndTimingMetadata() {
+        var events = new java.util.concurrent.CopyOnWriteArrayList<TaskEvent>();
         var rag = LightRag.builder()
             .chatModel(new FakeChatModel())
             .embeddingModel(new FakeEmbeddingModel())
             .storage(InMemoryStorageProvider.create())
+            .maxParallelInsert(2)
+            .chunkExtractParallelism(3)
+            .embeddingBatchSize(4)
+            .taskEventListener(events::add)
             .build();
 
         var taskId = rag.submitIngest(WORKSPACE, List.of(
@@ -406,7 +411,27 @@ class LightRagTaskApiTest {
 
         var task = awaitTerminalTask(rag, taskId);
 
-        assertThat(task.metadata()).containsKeys("queueWaitMs", "totalDurationMs");
+        assertThat(task.metadata()).containsKeys(
+            "queueWaitMs",
+            "totalDurationMs",
+            "stage.CHUNKING.durationMs",
+            "stage.GRAPH_ASSEMBLY.durationMs"
+        );
+        assertThat(task.metadata())
+            .containsEntry("maxParallelInsert", "2")
+            .containsEntry("chunkExtractParallelism", "3")
+            .containsEntry("embeddingBatchSize", "4")
+            .containsEntry("graphExtractionEnabled", "true");
+        assertThat(events.stream()
+            .filter(event -> event.eventType() == TaskEventType.STAGE_SUCCEEDED)
+            .map(event -> event.attributes().get("durationMs"))
+            .filter(value -> value != null)
+            .toList()).isNotEmpty();
+        assertThat(events.stream()
+            .filter(event -> event.eventType() == TaskEventType.DOCUMENT_COMMITTED)
+            .map(event -> event.attributes().get("durationMs"))
+            .filter(value -> value != null)
+            .toList()).isNotEmpty();
     }
 
     @Test

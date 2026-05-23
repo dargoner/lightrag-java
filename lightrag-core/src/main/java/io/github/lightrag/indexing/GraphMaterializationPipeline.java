@@ -10,6 +10,7 @@ import io.github.lightrag.api.DocumentGraphMaterializationResult;
 import io.github.lightrag.api.DocumentStatus;
 import io.github.lightrag.api.FailureStage;
 import io.github.lightrag.api.GraphChunkAction;
+import io.github.lightrag.api.GraphExtractionExample;
 import io.github.lightrag.api.GraphMaterializationMode;
 import io.github.lightrag.api.GraphMaterializationStatus;
 import io.github.lightrag.api.SnapshotSource;
@@ -82,7 +83,9 @@ public final class GraphMaterializationPipeline {
             KnowledgeExtractor.DEFAULT_ENTITY_EXTRACT_MAX_GLEANING,
             KnowledgeExtractor.DEFAULT_MAX_EXTRACT_INPUT_TOKENS,
             KnowledgeExtractor.DEFAULT_LANGUAGE,
-            KnowledgeExtractor.DEFAULT_ENTITY_TYPES
+            KnowledgeExtractor.DEFAULT_ENTITY_TYPES,
+            List.of(),
+            List.of()
         );
     }
 
@@ -97,7 +100,9 @@ public final class GraphMaterializationPipeline {
         int entityExtractMaxGleaning,
         int maxExtractInputTokens,
         String entityExtractionLanguage,
-        List<String> entityTypes
+        List<String> entityTypes,
+        List<String> relationTypes,
+        List<GraphExtractionExample> graphExtractionExamples
     ) {
         this.storageProvider = Objects.requireNonNull(storageProvider, "storageProvider");
         this.extractionRefinementOptions = extractionRefinementOptions == null
@@ -112,6 +117,8 @@ public final class GraphMaterializationPipeline {
             maxExtractInputTokens,
             entityExtractionLanguage,
             entityTypes,
+            relationTypes,
+            graphExtractionExamples,
             this.extractionRefinementOptions.allowDeterministicAttributionFallback()
         );
         this.embeddingBatcher = new EmbeddingBatcher(Objects.requireNonNull(embeddingModel, "embeddingModel"), Integer.MAX_VALUE);

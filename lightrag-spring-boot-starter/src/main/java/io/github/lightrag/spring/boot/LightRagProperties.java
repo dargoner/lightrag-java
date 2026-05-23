@@ -1,5 +1,8 @@
 package io.github.lightrag.spring.boot;
 
+import io.github.lightrag.api.GraphExtractionExample;
+import io.github.lightrag.api.GraphExtractionNode;
+import io.github.lightrag.api.GraphExtractionRelation;
 import io.github.lightrag.indexing.FixedWindowChunker;
 import org.springframework.boot.context.properties.ConfigurationProperties;
 
@@ -154,10 +157,14 @@ public class LightRagProperties {
         private final ParsingProperties parsing = new ParsingProperties();
         private int embeddingBatchSize;
         private int maxParallelInsert = 1;
+        private int chunkExtractParallelism = 1;
         private int entityExtractMaxGleaning = io.github.lightrag.indexing.KnowledgeExtractor.DEFAULT_ENTITY_EXTRACT_MAX_GLEANING;
         private int maxExtractInputTokens = io.github.lightrag.indexing.KnowledgeExtractor.DEFAULT_MAX_EXTRACT_INPUT_TOKENS;
         private String language = io.github.lightrag.indexing.KnowledgeExtractor.DEFAULT_LANGUAGE;
         private List<String> entityTypes = io.github.lightrag.indexing.KnowledgeExtractor.DEFAULT_ENTITY_TYPES;
+        private boolean graphEnabled = true;
+        private List<String> relationTypes = List.of();
+        private List<GraphExtractionExampleProperties> graphExamples = List.of();
 
         public ChunkingProperties getChunking() {
             return chunking;
@@ -188,6 +195,17 @@ public class LightRagProperties {
                 throw new IllegalArgumentException("maxParallelInsert must be positive");
             }
             this.maxParallelInsert = maxParallelInsert;
+        }
+
+        public int getChunkExtractParallelism() {
+            return chunkExtractParallelism;
+        }
+
+        public void setChunkExtractParallelism(int chunkExtractParallelism) {
+            if (chunkExtractParallelism <= 0) {
+                throw new IllegalArgumentException("chunkExtractParallelism must be positive");
+            }
+            this.chunkExtractParallelism = chunkExtractParallelism;
         }
 
         public int getEntityExtractMaxGleaning() {
@@ -234,11 +252,140 @@ public class LightRagProperties {
             this.entityTypes = normalizedEntityTypes;
         }
 
+        public boolean isGraphEnabled() {
+            return graphEnabled;
+        }
+
+        public void setGraphEnabled(boolean graphEnabled) {
+            this.graphEnabled = graphEnabled;
+        }
+
+        public List<String> getRelationTypes() {
+            return relationTypes;
+        }
+
+        public void setRelationTypes(List<String> relationTypes) {
+            this.relationTypes = List.copyOf(relationTypes).stream()
+                .map(type -> requireNonBlank(type, "relationTypes entry"))
+                .toList();
+        }
+
+        public List<GraphExtractionExampleProperties> getGraphExamples() {
+            return graphExamples;
+        }
+
+        public void setGraphExamples(List<GraphExtractionExampleProperties> graphExamples) {
+            this.graphExamples = List.copyOf(graphExamples);
+        }
+
+        public List<GraphExtractionExample> graphExtractionExamples() {
+            return graphExamples.stream()
+                .map(GraphExtractionExampleProperties::toGraphExtractionExample)
+                .toList();
+        }
+
         private static String requireNonBlank(String value, String fieldName) {
             if (value == null || value.isBlank()) {
                 throw new IllegalArgumentException(fieldName + " must not be blank");
             }
             return value.strip();
+        }
+    }
+
+    public static class GraphExtractionExampleProperties {
+        private String text;
+        private List<GraphExtractionNodeProperties> nodes = List.of();
+        private List<GraphExtractionRelationProperties> relations = List.of();
+
+        public String getText() {
+            return text;
+        }
+
+        public void setText(String text) {
+            this.text = text;
+        }
+
+        public List<GraphExtractionNodeProperties> getNodes() {
+            return nodes;
+        }
+
+        public void setNodes(List<GraphExtractionNodeProperties> nodes) {
+            this.nodes = List.copyOf(nodes);
+        }
+
+        public List<GraphExtractionRelationProperties> getRelations() {
+            return relations;
+        }
+
+        public void setRelations(List<GraphExtractionRelationProperties> relations) {
+            this.relations = List.copyOf(relations);
+        }
+
+        GraphExtractionExample toGraphExtractionExample() {
+            return new GraphExtractionExample(
+                text,
+                nodes.stream().map(GraphExtractionNodeProperties::toGraphExtractionNode).toList(),
+                relations.stream().map(GraphExtractionRelationProperties::toGraphExtractionRelation).toList()
+            );
+        }
+    }
+
+    public static class GraphExtractionNodeProperties {
+        private String name;
+        private List<String> attributes = List.of();
+
+        public String getName() {
+            return name;
+        }
+
+        public void setName(String name) {
+            this.name = name;
+        }
+
+        public List<String> getAttributes() {
+            return attributes;
+        }
+
+        public void setAttributes(List<String> attributes) {
+            this.attributes = List.copyOf(attributes);
+        }
+
+        GraphExtractionNode toGraphExtractionNode() {
+            return new GraphExtractionNode(name, attributes);
+        }
+    }
+
+    public static class GraphExtractionRelationProperties {
+        private String node1;
+        private String node2;
+        private String type;
+
+        public String getNode1() {
+            return node1;
+        }
+
+        public void setNode1(String node1) {
+            this.node1 = node1;
+        }
+
+        public String getNode2() {
+            return node2;
+        }
+
+        public void setNode2(String node2) {
+            this.node2 = node2;
+        }
+
+        public String getType() {
+            return type;
+        }
+
+        public void setType(String type) {
+            this.type = type;
+        }
+
+        GraphExtractionRelation toGraphExtractionRelation() {
+            return new GraphExtractionRelation(node1, node2, type);
         }
     }
 

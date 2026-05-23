@@ -57,11 +57,15 @@ public final class LightRagBuilder {
     private int maxExtractInputTokens = io.github.lightrag.indexing.KnowledgeExtractor.DEFAULT_MAX_EXTRACT_INPUT_TOKENS;
     private String entityExtractionLanguage = io.github.lightrag.indexing.KnowledgeExtractor.DEFAULT_LANGUAGE;
     private List<String> entityTypes = io.github.lightrag.indexing.KnowledgeExtractor.DEFAULT_ENTITY_TYPES;
+    private boolean graphExtractionEnabled = true;
+    private List<String> relationTypes = List.of();
+    private List<GraphExtractionExample> graphExtractionExamples = List.of();
     private boolean embeddingSemanticMergeEnabled = DEFAULT_EMBEDDING_SEMANTIC_MERGE_ENABLED;
     private double embeddingSemanticMergeThreshold = DEFAULT_EMBEDDING_SEMANTIC_MERGE_THRESHOLD;
     private boolean contextualExtractionRefinementEnabled;
     private boolean allowDeterministicAttributionFallback;
     private DocumentParsingOrchestrator documentParsingOrchestrator;
+    private GraphExtractionOptionsProvider graphExtractionOptionsProvider = GraphExtractionOptionsProvider.none();
     private final List<TaskEventListener> taskEventListeners = new ArrayList<>();
 
     public LightRagBuilder chatModel(ChatModel chatModel) {
@@ -241,6 +245,29 @@ public final class LightRagBuilder {
         return this;
     }
 
+    public LightRagBuilder graphExtractionEnabled(boolean graphExtractionEnabled) {
+        this.graphExtractionEnabled = graphExtractionEnabled;
+        return this;
+    }
+
+    public LightRagBuilder relationTypes(List<String> relationTypes) {
+        this.relationTypes = normalizeOptionalList(relationTypes, "relationTypes entry");
+        return this;
+    }
+
+    public LightRagBuilder graphExtractionExamples(List<GraphExtractionExample> graphExtractionExamples) {
+        this.graphExtractionExamples = List.copyOf(Objects.requireNonNull(graphExtractionExamples, "graphExtractionExamples"));
+        return this;
+    }
+
+    public LightRagBuilder graphExtractionOptionsProvider(GraphExtractionOptionsProvider graphExtractionOptionsProvider) {
+        this.graphExtractionOptionsProvider = Objects.requireNonNull(
+            graphExtractionOptionsProvider,
+            "graphExtractionOptionsProvider"
+        );
+        return this;
+    }
+
     public LightRagBuilder contextualExtractionRefinement(boolean enabled) {
         this.contextualExtractionRefinementEnabled = enabled;
         return this;
@@ -348,7 +375,21 @@ public final class LightRagBuilder {
             embeddingBatchSize, maxParallelInsert,
             chunkExtractParallelism,
             entityExtractMaxGleaning, maxExtractInputTokens, entityExtractionLanguage, entityTypes,
-            embeddingSemanticMergeEnabled, embeddingSemanticMergeThreshold, extractionRefinementOptions, taskEventListeners);
+            graphExtractionEnabled, relationTypes, graphExtractionExamples,
+            embeddingSemanticMergeEnabled, embeddingSemanticMergeThreshold, extractionRefinementOptions,
+            graphExtractionOptionsProvider, taskEventListeners);
+    }
+
+    private static List<String> normalizeOptionalList(List<String> values, String entryName) {
+        return List.copyOf(Objects.requireNonNull(values, entryName)).stream()
+            .map(value -> {
+                Objects.requireNonNull(value, entryName);
+                if (value.isBlank()) {
+                    throw new IllegalArgumentException(entryName + " must not be blank");
+                }
+                return value.strip();
+            })
+            .toList();
     }
 
     private static <T> T requireStore(String componentName, T store, Class<T> storeType) {
