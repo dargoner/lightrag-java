@@ -211,6 +211,27 @@ class LightRagAutoConfigurationTest {
     }
 
     @Test
+    void autoConfiguresExtractionModelFromSpringProperties() {
+        contextRunner
+            .withPropertyValues(
+                "lightrag.extraction-model.base-url=http://localhost:11437/v1/",
+                "lightrag.extraction-model.model=qwen-extract",
+                "lightrag.extraction-model.api-key=extract-key",
+                "lightrag.extraction-model.timeout=PT23S"
+            )
+            .run(context -> {
+                var lightRag = context.getBean(LightRag.class);
+                var config = (io.github.lightrag.config.LightRagConfig) extractField(lightRag, "config");
+
+                assertThat(context).hasBean("extractionModel");
+                assertThat(config.extractionModel()).isSameAs(context.getBean("extractionModel", ChatModel.class));
+                assertThat(config.extractionModel()).isNotSameAs(context.getBean("chatModel", ChatModel.class));
+                assertThat(extractTimeout((OpenAiCompatibleChatModel) context.getBean("extractionModel", ChatModel.class)))
+                    .isEqualTo(Duration.ofSeconds(23));
+            });
+    }
+
+    @Test
     void bindsPipelineWorkspaceAndDemoDefaults() {
         contextRunner.run(context -> {
             var properties = context.getBean(LightRagProperties.class);

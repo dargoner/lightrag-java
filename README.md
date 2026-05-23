@@ -169,6 +169,7 @@ The repository now includes two Spring-focused modules:
 The starter auto-configures `LightRag` from `application.yml` when you provide:
 
 - chat model base URL, model name, and API key
+- optional role-specific chat models for extraction, keyword extraction, and final query answering
 - embedding model base URL, model name, and API key
 - optional chat and embedding request timeouts
 - storage type: `in-memory`, `postgres`, or `postgres-neo4j`
@@ -1071,6 +1072,24 @@ lightrag:
   query:
     automatic-keyword-extraction: false
     rerank-candidate-multiplier: 4
+```
+
+Role-specific model properties follow upstream LightRAG's `EXTRACT`, `KEYWORD`, and `QUERY` roles. Each role falls back to `lightrag.chat` when not configured:
+
+```yaml
+lightrag:
+  extraction-model:
+    base-url: http://localhost:11434/v1/
+    model: qwen-extract
+    api-key: dummy
+  keyword-model:
+    base-url: http://localhost:11434/v1/
+    model: qwen-keyword
+    api-key: dummy
+  query-model:
+    base-url: http://localhost:11434/v1/
+    model: qwen-query
+    api-key: dummy
 ```
 
 Compatibility note:

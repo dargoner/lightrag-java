@@ -94,6 +94,19 @@ public class LightRagAutoConfiguration {
         );
     }
 
+    @Bean("extractionModel")
+    @ConditionalOnProperty(prefix = "lightrag.extraction-model", name = "base-url")
+    @ConditionalOnMissingBean(name = "extractionModel")
+    ChatModel extractionModel(LightRagProperties properties) {
+        var extractionModel = properties.getExtractionModel();
+        return new OpenAiCompatibleChatModel(
+            requireValue(extractionModel.getBaseUrl(), "lightrag.extraction-model.base-url"),
+            requireValue(extractionModel.getModel(), "lightrag.extraction-model.model"),
+            requireValue(extractionModel.getApiKey(), "lightrag.extraction-model.api-key"),
+            extractionModel.getTimeout()
+        );
+    }
+
     @Bean
     @ConditionalOnMissingBean
     EmbeddingModel embeddingModel(LightRagProperties properties) {

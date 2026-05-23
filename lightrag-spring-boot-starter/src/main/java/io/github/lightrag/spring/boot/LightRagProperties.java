@@ -12,6 +12,7 @@ public class LightRagProperties {
     private final ModelProperties chat = new ModelProperties();
     private final ModelProperties queryModel = new ModelProperties();
     private final ModelProperties keywordModel = new ModelProperties();
+    private final ModelProperties extractionModel = new ModelProperties();
     private final ModelProperties embedding = new ModelProperties();
     private final StorageProperties storage = new StorageProperties();
     private final IndexingProperties indexing = new IndexingProperties();
@@ -34,6 +35,10 @@ public class LightRagProperties {
 
     public ModelProperties getKeywordModel() {
         return keywordModel;
+    }
+
+    public ModelProperties getExtractionModel() {
+        return extractionModel;
     }
 
     public StorageProperties getStorage() {
