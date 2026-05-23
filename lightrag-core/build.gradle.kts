@@ -41,6 +41,14 @@ tasks.test {
     useJUnitPlatform()
 }
 
+sourceSets {
+    test {
+        java {
+            exclude("**/ArcadePdfChunkRetrievalManualTest.java")
+        }
+    }
+}
+
 tasks.register<JavaExec>("runRagasQuery") {
     group = "evaluation"
     description = "Runs a single LightRAG query for RAGAS evaluation."
