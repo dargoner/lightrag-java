@@ -11,6 +11,7 @@ import io.github.lightrag.storage.DocumentStore;
 import io.github.lightrag.storage.GraphStorageAdapter;
 import io.github.lightrag.storage.GraphStore;
 import io.github.lightrag.storage.HybridVectorStore;
+import io.github.lightrag.storage.LlmCacheStore;
 import io.github.lightrag.storage.StorageCoordinator;
 import io.github.lightrag.storage.SnapshotStore;
 import io.github.lightrag.storage.TaskDocumentStore;
@@ -46,6 +47,7 @@ public final class PostgresMilvusNeo4jStorageProvider implements AtomicStoragePr
     private final TaskStore lockedTaskStore;
     private final TaskStageStore lockedTaskStageStore;
     private final TaskDocumentStore lockedTaskDocumentStore;
+    private final LlmCacheStore lockedLlmCacheStore;
     private final VectorStore lockedVectorStore;
     private final GraphStore graphStore;
     private final DocumentGraphSnapshotStore documentGraphSnapshotStore;
@@ -153,6 +155,7 @@ public final class PostgresMilvusNeo4jStorageProvider implements AtomicStoragePr
         this.lockedTaskStore = new LockedTaskStore(coordinator.taskStore());
         this.lockedTaskStageStore = new LockedTaskStageStore(coordinator.taskStageStore());
         this.lockedTaskDocumentStore = new LockedTaskDocumentStore(coordinator.taskDocumentStore());
+        this.lockedLlmCacheStore = new LockedLlmCacheStore(coordinator.llmCacheStore());
         this.lockedVectorStore = new LockedVectorStore(coordinator.vectorStore());
         this.graphStore = new MirroringGraphStore();
         this.documentGraphSnapshotStore = coordinator.documentGraphSnapshotStore();
@@ -197,6 +200,11 @@ public final class PostgresMilvusNeo4jStorageProvider implements AtomicStoragePr
     @Override
     public TaskDocumentStore taskDocumentStore() {
         return lockedTaskDocumentStore;
+    }
+
+    @Override
+    public LlmCacheStore llmCacheStore() {
+        return lockedLlmCacheStore;
     }
 
     @Override
@@ -637,6 +645,39 @@ public final class PostgresMilvusNeo4jStorageProvider implements AtomicStoragePr
         @Override
         public void deleteByTask(String taskId) {
             withWriteLock(() -> delegate.deleteByTask(taskId));
+        }
+    }
+
+    private final class LockedLlmCacheStore implements LlmCacheStore {
+        private final LlmCacheStore delegate;
+
+        private LockedLlmCacheStore(LlmCacheStore delegate) {
+            this.delegate = Objects.requireNonNull(delegate, "delegate");
+        }
+
+        @Override
+        public void save(CacheRecord record) {
+            withWriteLock(() -> delegate.save(record));
+        }
+
+        @Override
+        public Optional<CacheRecord> load(String cacheId) {
+            return withReadLock(() -> delegate.load(cacheId));
+        }
+
+        @Override
+        public boolean contains(String cacheId) {
+            return withReadLock(() -> delegate.contains(cacheId));
+        }
+
+        @Override
+        public void delete(List<String> cacheIds) {
+            withWriteLock(() -> delegate.delete(cacheIds));
+        }
+
+        @Override
+        public void drop() {
+            withWriteLock(delegate::drop);
         }
     }
 

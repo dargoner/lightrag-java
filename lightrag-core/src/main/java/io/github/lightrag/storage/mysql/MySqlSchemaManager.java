@@ -98,7 +98,8 @@ public final class MySqlSchemaManager {
         return List.of(
             new Migration(1, versionOneStatements()),
             new Migration(2, versionTwoStatements()),
-            new Migration(3, versionThreeStatements())
+            new Migration(3, versionThreeStatements()),
+            new Migration(4, versionFourStatements())
         );
     }
 
@@ -280,6 +281,19 @@ public final class MySqlSchemaManager {
         );
     }
 
+    private List<String> versionFourStatements() {
+        return List.of(
+            """
+                CREATE TABLE IF NOT EXISTS %s (
+                    workspace_id VARCHAR(191) NOT NULL,
+                    cache_id VARCHAR(191) NOT NULL,
+                    value LONGTEXT NOT NULL,
+                    PRIMARY KEY (workspace_id, cache_id)
+                )
+                """.formatted(config.qualifiedTableName("llm_cache"))
+        );
+    }
+
     private void ensureSchemaVersionTable(Statement statement) throws SQLException {
         statement.execute(
             """
@@ -343,6 +357,7 @@ public final class MySqlSchemaManager {
             "documents",
             "chunks",
             "document_status",
+            "llm_cache",
             "document_graph_snapshots",
             "chunk_graph_snapshots",
             "document_graph_journals",

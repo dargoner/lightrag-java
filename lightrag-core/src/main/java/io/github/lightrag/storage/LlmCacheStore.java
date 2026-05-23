@@ -2,9 +2,12 @@ package io.github.lightrag.storage;
 
 import java.util.List;
 import java.util.Objects;
+import java.util.Optional;
 
 public interface LlmCacheStore {
     void save(CacheRecord record);
+
+    Optional<CacheRecord> load(String cacheId);
 
     boolean contains(String cacheId);
 

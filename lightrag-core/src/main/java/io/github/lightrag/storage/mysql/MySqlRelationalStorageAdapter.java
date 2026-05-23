@@ -10,6 +10,7 @@ import io.github.lightrag.storage.DocumentGraphSnapshotStore;
 import io.github.lightrag.storage.DocumentGraphStateSupport;
 import io.github.lightrag.storage.DocumentStatusStore;
 import io.github.lightrag.storage.DocumentStore;
+import io.github.lightrag.storage.LlmCacheStore;
 import io.github.lightrag.storage.RelationalStorageAdapter;
 import io.github.lightrag.storage.SnapshotStore;
 import io.github.lightrag.storage.TaskDocumentStore;
@@ -39,6 +40,7 @@ public final class MySqlRelationalStorageAdapter implements RelationalStorageAda
     private final TaskStore taskStore;
     private final TaskStageStore taskStageStore;
     private final TaskDocumentStore taskDocumentStore;
+    private final LlmCacheStore llmCacheStore;
     private final DocumentGraphSnapshotStore documentGraphSnapshotStore;
     private final DocumentGraphJournalStore documentGraphJournalStore;
     private final java.util.Set<String> trackedDocumentGraphIds;
@@ -92,6 +94,7 @@ public final class MySqlRelationalStorageAdapter implements RelationalStorageAda
         this.taskStore = new MySqlTaskStore(this.dataSource, this.config, this.workspaceId);
         this.taskStageStore = new MySqlTaskStageStore(this.dataSource, this.config, this.workspaceId);
         this.taskDocumentStore = new MySqlTaskDocumentStore(this.dataSource, this.config, this.workspaceId);
+        this.llmCacheStore = new MySqlLlmCacheStore(this.dataSource, this.config, this.workspaceId);
         this.trackedDocumentGraphIds = new ConcurrentSkipListSet<>();
         this.documentGraphSnapshotStore = DocumentGraphStateSupport.trackedSnapshotStore(
             new MySqlDocumentGraphSnapshotStore(this.dataSource, this.config, this.workspaceId),
@@ -131,6 +134,11 @@ public final class MySqlRelationalStorageAdapter implements RelationalStorageAda
     @Override
     public TaskDocumentStore taskDocumentStore() {
         return taskDocumentStore;
+    }
+
+    @Override
+    public LlmCacheStore llmCacheStore() {
+        return llmCacheStore;
     }
 
     @Override
@@ -182,6 +190,7 @@ public final class MySqlRelationalStorageAdapter implements RelationalStorageAda
                 deleteWorkspaceRows(connection, "document_graph_journals");
                 deleteWorkspaceRows(connection, "chunk_graph_snapshots");
                 deleteWorkspaceRows(connection, "document_graph_snapshots");
+                deleteWorkspaceRows(connection, "llm_cache");
                 deleteWorkspaceRows(connection, "document_status");
                 deleteWorkspaceRows(connection, "chunks");
                 deleteWorkspaceRows(connection, "documents");

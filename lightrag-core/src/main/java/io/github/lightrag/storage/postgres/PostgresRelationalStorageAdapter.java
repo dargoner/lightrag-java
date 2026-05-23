@@ -11,6 +11,7 @@ import io.github.lightrag.storage.DocumentGraphStateSupport;
 import io.github.lightrag.storage.DocumentStatusStore;
 import io.github.lightrag.storage.DocumentStore;
 import io.github.lightrag.storage.GraphStore;
+import io.github.lightrag.storage.LlmCacheStore;
 import io.github.lightrag.storage.RelationalStorageAdapter;
 import io.github.lightrag.storage.SnapshotStore;
 import io.github.lightrag.storage.TaskDocumentStore;
@@ -42,6 +43,7 @@ public final class PostgresRelationalStorageAdapter implements RelationalStorage
     private final TaskStore taskStore;
     private final TaskStageStore taskStageStore;
     private final TaskDocumentStore taskDocumentStore;
+    private final LlmCacheStore llmCacheStore;
     private final DocumentGraphSnapshotStore documentGraphSnapshotStore;
     private final DocumentGraphJournalStore documentGraphJournalStore;
     private final java.util.Set<String> trackedDocumentGraphIds;
@@ -116,6 +118,7 @@ public final class PostgresRelationalStorageAdapter implements RelationalStorage
         this.taskStore = new PostgresTaskStore(this.dataSource, this.config, this.workspaceId);
         this.taskStageStore = new PostgresTaskStageStore(this.dataSource, this.config, this.workspaceId);
         this.taskDocumentStore = new PostgresTaskDocumentStore(this.dataSource, this.config, this.workspaceId);
+        this.llmCacheStore = new PostgresLlmCacheStore(this.dataSource, this.config, this.workspaceId);
         this.trackedDocumentGraphIds = new ConcurrentSkipListSet<>();
         this.documentGraphSnapshotStore = DocumentGraphStateSupport.trackedSnapshotStore(
             new PostgresDocumentGraphSnapshotStore(this.dataSource, this.config, this.workspaceId),
@@ -155,6 +158,11 @@ public final class PostgresRelationalStorageAdapter implements RelationalStorage
     @Override
     public TaskDocumentStore taskDocumentStore() {
         return taskDocumentStore;
+    }
+
+    @Override
+    public LlmCacheStore llmCacheStore() {
+        return llmCacheStore;
     }
 
     @Override
@@ -384,6 +392,7 @@ public final class PostgresRelationalStorageAdapter implements RelationalStorage
         deleteWorkspaceRows(connection, "entity_aliases");
         deleteWorkspaceRows(connection, "relations");
         deleteWorkspaceRows(connection, "entities");
+        deleteWorkspaceRows(connection, "llm_cache");
         deleteWorkspaceRows(connection, "chunk_graph_journals");
         deleteWorkspaceRows(connection, "document_graph_journals");
         deleteWorkspaceRows(connection, "chunk_graph_snapshots");
@@ -593,6 +602,14 @@ public final class PostgresRelationalStorageAdapter implements RelationalStorage
                         PRIMARY KEY (workspace_id, task_id, document_id)
                     )
                     """.formatted(config.qualifiedTableName("task_document")),
+                """
+                    CREATE TABLE IF NOT EXISTS %s (
+                        workspace_id TEXT NOT NULL,
+                        cache_id TEXT NOT NULL,
+                        value TEXT NOT NULL,
+                        PRIMARY KEY (workspace_id, cache_id)
+                    )
+                    """.formatted(config.qualifiedTableName("llm_cache")),
                 """
                     CREATE TABLE IF NOT EXISTS %s (
                         workspace_id TEXT NOT NULL,

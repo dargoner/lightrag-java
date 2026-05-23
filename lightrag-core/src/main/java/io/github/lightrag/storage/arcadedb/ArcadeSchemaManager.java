@@ -149,6 +149,12 @@ public final class ArcadeSchemaManager {
             "CREATE PROPERTY IF NOT EXISTS DocumentStatus.metadata STRING",
             "CREATE INDEX IF NOT EXISTS ON DocumentStatus (workspaceId, documentId) UNIQUE",
 
+            "CREATE DOCUMENT TYPE IF NOT EXISTS LlmCache",
+            "CREATE PROPERTY IF NOT EXISTS LlmCache.workspaceId STRING",
+            "CREATE PROPERTY IF NOT EXISTS LlmCache.cacheId STRING",
+            "CREATE PROPERTY IF NOT EXISTS LlmCache.value STRING",
+            "CREATE INDEX IF NOT EXISTS ON LlmCache (workspaceId, cacheId) UNIQUE",
+
             "CREATE DOCUMENT TYPE IF NOT EXISTS Task",
             "CREATE PROPERTY IF NOT EXISTS Task.workspaceId STRING",
             "CREATE PROPERTY IF NOT EXISTS Task.taskId STRING",

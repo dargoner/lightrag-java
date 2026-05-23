@@ -7,6 +7,7 @@ import io.github.lightrag.storage.DocumentGraphSnapshotStore;
 import io.github.lightrag.storage.DocumentStatusStore;
 import io.github.lightrag.storage.DocumentStore;
 import io.github.lightrag.storage.GraphStore;
+import io.github.lightrag.storage.LlmCacheStore;
 import io.github.lightrag.storage.OneShotRetrievalStore;
 import io.github.lightrag.storage.SnapshotStore;
 import io.github.lightrag.storage.TaskDocumentStore;
@@ -33,6 +34,7 @@ public final class ArcadeStorageProvider implements AtomicStorageProvider, OneSh
     private final ArcadeTaskStore taskStore;
     private final ArcadeTaskStageStore taskStageStore;
     private final ArcadeTaskDocumentStore taskDocumentStore;
+    private final ArcadeLlmCacheStore llmCacheStore;
     private final ArcadeDocumentGraphSnapshotStore documentGraphSnapshotStore;
     private final ArcadeDocumentGraphJournalStore documentGraphJournalStore;
 
@@ -63,6 +65,7 @@ public final class ArcadeStorageProvider implements AtomicStorageProvider, OneSh
         this.taskStore = new ArcadeTaskStore(client, resolvedWorkspace);
         this.taskStageStore = new ArcadeTaskStageStore(client, resolvedWorkspace);
         this.taskDocumentStore = new ArcadeTaskDocumentStore(client, resolvedWorkspace);
+        this.llmCacheStore = new ArcadeLlmCacheStore(client, resolvedWorkspace);
         this.documentGraphSnapshotStore = new ArcadeDocumentGraphSnapshotStore(client, resolvedWorkspace);
         this.documentGraphJournalStore = new ArcadeDocumentGraphJournalStore(client, resolvedWorkspace);
     }
@@ -105,6 +108,11 @@ public final class ArcadeStorageProvider implements AtomicStorageProvider, OneSh
     @Override
     public TaskDocumentStore taskDocumentStore() {
         return taskDocumentStore;
+    }
+
+    @Override
+    public LlmCacheStore llmCacheStore() {
+        return llmCacheStore;
     }
 
     @Override
@@ -286,6 +294,7 @@ public final class ArcadeStorageProvider implements AtomicStorageProvider, OneSh
         taskDocumentStore.deleteAll();
         taskStageStore.deleteAll();
         taskStore.deleteAll();
+        llmCacheStore.deleteAll();
         documentGraphJournalStore.deleteAll();
         documentGraphSnapshotStore.deleteAll();
         documentStatusStore.deleteAll();

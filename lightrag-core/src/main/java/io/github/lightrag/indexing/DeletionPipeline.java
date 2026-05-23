@@ -146,19 +146,12 @@ public final class DeletionPipeline {
         if (deleteOptions.deleteLlmCache() && !cacheIds.isEmpty()) {
             requireLlmCacheStore(targetId, retryStatusRecord(targetId, targetStatusRecord), cacheIds);
         }
-        var remainingDocuments = beforeSnapshot.documents().stream()
-            .filter(document -> !document.id().equals(targetId))
-            .map(DeletionPipeline::toDocument)
-            .toList();
-        var remainingDocumentIds = remainingDocuments.stream()
-            .map(Document::id)
+        var targetChunkIds = beforeSnapshot.chunks().stream()
+            .filter(chunk -> chunk.documentId().equals(targetId))
+            .map(io.github.lightrag.storage.ChunkStore.ChunkRecord::id)
             .collect(java.util.stream.Collectors.toCollection(LinkedHashSet::new));
-        var preservedStatuses = beforeSnapshot.documentStatuses().stream()
-            .filter(statusRecord -> !statusRecord.documentId().equals(targetId))
-            .filter(statusRecord -> statusRecord.status() == io.github.lightrag.api.DocumentStatus.FAILED
-                || !remainingDocumentIds.contains(statusRecord.documentId()))
-            .toList();
-        if (remainingDocuments.size() == beforeSnapshot.documents().size()) {
+        var targetDocumentExists = beforeSnapshot.documents().stream().anyMatch(document -> document.id().equals(targetId));
+        if (!targetDocumentExists) {
             if (targetStatus.isPresent()) {
                 deletionStage = "delete_llm_cache";
                 if (deleteOptions.deleteLlmCache() && !cacheIds.isEmpty()) {
@@ -183,14 +176,8 @@ public final class DeletionPipeline {
         }
 
         try {
-            deletionStage = "rebuild_remaining_documents";
-            storageProvider.restore(StorageSnapshots.empty());
-            if (remainingDocuments.isEmpty()) {
-                restoreStatuses(preservedStatuses);
-            } else {
-                indexingPipeline.ingest(remainingDocuments);
-                restoreStatuses(preservedStatuses);
-            }
+            deletionStage = "delete_doc_entries";
+            storageProvider.restore(removeDocumentIncrementally(beforeSnapshot, targetId, targetChunkIds));
 
             if (deleteOptions.deleteLlmCache() && !cacheIds.isEmpty()) {
                 deletionStage = "delete_llm_cache";
@@ -251,6 +238,84 @@ public final class DeletionPipeline {
             }
             throw failure;
         }
+    }
+
+    private static SnapshotStore.Snapshot removeDocumentIncrementally(
+        SnapshotStore.Snapshot snapshot,
+        String documentId,
+        Set<String> targetChunkIds
+    ) {
+        var chunkIds = Set.copyOf(Objects.requireNonNull(targetChunkIds, "targetChunkIds"));
+        var entities = snapshot.entities().stream()
+            .map(entity -> removeEntityChunkReferences(entity, chunkIds))
+            .filter(entity -> !entity.sourceChunkIds().isEmpty())
+            .toList();
+        var entityIds = entities.stream()
+            .map(GraphStore.EntityRecord::id)
+            .collect(java.util.stream.Collectors.toCollection(LinkedHashSet::new));
+        var relations = snapshot.relations().stream()
+            .map(relation -> removeRelationChunkReferences(relation, chunkIds))
+            .filter(relation -> !relation.sourceChunkIds().isEmpty())
+            .filter(relation -> entityIds.contains(relation.srcId()) && entityIds.contains(relation.tgtId()))
+            .toList();
+        var relationIds = relations.stream()
+            .map(GraphStore.RelationRecord::id)
+            .collect(java.util.stream.Collectors.toCollection(LinkedHashSet::new));
+        var vectors = new java.util.LinkedHashMap<String, List<VectorStore.VectorRecord>>();
+        snapshot.vectors().forEach((namespace, records) -> vectors.put(namespace, records));
+        vectors.put(
+            StorageSnapshots.CHUNK_NAMESPACE,
+            filterVectors(snapshot, StorageSnapshots.CHUNK_NAMESPACE, id -> !chunkIds.contains(id))
+        );
+        vectors.put(
+            StorageSnapshots.ENTITY_NAMESPACE,
+            filterVectors(snapshot, StorageSnapshots.ENTITY_NAMESPACE, entityIds::contains)
+        );
+        vectors.put(
+            StorageSnapshots.RELATION_NAMESPACE,
+            filterVectors(snapshot, StorageSnapshots.RELATION_NAMESPACE, relationIds::contains)
+        );
+        return new SnapshotStore.Snapshot(
+            snapshot.documents().stream().filter(document -> !document.id().equals(documentId)).toList(),
+            snapshot.chunks().stream().filter(chunk -> !chunk.documentId().equals(documentId)).toList(),
+            entities,
+            relations,
+            Map.copyOf(vectors),
+            snapshot.documentStatuses().stream().filter(status -> !status.documentId().equals(documentId)).toList(),
+            snapshot.documentGraphSnapshots().stream().filter(status -> !status.documentId().equals(documentId)).toList(),
+            snapshot.chunkGraphSnapshots().stream().filter(chunk -> !chunk.documentId().equals(documentId)).toList(),
+            snapshot.documentGraphJournals().stream().filter(journal -> !journal.documentId().equals(documentId)).toList(),
+            snapshot.chunkGraphJournals().stream().filter(journal -> !journal.documentId().equals(documentId)).toList()
+        );
+    }
+
+    private static GraphStore.EntityRecord removeEntityChunkReferences(
+        GraphStore.EntityRecord entity,
+        Set<String> targetChunkIds
+    ) {
+        return new GraphStore.EntityRecord(
+            entity.id(),
+            entity.name(),
+            entity.type(),
+            entity.description(),
+            entity.aliases(),
+            entity.sourceChunkIds().stream().filter(chunkId -> !targetChunkIds.contains(chunkId)).toList()
+        );
+    }
+
+    private static GraphStore.RelationRecord removeRelationChunkReferences(
+        GraphStore.RelationRecord relation,
+        Set<String> targetChunkIds
+    ) {
+        return new GraphStore.RelationRecord(
+            relation.id(),
+            relation.srcId(),
+            relation.tgtId(),
+            relation.keywords(),
+            relation.description(),
+            relation.weight(),
+            relation.sourceChunkIds().stream().filter(chunkId -> !targetChunkIds.contains(chunkId)).toList()
+        );
     }
 
     private static List<VectorStore.VectorRecord> filterVectors(

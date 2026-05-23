@@ -553,6 +553,7 @@ class LightRagTaskApiTest {
         newlyAddedTaskTypes.removeAll(EnumSet.of(
             TaskType.INGEST_DOCUMENTS,
             TaskType.INGEST_SOURCES,
+            TaskType.DELETE_DOCUMENT,
             TaskType.REBUILD_GRAPH
         ));
         assertThat(newlyAddedTaskTypes).containsExactlyInAnyOrder(

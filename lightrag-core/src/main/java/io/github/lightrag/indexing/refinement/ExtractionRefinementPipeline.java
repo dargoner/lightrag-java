@@ -36,7 +36,11 @@ public final class ExtractionRefinementPipeline {
         var primary = List.copyOf(Objects.requireNonNull(primaryExtractions, "primaryExtractions"));
         if (!options.enabled()) {
             return primary.stream()
-                .map(extraction -> new GraphAssembler.ChunkExtraction(extraction.chunk().id(), extraction.extraction()))
+                .map(extraction -> new GraphAssembler.ChunkExtraction(
+                    extraction.chunk().id(),
+                    extraction.extraction(),
+                    extraction.llmCacheIds()
+                ))
                 .toList();
         }
 

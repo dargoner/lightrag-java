@@ -42,7 +42,8 @@ public final class DefaultExtractionMergePolicy implements ExtractionMergePolicy
                 List.copyOf(entities.values()),
                 List.copyOf(relations.values()),
                 resolvedPrimary.extraction().warnings()
-            )
+            ),
+            resolvedPrimary.llmCacheIds()
         );
     }
 

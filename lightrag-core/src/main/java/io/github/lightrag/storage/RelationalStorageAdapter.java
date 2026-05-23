@@ -17,6 +17,10 @@ public interface RelationalStorageAdapter extends AutoCloseable {
         throw new UnsupportedOperationException("taskDocumentStore is not available in this relational adapter");
     }
 
+    default LlmCacheStore llmCacheStore() {
+        throw new UnsupportedOperationException("llmCacheStore is not available in this relational adapter");
+    }
+
     SnapshotStore snapshotStore();
 
     default DocumentGraphSnapshotStore documentGraphSnapshotStore() {

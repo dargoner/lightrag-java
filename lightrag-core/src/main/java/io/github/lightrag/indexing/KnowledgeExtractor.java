@@ -11,6 +11,7 @@ import io.github.lightrag.indexing.refinement.RefinementWindow;
 import io.github.lightrag.indexing.refinement.WindowEntityCandidate;
 import io.github.lightrag.indexing.refinement.WindowExtractionResponse;
 import io.github.lightrag.indexing.refinement.WindowRelationCandidate;
+import io.github.lightrag.model.CachedChatModel;
 import io.github.lightrag.model.ChatModel;
 import io.github.lightrag.model.ChatModel.ChatRequest;
 import io.github.lightrag.types.Chunk;
@@ -195,12 +196,19 @@ public final class KnowledgeExtractor {
     }
 
     public ExtractionResult extract(Chunk chunk) {
+        return extractWithCacheIds(chunk).extraction();
+    }
+
+    public ExtractionRun extractWithCacheIds(Chunk chunk) {
         Objects.requireNonNull(chunk, "chunk");
 
         var warnings = new ArrayList<String>();
+        var cacheIds = new ArrayList<String>();
         var userPrompt = buildUserPrompt(chunk);
         var systemPrompt = buildSystemPrompt();
-        var response = chatModel.generate(new ChatRequest(systemPrompt, userPrompt));
+        var request = new ChatRequest(systemPrompt, userPrompt);
+        cacheIds.add(CachedChatModel.cacheId("extract", request));
+        var response = chatModel.generate(request);
         var current = sanitizeAliasConflicts(parseExtractionResult(response));
 
         var history = new ArrayList<ChatRequest.ConversationMessage>();
@@ -213,14 +221,19 @@ public final class KnowledgeExtractor {
                 warnings.add("skipped gleaning because extraction context exceeded maxExtractInputTokens");
                 break;
             }
-            var gleanResponse = chatModel.generate(new ChatRequest(systemPrompt, continuePrompt, history));
+            var gleanRequest = new ChatRequest(systemPrompt, continuePrompt, history);
+            cacheIds.add(CachedChatModel.cacheId("extract", gleanRequest));
+            var gleanResponse = chatModel.generate(gleanRequest);
             var gleaned = sanitizeAliasConflicts(parseExtractionResult(gleanResponse));
             current = sanitizeAliasConflicts(merge(current, gleaned));
             history.add(new ChatRequest.ConversationMessage("user", continuePrompt));
             history.add(new ChatRequest.ConversationMessage("assistant", gleanResponse));
         }
 
-        return new ExtractionResult(current.entities(), current.relations(), List.copyOf(warnings));
+        return new ExtractionRun(
+            new ExtractionResult(current.entities(), current.relations(), List.copyOf(warnings)),
+            List.copyOf(cacheIds)
+        );
     }
 
     public RefinedWindowExtraction extractWindow(RefinementWindow window) {
@@ -903,5 +916,12 @@ public final class KnowledgeExtractor {
             throw new IllegalArgumentException(fieldName + " must not be blank");
         }
         return normalized;
+    }
+
+    public record ExtractionRun(ExtractionResult extraction, List<String> cacheIds) {
+        public ExtractionRun {
+            extraction = Objects.requireNonNull(extraction, "extraction");
+            cacheIds = List.copyOf(Objects.requireNonNull(cacheIds, "cacheIds"));
+        }
     }
 }

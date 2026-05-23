@@ -46,12 +46,14 @@ public final class PostgresSchemaManager {
                                 + " but this SDK supports up to "
                                 + latestSchemaVersion()
                         );
-                    } else if (currentVersion.get() < latestSchemaVersion()) {
+                    } else if (currentVersion.get() < latestSchemaVersion() && currentVersion.get() < 5) {
                         throw new IllegalStateException(
                             "Detected legacy PostgreSQL schema version "
                                 + currentVersion.get()
                                 + "; automatic migration to workspace column isolation is not supported"
                         );
+                    } else if (currentVersion.get() < latestSchemaVersion()) {
+                        applyMissingMigrations(statement, currentVersion.get());
                     } else {
                         replayAppliedMigrations(statement, currentVersion.get());
                     }
@@ -101,7 +103,8 @@ public final class PostgresSchemaManager {
         return List.of(
             new Migration(3, versionThreeStatements()),
             new Migration(4, versionFourStatements()),
-            new Migration(5, versionFiveStatements())
+            new Migration(5, versionFiveStatements()),
+            new Migration(6, versionSixStatements())
         );
     }
 
@@ -338,6 +341,19 @@ public final class PostgresSchemaManager {
         );
     }
 
+    private List<String> versionSixStatements() {
+        return List.of(
+            """
+                CREATE TABLE IF NOT EXISTS %s (
+                    workspace_id TEXT NOT NULL,
+                    cache_id TEXT NOT NULL,
+                    value TEXT NOT NULL,
+                    PRIMARY KEY (workspace_id, cache_id)
+                )
+                """.formatted(config.qualifiedTableName("llm_cache"))
+        );
+    }
+
     private void ensureSchemaVersionTable(Statement statement) throws SQLException {
         statement.execute(
             """
@@ -421,6 +437,7 @@ public final class PostgresSchemaManager {
             "relations",
             "vectors",
             "document_status",
+            "llm_cache",
             "document_graph_snapshots",
             "chunk_graph_snapshots",
             "document_graph_journals",

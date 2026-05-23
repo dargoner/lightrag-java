@@ -18,6 +18,7 @@ import io.github.lightrag.storage.DocumentStore;
 import io.github.lightrag.storage.DocumentStatusStore;
 import io.github.lightrag.storage.GraphStore;
 import io.github.lightrag.storage.InMemoryStorageProvider;
+import io.github.lightrag.storage.LlmCacheStore;
 import io.github.lightrag.storage.StorageAssembly;
 import io.github.lightrag.storage.StorageAssemblyTestDoubles;
 import io.github.lightrag.storage.SnapshotStore;
@@ -30,6 +31,7 @@ import io.github.lightrag.storage.WorkspaceStorageProvider;
 import io.github.lightrag.storage.memory.InMemoryDocumentGraphJournalStore;
 import io.github.lightrag.storage.memory.InMemoryDocumentGraphSnapshotStore;
 import io.github.lightrag.storage.memory.InMemoryDocumentStatusStore;
+import io.github.lightrag.storage.memory.InMemoryLlmCacheStore;
 import io.github.lightrag.storage.memory.InMemoryTaskStageStore;
 import io.github.lightrag.storage.memory.InMemoryTaskStore;
 import io.github.lightrag.types.Chunk;
@@ -1470,6 +1472,9 @@ class LightRagBuilderTest {
         private final DocumentStatusStore documentStatusStore = new InMemoryDocumentStatusStore();
         private final TaskStore taskStore = new InMemoryTaskStore();
         private final TaskStageStore taskStageStore = new InMemoryTaskStageStore();
+        private final LlmCacheStore llmCacheStore = new InMemoryLlmCacheStore(
+            new java.util.concurrent.locks.ReentrantReadWriteLock()
+        );
         private final SnapshotStore snapshotStore = new FakeSnapshotStore();
         private final DocumentGraphSnapshotStore documentGraphSnapshotStore = new InMemoryDocumentGraphSnapshotStore();
         private final DocumentGraphJournalStore documentGraphJournalStore = new InMemoryDocumentGraphJournalStore();
@@ -1507,6 +1512,11 @@ class LightRagBuilderTest {
         @Override
         public TaskStageStore taskStageStore() {
             return taskStageStore;
+        }
+
+        @Override
+        public LlmCacheStore llmCacheStore() {
+            return llmCacheStore;
         }
 
         @Override

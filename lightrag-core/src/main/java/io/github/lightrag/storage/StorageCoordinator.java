@@ -68,6 +68,11 @@ public final class StorageCoordinator implements AtomicStorageProvider, AutoClos
     }
 
     @Override
+    public LlmCacheStore llmCacheStore() {
+        return relationalAdapter.llmCacheStore();
+    }
+
+    @Override
     public SnapshotStore snapshotStore() {
         return relationalAdapter.snapshotStore();
     }

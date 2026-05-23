@@ -542,7 +542,10 @@ public final class GraphMaterializationPipeline {
 
     private List<GraphAssembler.ChunkExtraction> refineExtractions(List<Chunk> chunks) {
         var primaryExtractions = chunks.stream()
-            .map(chunk -> new PrimaryChunkExtraction(chunk, knowledgeExtractor.extract(chunk)))
+            .map(chunk -> {
+                var extraction = knowledgeExtractor.extractWithCacheIds(chunk);
+                return new PrimaryChunkExtraction(chunk, extraction.extraction(), extraction.cacheIds());
+            })
             .toList();
         return extractionRefinementPipeline.refine(primaryExtractions);
     }

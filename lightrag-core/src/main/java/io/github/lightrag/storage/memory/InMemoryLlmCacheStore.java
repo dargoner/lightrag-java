@@ -4,6 +4,7 @@ import io.github.lightrag.storage.LlmCacheStore;
 
 import java.util.List;
 import java.util.Objects;
+import java.util.Optional;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ConcurrentMap;
 import java.util.concurrent.locks.ReadWriteLock;
@@ -24,6 +25,17 @@ public final class InMemoryLlmCacheStore implements LlmCacheStore {
             records.put(record.id(), record);
         } finally {
             writeLock.unlock();
+        }
+    }
+
+    @Override
+    public Optional<CacheRecord> load(String cacheId) {
+        var readLock = lock.readLock();
+        readLock.lock();
+        try {
+            return Optional.ofNullable(records.get(Objects.requireNonNull(cacheId, "cacheId")));
+        } finally {
+            readLock.unlock();
         }
     }
 

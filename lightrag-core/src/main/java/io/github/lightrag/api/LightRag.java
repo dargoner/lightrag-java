@@ -10,6 +10,8 @@ import io.github.lightrag.indexing.IndexingProgressListener;
 import io.github.lightrag.indexing.IndexingPipeline;
 import io.github.lightrag.indexing.StorageSnapshots;
 import io.github.lightrag.indexing.refinement.ExtractionRefinementOptions;
+import io.github.lightrag.model.CachedChatModel;
+import io.github.lightrag.model.ChatModel;
 import io.github.lightrag.query.ContextAssembler;
 import io.github.lightrag.query.DefaultPathRetriever;
 import io.github.lightrag.query.DefaultPathScorer;
@@ -573,9 +575,10 @@ public final class LightRag implements AutoCloseable {
         AtomicStorageProvider storageProvider,
         IndexingProgressListener progressListener
     ) {
+        var llmCacheStore = storageProvider.llmCacheStore();
         return new IndexingPipeline(
-            config.extractionModel(),
-            config.summaryModel(),
+            cachedModel("extract", config.extractionModel(), llmCacheStore),
+            cachedModel("summary", config.summaryModel(), llmCacheStore),
             config.embeddingModel(),
             storageProvider,
             config.snapshotPath(),
@@ -619,8 +622,9 @@ public final class LightRag implements AutoCloseable {
         IndexingProgressListener progressListener,
         TaskMetadataReporter metadataReporter
     ) {
+        var llmCacheStore = storageProvider.llmCacheStore();
         return new GraphMaterializationPipeline(
-            config.extractionModel(),
+            cachedModel("extract", config.extractionModel(), llmCacheStore),
             config.embeddingModel(),
             storageProvider,
             extractionRefinementOptions,
@@ -635,6 +639,7 @@ public final class LightRag implements AutoCloseable {
     }
 
     private QueryEngine newQueryEngine(AtomicStorageProvider storageProvider) {
+        var llmCacheStore = storageProvider.llmCacheStore();
         var contextAssembler = new ContextAssembler();
         var naive = new NaiveQueryStrategy(config.embeddingModel(), storageProvider, contextAssembler);
         var local = new LocalQueryStrategy(config.embeddingModel(), storageProvider, contextAssembler);
@@ -654,8 +659,8 @@ public final class LightRag implements AutoCloseable {
         strategies.put(QueryMode.HYBRID, hybrid);
         strategies.put(QueryMode.MIX, mix);
         return new QueryEngine(
-            config.queryModel(),
-            config.keywordModel(),
+            cachedModel("query", config.queryModel(), llmCacheStore),
+            cachedModel("keyword", config.keywordModel(), llmCacheStore),
             contextAssembler,
             strategies,
             config.rerankModel(),
@@ -666,6 +671,10 @@ public final class LightRag implements AutoCloseable {
             multiHop,
             new PathAwareAnswerSynthesizer()
         );
+    }
+
+    private static ChatModel cachedModel(String role, ChatModel delegate, io.github.lightrag.storage.LlmCacheStore cacheStore) {
+        return new CachedChatModel(role, delegate, cacheStore);
     }
 
     private static DocumentProcessingStatus toDocumentProcessingStatus(

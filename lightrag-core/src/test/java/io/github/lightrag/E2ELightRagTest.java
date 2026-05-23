@@ -343,16 +343,9 @@ class E2ELightRagTest {
 
         rag.ingest(WORKSPACE, List.of(new Document("doc-cache-delete", "Title", "Alice works with Bob", Map.of())));
         var chunk = storage.chunkStore().listByDocument("doc-cache-delete").get(0);
-        storage.chunkStore().save(new ChunkStore.ChunkRecord(
-            chunk.id(),
-            chunk.documentId(),
-            chunk.text(),
-            chunk.tokenCount(),
-            chunk.order(),
-            Map.of(DeletionPipeline.CHUNK_METADATA_LLM_CACHE_LIST, "cache-a,cache-b")
-        ));
-        storage.llmCacheStore().save(new io.github.lightrag.storage.LlmCacheStore.CacheRecord("cache-a", "cached extraction a"));
-        storage.llmCacheStore().save(new io.github.lightrag.storage.LlmCacheStore.CacheRecord("cache-b", "cached extraction b"));
+        var cacheIds = chunk.metadata().get(DeletionPipeline.CHUNK_METADATA_LLM_CACHE_LIST).split(",");
+        assertThat(cacheIds).isNotEmpty();
+        assertThat(cacheIds).allMatch(cacheId -> storage.llmCacheStore().contains(cacheId));
 
         var result = rag.deleteByDocumentId(
             WORKSPACE,
@@ -363,12 +356,46 @@ class E2ELightRagTest {
         assertThat(result.status()).isEqualTo("success");
         assertThat(storage.documentStore().load("doc-cache-delete")).isEmpty();
         assertThat(storage.documentStatusStore().load("doc-cache-delete")).isEmpty();
-        assertThat(storage.llmCacheStore().contains("cache-a")).isFalse();
-        assertThat(storage.llmCacheStore().contains("cache-b")).isFalse();
+        assertThat(cacheIds).allMatch(cacheId -> !storage.llmCacheStore().contains(cacheId));
     }
 
     @Test
-    void deleteByDocumentWithUnsupportedLlmCacheDeletionFailsFastAndPersistsRetryMetadata() {
+    void deleteByDocumentRemovesOnlyTargetChunkGraphReferencesWithoutReextractingRemainingDocuments() {
+        var storage = InMemoryStorageProvider.create();
+        var extractionModel = new CountingExtractionChatModel();
+        var rag = LightRag.builder()
+            .chatModel(new FakeChatModel())
+            .extractionModel(extractionModel)
+            .embeddingModel(new FakeEmbeddingModel())
+            .storage(storage)
+            .build();
+
+        rag.ingest(WORKSPACE, List.of(
+            new Document("doc-1", "Title", "Alice works with Bob", Map.of()),
+            new Document("doc-2", "Title", "Bob reports to Carol", Map.of())
+        ));
+        var extractionInvocationsAfterIngest = extractionModel.invocationCount();
+
+        var result = rag.deleteByDocumentId(WORKSPACE, "doc-2");
+
+        assertThat(result.status()).isEqualTo("success");
+        assertThat(extractionModel.invocationCount()).isEqualTo(extractionInvocationsAfterIngest);
+        assertThat(storage.documentStore().load("doc-1")).isPresent();
+        assertThat(storage.documentStore().load("doc-2")).isEmpty();
+        assertThat(storage.chunkStore().listByDocument("doc-2")).isEmpty();
+        assertThat(storage.graphStore().allEntities())
+            .extracting(GraphStore.EntityRecord::id)
+            .containsExactlyInAnyOrder("alice", "bob");
+        assertThat(storage.graphStore().allRelations())
+            .extracting(GraphStore.RelationRecord::id)
+            .containsExactly(relationId("alice", "bob"));
+        assertThat(storage.vectorStore().list("chunks"))
+            .extracting(VectorStore.VectorRecord::id)
+            .containsExactly("doc-1:0");
+    }
+
+    @Test
+    void ingestWithUnsupportedLlmCacheStoreFailsFast() {
         var storage = new AtomicOnlyStorageProvider();
         var rag = LightRag.builder()
             .chatModel(new FakeChatModel())
@@ -376,33 +403,12 @@ class E2ELightRagTest {
             .storage(storage)
             .build();
 
-        rag.ingest(WORKSPACE, List.of(new Document("doc-cache-delete", "Title", "Alice works with Bob", Map.of())));
-        var chunk = storage.chunkStore().listByDocument("doc-cache-delete").get(0);
-        storage.chunkStore().save(new ChunkStore.ChunkRecord(
-            chunk.id(),
-            chunk.documentId(),
-            chunk.text(),
-            chunk.tokenCount(),
-            chunk.order(),
-            Map.of(DeletionPipeline.CHUNK_METADATA_LLM_CACHE_LIST, "cache-a,cache-b")
-        ));
-
-        assertThatThrownBy(() -> rag.deleteByDocumentId(
+        assertThatThrownBy(() -> rag.ingest(
             WORKSPACE,
-            "doc-cache-delete",
-            DeleteDocumentOptions.withLlmCacheDeletion()
+            List.of(new Document("doc-cache-delete", "Title", "Alice works with Bob", Map.of()))
         ))
             .isInstanceOf(UnsupportedOperationException.class)
-            .hasMessageContaining("LLM cache deletion requested");
-
-        assertThat(storage.documentStore().load("doc-cache-delete")).isPresent();
-        var status = storage.documentStatusStore().load("doc-cache-delete").orElseThrow();
-        assertThat(status.metadata())
-            .containsEntry(DeletionPipeline.METADATA_DELETION_FAILED, true)
-            .containsEntry(DeletionPipeline.METADATA_DELETION_FAILURE_STAGE, "delete_llm_cache")
-            .containsKey(DeletionPipeline.METADATA_LAST_DELETION_ATTEMPT_AT);
-        assertThat(status.metadata().get(DeletionPipeline.METADATA_DELETION_LLM_CACHE_IDS))
-            .isEqualTo(List.of("cache-a", "cache-b"));
+            .hasMessageContaining(io.github.lightrag.storage.StorageProvider.LLM_CACHE_STORE_UNSUPPORTED_MESSAGE);
     }
 
     @Test
@@ -3812,6 +3818,11 @@ class E2ELightRagTest {
                 @Override
                 public void save(CacheRecord record) {
                     delegate.llmCacheStore().save(record);
+                }
+
+                @Override
+                public java.util.Optional<CacheRecord> load(String cacheId) {
+                    return delegate.llmCacheStore().load(cacheId);
                 }
 
                 @Override

@@ -19,6 +19,7 @@ import io.github.lightrag.indexing.refinement.PrimaryChunkExtraction;
 import io.github.lightrag.model.ChatModel;
 import io.github.lightrag.model.EmbeddingModel;
 import io.github.lightrag.storage.AtomicStorageProvider;
+import io.github.lightrag.storage.ChunkStore;
 import io.github.lightrag.storage.DocumentGraphJournalStore;
 import io.github.lightrag.storage.DocumentGraphSnapshotStore;
 import io.github.lightrag.storage.DocumentStatusStore;
@@ -890,7 +891,10 @@ public final class IndexingPipeline {
 
     private List<PrimaryChunkExtraction> extractPrimarySequentially(List<io.github.lightrag.types.Chunk> chunks, boolean publishChunkEvents) {
         return chunks.stream()
-            .map(chunk -> new PrimaryChunkExtraction(chunk, extractChunkWithDiagnostics(chunk, publishChunkEvents)))
+            .map(chunk -> {
+                var extraction = extractChunkWithDiagnostics(chunk, publishChunkEvents);
+                return new PrimaryChunkExtraction(chunk, extraction.extraction(), extraction.cacheIds());
+            })
             .toList();
     }
 
@@ -906,7 +910,7 @@ public final class IndexingPipeline {
                 pendingTasks.put(
                     completionService.submit(() -> new IndexedPrimaryExtraction(
                         taskIndex,
-                        new PrimaryChunkExtraction(chunk, extractChunkWithDiagnostics(chunk, publishChunkEvents))
+                        primaryChunkExtraction(chunk, publishChunkEvents)
                     )),
                     taskIndex
                 );
@@ -931,7 +935,12 @@ public final class IndexingPipeline {
         }
     }
 
-    private io.github.lightrag.types.ExtractionResult extractChunkWithDiagnostics(
+    private PrimaryChunkExtraction primaryChunkExtraction(io.github.lightrag.types.Chunk chunk, boolean publishChunkEvents) {
+        var extraction = extractChunkWithDiagnostics(chunk, publishChunkEvents);
+        return new PrimaryChunkExtraction(chunk, extraction.extraction(), extraction.cacheIds());
+    }
+
+    private KnowledgeExtractor.ExtractionRun extractChunkWithDiagnostics(
         io.github.lightrag.types.Chunk chunk,
         boolean publishChunkEvents
     ) {
@@ -941,13 +950,13 @@ public final class IndexingPipeline {
             progressListener.onChunkStarted(chunk.documentId(), chunk.id(), "chunk processing started");
         }
         try {
-            var extraction = knowledgeExtractor.extract(chunk);
+            var extraction = knowledgeExtractor.extractWithCacheIds(chunk);
             if (publishChunkEvents) {
                 progressListener.onChunkPrimaryExtracted(
                     chunk.documentId(),
                     chunk.id(),
-                    extraction.entities().size(),
-                    extraction.relations().size(),
+                    extraction.extraction().entities().size(),
+                    extraction.extraction().relations().size(),
                     "chunk primary extraction ready for " + chunk.id()
                 );
             }
@@ -1034,6 +1043,7 @@ public final class IndexingPipeline {
         progressListener.onStageStarted(io.github.lightrag.api.TaskStage.COMMITTING, "materializing graph and final vectors");
         synchronized (storageMutationMonitor) {
             storageProvider.writeAtomically(storage -> {
+                saveChunkLlmCacheMetadata(computed.prepared().chunks(), computed.extractions(), storage.chunkStore());
                 saveGraph(computed.graph().entities(), computed.graph().relations(), storage);
                 saveEntityVectors(computed.graph().entities(), computed.entityVectors(), storage.vectorStore());
                 saveRelationVectors(computed.graph().relations(), computed.relationVectors(), storage.vectorStore());
@@ -1201,6 +1211,38 @@ public final class IndexingPipeline {
             return;
         }
         saveVectors(StorageSnapshots.CHUNK_NAMESPACE, vectors, vectorStore);
+    }
+
+    private static void saveChunkLlmCacheMetadata(
+        List<io.github.lightrag.types.Chunk> chunks,
+        List<GraphAssembler.ChunkExtraction> extractions,
+        ChunkStore chunkStore
+    ) {
+        var cacheIdsByChunkId = new LinkedHashMap<String, List<String>>();
+        for (var extraction : extractions) {
+            if (!extraction.llmCacheIds().isEmpty()) {
+                cacheIdsByChunkId.put(extraction.chunkId(), extraction.llmCacheIds());
+            }
+        }
+        if (cacheIdsByChunkId.isEmpty()) {
+            return;
+        }
+        for (var chunk : chunks) {
+            var cacheIds = cacheIdsByChunkId.get(chunk.id());
+            if (cacheIds == null || cacheIds.isEmpty()) {
+                continue;
+            }
+            var metadata = new LinkedHashMap<String, String>(chunk.metadata());
+            metadata.put(DeletionPipeline.CHUNK_METADATA_LLM_CACHE_LIST, String.join(",", cacheIds));
+            chunkStore.save(new ChunkStore.ChunkRecord(
+                chunk.id(),
+                chunk.documentId(),
+                chunk.text(),
+                chunk.tokenCount(),
+                chunk.order(),
+                metadata
+            ));
+        }
     }
 
     private void saveEntityVectors(List<Entity> entities, List<VectorStore.VectorRecord> vectors, VectorStore vectorStore) {

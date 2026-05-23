@@ -197,13 +197,18 @@ public final class GraphAssembler {
         return sourceEntityId + "\u0000" + targetEntityId;
     }
 
-    public record ChunkExtraction(String chunkId, ExtractionResult extraction) {
+    public record ChunkExtraction(String chunkId, ExtractionResult extraction, List<String> llmCacheIds) {
+        public ChunkExtraction(String chunkId, ExtractionResult extraction) {
+            this(chunkId, extraction, List.of());
+        }
+
         public ChunkExtraction {
             chunkId = Objects.requireNonNull(chunkId, "chunkId").strip();
             if (chunkId.isEmpty()) {
                 throw new IllegalArgumentException("chunkId must not be blank");
             }
             extraction = Objects.requireNonNull(extraction, "extraction");
+            llmCacheIds = List.copyOf(Objects.requireNonNull(llmCacheIds, "llmCacheIds"));
         }
     }
 

@@ -12,6 +12,7 @@ import io.github.lightrag.storage.DocumentGraphStateSupport;
 import io.github.lightrag.storage.DocumentStore;
 import io.github.lightrag.storage.DocumentStatusStore;
 import io.github.lightrag.storage.GraphStore;
+import io.github.lightrag.storage.LlmCacheStore;
 import io.github.lightrag.storage.SnapshotStore;
 import io.github.lightrag.storage.TaskDocumentStore;
 import io.github.lightrag.storage.TaskStageStore;
@@ -49,6 +50,7 @@ public final class PostgresStorageProvider implements AtomicStorageProvider, Aut
     private final TaskStore taskStore;
     private final TaskStageStore taskStageStore;
     private final TaskDocumentStore taskDocumentStore;
+    private final LlmCacheStore llmCacheStore;
     private final PostgresDocumentStore documentStore;
     private final PostgresChunkStore chunkStore;
     private final PostgresGraphStore graphStore;
@@ -57,6 +59,7 @@ public final class PostgresStorageProvider implements AtomicStorageProvider, Aut
     private final TaskStore lockedTaskStore;
     private final TaskStageStore lockedTaskStageStore;
     private final TaskDocumentStore lockedTaskDocumentStore;
+    private final LlmCacheStore lockedLlmCacheStore;
     private final DocumentStore lockedDocumentStore;
     private final ChunkStore lockedChunkStore;
     private final GraphStore lockedGraphStore;
@@ -139,6 +142,7 @@ public final class PostgresStorageProvider implements AtomicStorageProvider, Aut
             this.taskStore = new PostgresTaskStore(jdbcDataSource, resolvedConfig, this.workspaceId);
             this.taskStageStore = new PostgresTaskStageStore(jdbcDataSource, resolvedConfig, this.workspaceId);
             this.taskDocumentStore = new PostgresTaskDocumentStore(jdbcDataSource, resolvedConfig, this.workspaceId);
+            this.llmCacheStore = new PostgresLlmCacheStore(jdbcDataSource, resolvedConfig, this.workspaceId);
             this.documentGraphSnapshotStore = DocumentGraphStateSupport.trackedSnapshotStore(
                 new PostgresDocumentGraphSnapshotStore(jdbcDataSource, resolvedConfig, this.workspaceId),
                 trackedDocumentGraphIds
@@ -151,6 +155,7 @@ public final class PostgresStorageProvider implements AtomicStorageProvider, Aut
             this.lockedTaskStore = new LockedTaskStore(taskStore);
             this.lockedTaskStageStore = new LockedTaskStageStore(taskStageStore);
             this.lockedTaskDocumentStore = new LockedTaskDocumentStore(taskDocumentStore);
+            this.lockedLlmCacheStore = new LockedLlmCacheStore(llmCacheStore);
             this.lockedDocumentStore = new LockedDocumentStore(documentStore);
             this.lockedChunkStore = new LockedChunkStore(chunkStore);
             this.lockedGraphStore = new LockedGraphStore(graphStore);
@@ -199,6 +204,11 @@ public final class PostgresStorageProvider implements AtomicStorageProvider, Aut
     @Override
     public TaskDocumentStore taskDocumentStore() {
         return lockedTaskDocumentStore;
+    }
+
+    @Override
+    public LlmCacheStore llmCacheStore() {
+        return lockedLlmCacheStore;
     }
 
     @Override
@@ -399,6 +409,7 @@ public final class PostgresStorageProvider implements AtomicStorageProvider, Aut
         deleteWorkspaceRows(connection, "relations");
         deleteWorkspaceRows(connection, "entities");
         deleteWorkspaceRows(connection, "vectors");
+        deleteWorkspaceRows(connection, "llm_cache");
         deleteWorkspaceRows(connection, "chunk_graph_journals");
         deleteWorkspaceRows(connection, "document_graph_journals");
         deleteWorkspaceRows(connection, "chunk_graph_snapshots");
@@ -698,6 +709,39 @@ public final class PostgresStorageProvider implements AtomicStorageProvider, Aut
         @Override
         public void deleteByTask(String taskId) {
             withWriteLock(() -> delegate.deleteByTask(taskId));
+        }
+    }
+
+    private final class LockedLlmCacheStore implements LlmCacheStore {
+        private final LlmCacheStore delegate;
+
+        private LockedLlmCacheStore(LlmCacheStore delegate) {
+            this.delegate = Objects.requireNonNull(delegate, "delegate");
+        }
+
+        @Override
+        public void save(CacheRecord record) {
+            withWriteLock(() -> delegate.save(record));
+        }
+
+        @Override
+        public Optional<CacheRecord> load(String cacheId) {
+            return withReadLock(() -> delegate.load(cacheId));
+        }
+
+        @Override
+        public boolean contains(String cacheId) {
+            return withReadLock(() -> delegate.contains(cacheId));
+        }
+
+        @Override
+        public void delete(List<String> cacheIds) {
+            withWriteLock(() -> delegate.delete(cacheIds));
+        }
+
+        @Override
+        public void drop() {
+            withWriteLock(delegate::drop);
         }
     }
 
