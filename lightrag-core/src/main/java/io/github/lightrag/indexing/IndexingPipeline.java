@@ -318,7 +318,7 @@ public final class IndexingPipeline {
             storageProvider,
             effectiveChunker,
             chunkPreparationStrategy(effectiveChunker, embeddingSemanticMergeEnabled, embeddingSemanticMergeThreshold),
-            new ChunkingOrchestrator()
+            new ChunkingOrchestrator(embeddingModel, effectiveEmbeddingBatchSize)
         );
         this.summaryModel = Objects.requireNonNull(summaryModel, "summaryModel");
         this.knowledgeExtractor = new KnowledgeExtractor(

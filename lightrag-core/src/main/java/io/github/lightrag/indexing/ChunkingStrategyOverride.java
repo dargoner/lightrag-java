@@ -7,6 +7,7 @@ public enum ChunkingStrategyOverride {
     SMART,
     PARAGRAPH,
     RECURSIVE,
+    SEMANTIC_VECTOR,
     REGEX,
     FIXED;
 
@@ -19,16 +20,10 @@ public enum ChunkingStrategyOverride {
             case "F", "FIX", "FIXED" -> FIXED;
             case "P", "PARAGRAPH", "PARAGRAPH_SEMANTIC" -> PARAGRAPH;
             case "R", "RECURSIVE" -> RECURSIVE;
+            case "V", "VECTOR", "SEMANTIC_VECTOR" -> SEMANTIC_VECTOR;
             case "SMART" -> SMART;
             case "REGEX" -> REGEX;
-            case "V", "VECTOR", "SEMANTIC_VECTOR" -> throw unsupported(value, "vector breakpoint chunking is not implemented");
             default -> throw new IllegalArgumentException("unsupported chunking strategy: " + value);
         };
-    }
-
-    private static IllegalArgumentException unsupported(String value, String reason) {
-        return new IllegalArgumentException(
-            "unsupported upstream chunking strategy " + value.strip() + ": " + reason
-        );
     }
 }

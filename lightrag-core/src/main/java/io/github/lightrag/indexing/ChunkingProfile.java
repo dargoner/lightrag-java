@@ -59,4 +59,12 @@ public record ChunkingProfile(
             case COARSE -> new RecursiveCharacterChunker(1_600, 160);
         };
     }
+
+    public int semanticVectorChunkSize() {
+        return switch (chunkGranularity) {
+            case FINE -> 500;
+            case MEDIUM -> 1_000;
+            case COARSE -> 1_600;
+        };
+    }
 }

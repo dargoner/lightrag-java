@@ -421,15 +421,14 @@ class LightRagAutoConfigurationTest {
     }
 
     @Test
-    void rejectsUnsupportedUpstreamChunkingStrategiesInSpringIngestOptions() {
+    void bindsUpstreamVectorChunkingStrategyInSpringIngestOptions() {
         contextRunner
             .withPropertyValues("lightrag.indexing.ingest.chunking-strategy=V")
             .run(context -> {
                 var ingest = context.getBean(LightRagProperties.class).getIndexing().getIngest();
 
-                assertThatThrownBy(() -> ingest.toDocumentIngestOptions(null))
-                    .isInstanceOf(IllegalArgumentException.class)
-                    .hasMessageContaining("vector breakpoint chunking is not implemented");
+                assertThat(ingest.toDocumentIngestOptions(null).strategyOverride())
+                    .isEqualTo(ChunkingStrategyOverride.SEMANTIC_VECTOR);
             });
     }
 

@@ -342,12 +342,12 @@ The hosted API does not accept local file bytes directly, so raw upload bytes st
 Chunk selection also stays business-oriented:
 
 - default `AUTO`: use regex/manual chunking when regex rules are supplied, otherwise use `SmartChunker`
-- force `SMART`, `PARAGRAPH`, `RECURSIVE`, `REGEX`, or `FIXED` through `DocumentIngestOptions`
-- upstream-style aliases are accepted where Java has equivalent behavior: `F` / `Fix` maps to `FIXED`, and `P` / `Paragraph` maps to `PARAGRAPH`
+- force `SMART`, `PARAGRAPH`, `RECURSIVE`, `SEMANTIC_VECTOR`, `REGEX`, or `FIXED` through `DocumentIngestOptions`
+- upstream-style aliases are accepted where Java has equivalent behavior: `F` / `Fix` maps to `FIXED`, `R` / `Recursive` maps to `RECURSIVE`, `P` / `Paragraph` maps to `PARAGRAPH`, and `V` / `Vector` maps to `SEMANTIC_VECTOR`
 - `F` / `Fix` now uses the same token-window shape as upstream fixed-token chunking: `FixedWindowChunker` delegates windowing, overlap, and token counts to a `ChunkTextTokenizer`; the default tokenizer preserves the prior Unicode code point behavior, while custom tokenizers and `split_by_character` / `split_by_character_only` can be supplied through the chunker constructor
 - `P` / `Paragraph` follows LightRAG's paragraph-semantic path for sidecar content blocks: heading-first basic chunks, paragraph/table-boundary splitting, `[part n]` suffixes for split content rows, and hierarchy-aware small-block merging; when sidecar blocks are missing, Java now applies the upstream-style `R` fallback and records the fallback reason
 - `R` / `Recursive` uses the upstream-style recursive separator cascade: paragraph, line, Chinese sentence punctuation, Chinese clause punctuation, space, then token-window fallback
-- `V` / `Vector` is rejected explicitly for now because Java does not yet implement upstream's vector breakpoint splitter
+- `V` / `Vector` uses sentence embeddings to find semantic breakpoints with upstream threshold modes (`percentile`, `standard_deviation`, `interquartile`, `gradient`); when no embedding model is available it follows upstream behavior and falls back to `R` with zero overlap, and oversized semantic pieces are re-split through `R` with zero overlap
 - enable optional parent/child chunks when you want retrieval to recall child hits and expand them back to parent context
 
 With Spring Boot Starter, fixed-window chunking can be configured optionally in `application.yml`. If omitted, it still defaults to `window-size=1000` and `overlap=100`:
@@ -387,7 +387,7 @@ The legacy properties below are still supported for backward compatibility:
 - `lightrag.indexing.ingest.parent-child-enabled`
 
 If no request-level `preset` override is provided, those legacy properties still override the preset-derived defaults.
-`lightrag.indexing.ingest.chunking-strategy` accepts `AUTO`, Java-native `SMART` / `PARAGRAPH` / `RECURSIVE` / `REGEX` / `FIXED`, and the upstream-compatible aliases `F` / `Fix` / `R` / `Recursive` / `P` / `Paragraph`.
+`lightrag.indexing.ingest.chunking-strategy` accepts `AUTO`, Java-native `SMART` / `PARAGRAPH` / `RECURSIVE` / `SEMANTIC_VECTOR` / `REGEX` / `FIXED`, and the upstream-compatible aliases `F` / `Fix` / `R` / `Recursive` / `P` / `Paragraph` / `V` / `Vector`.
 
 `embedding-batch-size` controls how many texts are sent in each indexing-time embedding request. Leave it unset or `0` to preserve the current single-batch behavior.
 `max-parallel-insert` controls how many documents ingest can process concurrently. It defaults to `1` so existing runtime behavior stays serial unless you opt in.

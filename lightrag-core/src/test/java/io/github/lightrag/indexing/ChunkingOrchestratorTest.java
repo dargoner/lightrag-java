@@ -8,7 +8,6 @@ import java.util.List;
 import java.util.Map;
 
 import static org.assertj.core.api.Assertions.assertThat;
-import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 class ChunkingOrchestratorTest {
     @Test
@@ -272,10 +271,21 @@ class ChunkingOrchestratorTest {
     }
 
     @Test
-    void rejectsUnsupportedUpstreamVectorAlias() {
-        assertThatThrownBy(() -> ChunkingStrategyOverride.fromExternalName("V"))
-            .isInstanceOf(IllegalArgumentException.class)
-            .hasMessageContaining("vector breakpoint chunking is not implemented");
+    void acceptsUpstreamVectorAliasAsSemanticVectorStrategy() {
+        var options = new DocumentIngestOptions(
+            DocumentTypeHint.AUTO,
+            ChunkGranularity.MEDIUM,
+            "V"
+        );
+        var profile = new ChunkingProfile(
+            DocumentType.GENERIC,
+            ChunkGranularity.MEDIUM,
+            options.strategyOverride(),
+            RegexChunkerConfig.empty()
+        );
+
+        assertThat(options.strategyOverride()).isEqualTo(ChunkingStrategyOverride.SEMANTIC_VECTOR);
+        assertThat(ChunkingOrchestrator.resolveInitialMode(profile)).isEqualTo(ChunkingMode.SEMANTIC_VECTOR);
     }
 
     @Test

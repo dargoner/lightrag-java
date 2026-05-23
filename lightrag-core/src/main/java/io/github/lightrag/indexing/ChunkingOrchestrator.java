@@ -1,6 +1,7 @@
 package io.github.lightrag.indexing;
 
 import io.github.lightrag.api.DocumentIngestOptions;
+import io.github.lightrag.model.EmbeddingModel;
 import io.github.lightrag.types.Chunk;
 import io.github.lightrag.types.Document;
 
@@ -18,11 +19,28 @@ public final class ChunkingOrchestrator {
     private final SmartChunker smartChunkerOverride;
     private final ParagraphSemanticChunker paragraphChunkerOverride;
     private final RecursiveCharacterChunker recursiveChunkerOverride;
+    private final SemanticVectorChunker semanticVectorChunkerOverride;
+    private final EmbeddingModel semanticVectorEmbeddingModel;
+    private final int semanticVectorEmbeddingBatchSize;
     private final RegexChunker regexChunkerOverride;
     private final FixedWindowChunker fixedChunkerOverride;
 
     public ChunkingOrchestrator() {
-        this(new DocumentTypeResolver(), null, null, null, null, null);
+        this(new DocumentTypeResolver(), null, null, null, null, null, null, null, Integer.MAX_VALUE);
+    }
+
+    public ChunkingOrchestrator(EmbeddingModel semanticVectorEmbeddingModel, int semanticVectorEmbeddingBatchSize) {
+        this(
+            new DocumentTypeResolver(),
+            null,
+            null,
+            null,
+            null,
+            null,
+            null,
+            semanticVectorEmbeddingModel,
+            semanticVectorEmbeddingBatchSize
+        );
     }
 
     ChunkingOrchestrator(
@@ -30,13 +48,33 @@ public final class ChunkingOrchestrator {
         SmartChunker smartChunker,
         ParagraphSemanticChunker paragraphChunker,
         RecursiveCharacterChunker recursiveChunker,
+        SemanticVectorChunker semanticVectorChunker,
         RegexChunker regexChunker,
         FixedWindowChunker fixedChunker
+    ) {
+        this(documentTypeResolver, smartChunker, paragraphChunker, recursiveChunker, semanticVectorChunker, regexChunker, fixedChunker, null, Integer.MAX_VALUE);
+    }
+
+    private ChunkingOrchestrator(
+        DocumentTypeResolver documentTypeResolver,
+        SmartChunker smartChunker,
+        ParagraphSemanticChunker paragraphChunker,
+        RecursiveCharacterChunker recursiveChunker,
+        SemanticVectorChunker semanticVectorChunker,
+        RegexChunker regexChunker,
+        FixedWindowChunker fixedChunker,
+        EmbeddingModel semanticVectorEmbeddingModel,
+        int semanticVectorEmbeddingBatchSize
     ) {
         this.documentTypeResolver = Objects.requireNonNull(documentTypeResolver, "documentTypeResolver");
         this.smartChunkerOverride = smartChunker;
         this.paragraphChunkerOverride = paragraphChunker;
         this.recursiveChunkerOverride = recursiveChunker;
+        this.semanticVectorChunkerOverride = semanticVectorChunker;
+        this.semanticVectorEmbeddingModel = semanticVectorEmbeddingModel;
+        this.semanticVectorEmbeddingBatchSize = semanticVectorEmbeddingBatchSize <= 0
+            ? Integer.MAX_VALUE
+            : semanticVectorEmbeddingBatchSize;
         this.regexChunkerOverride = regexChunker;
         this.fixedChunkerOverride = fixedChunker;
     }
@@ -48,7 +86,7 @@ public final class ChunkingOrchestrator {
         RegexChunker regexChunker,
         FixedWindowChunker fixedChunker
     ) {
-        this(documentTypeResolver, smartChunker, paragraphChunker, null, regexChunker, fixedChunker);
+        this(documentTypeResolver, smartChunker, paragraphChunker, null, null, regexChunker, fixedChunker);
     }
 
     ChunkingOrchestrator(
@@ -57,7 +95,7 @@ public final class ChunkingOrchestrator {
         RegexChunker regexChunker,
         FixedWindowChunker fixedChunker
     ) {
-        this(documentTypeResolver, smartChunker, null, null, regexChunker, fixedChunker);
+        this(documentTypeResolver, smartChunker, null, null, null, regexChunker, fixedChunker);
     }
 
     public ChunkingResult chunk(ParsedDocument document, DocumentIngestOptions options) {
@@ -74,6 +112,7 @@ public final class ChunkingOrchestrator {
             case REGEX -> regexChunker(profile).chunk(parsed, profile.regexConfig());
             case PARAGRAPH -> paragraphChunker(profile).chunk(parsed);
             case RECURSIVE -> recursiveChunker(profile).chunk(parsed);
+            case SEMANTIC_VECTOR -> semanticVectorChunker(profile).chunk(parsed);
             case SMART -> smartChunk(parsed, profile);
             case FIXED -> fixedChunk(parsed, profile);
         };
@@ -85,6 +124,7 @@ public final class ChunkingOrchestrator {
             case SMART -> ChunkingMode.SMART;
             case PARAGRAPH -> ChunkingMode.PARAGRAPH;
             case RECURSIVE -> ChunkingMode.RECURSIVE;
+            case SEMANTIC_VECTOR -> ChunkingMode.SEMANTIC_VECTOR;
             case REGEX -> ChunkingMode.REGEX;
             case FIXED -> ChunkingMode.FIXED;
             case AUTO -> profile.hasRegexRules() ? ChunkingMode.REGEX : ChunkingMode.SMART;
@@ -171,6 +211,16 @@ public final class ChunkingOrchestrator {
         return recursiveChunkerOverride != null
             ? recursiveChunkerOverride
             : profile.recursiveCharacterChunker();
+    }
+
+    private SemanticVectorChunker semanticVectorChunker(ChunkingProfile profile) {
+        return semanticVectorChunkerOverride != null
+            ? semanticVectorChunkerOverride
+            : new SemanticVectorChunker(
+                profile.semanticVectorChunkSize(),
+                semanticVectorEmbeddingModel,
+                semanticVectorEmbeddingBatchSize
+            );
     }
 
     private RegexChunker regexChunker(ChunkingProfile profile) {
