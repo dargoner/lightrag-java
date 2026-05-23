@@ -12,12 +12,14 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
+import java.util.function.Function;
 import java.util.regex.Pattern;
 
 public final class ParagraphSemanticChunker {
     private static final double IDEAL_RATIO = 0.75d;
     private static final double TABLE_MAX_RATIO = 0.625d;
     private static final double TABLE_IDEAL_RATIO = 0.375d;
+    private static final double TABLE_MIN_LAST_RATIO = 0.32d;
     private static final double SMALL_TAIL_RATIO = 0.125d;
     private static final int MAX_ANCHOR_CANDIDATE_LENGTH = 100;
     private static final Pattern HTML_ROW_PATTERN = Pattern.compile("(?is)<tr\\b.*?</tr>");
@@ -46,6 +48,7 @@ public final class ParagraphSemanticChunker {
         var targetIdeal = Math.max((int) (targetMax * IDEAL_RATIO), 1);
         var tableMax = Math.max((int) (targetMax * TABLE_MAX_RATIO), 1);
         var tableIdeal = Math.max((int) (targetMax * TABLE_IDEAL_RATIO), 1);
+        var tableMinLast = Math.max((int) (tableMax * TABLE_MIN_LAST_RATIO), 1);
         var smallTailThreshold = Math.max((int) (targetMax * SMALL_TAIL_RATIO), 1);
 
         var splitBlocks = new ArrayList<SemanticBlock>();
@@ -56,7 +59,7 @@ public final class ParagraphSemanticChunker {
                 continue;
             }
             var semanticBlock = toSemanticBlock(block, source.title());
-            var expanded = expandTables(semanticBlock, tableMax, tableIdeal);
+            var expanded = expandTables(semanticBlock, tableMax, tableIdeal, tableMinLast);
             var afterLongSplit = new ArrayList<SemanticBlock>();
             for (var candidate : expanded) {
                 afterLongSplit.addAll(splitLongBlock(candidate, targetMax, targetIdeal));
@@ -129,7 +132,7 @@ public final class ParagraphSemanticChunker {
         return stripped.startsWith("<table ") && stripped.endsWith("</table>");
     }
 
-    private List<SemanticBlock> expandTables(SemanticBlock block, int tableMax, int tableIdeal) {
+    private List<SemanticBlock> expandTables(SemanticBlock block, int tableMax, int tableIdeal, int tableMinLast) {
         if (block.paragraphs().stream().noneMatch(paragraph -> paragraph.isTable() && tokens(paragraph.text()) > tableMax)) {
             return List.of(block);
         }
@@ -142,7 +145,7 @@ public final class ParagraphSemanticChunker {
                 current.add(paragraph);
                 continue;
             }
-            var slices = splitTable(paragraph.text(), tableMax, tableIdeal);
+            var slices = splitTable(paragraph.text(), tableMax, tableIdeal, tableMinLast);
             if (slices.size() <= 1) {
                 current.add(paragraph);
                 continue;
@@ -166,14 +169,14 @@ public final class ParagraphSemanticChunker {
         return List.copyOf(out);
     }
 
-    private List<String> splitTable(String text, int tableMax, int tableIdeal) {
+    private List<String> splitTable(String text, int tableMax, int tableIdeal, int tableMinLast) {
         var htmlRows = htmlRows(text);
         if (htmlRows.size() > 1) {
-            return splitHtmlTableByRows(text, htmlRows, tableMax, tableIdeal);
+            return splitHtmlTableByRows(text, htmlRows, tableMax, tableIdeal, tableMinLast);
         }
         var jsonRows = jsonRows(text);
         if (jsonRows.size() > 1) {
-            return splitJsonTableByRows(text, jsonRows, tableMax, tableIdeal);
+            return splitJsonTableByRows(text, jsonRows, tableMax, tableIdeal, tableMinLast);
         }
         return fixedSplitText(text, tableMax, 0);
     }
@@ -216,75 +219,131 @@ public final class ParagraphSemanticChunker {
         return text.substring(start + 1, end).strip();
     }
 
-    private List<String> splitHtmlTableByRows(String original, List<String> rows, int tableMax, int tableIdeal) {
+    private List<String> splitHtmlTableByRows(String original, List<String> rows, int tableMax, int tableIdeal, int tableMinLast) {
         var start = original.indexOf(rows.get(0));
         var end = original.lastIndexOf(rows.get(rows.size() - 1)) + rows.get(rows.size() - 1).length();
         var prefix = start <= 0 ? "<table>" : original.substring(0, start);
         var suffix = end >= original.length() ? "</table>" : original.substring(end);
+        var bodyLimits = tableBodyLimits(prefix, suffix, tableMax, tableIdeal, tableMinLast);
         var chunks = new ArrayList<String>();
-        var currentRows = new ArrayList<String>();
-        for (var row : rows) {
-            var candidateRows = new ArrayList<>(currentRows);
-            candidateRows.add(row);
-            var candidateText = prefix + String.join("", candidateRows) + suffix;
-            if (!currentRows.isEmpty() && tokens(candidateText) > tableMax) {
-                chunks.add(prefix + String.join("", currentRows) + suffix);
-                currentRows.clear();
-            }
-            if (tokens(prefix + row + suffix) > tableMax) {
-                if (!currentRows.isEmpty()) {
-                    chunks.add(prefix + String.join("", currentRows) + suffix);
-                    currentRows.clear();
-                }
-                chunks.addAll(fixedSplitText(prefix + row + suffix, tableMax, 0));
-                continue;
-            }
-            currentRows.add(row);
-            if (tokens(prefix + String.join("", currentRows) + suffix) >= tableIdeal) {
-                chunks.add(prefix + String.join("", currentRows) + suffix);
-                currentRows.clear();
-            }
-        }
-        if (!currentRows.isEmpty()) {
-            chunks.add(prefix + String.join("", currentRows) + suffix);
+        for (var rowChunk : splitRowsByTokens(rows, joined -> String.join("", joined), bodyLimits)) {
+            chunks.addAll(serializeRowsWithOverflowSplit(
+                rowChunk,
+                joined -> String.join("", joined),
+                joined -> prefix + String.join("", joined) + suffix,
+                bodyLimits
+            ));
         }
         return List.copyOf(chunks);
     }
 
-    private List<String> splitJsonTableByRows(String original, List<String> rows, int tableMax, int tableIdeal) {
+    private List<String> splitJsonTableByRows(String original, List<String> rows, int tableMax, int tableIdeal, int tableMinLast) {
         var start = original.indexOf('>');
         var end = original.lastIndexOf("</table>");
         var prefix = start < 0 ? "<table>" : original.substring(0, start + 1);
         var suffix = end < 0 ? "</table>" : original.substring(end);
+        var bodyLimits = tableBodyLimits(prefix, suffix, tableMax, tableIdeal, tableMinLast);
         var chunks = new ArrayList<String>();
-        var currentRows = new ArrayList<String>();
-        for (var row : rows) {
-            var candidateRows = new ArrayList<>(currentRows);
-            candidateRows.add(row);
-            var candidateText = wrapJsonRows(prefix, candidateRows, suffix);
-            if (!currentRows.isEmpty() && tokens(candidateText) > tableMax) {
-                chunks.add(wrapJsonRows(prefix, currentRows, suffix));
-                currentRows.clear();
-            }
-            var singleRow = wrapJsonRows(prefix, List.of(row), suffix);
-            if (tokens(singleRow) > tableMax) {
-                if (!currentRows.isEmpty()) {
-                    chunks.add(wrapJsonRows(prefix, currentRows, suffix));
-                    currentRows.clear();
-                }
-                chunks.addAll(fixedSplitText(singleRow, tableMax, 0));
-                continue;
-            }
-            currentRows.add(row);
-            if (tokens(wrapJsonRows(prefix, currentRows, suffix)) >= tableIdeal) {
-                chunks.add(wrapJsonRows(prefix, currentRows, suffix));
-                currentRows.clear();
-            }
-        }
-        if (!currentRows.isEmpty()) {
-            chunks.add(wrapJsonRows(prefix, currentRows, suffix));
+        for (var rowChunk : splitRowsByTokens(rows, joined -> "[" + String.join(",", joined) + "]", bodyLimits)) {
+            chunks.addAll(serializeRowsWithOverflowSplit(
+                rowChunk,
+                joined -> "[" + String.join(",", joined) + "]",
+                joined -> wrapJsonRows(prefix, joined, suffix),
+                bodyLimits
+            ));
         }
         return List.copyOf(chunks);
+    }
+
+    private List<List<String>> splitRowsByTokens(
+        List<String> rows,
+        Function<List<String>, String> bodySerializer,
+        TableBodyLimits limits
+    ) {
+        var total = tokens(bodySerializer.apply(rows));
+        if (total <= limits.bodyMax() || rows.size() <= 1) {
+            return List.of(rows);
+        }
+
+        var targetChunks = Math.max(
+            (int) Math.ceil((double) total / limits.bodyIdeal()),
+            (int) Math.ceil((double) total / limits.bodyMax())
+        );
+        targetChunks = Math.min(targetChunks, rows.size());
+        var targetRows = (double) rows.size() / targetChunks;
+        var chunks = new ArrayList<List<String>>();
+        var start = 0;
+        for (int index = 0; index < targetChunks; index++) {
+            int end;
+            if (index == targetChunks - 1) {
+                end = rows.size();
+            } else {
+                end = Math.max(start + 1, Math.min((int) ((index + 1) * targetRows), rows.size()));
+                var remaining = rows.size() - end;
+                if (remaining > 0 && remaining < targetRows * 0.3d) {
+                    end = rows.size();
+                }
+            }
+            chunks.add(List.copyOf(rows.subList(start, end)));
+            start = end;
+            if (start >= rows.size()) {
+                break;
+            }
+        }
+
+        if (chunks.size() >= 2 && tokens(bodySerializer.apply(chunks.get(chunks.size() - 1))) < limits.bodyLastMin()) {
+            var previous = chunks.get(chunks.size() - 2);
+            var last = chunks.get(chunks.size() - 1);
+            var merged = new ArrayList<String>(previous.size() + last.size());
+            merged.addAll(previous);
+            merged.addAll(last);
+            if (tokens(bodySerializer.apply(merged)) <= limits.bodyMax()) {
+                chunks.set(chunks.size() - 2, List.copyOf(merged));
+                chunks.remove(chunks.size() - 1);
+            }
+        }
+        return List.copyOf(chunks);
+    }
+
+    private List<String> serializeRowsWithOverflowSplit(
+        List<String> rows,
+        Function<List<String>, String> bodySerializer,
+        Function<List<String>, String> serializer,
+        TableBodyLimits limits
+    ) {
+        var wrapped = serializer.apply(rows);
+        if (tokens(wrapped) <= limits.tableMax()) {
+            return List.of(wrapped);
+        }
+        if (rows.size() <= 1) {
+            return fixedSplitText(wrapped, limits.tableMax(), 0);
+        }
+        var halved = Math.max(tokens(wrapped) / 2, 1);
+        var nextLimits = new TableBodyLimits(
+            limits.tableMax(),
+            Math.max(Math.min(limits.bodyMax(), halved), 1),
+            Math.max(Math.min(limits.bodyIdeal(), halved / 2), 1),
+            Math.max(Math.min(limits.bodyLastMin(), halved / 2), 1)
+        );
+        var pieces = new ArrayList<String>();
+        for (var splitRows : splitRowsByTokens(rows, bodySerializer, nextLimits)) {
+            if (splitRows.equals(rows)) {
+                pieces.addAll(fixedSplitText(wrapped, limits.tableMax(), 0));
+            } else {
+                pieces.addAll(serializeRowsWithOverflowSplit(splitRows, bodySerializer, serializer, nextLimits));
+            }
+        }
+        return List.copyOf(pieces);
+    }
+
+    private static TableBodyLimits tableBodyLimits(String prefix, String suffix, int tableMax, int tableIdeal, int tableMinLast) {
+        var wrapperOverhead = tokens(prefix + suffix);
+        return new TableBodyLimits(
+            tableMax,
+            Math.max(tableMax - wrapperOverhead, 1),
+            Math.max(Math.min(tableIdeal, tableMax) - wrapperOverhead, 1),
+            Math.max(tableMinLast - wrapperOverhead, 1)
+        );
     }
 
     private static String wrapJsonRows(String prefix, List<String> rows, String suffix) {
@@ -456,6 +515,9 @@ public final class ParagraphSemanticChunker {
     }
 
     private record Paragraph(String text, boolean isTable) {
+    }
+
+    private record TableBodyLimits(int tableMax, int bodyMax, int bodyIdeal, int bodyLastMin) {
     }
 
     private record SemanticBlock(

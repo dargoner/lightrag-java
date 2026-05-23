@@ -216,6 +216,63 @@ class ChunkingOrchestratorTest {
     }
 
     @Test
+    void paragraphStrategyUsesBalancedTableRowsAndSwallowsTinyLastSlice() {
+        var orchestrator = new ChunkingOrchestrator(
+            new DocumentTypeResolver(),
+            new SmartChunker(SmartChunkerConfig.defaults()),
+            new ParagraphSemanticChunker(
+                SmartChunkerConfig.builder()
+                    .targetTokens(180)
+                    .maxTokens(240)
+                    .overlapTokens(10)
+                    .semanticMergeEnabled(false)
+                    .build(),
+                new RecursiveCharacterChunker(240, 10)
+            ),
+            new RegexChunker(new FixedWindowChunker(240, 10)),
+            new FixedWindowChunker(240, 10)
+        );
+        var table = "<table format=\"json\">["
+            + "{\"name\":\"row-1\",\"desc\":\"" + "a".repeat(60) + "\"},"
+            + "{\"name\":\"row-2\",\"desc\":\"" + "b".repeat(60) + "\"},"
+            + "{\"name\":\"row-3\",\"desc\":\"" + "c".repeat(60) + "\"},"
+            + "0"
+            + "]</table>";
+        var parsed = new ParsedDocument(
+            "doc-table-tail",
+            "Guide",
+            "",
+            List.of(new ParsedBlock(
+                "table-tail",
+                "table",
+                table,
+                "Chapter > Table",
+                List.of("Chapter", "Table"),
+                null,
+                "",
+                1,
+                Map.of("sidecar.level", "2")
+            )),
+            Map.of("parse_mode", "sidecar")
+        );
+
+        var result = orchestrator.chunk(parsed, new DocumentIngestOptions(
+            DocumentTypeHint.AUTO,
+            ChunkGranularity.MEDIUM,
+            ChunkingStrategyOverride.PARAGRAPH,
+            RegexChunkerConfig.empty()
+        ));
+
+        assertThat(result.effectiveMode()).isEqualTo(ChunkingMode.PARAGRAPH);
+        assertThat(result.chunks()).hasSize(3);
+        assertThat(result.chunks().get(2).text())
+            .contains("row-3")
+            .contains(",0]</table>");
+        assertThat(result.chunks())
+            .allSatisfy(chunk -> assertThat(chunk.tokenCount()).isLessThanOrEqualTo(240));
+    }
+
+    @Test
     void paragraphStrategyFallsBackWhenSidecarBlocksAreUnavailable() {
         var orchestrator = new ChunkingOrchestrator(
             new DocumentTypeResolver(),
