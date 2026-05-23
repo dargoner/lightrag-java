@@ -677,6 +677,9 @@ public final class IndexingPipeline {
         var chunkVectors = chunkVectors(chunks);
         persistChunkVectorState(chunks, chunkVectors);
         progressListener.onStageSucceeded(io.github.lightrag.api.TaskStage.VECTOR_INDEXING, "embedded chunk vectors for " + source.id());
+        if (skipKnowledgeGraph(source.metadata())) {
+            return withoutKnowledgeGraph(source, prepared, chunkVectors);
+        }
         progressListener.onStageStarted(io.github.lightrag.api.TaskStage.GRAPH_ASSEMBLY, "assembling graph for " + source.id());
         var refinedExtractions = refineExtractions(chunks);
         var graph = graphAssembler.assemble(refinedExtractions);
@@ -725,6 +728,9 @@ public final class IndexingPipeline {
         var chunkVectors = chunkVectors(chunks);
         persistChunkVectorState(chunks, chunkVectors);
         progressListener.onStageSucceeded(io.github.lightrag.api.TaskStage.VECTOR_INDEXING, "embedded chunk vectors for " + source.documentId());
+        if (options.processOptions().skipKnowledgeGraph()) {
+            return withoutKnowledgeGraph(toDocument(source), prepared, chunkVectors);
+        }
         progressListener.onStageStarted(io.github.lightrag.api.TaskStage.GRAPH_ASSEMBLY, "assembling graph for " + source.documentId());
         var refinedExtractions = refineExtractions(chunks);
         var graph = graphAssembler.assemble(refinedExtractions);
@@ -776,6 +782,13 @@ public final class IndexingPipeline {
                 chunk.id(),
                 1,
                 "embedded chunk vector for " + chunk.id()
+            );
+        }
+        if (skipKnowledgeGraph(source.metadata())) {
+            return withoutKnowledgeGraph(
+                new Document(source.documentId(), source.title(), "", source.metadata()),
+                prepared,
+                chunkVectors
             );
         }
         progressListener.onStageSucceeded(io.github.lightrag.api.TaskStage.VECTOR_INDEXING, "embedded chunk vectors for " + source.documentId());
@@ -986,6 +999,31 @@ public final class IndexingPipeline {
             throw error;
         }
         throw new IllegalStateException("document ingest failed", failure);
+    }
+
+    private ComputedIngest withoutKnowledgeGraph(
+        Document source,
+        DocumentIngestor.PreparedIngest prepared,
+        List<VectorStore.VectorRecord> chunkVectors
+    ) {
+        var emptyExtractions = List.<GraphAssembler.ChunkExtraction>of();
+        var emptyGraph = new GraphAssembler.Graph(List.of(), List.of());
+        persistExtractionSnapshotState(source.id(), prepared, emptyExtractions, emptyGraph);
+        progressListener.onDocumentGraphReady(source.id(), 0, 0, "knowledge graph skipped for " + source.id());
+        return new ComputedIngest(
+            source,
+            prepared,
+            emptyExtractions,
+            chunkVectors,
+            emptyGraph,
+            List.of(),
+            List.of()
+        );
+    }
+
+    private static boolean skipKnowledgeGraph(Map<String, String> metadata) {
+        var processOptions = metadata.get(io.github.lightrag.api.DocumentIngestOptions.METADATA_PROCESS_OPTIONS);
+        return processOptions != null && processOptions.indexOf('!') >= 0;
     }
 
     private void commitComputedIngest(ComputedIngest computed) {

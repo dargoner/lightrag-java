@@ -103,7 +103,9 @@ class DocumentIngestorTest {
                 Map.of(
                     "source", "unit-test",
                     DocumentIngestOptions.METADATA_DOCUMENT_TYPE_HINT, DocumentTypeHint.AUTO.name(),
-                    DocumentIngestOptions.METADATA_CHUNK_GRANULARITY, io.github.lightrag.api.ChunkGranularity.MEDIUM.name()
+                    DocumentIngestOptions.METADATA_CHUNK_GRANULARITY, io.github.lightrag.api.ChunkGranularity.MEDIUM.name(),
+                    DocumentIngestOptions.METADATA_PROCESS_OPTIONS, "",
+                    DocumentIngestOptions.METADATA_CHUNK_OPTIONS, "{\"fixed_token\":{}}"
                 )
             ));
         assertThat(prepared.chunks()).isNotEmpty();
@@ -168,6 +170,38 @@ class DocumentIngestorTest {
             .containsEntry(SmartChunkMetadata.SECTION_PATH, "第一条");
         assertThat(prepared.chunks().get(1).metadata())
             .containsEntry(SmartChunkMetadata.SECTION_PATH, "第二条");
+    }
+
+    @Test
+    void persistsUpstreamProcessOptionsAndSlimChunkOptionsMetadata() {
+        var storage = InMemoryStorageProvider.create();
+        var ingestor = new DocumentIngestor(storage, new FixedWindowChunker(4, 1));
+        var parsed = new ParsedDocument(
+            "doc-process",
+            "Title",
+            "Alpha beta gamma",
+            List.of(),
+            Map.of("source", "unit-test")
+        );
+        var options = new DocumentIngestOptions(
+            DocumentTypeHint.AUTO,
+            io.github.lightrag.api.ChunkGranularity.MEDIUM,
+            "R!",
+            Map.of(
+                "chunk-token-size", 1200,
+                "fixed-token", Map.of("chunk-overlap-token-size", 10),
+                "recursive-character", Map.of("chunk-overlap-token-size", 100)
+            )
+        );
+
+        var prepared = ingestor.prepareParsed(parsed, options);
+
+        assertThat(prepared.documentRecords().get(0).metadata())
+            .containsEntry(DocumentIngestOptions.METADATA_PROCESS_OPTIONS, "R!")
+            .containsEntry(
+                DocumentIngestOptions.METADATA_CHUNK_OPTIONS,
+                "{\"chunk_token_size\":1200,\"recursive_character\":{\"chunk_overlap_token_size\":100}}"
+            );
     }
 
     @Test

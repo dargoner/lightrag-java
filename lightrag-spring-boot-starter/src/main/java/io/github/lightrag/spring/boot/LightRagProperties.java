@@ -4,8 +4,11 @@ import io.github.lightrag.indexing.FixedWindowChunker;
 import org.springframework.boot.context.properties.ConfigurationProperties;
 
 import java.time.Duration;
+import java.util.Collections;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Locale;
+import java.util.Map;
 
 @ConfigurationProperties(prefix = "lightrag")
 public class LightRagProperties {
@@ -265,6 +268,8 @@ public class LightRagProperties {
         private String documentType;
         private String chunkGranularity;
         private String chunkingStrategy;
+        private String processOptions;
+        private Map<String, Object> chunkOptions = Map.of();
         private Boolean parentChildEnabled;
         private int parentChildWindowSize = 400;
         private int parentChildOverlap = 40;
@@ -303,6 +308,22 @@ public class LightRagProperties {
 
         public void setChunkingStrategy(String chunkingStrategy) {
             this.chunkingStrategy = normalizeLegacyEnum(chunkingStrategy);
+        }
+
+        public String getProcessOptions() {
+            return processOptions == null ? "" : processOptions;
+        }
+
+        public void setProcessOptions(String processOptions) {
+            this.processOptions = processOptions == null || processOptions.isBlank() ? null : processOptions.strip();
+        }
+
+        public Map<String, Object> getChunkOptions() {
+            return chunkOptions;
+        }
+
+        public void setChunkOptions(Map<String, Object> chunkOptions) {
+            this.chunkOptions = chunkOptions == null ? Map.of() : copyChunkOptions(chunkOptions);
         }
 
         @Deprecated
@@ -350,7 +371,9 @@ public class LightRagProperties {
                 resolvedChunkGranularity,
                 io.github.lightrag.indexing.ChunkingStrategyOverride.fromExternalName(chunkingStrategy),
                 io.github.lightrag.indexing.RegexChunkerConfig.empty(),
-                resolvedParentChildProfile
+                resolvedParentChildProfile,
+                new io.github.lightrag.api.ProcessOptions(getProcessOptions()),
+                io.github.lightrag.api.ChunkOptions.from(chunkOptions)
             );
         }
 
@@ -360,6 +383,46 @@ public class LightRagProperties {
             }
             var normalized = value.strip();
             return normalized.isEmpty() ? null : normalized.toUpperCase(Locale.ROOT);
+        }
+
+        private static Map<String, Object> copyChunkOptions(Map<String, Object> source) {
+            var copy = new LinkedHashMap<String, Object>();
+            source.forEach((key, value) -> copy.put(key, normalizeChunkOptionValue(value)));
+            return Collections.unmodifiableMap(copy);
+        }
+
+        private static Object normalizeChunkOptionValue(Object value) {
+            if (value instanceof Map<?, ?> map) {
+                var copy = new LinkedHashMap<String, Object>();
+                map.forEach((key, nestedValue) -> copy.put(String.valueOf(key), normalizeChunkOptionValue(nestedValue)));
+                return Collections.unmodifiableMap(copy);
+            }
+            if (value instanceof String stringValue) {
+                return parseScalarChunkOption(stringValue);
+            }
+            return value;
+        }
+
+        private static Object parseScalarChunkOption(String value) {
+            var normalized = value.strip();
+            if (normalized.equalsIgnoreCase("true") || normalized.equalsIgnoreCase("false")) {
+                return Boolean.parseBoolean(normalized);
+            }
+            if (normalized.matches("-?\\d+")) {
+                try {
+                    return Long.parseLong(normalized);
+                } catch (NumberFormatException ignored) {
+                    return normalized;
+                }
+            }
+            if (normalized.matches("-?\\d+\\.\\d+")) {
+                try {
+                    return Double.parseDouble(normalized);
+                } catch (NumberFormatException ignored) {
+                    return normalized;
+                }
+            }
+            return value;
         }
     }
 

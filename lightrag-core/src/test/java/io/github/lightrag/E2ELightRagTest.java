@@ -5,6 +5,7 @@ import io.github.lightrag.api.QueryMode;
 import io.github.lightrag.api.CreateEntityRequest;
 import io.github.lightrag.api.CreateRelationRequest;
 import io.github.lightrag.api.DeletionResult;
+import io.github.lightrag.api.DocumentIngestOptions;
 import io.github.lightrag.api.EditEntityRequest;
 import io.github.lightrag.api.UpdateRelationRequest;
 import io.github.lightrag.api.DocumentProcessingStatus;
@@ -303,6 +304,33 @@ class E2ELightRagTest {
             .isInstanceOf(java.util.NoSuchElementException.class)
             .hasMessageContaining("document status does not exist");
         assertThat(rag.listDocumentStatuses(WORKSPACE)).isEmpty();
+    }
+
+    @Test
+    void processOptionsCanSkipKnowledgeGraphConstruction() {
+        var storage = InMemoryStorageProvider.create();
+        var rag = LightRag.builder()
+            .chatModel(new FailingExtractionChatModel())
+            .embeddingModel(new FakeEmbeddingModel())
+            .storage(storage)
+            .build();
+
+        rag.ingest(WORKSPACE, List.of(new Document(
+            "doc-skip-kg",
+            "Title",
+            "Alice works with Bob",
+            Map.of(DocumentIngestOptions.METADATA_PROCESS_OPTIONS, "!")
+        )));
+
+        assertThat(storage.documentStore().load("doc-skip-kg")).isPresent();
+        assertThat(storage.chunkStore().listByDocument("doc-skip-kg")).hasSize(1);
+        assertThat(storage.graphStore().allEntities()).isEmpty();
+        assertThat(storage.graphStore().allRelations()).isEmpty();
+        assertThat(storage.vectorStore().list("chunks"))
+            .extracting(VectorStore.VectorRecord::id)
+            .containsExactly("doc-skip-kg:0");
+        assertThat(storage.vectorStore().list("entities")).isEmpty();
+        assertThat(storage.vectorStore().list("relations")).isEmpty();
     }
 
     @Test

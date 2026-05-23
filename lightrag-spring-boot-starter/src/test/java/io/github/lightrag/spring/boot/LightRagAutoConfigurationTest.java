@@ -380,6 +380,9 @@ class LightRagAutoConfigurationTest {
                 "lightrag.indexing.ingest.preset=LAW",
                 "lightrag.indexing.ingest.parent-child-window-size=256",
                 "lightrag.indexing.ingest.parent-child-overlap=32",
+                "lightrag.indexing.ingest.process-options=R!",
+                "lightrag.indexing.ingest.chunk-options.chunk-token-size=1200",
+                "lightrag.indexing.ingest.chunk-options.recursive-character.chunk-overlap-token-size=100",
                 "lightrag.indexing.parsing.tika-fallback-enabled=true",
                 "lightrag.indexing.parsing.mineru.enabled=true",
                 "lightrag.indexing.parsing.mineru.mode=API",
@@ -391,9 +394,13 @@ class LightRagAutoConfigurationTest {
 
                 assertThat(properties.getIndexing().getIngest().getPreset()).isEqualTo(IngestPreset.LAW);
                 assertThat(properties.getIndexing().getIngest().getParentChildWindowSize()).isEqualTo(256);
-                assertThat(properties.getIndexing().getIngest().getParentChildOverlap()).isEqualTo(32);
-                assertThat(properties.getIndexing().getParsing().isTikaFallbackEnabled()).isTrue();
-                assertThat(properties.getIndexing().getParsing().getMineru().isEnabled()).isTrue();
+            assertThat(properties.getIndexing().getIngest().getParentChildOverlap()).isEqualTo(32);
+            assertThat(properties.getIndexing().getIngest().getProcessOptions()).isEqualTo("R!");
+            assertThat(properties.getIndexing().getIngest().getChunkOptions()).containsKey("chunk-token-size");
+            assertThat(properties.getIndexing().getIngest().toDocumentIngestOptions(null).chunkOptions().toJson())
+                .isEqualTo("{\"chunk_token_size\":1200,\"recursive_character\":{\"chunk_overlap_token_size\":100}}");
+            assertThat(properties.getIndexing().getParsing().isTikaFallbackEnabled()).isTrue();
+            assertThat(properties.getIndexing().getParsing().getMineru().isEnabled()).isTrue();
                 assertThat(properties.getIndexing().getParsing().getMineru().getMode()).isEqualTo("API");
                 assertThat(properties.getIndexing().getParsing().getMineru().getBaseUrl()).isEqualTo("http://mineru.local");
                 assertThat(properties.getIndexing().getParsing().getMineru().getApiKey()).isEqualTo("test-key");
