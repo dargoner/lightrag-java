@@ -63,6 +63,25 @@ class LightRagDocumentGraphApiTest {
             String.class
         );
         assertMethod(
+            "resumeDocumentIngest",
+            DocumentIngestResumeResult.class,
+            String.class,
+            String.class
+        );
+        assertMethod(
+            "submitResumeDocumentIngest",
+            String.class,
+            String.class,
+            String.class
+        );
+        assertMethod(
+            "submitResumeDocumentIngest",
+            String.class,
+            String.class,
+            String.class,
+            TaskSubmitOptions.class
+        );
+        assertMethod(
             "submitDocumentGraphMaterialization",
             String.class,
             String.class,
@@ -130,6 +149,11 @@ class LightRagDocumentGraphApiTest {
             GraphChunkAction.NONE,
             GraphChunkAction.RESUME,
             GraphChunkAction.REPAIR
+        );
+        assertThat(DocumentIngestResumeAction.values()).containsExactly(
+            DocumentIngestResumeAction.NONE,
+            DocumentIngestResumeAction.GRAPH_MATERIALIZATION,
+            DocumentIngestResumeAction.REINGEST
         );
         assertThat(FailureStage.values()).containsExactly(
             FailureStage.SNAPSHOT_LOADING,
@@ -283,6 +307,26 @@ class LightRagDocumentGraphApiTest {
                 int.class,
                 int.class,
                 int.class,
+                String.class,
+                String.class
+            },
+            new String[0]
+        );
+        assertRecord(
+            DocumentIngestResumeResult.class,
+            new String[] {
+                "documentId",
+                "executedAction",
+                "finalDocumentStatus",
+                "finalGraphStatus",
+                "summary",
+                "errorMessage"
+            },
+            new Class<?>[] {
+                String.class,
+                DocumentIngestResumeAction.class,
+                DocumentStatus.class,
+                GraphMaterializationStatus.class,
                 String.class,
                 String.class
             },

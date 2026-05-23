@@ -30,7 +30,7 @@ import io.github.lightrag.storage.TaskDocumentStore;
 import io.github.lightrag.task.TaskExecutionService;
 import io.github.lightrag.task.TaskMetadataReporter;
 import io.github.lightrag.types.Document;
-import io.github.lightrag.types.PreChunkedDocument;
+import io.github.lightrag.types.PreChunkedChunk;
 import io.github.lightrag.types.RawDocumentSource;
 
 import java.nio.file.Path;
@@ -41,6 +41,7 @@ import java.util.Map;
 import java.util.NoSuchElementException;
 import java.util.Objects;
 import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.function.Function;
 
 public final class LightRag implements AutoCloseable {
     private final LightRagConfig config;
@@ -179,57 +180,111 @@ public final class LightRag implements AutoCloseable {
     }
 
     public void ingest(String workspaceId, List<Document> documents) {
+        ingest(workspaceId, DocumentIngestRequest.of(documents));
+    }
+
+    public void ingest(String workspaceId, DocumentIngestRequest request) {
+        var normalizedRequest = Objects.requireNonNull(request, "request");
         var scope = resolveScope(workspaceId);
-        newIndexingPipeline(scope, resolveProvider(scope)).ingest(documents);
+        runInWorkspace(scope, provider -> {
+            newIndexingPipeline(scope, provider).ingest(normalizedRequest.documents());
+            return null;
+        });
     }
 
     public void ingestSources(String workspaceId, List<RawDocumentSource> sources, DocumentIngestOptions options) {
         var scope = resolveScope(workspaceId);
-        newIndexingPipeline(scope, resolveProvider(scope)).ingestSources(sources, options);
+        runInWorkspace(scope, provider -> {
+            newIndexingPipeline(scope, provider).ingestSources(sources, options);
+            return null;
+        });
     }
 
-    public void ingestPreChunked(String workspaceId, List<PreChunkedDocument> documents) {
+    public void ingest(String workspaceId, PreChunkedIngestRequest request) {
+        var normalizedRequest = Objects.requireNonNull(request, "request");
         var scope = resolveScope(workspaceId);
-        newIndexingPipeline(scope, resolveProvider(scope)).ingestPreChunked(List.copyOf(Objects.requireNonNull(documents, "documents")));
+        runInWorkspace(scope, provider -> {
+            newIndexingPipeline(scope, provider).ingestPreChunkedChunks(normalizedRequest.chunks());
+            return null;
+        });
+    }
+
+    public void ingestChunks(String workspaceId, List<PreChunkedChunk> chunks) {
+        ingest(workspaceId, PreChunkedIngestRequest.ofChunks(chunks));
     }
 
     public String submitIngest(String workspaceId, List<Document> documents) {
-        return submitIngest(workspaceId, documents, TaskSubmitOptions.defaults());
+        return submitIngest(workspaceId, DocumentIngestRequest.of(documents), TaskSubmitOptions.defaults());
     }
 
     public String submitIngest(String workspaceId, List<Document> documents, TaskSubmitOptions options) {
-        var normalizedDocuments = List.copyOf(Objects.requireNonNull(documents, "documents"));
-        var submitOptions = Objects.requireNonNull(options, "options");
-        var scope = resolveScope(workspaceId);
-        return taskExecutionService.submit(
-            scope.workspaceId(),
-            TaskType.INGEST_DOCUMENTS,
-            pipelineMetadata(scope, Map.of("documentCount", Integer.toString(normalizedDocuments.size()))),
-            submitOptions.listeners(),
-            progressListener -> {
-                newIndexingPipeline(scope, resolveProvider(scope), progressListener).ingest(normalizedDocuments);
-            }
+        return submitIngest(workspaceId, DocumentIngestRequest.of(documents), options);
+    }
+
+    public String submitIngest(String workspaceId, DocumentIngestRequest request) {
+        return submitIngest(workspaceId, request, TaskSubmitOptions.defaults());
+    }
+
+    public String submitIngest(String workspaceId, DocumentIngestRequest request, TaskSubmitOptions options) {
+        var normalizedRequest = Objects.requireNonNull(request, "request");
+        return submitIngestTask(
+            workspaceId,
+            options,
+            Map.of("documentCount", Integer.toString(normalizedRequest.documents().size())),
+            (scope, progressListener) -> newIndexingPipeline(scope, resolveProvider(scope), progressListener)
+                .ingest(normalizedRequest.documents())
         );
     }
 
-    public String submitIngestPreChunked(
+    public String submitIngest(String workspaceId, PreChunkedIngestRequest request) {
+        return submitIngest(workspaceId, request, TaskSubmitOptions.defaults());
+    }
+
+    public String submitIngest(String workspaceId, PreChunkedIngestRequest request, TaskSubmitOptions options) {
+        var normalizedRequest = Objects.requireNonNull(request, "request");
+        return submitIngestTask(
+            workspaceId,
+            options,
+            Map.of(
+                "documentCount", Integer.toString(countDocuments(normalizedRequest.chunks())),
+                "chunkCount", Integer.toString(normalizedRequest.chunks().size())
+            ),
+            (scope, progressListener) -> newIndexingPipeline(scope, resolveProvider(scope), progressListener)
+                .ingestPreChunkedChunks(normalizedRequest.chunks())
+        );
+    }
+
+    public String submitIngestChunks(String workspaceId, List<PreChunkedChunk> chunks) {
+        return submitIngestChunks(workspaceId, chunks, TaskSubmitOptions.defaults());
+    }
+
+    public String submitIngestChunks(String workspaceId, List<PreChunkedChunk> chunks, TaskSubmitOptions options) {
+        return submitIngest(workspaceId, PreChunkedIngestRequest.ofChunks(chunks), options);
+    }
+
+    private String submitIngestTask(
         String workspaceId,
-        List<PreChunkedDocument> documents,
-        TaskSubmitOptions options
+        TaskSubmitOptions options,
+        Map<String, String> metadata,
+        IngestTaskWork work
     ) {
-        var normalizedDocuments = List.copyOf(Objects.requireNonNull(documents, "documents"));
         var submitOptions = Objects.requireNonNull(options, "options");
+        var taskWork = Objects.requireNonNull(work, "work");
         var scope = resolveScope(workspaceId);
         return taskExecutionService.submit(
             scope.workspaceId(),
             TaskType.INGEST_DOCUMENTS,
-            pipelineMetadata(scope, Map.of("documentCount", Integer.toString(normalizedDocuments.size()))),
+            pipelineMetadata(scope, metadata),
             submitOptions.listeners(),
-            progressListener -> {
-                newIndexingPipeline(scope, resolveProvider(scope), progressListener)
-                    .ingestPreChunked(normalizedDocuments);
-            }
+            progressListener -> taskWork.run(scope, progressListener)
         );
+    }
+
+    private int countDocuments(List<PreChunkedChunk> chunks) {
+        return (int) chunks.stream()
+            .map(PreChunkedChunk::documentId)
+            .distinct()
+            .count();
     }
 
     public String submitIngestSources(String workspaceId, List<RawDocumentSource> sources, DocumentIngestOptions options) {
@@ -335,32 +390,35 @@ public final class LightRag implements AutoCloseable {
 
     public GraphEntity createEntity(String workspaceId, CreateEntityRequest request) {
         var scope = resolveScope(workspaceId);
-        return newGraphManagementPipeline(scope, resolveProvider(scope)).createEntity(request);
+        return runInWorkspace(scope, provider -> newGraphManagementPipeline(scope, provider).createEntity(request));
     }
 
     public GraphRelation createRelation(String workspaceId, CreateRelationRequest request) {
         var scope = resolveScope(workspaceId);
-        return newGraphManagementPipeline(scope, resolveProvider(scope)).createRelation(request);
+        return runInWorkspace(scope, provider -> newGraphManagementPipeline(scope, provider).createRelation(request));
     }
 
     public GraphEntity editEntity(String workspaceId, EditEntityRequest request) {
         var scope = resolveScope(workspaceId);
-        return newGraphManagementPipeline(scope, resolveProvider(scope)).editEntity(request);
+        return runInWorkspace(scope, provider -> newGraphManagementPipeline(scope, provider).editEntity(request));
     }
 
     public GraphRelation updateRelation(String workspaceId, UpdateRelationRequest request) {
         var scope = resolveScope(workspaceId);
-        return newGraphManagementPipeline(scope, resolveProvider(scope)).updateRelation(request);
+        return runInWorkspace(scope, provider -> newGraphManagementPipeline(scope, provider).updateRelation(request));
     }
 
     public void deleteRelation(String workspaceId, DeleteRelationRequest request) {
         var scope = resolveScope(workspaceId);
-        newGraphManagementPipeline(scope, resolveProvider(scope)).deleteRelation(request);
+        runInWorkspace(scope, provider -> {
+            newGraphManagementPipeline(scope, provider).deleteRelation(request);
+            return null;
+        });
     }
 
     public GraphEntity mergeEntities(String workspaceId, MergeEntitiesRequest request) {
         var scope = resolveScope(workspaceId);
-        return newGraphManagementPipeline(scope, resolveProvider(scope)).mergeEntities(request);
+        return runInWorkspace(scope, provider -> newGraphManagementPipeline(scope, provider).mergeEntities(request));
     }
 
     /**
@@ -369,7 +427,7 @@ public final class LightRag implements AutoCloseable {
      */
     public DeletionResult deleteByEntity(String workspaceId, String entityName) {
         var scope = resolveScope(workspaceId);
-        return newDeletionPipeline(scope, resolveProvider(scope)).deleteByEntity(entityName);
+        return runInWorkspace(scope, provider -> newDeletionPipeline(scope, provider).deleteByEntity(entityName));
     }
 
     /**
@@ -378,7 +436,10 @@ public final class LightRag implements AutoCloseable {
      */
     public DeletionResult deleteByRelation(String workspaceId, String sourceEntityName, String targetEntityName) {
         var scope = resolveScope(workspaceId);
-        return newDeletionPipeline(scope, resolveProvider(scope)).deleteByRelation(sourceEntityName, targetEntityName);
+        return runInWorkspace(
+            scope,
+            provider -> newDeletionPipeline(scope, provider).deleteByRelation(sourceEntityName, targetEntityName)
+        );
     }
 
     /**
@@ -391,12 +452,48 @@ public final class LightRag implements AutoCloseable {
 
     public DeletionResult deleteByDocumentId(String workspaceId, String documentId, DeleteDocumentOptions options) {
         var scope = resolveScope(workspaceId);
-        return newDeletionPipeline(scope, resolveProvider(scope)).deleteByDocumentId(documentId, options);
+        return runInWorkspace(scope, provider -> newDeletionPipeline(scope, provider).deleteByDocumentId(documentId, options));
+    }
+
+    public DocumentIngestResumeResult resumeDocumentIngest(String workspaceId, String documentId) {
+        var scope = resolveScope(workspaceId);
+        return runInWorkspace(
+            scope,
+            provider -> resumeDocumentIngest(scope, provider, documentId, IndexingProgressListener.noop(), TaskMetadataReporter.noop())
+        );
+    }
+
+    public String submitResumeDocumentIngest(String workspaceId, String documentId) {
+        return submitResumeDocumentIngest(workspaceId, documentId, TaskSubmitOptions.defaults());
+    }
+
+    public String submitResumeDocumentIngest(String workspaceId, String documentId, TaskSubmitOptions options) {
+        var normalizedDocumentId = requireNonBlank(documentId, "documentId");
+        var submitOptions = Objects.requireNonNull(options, "options");
+        var scope = resolveScope(workspaceId);
+        return taskExecutionService.submit(
+            scope.workspaceId(),
+            TaskType.RESUME_DOCUMENT_INGEST,
+            pipelineMetadata(scope, Map.of("documentId", normalizedDocumentId)),
+            submitOptions.listeners(),
+            progressListener -> resumeDocumentIngest(
+                scope,
+                resolveProvider(scope),
+                normalizedDocumentId,
+                progressListener,
+                progressListener instanceof TaskMetadataReporter metadataReporter
+                    ? metadataReporter
+                    : TaskMetadataReporter.noop()
+            )
+        );
     }
 
     public void clearCache(String workspaceId) {
         var scope = resolveScope(workspaceId);
-        resolveProvider(scope).llmCacheStore().drop();
+        runInWorkspace(scope, provider -> {
+            provider.llmCacheStore().drop();
+            return null;
+        });
     }
 
     public QueryResult query(String workspaceId, QueryRequest request) {
@@ -435,7 +532,10 @@ public final class LightRag implements AutoCloseable {
         GraphMaterializationMode mode
     ) {
         var scope = resolveScope(workspaceId);
-        return newGraphMaterializationPipeline(scope, resolveProvider(scope)).materialize(documentId, mode);
+        return runInWorkspace(
+            scope,
+            provider -> newGraphMaterializationPipeline(scope, provider).materialize(documentId, mode)
+        );
     }
 
     public DocumentChunkGraphStatus getDocumentChunkGraphStatus(String workspaceId, String documentId, String chunkId) {
@@ -450,12 +550,18 @@ public final class LightRag implements AutoCloseable {
 
     public ChunkGraphMaterializationResult resumeChunkGraph(String workspaceId, String documentId, String chunkId) {
         var scope = resolveScope(workspaceId);
-        return newGraphMaterializationPipeline(scope, resolveProvider(scope)).resumeChunk(documentId, chunkId);
+        return runInWorkspace(
+            scope,
+            provider -> newGraphMaterializationPipeline(scope, provider).resumeChunk(documentId, chunkId)
+        );
     }
 
     public ChunkGraphMaterializationResult repairChunkGraph(String workspaceId, String documentId, String chunkId) {
         var scope = resolveScope(workspaceId);
-        return newGraphMaterializationPipeline(scope, resolveProvider(scope)).repairChunk(documentId, chunkId);
+        return runInWorkspace(
+            scope,
+            provider -> newGraphMaterializationPipeline(scope, provider).repairChunk(documentId, chunkId)
+        );
     }
 
     public String submitDocumentGraphMaterialization(
@@ -527,15 +633,19 @@ public final class LightRag implements AutoCloseable {
     public void saveSnapshot(String workspaceId, Path path) {
         var scope = resolveScope(workspaceId);
         var snapshotPath = Objects.requireNonNull(path, "path");
-        var storageProvider = resolveProvider(scope);
-        storageProvider.snapshotStore().save(snapshotPath, StorageSnapshots.capture(storageProvider));
+        runInWorkspace(scope, storageProvider -> {
+            storageProvider.snapshotStore().save(snapshotPath, StorageSnapshots.capture(storageProvider));
+            return null;
+        });
     }
 
     public void restoreSnapshot(String workspaceId, Path path) {
         var scope = resolveScope(workspaceId);
         var snapshotPath = Objects.requireNonNull(path, "path");
-        var storageProvider = resolveProvider(scope);
-        storageProvider.restore(storageProvider.snapshotStore().load(snapshotPath));
+        runInWorkspace(scope, storageProvider -> {
+            storageProvider.restore(storageProvider.snapshotStore().load(snapshotPath));
+            return null;
+        });
     }
 
     LightRagConfig config() {
@@ -633,6 +743,14 @@ public final class LightRag implements AutoCloseable {
         );
     }
 
+    private <T> T runInWorkspace(WorkspaceScope scope, Function<AtomicStorageProvider, T> work) {
+        var normalizedScope = Objects.requireNonNull(scope, "scope");
+        return taskExecutionService.runInWorkspace(
+            normalizedScope.workspaceId(),
+            provider -> Objects.requireNonNull(work, "work").apply(provider)
+        );
+    }
+
     private IndexingPipeline newIndexingPipeline(WorkspaceScope scope, AtomicStorageProvider storageProvider) {
         return newIndexingPipeline(scope, storageProvider, IndexingProgressListener.noop());
     }
@@ -717,6 +835,86 @@ public final class LightRag implements AutoCloseable {
         );
     }
 
+    private DocumentIngestResumeResult resumeDocumentIngest(
+        WorkspaceScope scope,
+        AtomicStorageProvider provider,
+        String documentId,
+        IndexingProgressListener progressListener,
+        TaskMetadataReporter metadataReporter
+    ) {
+        var normalizedDocumentId = requireNonBlank(documentId, "documentId");
+        var graphEnabled = resolveGraphExtractionOptions(scope).resolvedEnabled()
+            && !documentSkipsKnowledgeGraph(provider, normalizedDocumentId);
+        var graphStatus = GraphMaterializationStatus.MISSING;
+
+        if (graphEnabled) {
+            var graphPipeline = newGraphMaterializationPipeline(scope, provider, progressListener, metadataReporter);
+            var inspection = graphPipeline.inspect(normalizedDocumentId);
+            graphStatus = inspection.graphStatus();
+            if (inspection.graphStatus() != GraphMaterializationStatus.MERGED && inspection.repairable()) {
+                var materialized = graphPipeline.materialize(normalizedDocumentId, GraphMaterializationMode.AUTO);
+                var finalStatus = provider.documentStatusStore().load(normalizedDocumentId)
+                    .map(io.github.lightrag.storage.DocumentStatusStore.StatusRecord::status)
+                    .orElse(DocumentStatus.FAILED);
+                return new DocumentIngestResumeResult(
+                    normalizedDocumentId,
+                    DocumentIngestResumeAction.GRAPH_MATERIALIZATION,
+                    finalStatus,
+                    materialized.finalStatus(),
+                    materialized.summary(),
+                    materialized.errorMessage()
+                );
+            }
+        }
+
+        var currentStatus = provider.documentStatusStore().load(normalizedDocumentId).orElse(null);
+        if (currentStatus != null && currentStatus.status() == DocumentStatus.PROCESSED) {
+            return new DocumentIngestResumeResult(
+                normalizedDocumentId,
+                DocumentIngestResumeAction.NONE,
+                DocumentStatus.PROCESSED,
+                graphStatus,
+                "document ingest already complete",
+                null
+            );
+        }
+
+        var source = provider.documentStore().load(normalizedDocumentId)
+            .map(LightRag::toDocument)
+            .orElseThrow(() -> new NoSuchElementException(
+                "cannot resume document ingest because stored document does not exist: " + normalizedDocumentId
+            ));
+        newIndexingPipeline(scope, provider, progressListener).ingest(List.of(source));
+        var finalStatus = provider.documentStatusStore().load(normalizedDocumentId)
+            .map(io.github.lightrag.storage.DocumentStatusStore.StatusRecord::status)
+            .orElse(DocumentStatus.FAILED);
+        var finalGraphStatus = graphEnabled
+            ? newGraphMaterializationPipeline(scope, provider, IndexingProgressListener.noop(), TaskMetadataReporter.noop())
+                .inspect(normalizedDocumentId)
+                .graphStatus()
+            : GraphMaterializationStatus.MISSING;
+        return new DocumentIngestResumeResult(
+            normalizedDocumentId,
+            DocumentIngestResumeAction.REINGEST,
+            finalStatus,
+            finalGraphStatus,
+            "document reingested from stored full document",
+            null
+        );
+    }
+
+    private static Document toDocument(io.github.lightrag.storage.DocumentStore.DocumentRecord record) {
+        return new Document(record.id(), record.title(), record.content(), record.metadata());
+    }
+
+    private static boolean documentSkipsKnowledgeGraph(AtomicStorageProvider provider, String documentId) {
+        return provider.documentStore().load(documentId)
+            .map(io.github.lightrag.storage.DocumentStore.DocumentRecord::metadata)
+            .map(metadata -> metadata.get(DocumentIngestOptions.METADATA_PROCESS_OPTIONS))
+            .map(value -> value.indexOf('!') >= 0)
+            .orElse(false);
+    }
+
     private GraphExtractionOptions resolveGraphExtractionOptions(WorkspaceScope scope) {
         var normalizedScope = Objects.requireNonNull(scope, "scope");
         return Objects.requireNonNull(
@@ -781,6 +979,11 @@ public final class LightRag implements AutoCloseable {
 
     private static ChatModel cachedModel(String role, ChatModel delegate, io.github.lightrag.storage.LlmCacheStore cacheStore) {
         return new CachedChatModel(role, delegate, cacheStore);
+    }
+
+    @FunctionalInterface
+    private interface IngestTaskWork {
+        void run(WorkspaceScope scope, IndexingProgressListener progressListener);
     }
 
     private static DocumentProcessingStatus toDocumentProcessingStatus(

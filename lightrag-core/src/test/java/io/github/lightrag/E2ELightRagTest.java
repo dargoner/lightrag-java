@@ -6,6 +6,7 @@ import io.github.lightrag.api.CreateEntityRequest;
 import io.github.lightrag.api.CreateRelationRequest;
 import io.github.lightrag.api.DeleteDocumentOptions;
 import io.github.lightrag.api.DeletionResult;
+import io.github.lightrag.api.DocumentIngestResumeAction;
 import io.github.lightrag.api.DocumentIngestOptions;
 import io.github.lightrag.api.EditEntityRequest;
 import io.github.lightrag.api.UpdateRelationRequest;
@@ -38,7 +39,9 @@ import io.github.lightrag.storage.neo4j.PostgresNeo4jStorageProvider;
 import io.github.lightrag.storage.postgres.PostgresStorageConfig;
 import io.github.lightrag.storage.postgres.PostgresStorageProvider;
 import io.github.lightrag.support.Neo4jTestContainers;
+import io.github.lightrag.types.Chunk;
 import io.github.lightrag.types.Document;
+import io.github.lightrag.types.PreChunkedChunk;
 import org.testcontainers.containers.Neo4jContainer;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
@@ -285,7 +288,13 @@ class E2ELightRagTest {
             .hasMessage("extract failed for doc-2");
 
         assertThat(storage.documentStore().load("doc-1")).isPresent();
-        assertThat(storage.documentStore().load("doc-2")).isEmpty();
+        assertThat(storage.documentStore().load("doc-2")).isPresent();
+        assertThat(storage.chunkStore().listByDocument("doc-2"))
+            .extracting(ChunkStore.ChunkRecord::id)
+            .containsExactly("doc-2:0");
+        assertThat(storage.vectorStore().list("chunks"))
+            .extracting(VectorStore.VectorRecord::id)
+            .contains("doc-2:0");
         assertThat(failingRag.getDocumentStatus(WORKSPACE, "doc-1"))
             .isEqualTo(new DocumentProcessingStatus("doc-1", DocumentStatus.PROCESSED, "processed 1 chunks", null));
         assertThat(failingRag.getDocumentStatus(WORKSPACE, "doc-2"))
@@ -396,7 +405,7 @@ class E2ELightRagTest {
 
     @Test
     void ingestWithUnsupportedLlmCacheStoreFailsFast() {
-        var storage = new AtomicOnlyStorageProvider();
+        var storage = new AtomicOnlyStorageProvider(false);
         var rag = LightRag.builder()
             .chatModel(new FakeChatModel())
             .embeddingModel(new FakeEmbeddingModel())
@@ -487,6 +496,74 @@ class E2ELightRagTest {
     }
 
     @Test
+    void resumeDocumentIngestMaterializesGraphFromStagedChunksAfterExtractionFailure() {
+        var storage = InMemoryStorageProvider.create();
+        var failingRag = LightRag.builder()
+            .chatModel(new FailingExtractionChatModel())
+            .embeddingModel(new FakeEmbeddingModel())
+            .storage(storage)
+            .build();
+
+        assertThatThrownBy(() -> failingRag.ingest(
+            WORKSPACE,
+            List.of(new Document("doc-resume", "Title", "Alice works with Bob", Map.of()))
+        ))
+            .isInstanceOf(IllegalStateException.class)
+            .hasMessage("extract failed");
+
+        var rag = LightRag.builder()
+            .chatModel(new FakeChatModel())
+            .embeddingModel(new FakeEmbeddingModel())
+            .storage(storage)
+            .build();
+
+        var result = rag.resumeDocumentIngest(WORKSPACE, "doc-resume");
+
+        assertThat(result.executedAction()).isEqualTo(DocumentIngestResumeAction.GRAPH_MATERIALIZATION);
+        assertThat(result.finalDocumentStatus()).isEqualTo(DocumentStatus.PROCESSED);
+        assertThat(result.finalGraphStatus()).isEqualTo(GraphMaterializationStatus.MERGED);
+        assertThat(storage.graphStore().allEntities())
+            .extracting(GraphStore.EntityRecord::id)
+            .containsExactly("alice", "bob");
+        assertThat(storage.documentStatusStore().load("doc-resume").orElseThrow().metadata())
+            .containsEntry("chunks_count", 1)
+            .containsEntry("chunks_list", List.of("doc-resume:0"));
+    }
+
+    @Test
+    void concurrentGraphMergeCombinesDuplicateEntitiesAndRelationsByKey() {
+        var storage = InMemoryStorageProvider.create();
+        var rag = LightRag.builder()
+            .chatModel(new FakeChatModel())
+            .embeddingModel(new FakeEmbeddingModel())
+            .storage(storage)
+            .chunkExtractParallelism(4)
+            .build();
+
+        rag.ingestChunks(WORKSPACE, List.of(
+            new PreChunkedChunk(
+                "doc-merge",
+                "Title",
+                new Chunk("doc-merge:0", "doc-merge", "Alice works with Bob", 4, 0, Map.of()),
+                Map.of()
+            ),
+            new PreChunkedChunk(
+                "doc-merge",
+                "Title",
+                new Chunk("doc-merge:1", "doc-merge", "Alice works with Bob", 4, 1, Map.of()),
+                Map.of()
+            )
+        ));
+
+        assertThat(storage.graphStore().loadEntity("alice").orElseThrow().sourceChunkIds())
+            .containsExactly("doc-merge:0", "doc-merge:1");
+        assertThat(storage.graphStore().loadEntity("bob").orElseThrow().sourceChunkIds())
+            .containsExactly("doc-merge:0", "doc-merge:1");
+        assertThat(storage.graphStore().loadRelation(relationId("alice", "bob")).orElseThrow().sourceChunkIds())
+            .containsExactly("doc-merge:0", "doc-merge:1");
+    }
+
+    @Test
     void deleteByDocumentRemovesFailedStatusWithoutStoredDocument() {
         var storage = InMemoryStorageProvider.create();
         var rag = LightRag.builder()
@@ -503,7 +580,7 @@ class E2ELightRagTest {
 
         assertThat(result).isEqualTo(DeletionResult.success(
             "doc-1",
-            "Document deleted without associated chunks: doc-1"
+            "Document doc-1 successfully deleted"
         ));
         assertThat(storage.documentStore().load("doc-1")).isEmpty();
         assertThat(rag.listDocumentStatuses(WORKSPACE)).isEmpty();
@@ -546,20 +623,22 @@ class E2ELightRagTest {
         var snapshot = storage.snapshotStore().load(snapshotPath);
         assertThat(snapshot.documents())
             .extracting(DocumentStore.DocumentRecord::id)
-            .containsExactly("doc-2");
+            .containsExactly("doc-2", "doc-3");
         assertThat(snapshot.documentStatuses())
             .containsExactly(
                 new io.github.lightrag.storage.DocumentStatusStore.StatusRecord(
                     "doc-2",
                     DocumentStatus.PROCESSED,
                     "processed 1 chunks",
-                    null
+                    null,
+                    statusMetadata("doc-2:0")
                 ),
                 new io.github.lightrag.storage.DocumentStatusStore.StatusRecord(
                     "doc-3",
                     DocumentStatus.FAILED,
                     "",
-                    "extract failed for doc-3"
+                    "extract failed for doc-3",
+                    statusMetadata("doc-3:0")
                 )
             );
     }
@@ -583,7 +662,8 @@ class E2ELightRagTest {
                 "doc-1",
                 DocumentStatus.PROCESSED,
                 "processed 1 chunks",
-                null
+                null,
+                statusMetadata("doc-1:0")
             ));
     }
 
@@ -608,20 +688,22 @@ class E2ELightRagTest {
         var snapshot = storage.snapshotStore().load(snapshotPath);
         assertThat(snapshot.documents())
             .extracting(DocumentStore.DocumentRecord::id)
-            .containsExactly("doc-1");
+            .containsExactly("doc-1", "doc-2");
         assertThat(snapshot.documentStatuses())
             .containsExactly(
                 new io.github.lightrag.storage.DocumentStatusStore.StatusRecord(
                     "doc-1",
                     DocumentStatus.PROCESSED,
                     "processed 1 chunks",
-                    null
+                    null,
+                    statusMetadata("doc-1:0")
                 ),
                 new io.github.lightrag.storage.DocumentStatusStore.StatusRecord(
                     "doc-2",
                     DocumentStatus.FAILED,
                     "",
-                    "extract failed for doc-2"
+                    "extract failed for doc-2",
+                    statusMetadata("doc-2:0")
                 )
             );
     }
@@ -662,7 +744,8 @@ class E2ELightRagTest {
                         "doc-1",
                         DocumentStatus.PROCESSED,
                         "processed 1 chunks",
-                        null
+                        null,
+                        statusMetadata("doc-1:0")
                     ));
             }
         }
@@ -754,7 +837,8 @@ class E2ELightRagTest {
                         "doc-1",
                         DocumentStatus.PROCESSED,
                         "processed 1 chunks",
-                        null
+                        null,
+                        statusMetadata("doc-1:0")
                     ));
             }
         }
@@ -2758,7 +2842,7 @@ class E2ELightRagTest {
     }
 
     @Test
-    void restoresOriginalStateWhenDocumentDeleteRebuildFails() {
+    void deleteByDocumentUsesStoredGraphSnapshotsWithoutReextractingRemainingDocuments() {
         var storage = InMemoryStorageProvider.create();
         var seedRag = LightRag.builder()
             .chatModel(new FakeChatModel())
@@ -2777,22 +2861,18 @@ class E2ELightRagTest {
             .storage(storage)
             .build();
 
-        assertThatThrownBy(() -> rag.deleteByDocumentId(WORKSPACE, "doc-1"))
-            .isInstanceOf(IllegalStateException.class)
-            .hasMessage("extract failed");
+        var result = rag.deleteByDocumentId(WORKSPACE, "doc-1");
 
+        assertThat(result).isEqualTo(DeletionResult.success("doc-1", "Document doc-1 successfully deleted"));
         assertThat(storage.documentStore().list())
             .extracting(DocumentStore.DocumentRecord::id)
-            .containsExactly("doc-1", "doc-2");
+            .containsExactly("doc-2");
         assertThat(storage.graphStore().allEntities())
             .extracting(GraphStore.EntityRecord::id)
-            .containsExactly("alice", "bob", "carol");
+            .containsExactly("bob", "carol");
         assertThat(storage.graphStore().allRelations())
             .extracting(GraphStore.RelationRecord::id)
-            .containsExactlyInAnyOrder(
-                relationId("alice", "bob"),
-                relationId("bob", "carol")
-            );
+            .containsExactly(relationId("bob", "carol"));
     }
 
     @Test
@@ -2966,7 +3046,7 @@ class E2ELightRagTest {
     }
 
     @Test
-    void postgresIngestRollsBackWhenExtractionFailsAfterChunkPersistence() {
+    void postgresIngestPreservesStagedRowsWhenExtractionFailsAfterChunkPersistence() {
         try (
             var container = new PostgreSQLContainer<>(
                 DockerImageName.parse("pgvector/pgvector:pg16").asCompatibleSubstituteFor("postgres")
@@ -2998,13 +3078,27 @@ class E2ELightRagTest {
                     .isInstanceOf(IllegalStateException.class)
                     .hasMessage("extract failed");
 
-                assertThat(storage.documentStore().list()).isEmpty();
-                assertThat(storage.chunkStore().list()).isEmpty();
+                assertThat(storage.documentStore().list())
+                    .extracting(DocumentStore.DocumentRecord::id)
+                    .containsExactly("doc-1");
+                assertThat(storage.chunkStore().list())
+                    .extracting(ChunkStore.ChunkRecord::id)
+                    .containsExactly("doc-1:0");
                 assertThat(storage.graphStore().allEntities()).isEmpty();
                 assertThat(storage.graphStore().allRelations()).isEmpty();
-                assertThat(storage.vectorStore().list("chunks")).isEmpty();
+                assertThat(storage.vectorStore().list("chunks"))
+                    .extracting(VectorStore.VectorRecord::id)
+                    .containsExactly("doc-1:0");
                 assertThat(storage.vectorStore().list("entities")).isEmpty();
                 assertThat(storage.vectorStore().list("relations")).isEmpty();
+                assertThat(storage.documentStatusStore().load("doc-1"))
+                    .contains(new io.github.lightrag.storage.DocumentStatusStore.StatusRecord(
+                        "doc-1",
+                        DocumentStatus.FAILED,
+                        "",
+                        "extract failed",
+                        statusMetadata("doc-1:0")
+                    ));
             }
         }
     }
@@ -3712,6 +3806,13 @@ class E2ELightRagTest {
         return RelationCanonicalizer.canonicalize(srcId, tgtId).relationId();
     }
 
+    private static Map<String, Object> statusMetadata(String chunkId) {
+        return Map.of(
+            "chunks_count", 1,
+            "chunks_list", List.of(chunkId)
+        );
+    }
+
     private static List<String> readAll(io.github.lightrag.model.CloseableIterator<String> iterator) {
         try (iterator) {
             var values = new java.util.ArrayList<String>();
@@ -3737,7 +3838,16 @@ class E2ELightRagTest {
 
     private static final class AtomicOnlyStorageProvider implements io.github.lightrag.storage.AtomicStorageProvider {
         private final InMemoryStorageProvider delegate = InMemoryStorageProvider.create();
+        private final boolean llmCacheSupported;
         private int restoreCalls;
+
+        private AtomicOnlyStorageProvider() {
+            this(true);
+        }
+
+        private AtomicOnlyStorageProvider(boolean llmCacheSupported) {
+            this.llmCacheSupported = llmCacheSupported;
+        }
 
         @Override
         public <T> T writeAtomically(AtomicOperation<T> operation) {
@@ -3783,6 +3893,21 @@ class E2ELightRagTest {
         @Override
         public io.github.lightrag.storage.TaskStageStore taskStageStore() {
             return delegate.taskStageStore();
+        }
+
+        @Override
+        public io.github.lightrag.storage.TaskDocumentStore taskDocumentStore() {
+            return delegate.taskDocumentStore();
+        }
+
+        @Override
+        public io.github.lightrag.storage.LlmCacheStore llmCacheStore() {
+            if (!llmCacheSupported) {
+                throw new UnsupportedOperationException(
+                    io.github.lightrag.storage.StorageProvider.LLM_CACHE_STORE_UNSUPPORTED_MESSAGE
+                );
+            }
+            return delegate.llmCacheStore();
         }
 
         @Override

@@ -49,7 +49,7 @@ public record GraphExtractionOptions(
     public static GraphExtractionOptions defaults() {
         return builder()
             .enabled(true)
-            .chunkExtractParallelism(1)
+            .chunkExtractParallelism(2)
             .entityExtractMaxGleaning(KnowledgeExtractor.DEFAULT_ENTITY_EXTRACT_MAX_GLEANING)
             .maxExtractInputTokens(KnowledgeExtractor.DEFAULT_MAX_EXTRACT_INPUT_TOKENS)
             .language(KnowledgeExtractor.DEFAULT_LANGUAGE)
@@ -82,7 +82,7 @@ public record GraphExtractionOptions(
     }
 
     int resolvedChunkExtractParallelism() {
-        return chunkExtractParallelism == null ? 1 : chunkExtractParallelism;
+        return chunkExtractParallelism == null ? 2 : chunkExtractParallelism;
     }
 
     int resolvedEntityExtractMaxGleaning() {

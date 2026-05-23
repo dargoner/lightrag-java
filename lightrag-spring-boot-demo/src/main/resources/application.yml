@@ -16,12 +16,11 @@ lightrag:
     ingest:
       preset: ${LIGHTRAG_INDEXING_INGEST_PRESET:GENERAL}
     embedding-batch-size: ${LIGHTRAG_INDEXING_EMBEDDING_BATCH_SIZE:0}
-    max-parallel-insert: ${LIGHTRAG_INDEXING_MAX_PARALLEL_INSERT:1}
-    chunk-extract-parallelism: ${LIGHTRAG_INDEXING_CHUNK_EXTRACT_PARALLELISM:1}
+    max-parallel-insert: ${LIGHTRAG_INDEXING_MAX_PARALLEL_INSERT:2}
+    chunk-extract-parallelism: ${LIGHTRAG_INDEXING_CHUNK_EXTRACT_PARALLELISM:2}
     entity-extract-max-gleaning: ${LIGHTRAG_INDEXING_ENTITY_EXTRACT_MAX_GLEANING:1}
     max-extract-input-tokens: ${LIGHTRAG_INDEXING_MAX_EXTRACT_INPUT_TOKENS:20480}
     language: ${LIGHTRAG_INDEXING_LANGUAGE:English}
-    entity-types: ${LIGHTRAG_INDEXING_ENTITY_TYPES:Person,Creature,Organization,Location,Event,Concept,Method,Content,Data,Artifact,NaturalObject,Other}
     graph-enabled: ${LIGHTRAG_INDEXING_GRAPH_ENABLED:true}
   query:
     default-mode: ${LIGHTRAG_QUERY_DEFAULT_MODE:MIX}

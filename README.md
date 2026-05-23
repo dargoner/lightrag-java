@@ -408,7 +408,8 @@ If no request-level `preset` override is provided, those legacy properties still
 `lightrag.indexing.ingest.chunking-strategy` accepts `AUTO`, Java-native `SMART` / `PARAGRAPH` / `RECURSIVE` / `SEMANTIC_VECTOR` / `REGEX` / `FIXED`, and the upstream-compatible aliases `F` / `Fix` / `R` / `Recursive` / `P` / `Paragraph` / `V` / `Vector`.
 
 `embedding-batch-size` controls how many texts are sent in each indexing-time embedding request. Leave it unset or `0` to preserve the current single-batch behavior.
-`max-parallel-insert` controls how many documents ingest can process concurrently. It defaults to `1` so existing runtime behavior stays serial unless you opt in.
+`max-parallel-insert` controls how many documents ingest can process concurrently. It defaults to `2`.
+`chunk-extract-parallelism` controls how many chunks run LLM entity/relation extraction concurrently within one document. It defaults to `2`.
 `entity-extract-max-gleaning` controls how many follow-up extraction passes run for the same chunk after the first LLM extraction.
 `max-extract-input-tokens` caps the estimated extraction context budget before a glean pass is skipped.
 `language` controls the language used in entity descriptions and extraction guidance. It defaults to `English`.
@@ -1082,7 +1083,7 @@ var rag = LightRag.builder()
 - `chunker(...)`: replaces the default fixed-window chunker used during ingest
 - `embeddingBatchSize(...)`: caps the number of texts per embedding request during indexing
 - `maxParallelInsert(...)`: caps how many documents `ingest(...)` processes concurrently
-- `chunkExtractParallelism(...)`: caps how many chunks run LLM entity/relation extraction concurrently within one document
+- `chunkExtractParallelism(...)`: caps how many chunks run LLM entity/relation extraction concurrently within one document; default `2`
 - `entityExtractMaxGleaning(...)`: controls how many follow-up extraction passes run per chunk
 - `maxExtractInputTokens(...)`: caps estimated extraction context before gleaning is skipped
 - `entityExtractionLanguage(...)`: changes the language used in extraction-time guidance and generated descriptions

@@ -287,7 +287,8 @@ public final class GraphMaterializationPipeline {
                 state.documentId(),
                 DocumentStatus.PROCESSED,
                 "graph materialized in %s mode".formatted(mode.name()),
-                null
+                null,
+                statusMetadata(state.storedChunks())
             ));
             appendSuccessJournals(state, mode);
             return null;
@@ -766,6 +767,14 @@ public final class GraphMaterializationPipeline {
             missingRelations.size(),
             orphanEntities.size(),
             orphanRelations.size()
+        );
+    }
+
+    private static Map<String, Object> statusMetadata(List<Chunk> chunks) {
+        var ids = chunks.stream().map(Chunk::id).toList();
+        return Map.of(
+            "chunks_count", ids.size(),
+            "chunks_list", ids
         );
     }
 

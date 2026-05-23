@@ -362,7 +362,8 @@ lightrag:
 如果请求级别没有显式传 `preset`，这些旧配置仍会覆盖 `preset` 推导出来的默认值。
 
 `embedding-batch-size` 用来控制 ingest 阶段每次 embedding 请求最多发送多少段文本。保持未配置或设为 `0`，就会继续沿用当前的单批次行为。
-`max-parallel-insert` 用来控制 ingest 阶段最多同时处理多少个文档，默认值是 `1`，也就是不显式开启时仍按串行执行。
+`max-parallel-insert` 用来控制 ingest 阶段最多同时处理多少个文档，默认值是 `2`。
+`chunk-extract-parallelism` 用来控制单个文档内最多同时对多少个 chunk 执行 LLM 实体/关系抽取，默认值是 `2`。
 `entity-extract-max-gleaning` 用来控制每个 chunk 在首次抽取之后还能继续做多少轮补抽。
 `max-extract-input-tokens` 用来限制补抽前允许的估算上下文预算，超过后会跳过该轮补抽。
 `language` 用来控制实体描述和抽取提示语默认使用的语言，默认值是 `English`。

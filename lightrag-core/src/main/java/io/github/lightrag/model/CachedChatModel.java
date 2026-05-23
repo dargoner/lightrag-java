@@ -31,6 +31,11 @@ public final class CachedChatModel implements ChatModel {
         return response;
     }
 
+    @Override
+    public CloseableIterator<String> stream(ChatRequest request) {
+        return delegate.stream(request);
+    }
+
     public static String cacheId(String role, ChatRequest request) {
         Objects.requireNonNull(request, "request");
         var canonical = new StringBuilder()

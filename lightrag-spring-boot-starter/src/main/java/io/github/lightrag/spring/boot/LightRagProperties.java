@@ -156,8 +156,8 @@ public class LightRagProperties {
         private final IngestProperties ingest = new IngestProperties();
         private final ParsingProperties parsing = new ParsingProperties();
         private int embeddingBatchSize;
-        private int maxParallelInsert = 1;
-        private int chunkExtractParallelism = 1;
+        private int maxParallelInsert = 2;
+        private int chunkExtractParallelism = 2;
         private int entityExtractMaxGleaning = io.github.lightrag.indexing.KnowledgeExtractor.DEFAULT_ENTITY_EXTRACT_MAX_GLEANING;
         private int maxExtractInputTokens = io.github.lightrag.indexing.KnowledgeExtractor.DEFAULT_MAX_EXTRACT_INPUT_TOKENS;
         private String language = io.github.lightrag.indexing.KnowledgeExtractor.DEFAULT_LANGUAGE;

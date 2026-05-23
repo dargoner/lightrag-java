@@ -553,8 +553,13 @@ public final class PostgresRelationalStorageAdapter implements RelationalStorage
                         status TEXT NOT NULL,
                         summary TEXT NOT NULL DEFAULT '',
                         error_message TEXT,
+                        metadata JSONB NOT NULL DEFAULT '{}'::jsonb,
                         PRIMARY KEY (workspace_id, document_id)
                     )
+                    """.formatted(config.qualifiedTableName("document_status")),
+                """
+                    ALTER TABLE %s
+                    ADD COLUMN IF NOT EXISTS metadata JSONB NOT NULL DEFAULT '{}'::jsonb
                     """.formatted(config.qualifiedTableName("document_status")),
                 """
                     CREATE TABLE IF NOT EXISTS %s (

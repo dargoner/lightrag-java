@@ -94,13 +94,29 @@ class LightRagBuilderTest {
     }
 
     @Test
-    void exposesPreChunkedIngestApi() throws Exception {
-        Class<?> preChunkedDocumentType = Class.forName("io.github.lightrag.types.PreChunkedDocument");
+    void exposesChunkLevelIngestApi() throws Exception {
+        Class<?> preChunkedChunkType = Class.forName("io.github.lightrag.types.PreChunkedChunk");
 
-        assertThat(preChunkedDocumentType).isNotNull();
-        assertThat(LightRag.class.getMethod("ingestPreChunked", String.class, List.class)).isNotNull();
+        assertThat(preChunkedChunkType).isNotNull();
+        assertThat(LightRag.class.getMethod("ingest", String.class, PreChunkedIngestRequest.class)).isNotNull();
+        assertThat(LightRag.class.getMethod("ingestChunks", String.class, List.class)).isNotNull();
+        assertThat(LightRag.class.getMethod("submitIngest", String.class, DocumentIngestRequest.class)).isNotNull();
         assertThat(LightRag.class.getMethod(
-            "submitIngestPreChunked",
+            "submitIngest",
+            String.class,
+            DocumentIngestRequest.class,
+            TaskSubmitOptions.class
+        )).isNotNull();
+        assertThat(LightRag.class.getMethod("submitIngest", String.class, PreChunkedIngestRequest.class)).isNotNull();
+        assertThat(LightRag.class.getMethod(
+            "submitIngest",
+            String.class,
+            PreChunkedIngestRequest.class,
+            TaskSubmitOptions.class
+        )).isNotNull();
+        assertThat(LightRag.class.getMethod("submitIngestChunks", String.class, List.class)).isNotNull();
+        assertThat(LightRag.class.getMethod(
+            "submitIngestChunks",
             String.class,
             List.class,
             TaskSubmitOptions.class
@@ -924,14 +940,17 @@ class LightRagBuilderTest {
     }
 
     @Test
-    void keepsChunkExtractParallelismAtOneByDefault() {
+    void defaultsToTwoWayIngestAndChunkExtractionParallelism() {
         var rag = LightRag.builder()
             .chatModel(new FakeChatModel())
             .embeddingModel(new FakeEmbeddingModel())
             .storage(new FakeStorageProvider())
             .build();
 
-        assertThat(rag.chunkExtractParallelism()).isEqualTo(1);
+        assertThat(rag.maxParallelInsert()).isEqualTo(2);
+        assertThat(rag.chunkExtractParallelism()).isEqualTo(2);
+        assertThat(GraphExtractionOptions.defaults().resolvedChunkExtractParallelism()).isEqualTo(2);
+        assertThat(GraphExtractionOptions.builder().build().resolvedChunkExtractParallelism()).isEqualTo(2);
     }
 
     @Test

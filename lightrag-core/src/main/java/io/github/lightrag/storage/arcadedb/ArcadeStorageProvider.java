@@ -17,7 +17,6 @@ import io.github.lightrag.storage.VectorStore;
 
 import java.util.LinkedHashMap;
 import java.util.List;
-import java.util.Map;
 import java.util.Objects;
 import java.util.concurrent.locks.ReentrantReadWriteLock;
 
@@ -187,7 +186,6 @@ public final class ArcadeStorageProvider implements AtomicStorageProvider, OneSh
     public <T> T writeAtomically(AtomicOperation<T> operation) {
         var writeLock = lock.writeLock();
         writeLock.lock();
-        var snapshot = snapshot();
         try {
             return Objects.requireNonNull(operation, "operation").execute(new AtomicView(
                 documentStore,
@@ -198,9 +196,6 @@ public final class ArcadeStorageProvider implements AtomicStorageProvider, OneSh
                 vectorStore,
                 documentStatusStore
             ));
-        } catch (RuntimeException failure) {
-            restore(snapshot, failure);
-            throw failure;
         } finally {
             writeLock.unlock();
         }
@@ -214,37 +209,6 @@ public final class ArcadeStorageProvider implements AtomicStorageProvider, OneSh
             restoreStores(Objects.requireNonNull(snapshot, "snapshot"));
         } finally {
             writeLock.unlock();
-        }
-    }
-
-    private SnapshotStore.Snapshot snapshot() {
-        return new SnapshotStore.Snapshot(
-            documentStore.list(),
-            chunkStore.list(),
-            graphStore.allEntities(),
-            graphStore.allRelations(),
-            vectorsByNamespace(),
-            documentStatusStore.list(),
-            documentGraphSnapshotStore.listDocuments(),
-            documentGraphSnapshotStore.listAllChunks(),
-            documentGraphJournalStore.listAllDocuments(),
-            documentGraphJournalStore.listAllChunks()
-        );
-    }
-
-    private Map<String, List<VectorStore.VectorRecord>> vectorsByNamespace() {
-        var vectors = new LinkedHashMap<String, List<VectorStore.VectorRecord>>();
-        for (var namespace : List.of("chunks", "entities", "relations")) {
-            vectors.put(namespace, vectorStore.list(namespace));
-        }
-        return Map.copyOf(vectors);
-    }
-
-    private void restore(SnapshotStore.Snapshot snapshot, RuntimeException failure) {
-        try {
-            restoreStores(snapshot);
-        } catch (RuntimeException rollbackFailure) {
-            failure.addSuppressed(rollbackFailure);
         }
     }
 

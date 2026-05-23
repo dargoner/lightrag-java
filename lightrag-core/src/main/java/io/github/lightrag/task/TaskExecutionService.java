@@ -71,6 +71,24 @@ public final class TaskExecutionService implements AutoCloseable {
         });
     }
 
+    public <T> T runInWorkspace(String workspaceId, WorkspaceWork<T> work) {
+        var normalizedWorkspaceId = requireNonBlank(workspaceId, "workspaceId");
+        var provider = providerResolver.apply(normalizedWorkspaceId);
+        recoverInterruptedTasks(normalizedWorkspaceId, provider);
+        var workspaceLock = workspaceLocks.computeIfAbsent(normalizedWorkspaceId, ignored -> new ReentrantLock(true));
+        try {
+            workspaceLock.lockInterruptibly();
+            return Objects.requireNonNull(work, "work").run(provider);
+        } catch (InterruptedException exception) {
+            Thread.currentThread().interrupt();
+            throw new RuntimeException("workspace operation interrupted", exception);
+        } finally {
+            if (workspaceLock.isHeldByCurrentThread()) {
+                workspaceLock.unlock();
+            }
+        }
+    }
+
     public String submit(String workspaceId, TaskType taskType, Map<String, String> metadata, TaskWork work) {
         return submit(workspaceId, taskType, metadata, List.of(), work);
     }
@@ -388,6 +406,11 @@ public final class TaskExecutionService implements AutoCloseable {
     @FunctionalInterface
     public interface TaskWork {
         void run(IndexingProgressListener progressListener);
+    }
+
+    @FunctionalInterface
+    public interface WorkspaceWork<T> {
+        T run(AtomicStorageProvider provider);
     }
 
     private List<TaskEventListener> mergeListeners(List<TaskEventListener> listeners) {

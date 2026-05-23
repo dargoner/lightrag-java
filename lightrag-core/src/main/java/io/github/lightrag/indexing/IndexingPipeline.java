@@ -8,6 +8,7 @@ import io.github.lightrag.api.FailureStage;
 import io.github.lightrag.api.GraphExtractionExample;
 import io.github.lightrag.api.GraphMaterializationMode;
 import io.github.lightrag.api.GraphMaterializationStatus;
+import io.github.lightrag.api.PreChunkedIngestRequest;
 import io.github.lightrag.api.SnapshotSource;
 import io.github.lightrag.api.SnapshotStatus;
 import io.github.lightrag.indexing.refinement.DefaultAttributionResolver;
@@ -26,9 +27,9 @@ import io.github.lightrag.storage.DocumentGraphSnapshotStore;
 import io.github.lightrag.storage.DocumentStatusStore;
 import io.github.lightrag.storage.GraphStore;
 import io.github.lightrag.storage.HybridVectorStore;
-import io.github.lightrag.storage.SnapshotStore;
 import io.github.lightrag.storage.VectorStore;
 import io.github.lightrag.types.Document;
+import io.github.lightrag.types.PreChunkedChunk;
 import io.github.lightrag.types.PreChunkedDocument;
 import io.github.lightrag.types.Entity;
 import io.github.lightrag.types.RawDocumentSource;
@@ -40,6 +41,7 @@ import java.nio.file.Path;
 import java.time.Instant;
 import java.util.ArrayList;
 import java.util.Collection;
+import java.util.Comparator;
 import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
@@ -475,7 +477,7 @@ public final class IndexingPipeline {
         ingestConcurrently(sources);
     }
 
-    public void ingestPreChunked(List<PreChunkedDocument> documents) {
+    private void ingestPreChunked(List<PreChunkedDocument> documents) {
         var sources = List.copyOf(Objects.requireNonNull(documents, "documents"));
         if (sources.size() <= 1 || maxParallelInsert <= 1) {
             for (var document : sources) {
@@ -486,12 +488,17 @@ public final class IndexingPipeline {
         ingestPreChunkedConcurrently(sources);
     }
 
+    public void ingestPreChunkedChunks(List<PreChunkedChunk> chunks) {
+        var request = PreChunkedIngestRequest.ofChunks(chunks);
+        ingestPreChunked(toPreChunkedDocuments(request.chunks()));
+    }
+
     public void ingestSources(List<RawDocumentSource> sources, io.github.lightrag.api.DocumentIngestOptions options) {
         var rawSources = List.copyOf(Objects.requireNonNull(sources, "sources"));
         var resolvedOptions = Objects.requireNonNull(options, "options");
         progressListener.onStageStarted(io.github.lightrag.api.TaskStage.PARSING, "parsing source documents");
         for (var source : rawSources) {
-            saveStatus(processingStatus(source.sourceId()));
+            saveStatus(pendingStatus(source.sourceId()));
         }
         var parsedDocuments = new java.util.ArrayList<ParsedDocument>(rawSources.size());
         for (int index = 0; index < rawSources.size(); index++) {
@@ -521,13 +528,11 @@ public final class IndexingPipeline {
 
     private void ingestSequentially(Document document) {
         var source = Objects.requireNonNull(document, "document");
-        var beforeDocument = StorageSnapshots.capture(storageProvider);
-        saveStatus(processingStatus(source.id()));
+        saveStatus(pendingStatus(source.id()));
         try {
             commitComputedIngest(computeDocument(source));
             persistSnapshotIfConfigured();
         } catch (RuntimeException | Error failure) {
-            restoreBeforeFailedDocument(source.id(), beforeDocument, failure);
             markDocumentFailed(source.id(), failure);
             persistSnapshotIfConfigured();
             throw failure;
@@ -536,13 +541,11 @@ public final class IndexingPipeline {
 
     private void ingestParsedSequentially(ParsedDocument parsedDocument, io.github.lightrag.api.DocumentIngestOptions options) {
         var source = Objects.requireNonNull(parsedDocument, "parsedDocument");
-        var beforeDocument = StorageSnapshots.capture(storageProvider);
-        saveStatus(processingStatus(source.documentId()));
+        saveStatus(pendingStatus(source.documentId()));
         try {
             commitComputedIngest(computeDocument(source, options));
             persistSnapshotIfConfigured();
         } catch (RuntimeException | Error failure) {
-            restoreBeforeFailedDocument(source.documentId(), beforeDocument, failure);
             markDocumentFailed(source.documentId(), failure);
             persistSnapshotIfConfigured();
             throw failure;
@@ -551,13 +554,11 @@ public final class IndexingPipeline {
 
     private void ingestPreChunkedSequentially(PreChunkedDocument document) {
         var source = Objects.requireNonNull(document, "document");
-        var beforeDocument = StorageSnapshots.capture(storageProvider);
-        saveStatus(processingStatus(source.documentId()));
+        saveStatus(pendingStatus(source.documentId()));
         try {
             commitComputedIngest(computeDocument(source), true);
             persistSnapshotIfConfigured();
         } catch (RuntimeException | Error failure) {
-            restoreBeforeFailedDocument(source.documentId(), beforeDocument, failure);
             markPreChunkedDocumentFailed(source, failure);
             persistSnapshotIfConfigured();
             throw failure;
@@ -570,7 +571,7 @@ public final class IndexingPipeline {
         var pendingTasks = new LinkedHashMap<Future<ComputedIngest>, Document>();
         try {
             for (var document : documents) {
-                saveStatus(processingStatus(document.id()));
+                saveStatus(pendingStatus(document.id()));
                 pendingTasks.put(completionService.submit(() -> computeDocument(document)), document);
             }
             while (!pendingTasks.isEmpty()) {
@@ -613,7 +614,7 @@ public final class IndexingPipeline {
         var pendingTasks = new LinkedHashMap<Future<ComputedIngest>, ParsedDocument>();
         try {
             for (var parsed : parsedDocuments) {
-                saveStatus(processingStatus(parsed.documentId()));
+                saveStatus(pendingStatus(parsed.documentId()));
                 pendingTasks.put(completionService.submit(() -> computeDocument(parsed, options)), parsed);
             }
             while (!pendingTasks.isEmpty()) {
@@ -653,7 +654,7 @@ public final class IndexingPipeline {
         var pendingTasks = new LinkedHashMap<Future<ComputedIngest>, PreChunkedDocument>();
         try {
             for (var document : documents) {
-                saveStatus(processingStatus(document.documentId()));
+                saveStatus(pendingStatus(document.documentId()));
                 pendingTasks.put(completionService.submit(() -> computeDocument(document)), document);
             }
             while (!pendingTasks.isEmpty()) {
@@ -711,27 +712,28 @@ public final class IndexingPipeline {
         }
     }
 
+    private List<PreChunkedDocument> toPreChunkedDocuments(List<PreChunkedChunk> chunks) {
+        var grouped = new LinkedHashMap<String, DocumentChunks>();
+        for (var item : chunks) {
+            var source = Objects.requireNonNull(item, "chunk");
+            var group = grouped.computeIfAbsent(source.documentId(), documentId -> new DocumentChunks(
+                source.documentId(),
+                source.title(),
+                source.documentMetadata()
+            ));
+            group.add(source);
+        }
+        var documents = new ArrayList<PreChunkedDocument>(grouped.size());
+        for (var group : grouped.values()) {
+            documents.add(group.toDocument());
+        }
+        return List.copyOf(documents);
+    }
+
     private void markPendingPreChunkedDocumentsFailed(Collection<PreChunkedDocument> documents, String errorMessage) {
         for (var document : documents) {
             markPreChunkedDocumentFailed(document, errorMessage);
         }
-    }
-
-    private void restoreBeforeFailedDocument(String documentId, SnapshotStore.Snapshot beforeDocument, Throwable failure) {
-        if (hasNewGraphSnapshot(documentId, beforeDocument)) {
-            return;
-        }
-        try {
-            storageProvider.restore(beforeDocument);
-        } catch (RuntimeException | Error restoreFailure) {
-            failure.addSuppressed(restoreFailure);
-        }
-    }
-
-    private boolean hasNewGraphSnapshot(String documentId, SnapshotStore.Snapshot beforeDocument) {
-        var hadSnapshotBefore = beforeDocument.documentGraphSnapshots().stream()
-            .anyMatch(snapshot -> snapshot.documentId().equals(documentId));
-        return !hadSnapshotBefore && storageProvider.documentGraphSnapshotStore().loadDocument(documentId).isPresent();
     }
 
     private ComputedIngest computeDocument(Document document) {
@@ -1144,12 +1146,7 @@ public final class IndexingPipeline {
                 saveEntityVectors(computed.graph().entities(), computed.entityVectors(), storage.vectorStore());
                 saveRelationVectors(computed.graph().relations(), computed.relationVectors(), storage.vectorStore());
                 finalizeDocumentGraphState(computed, storage);
-                storage.documentStatusStore().save(new DocumentStatusStore.StatusRecord(
-                    computed.source().id(),
-                    DocumentStatus.PROCESSED,
-                    "processed %d chunks".formatted(computed.prepared().chunks().size()),
-                    null
-                ));
+                storage.documentStatusStore().save(processedStatus(computed));
                 return null;
             });
         }
@@ -1175,12 +1172,7 @@ public final class IndexingPipeline {
     }
 
     private void markDocumentFailed(String documentId, String errorMessage) {
-        saveStatus(new DocumentStatusStore.StatusRecord(
-            documentId,
-            DocumentStatus.FAILED,
-            "",
-            errorMessage
-        ));
+        saveStatus(failedStatus(documentId, errorMessage));
         progressListener.onDocumentFailed(documentId, errorMessage);
     }
 
@@ -1190,7 +1182,8 @@ public final class IndexingPipeline {
 
     private void markPreChunkedDocumentFailed(PreChunkedDocument document, String errorMessage) {
         var source = Objects.requireNonNull(document, "document");
-        markDocumentFailed(source.documentId(), errorMessage);
+        saveStatus(failedStatus(source.documentId(), errorMessage, statusMetadata(source.chunks())));
+        progressListener.onDocumentFailed(source.documentId(), errorMessage);
         for (var chunk : source.chunks()) {
             progressListener.onChunkFailed(source.documentId(), chunk.id(), errorMessage);
         }
@@ -1209,10 +1202,7 @@ public final class IndexingPipeline {
         synchronized (storageMutationMonitor) {
             storageProvider.writeAtomically(storage -> {
                 documentIngestor.persist(prepared, storage);
-                var statusRecord = storage.documentStatusStore().load(documentId)
-                    .filter(existing -> existing.status() == DocumentStatus.FAILED)
-                    .orElseGet(() -> processingStatus(documentId));
-                storage.documentStatusStore().save(statusRecord);
+                storage.documentStatusStore().save(processingStatus(documentId, prepared.chunks()));
                 return null;
             });
         }
@@ -1238,18 +1228,7 @@ public final class IndexingPipeline {
             for (var entity : graphStore.loadEntities(distinctIds(entities.stream().map(Entity::id).toList()))) {
                 existingEntitiesById.put(entity.id(), entity);
             }
-            var mergedEntities = new LinkedHashMap<String, GraphStore.EntityRecord>();
-            for (var entity : entities) {
-                var current = mergedEntities.get(entity.id());
-                var mergedEntity = current != null
-                    ? mergeEntity(current, entity)
-                    : existingEntitiesById.containsKey(entity.id())
-                        ? mergeEntity(existingEntitiesById.get(entity.id()), entity)
-                        : toEntityRecord(entity);
-                mergedEntities.remove(entity.id());
-                mergedEntities.put(entity.id(), mergedEntity);
-            }
-            graphStore.saveEntities(List.copyOf(mergedEntities.values()));
+            graphStore.saveEntities(mergeEntitiesByKey(entities, existingEntitiesById));
         }
 
         if (!relations.isEmpty()) {
@@ -1257,27 +1236,105 @@ public final class IndexingPipeline {
             for (var relation : graphStore.loadRelations(distinctIds(relations.stream().map(Relation::id).toList()))) {
                 existingRelationsById.put(relation.id(), relation);
             }
-            var mergedRelations = new LinkedHashMap<String, GraphStore.RelationRecord>();
-            for (var relation : relations) {
-                var current = mergedRelations.get(relation.id());
-                var mergedRelation = current != null
-                    ? mergeRelation(current, relation)
-                    : existingRelationsById.containsKey(relation.id())
-                        ? mergeRelation(existingRelationsById.get(relation.id()), relation)
-                        : toRelationRecord(relation);
-                mergedRelations.remove(relation.id());
-                mergedRelations.put(relation.id(), mergedRelation);
-            }
-            graphStore.saveRelations(List.copyOf(mergedRelations.values()));
+            graphStore.saveRelations(mergeRelationsByKey(relations, existingRelationsById));
         }
         if (log.isDebugEnabled()) {
             log.debug(
-                "Persisted graph batch with {} entities and {} relations in {} ms",
+                "Persisted graph batch with {} entities and {} relations using mergeParallelism={} in {} ms",
                 entities.size(),
                 relations.size(),
+                graphMergeParallelism(Math.max(entities.size(), relations.size())),
                 TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - startedAtNanos)
             );
         }
+    }
+
+    private List<GraphStore.EntityRecord> mergeEntitiesByKey(
+        List<Entity> entities,
+        Map<String, GraphStore.EntityRecord> existingEntitiesById
+    ) {
+        var grouped = new LinkedHashMap<String, List<Entity>>();
+        for (var entity : entities) {
+            grouped.computeIfAbsent(entity.id(), ignored -> new ArrayList<>()).add(entity);
+        }
+        return mergeGroupedConcurrently(
+            grouped,
+            (id, group) -> mergeEntityGroup(existingEntitiesById.get(id), group)
+        );
+    }
+
+    private List<GraphStore.RelationRecord> mergeRelationsByKey(
+        List<Relation> relations,
+        Map<String, GraphStore.RelationRecord> existingRelationsById
+    ) {
+        var grouped = new LinkedHashMap<String, List<Relation>>();
+        for (var relation : relations) {
+            grouped.computeIfAbsent(relation.id(), ignored -> new ArrayList<>()).add(relation);
+        }
+        return mergeGroupedConcurrently(
+            grouped,
+            (id, group) -> mergeRelationGroup(existingRelationsById.get(id), group)
+        );
+    }
+
+    private <I, O> List<O> mergeGroupedConcurrently(
+        LinkedHashMap<String, List<I>> grouped,
+        GroupMerger<I, O> merger
+    ) {
+        var entries = List.copyOf(grouped.entrySet());
+        var parallelism = graphMergeParallelism(entries.size());
+        if (parallelism <= 1 || entries.size() <= 1) {
+            var merged = new ArrayList<O>(entries.size());
+            for (var entry : entries) {
+                merged.add(merger.merge(entry.getKey(), entry.getValue()));
+            }
+            return List.copyOf(merged);
+        }
+
+        ExecutorService executor = Executors.newFixedThreadPool(parallelism);
+        var completionService = new ExecutorCompletionService<IndexedMerge<O>>(executor);
+        var pendingTasks = new LinkedHashMap<Future<IndexedMerge<O>>, Integer>();
+        try {
+            for (int index = 0; index < entries.size(); index++) {
+                var taskIndex = index;
+                var entry = entries.get(index);
+                pendingTasks.put(
+                    completionService.submit(() -> new IndexedMerge<>(
+                        taskIndex,
+                        merger.merge(entry.getKey(), entry.getValue())
+                    )),
+                    taskIndex
+                );
+            }
+            var merged = new Object[entries.size()];
+            while (!pendingTasks.isEmpty()) {
+                var completed = completionService.take();
+                pendingTasks.remove(completed);
+                var result = completed.get();
+                merged[result.index()] = result.value();
+            }
+            var ordered = new ArrayList<O>(entries.size());
+            for (var item : merged) {
+                @SuppressWarnings("unchecked")
+                var typed = (O) item;
+                ordered.add(typed);
+            }
+            return List.copyOf(ordered);
+        } catch (ExecutionException exception) {
+            cancelPending(pendingTasks.keySet());
+            rethrowTaskFailure(exception.getCause());
+            throw new IllegalStateException("graph merge failed", exception.getCause());
+        } catch (InterruptedException exception) {
+            cancelPending(pendingTasks.keySet());
+            Thread.currentThread().interrupt();
+            throw new RuntimeException("graph merge interrupted", exception);
+        } finally {
+            shutdownExecutor(executor);
+        }
+    }
+
+    private int graphMergeParallelism(int itemCount) {
+        return Math.min(Math.max(1, chunkExtractParallelism * 2), Math.max(1, itemCount));
     }
 
     private static List<String> distinctIds(List<String> ids) {
@@ -1379,8 +1436,76 @@ public final class IndexingPipeline {
         }
     }
 
-    private static DocumentStatusStore.StatusRecord processingStatus(String documentId) {
-        return new DocumentStatusStore.StatusRecord(documentId, DocumentStatus.PROCESSING, "", null);
+    private DocumentStatusStore.StatusRecord failedStatus(String documentId, String errorMessage) {
+        return failedStatus(documentId, errorMessage, existingStatusMetadata(documentId));
+    }
+
+    private DocumentStatusStore.StatusRecord failedStatus(
+        String documentId,
+        String errorMessage,
+        Map<String, Object> fallbackMetadata
+    ) {
+        var metadata = new LinkedHashMap<String, Object>(Objects.requireNonNull(fallbackMetadata, "fallbackMetadata"));
+        if (!metadata.containsKey("chunks_list")) {
+            var chunks = storageProvider.chunkStore().listByDocument(documentId).stream()
+                .map(ChunkStore.ChunkRecord::id)
+                .toList();
+            if (!chunks.isEmpty()) {
+                metadata.putAll(statusMetadataFromChunkIds(chunks));
+            }
+        }
+        return new DocumentStatusStore.StatusRecord(
+            documentId,
+            DocumentStatus.FAILED,
+            "",
+            errorMessage,
+            metadata
+        );
+    }
+
+    private Map<String, Object> existingStatusMetadata(String documentId) {
+        return storageProvider.documentStatusStore().load(documentId)
+            .map(DocumentStatusStore.StatusRecord::metadata)
+            .orElseGet(Map::of);
+    }
+
+    private static DocumentStatusStore.StatusRecord pendingStatus(String documentId) {
+        return new DocumentStatusStore.StatusRecord(documentId, DocumentStatus.PENDING, "", null);
+    }
+
+    private static DocumentStatusStore.StatusRecord processingStatus(
+        String documentId,
+        List<io.github.lightrag.types.Chunk> chunks
+    ) {
+        return new DocumentStatusStore.StatusRecord(
+            documentId,
+            DocumentStatus.PROCESSING,
+            "",
+            null,
+            statusMetadata(chunks)
+        );
+    }
+
+    private static DocumentStatusStore.StatusRecord processedStatus(ComputedIngest computed) {
+        return new DocumentStatusStore.StatusRecord(
+            computed.source().id(),
+            DocumentStatus.PROCESSED,
+            "processed %d chunks".formatted(computed.prepared().chunks().size()),
+            null,
+            statusMetadata(computed.prepared().chunks())
+        );
+    }
+
+    private static Map<String, Object> statusMetadata(List<io.github.lightrag.types.Chunk> chunks) {
+        return statusMetadataFromChunkIds(chunks.stream().map(io.github.lightrag.types.Chunk::id).toList());
+    }
+
+    private static Map<String, Object> statusMetadataFromChunkIds(List<String> chunkIds) {
+        var ids = List.copyOf(Objects.requireNonNull(chunkIds, "chunkIds"));
+        return Map.of(
+            "chunks_count", ids.size(),
+            "chunks_list", ids
+        );
     }
 
     private static Document toDocument(ParsedDocument parsed) {
@@ -1490,6 +1615,20 @@ public final class IndexingPipeline {
         );
     }
 
+    private static GraphStore.EntityRecord mergeEntityGroup(
+        GraphStore.EntityRecord existing,
+        List<Entity> incoming
+    ) {
+        if (incoming.isEmpty()) {
+            return Objects.requireNonNull(existing, "existing");
+        }
+        var merged = existing == null ? toEntityRecord(incoming.get(0)) : mergeEntity(existing, incoming.get(0));
+        for (int index = 1; index < incoming.size(); index++) {
+            merged = mergeEntity(merged, incoming.get(index));
+        }
+        return merged;
+    }
+
     private static GraphStore.RelationRecord mergeRelation(GraphStore.RelationRecord existing, Relation incoming) {
         return new GraphStore.RelationRecord(
             existing.id(),
@@ -1500,6 +1639,20 @@ public final class IndexingPipeline {
             Math.max(existing.weight(), incoming.weight()),
             union(existing.sourceChunkIds(), incoming.sourceChunkIds())
         );
+    }
+
+    private static GraphStore.RelationRecord mergeRelationGroup(
+        GraphStore.RelationRecord existing,
+        List<Relation> incoming
+    ) {
+        if (incoming.isEmpty()) {
+            return Objects.requireNonNull(existing, "existing");
+        }
+        var merged = existing == null ? toRelationRecord(incoming.get(0)) : mergeRelation(existing, incoming.get(0));
+        for (int index = 1; index < incoming.size(); index++) {
+            merged = mergeRelation(merged, incoming.get(index));
+        }
+        return merged;
     }
 
     private static GraphStore.EntityRecord toEntityRecord(Entity entity) {
@@ -1782,6 +1935,47 @@ public final class IndexingPipeline {
         private ChunkGraphKeys {
             entityKeys = List.copyOf(Objects.requireNonNull(entityKeys, "entityKeys"));
             relationKeys = List.copyOf(Objects.requireNonNull(relationKeys, "relationKeys"));
+        }
+    }
+
+    private record IndexedMerge<T>(int index, T value) {
+        private IndexedMerge {
+            value = Objects.requireNonNull(value, "value");
+        }
+    }
+
+    @FunctionalInterface
+    private interface GroupMerger<I, O> {
+        O merge(String id, List<I> incoming);
+    }
+
+    private static final class DocumentChunks {
+        private final String documentId;
+        private final String title;
+        private final Map<String, String> metadata;
+        private final List<io.github.lightrag.types.Chunk> chunks = new ArrayList<>();
+
+        private DocumentChunks(String documentId, String title, Map<String, String> metadata) {
+            this.documentId = documentId;
+            this.title = title;
+            this.metadata = Map.copyOf(metadata);
+        }
+
+        private void add(PreChunkedChunk source) {
+            if (!title.equals(source.title())) {
+                throw new IllegalArgumentException("Conflicting title for document id: " + documentId);
+            }
+            if (!metadata.equals(source.documentMetadata())) {
+                throw new IllegalArgumentException("Conflicting metadata for document id: " + documentId);
+            }
+            chunks.add(source.chunk());
+        }
+
+        private PreChunkedDocument toDocument() {
+            var orderedChunks = chunks.stream()
+                .sorted(Comparator.comparingInt(io.github.lightrag.types.Chunk::order))
+                .toList();
+            return new PreChunkedDocument(documentId, title, orderedChunks, metadata);
         }
     }
 

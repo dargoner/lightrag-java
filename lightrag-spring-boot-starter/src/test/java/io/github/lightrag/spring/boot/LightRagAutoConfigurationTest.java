@@ -566,7 +566,8 @@ class LightRagAutoConfigurationTest {
                 assertThat(properties.getIndexing().getChunking().getWindowSize()).isEqualTo(1_000);
                 assertThat(properties.getIndexing().getChunking().getOverlap()).isEqualTo(100);
                 assertThat(properties.getIndexing().getEmbeddingBatchSize()).isZero();
-                assertThat(properties.getIndexing().getMaxParallelInsert()).isEqualTo(1);
+                assertThat(properties.getIndexing().getMaxParallelInsert()).isEqualTo(2);
+                assertThat(properties.getIndexing().getChunkExtractParallelism()).isEqualTo(2);
                 assertThat(properties.getIndexing().getEntityExtractMaxGleaning()).isEqualTo(1);
                 assertThat(properties.getIndexing().getMaxExtractInputTokens()).isEqualTo(20_480);
                 assertThat(properties.getIndexing().getLanguage()).isEqualTo("English");

@@ -38,6 +38,12 @@ class IndexingPipelineResumableIngestTest {
         var storage = InMemoryStorageProvider.create();
         var listener = new IndexingProgressListener() {
             @Override
+            public void onDocumentStarted(String documentId, String message) {
+                assertThat(storage.documentStatusStore().load("doc-1"))
+                    .contains(new DocumentStatusStore.StatusRecord("doc-1", DocumentStatus.PENDING, "", null));
+            }
+
+            @Override
             public void onStageStarted(TaskStage stage, String message) {
                 if (stage != TaskStage.PRIMARY_EXTRACTION) {
                     return;
@@ -47,7 +53,13 @@ class IndexingPipelineResumableIngestTest {
                     .extracting(ChunkStore.ChunkRecord::id)
                     .containsExactly("doc-1:0");
                 assertThat(storage.documentStatusStore().load("doc-1"))
-                    .contains(new DocumentStatusStore.StatusRecord("doc-1", DocumentStatus.PROCESSING, "", null));
+                    .contains(new DocumentStatusStore.StatusRecord(
+                        "doc-1",
+                        DocumentStatus.PROCESSING,
+                        "",
+                        null,
+                        statusMetadata("doc-1:0")
+                    ));
                 assertThat(storage.vectorStore().list(StorageSnapshots.CHUNK_NAMESPACE))
                     .extracting(VectorStore.VectorRecord::id)
                     .containsExactly("doc-1:0");
@@ -56,6 +68,35 @@ class IndexingPipelineResumableIngestTest {
         var pipeline = newPipeline(storage, listener);
 
         pipeline.ingest(List.of(new Document("doc-1", "Title", "Alice works with Bob", Map.of())));
+    }
+
+    @Test
+    void preservesStagedChunksAndMarksDocumentFailedWhenPrimaryExtractionFails() {
+        var storage = InMemoryStorageProvider.create();
+        var pipeline = newPipeline(storage, new ThrowingChatModel(), IndexingProgressListener.noop());
+
+        assertThatThrownBy(() -> pipeline.ingest(List.of(
+            new Document("doc-1", "Title", "Alice works with Bob", Map.of())
+        )))
+            .isInstanceOf(IllegalStateException.class)
+            .hasMessageContaining("synthetic extraction failure");
+
+        assertThat(storage.documentStore().load("doc-1")).isPresent();
+        assertThat(storage.chunkStore().listByDocument("doc-1"))
+            .extracting(ChunkStore.ChunkRecord::id)
+            .containsExactly("doc-1:0");
+        assertThat(storage.vectorStore().list(StorageSnapshots.CHUNK_NAMESPACE))
+            .extracting(VectorStore.VectorRecord::id)
+            .containsExactly("doc-1:0");
+        assertThat(storage.documentStatusStore().load("doc-1"))
+            .contains(new DocumentStatusStore.StatusRecord(
+                "doc-1",
+                DocumentStatus.FAILED,
+                "",
+                "synthetic extraction failure",
+                statusMetadata("doc-1:0")
+            ));
+        assertThat(storage.documentGraphSnapshotStore().loadDocument("doc-1")).isEmpty();
     }
 
     @Test
@@ -96,8 +137,23 @@ class IndexingPipelineResumableIngestTest {
     }
 
     private static IndexingPipeline newPipeline(AtomicStorageProvider storage, IndexingProgressListener listener) {
+        return newPipeline(storage, new FakeChatModel(), listener);
+    }
+
+    private static Map<String, Object> statusMetadata(String chunkId) {
+        return Map.of(
+            "chunks_count", 1,
+            "chunks_list", List.of(chunkId)
+        );
+    }
+
+    private static IndexingPipeline newPipeline(
+        AtomicStorageProvider storage,
+        ChatModel extractionModel,
+        IndexingProgressListener listener
+    ) {
         return new IndexingPipeline(
-            new FakeChatModel(),
+            extractionModel,
             new FakeChatModel(),
             new FakeEmbeddingModel(),
             storage,
@@ -124,6 +180,13 @@ class IndexingPipelineResumableIngestTest {
             return """
                 {"entities":[{"name":"Alice","type":"person","description":"Alice","aliases":[]},{"name":"Bob","type":"person","description":"Bob","aliases":[]}],"relations":[{"source_entity":"Alice","target_entity":"Bob","relationship_keywords":"works_with","relationship_description":"works with","weight":1.0}]}
                 """;
+        }
+    }
+
+    private static final class ThrowingChatModel implements ChatModel {
+        @Override
+        public String generate(ChatRequest request) {
+            throw new IllegalStateException("synthetic extraction failure");
         }
     }
 

@@ -3,6 +3,8 @@ package io.github.lightrag.api;
 import io.github.lightrag.model.ChatModel;
 import io.github.lightrag.model.EmbeddingModel;
 import io.github.lightrag.storage.AtomicStorageProvider;
+import io.github.lightrag.storage.ChunkStore;
+import io.github.lightrag.storage.DocumentStatusStore;
 import io.github.lightrag.storage.InMemoryStorageProvider;
 import io.github.lightrag.storage.WorkspaceStorageProvider;
 import io.github.lightrag.types.Document;
@@ -15,6 +17,7 @@ import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.atomic.AtomicInteger;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 class LightRagWorkspaceTest {
     @Test
@@ -120,6 +123,56 @@ class LightRagWorkspaceTest {
     }
 
     @Test
+    void failedIngestKeepsFailureStateScopedToTargetWorkspaceOnly() {
+        var workspaceStorageProvider = new TestWorkspaceStorageProvider();
+        var successfulRag = LightRag.builder()
+            .chatModel(new NoOpChatModel())
+            .embeddingModel(new WorkspaceEmbeddingModel())
+            .workspaceStorage(workspaceStorageProvider)
+            .automaticQueryKeywordExtraction(false)
+            .build();
+        var failingRag = LightRag.builder()
+            .chatModel(new ThrowingChatModel())
+            .embeddingModel(new WorkspaceEmbeddingModel())
+            .workspaceStorage(workspaceStorageProvider)
+            .automaticQueryKeywordExtraction(false)
+            .build();
+
+        successfulRag.ingest("beta", List.of(new Document("doc-beta", "Beta", "beta token", Map.of())));
+
+        assertThatThrownBy(() -> failingRag.ingest(
+            "alpha",
+            List.of(new Document("doc-alpha", "Alpha", "alpha token", Map.of()))
+        ))
+            .isInstanceOf(IllegalStateException.class)
+            .hasMessageContaining("synthetic extraction failure");
+
+        var alpha = workspaceStorageProvider.provider("alpha");
+        var beta = workspaceStorageProvider.provider("beta");
+        assertThat(alpha.documentStore().load("doc-alpha")).isPresent();
+        assertThat(alpha.chunkStore().listByDocument("doc-alpha"))
+            .extracting(ChunkStore.ChunkRecord::id)
+            .containsExactly("doc-alpha:0");
+        assertThat(alpha.documentStatusStore().load("doc-alpha"))
+            .contains(new DocumentStatusStore.StatusRecord(
+                "doc-alpha",
+                DocumentStatus.FAILED,
+                "",
+                "synthetic extraction failure",
+                statusMetadata("doc-alpha:0")
+            ));
+        assertThat(beta.documentStore().load("doc-beta")).isPresent();
+        assertThat(beta.documentStatusStore().load("doc-beta"))
+            .contains(new DocumentStatusStore.StatusRecord(
+                "doc-beta",
+                DocumentStatus.PROCESSED,
+                "processed 1 chunks",
+                null,
+                statusMetadata("doc-beta:0")
+            ));
+    }
+
+    @Test
     void repeatedWorkspaceResolutionReusesTheSameLogicalProviderInstance() {
         var workspaceStorageProvider = new TestWorkspaceStorageProvider();
         var rag = LightRag.builder()
@@ -170,6 +223,13 @@ class LightRagWorkspaceTest {
         }
     }
 
+    private static Map<String, Object> statusMetadata(String chunkId) {
+        return Map.of(
+            "chunks_count", 1,
+            "chunks_list", List.of(chunkId)
+        );
+    }
+
     private static final class NoOpChatModel implements ChatModel {
         @Override
         public String generate(ChatRequest request) {
@@ -179,6 +239,13 @@ class LightRagWorkspaceTest {
                   "relations": []
                 }
                 """;
+        }
+    }
+
+    private static final class ThrowingChatModel implements ChatModel {
+        @Override
+        public String generate(ChatRequest request) {
+            throw new IllegalStateException("synthetic extraction failure");
         }
     }
 

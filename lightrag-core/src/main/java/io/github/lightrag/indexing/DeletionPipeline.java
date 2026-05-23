@@ -175,9 +175,24 @@ public final class DeletionPipeline {
             return DeletionResult.notFound(targetId, "Document " + targetId + " not found.");
         }
 
+        if (!cacheIds.isEmpty()) {
+            targetStatusRecord = updateDeleteRetryState(
+                retryStatusRecord(targetId, targetStatusRecord),
+                "collect_llm_cache",
+                cacheIds,
+                false,
+                null
+            );
+        }
+
         try {
-            deletionStage = "delete_doc_entries";
-            storageProvider.restore(removeDocumentIncrementally(beforeSnapshot, targetId, targetChunkIds));
+            deletionStage = "delete_document_derived_state";
+            storageProvider.restore(removeDocumentIncrementally(
+                beforeSnapshot,
+                targetId,
+                targetChunkIds,
+                targetStatusRecord
+            ));
 
             if (deleteOptions.deleteLlmCache() && !cacheIds.isEmpty()) {
                 deletionStage = "delete_llm_cache";
@@ -190,29 +205,23 @@ public final class DeletionPipeline {
                     null
                 );
                 deleteLlmCacheOrMarkRetryFailed(targetId, retryStatusRecord, cacheIds);
-                storageProvider.documentStatusStore().delete(targetId);
             }
+            deletionStage = "delete_doc_entries";
+            storageProvider.documentStatusStore().delete(targetId);
             StorageSnapshots.persistIfConfigured(storageProvider, snapshotPath);
             return DeletionResult.success(targetId, "Document " + targetId + " successfully deleted");
         } catch (RuntimeException | Error failure) {
-            if ("delete_llm_cache".equals(deletionStage)) {
-                StorageSnapshots.persistIfConfigured(storageProvider, snapshotPath);
-                throw failure;
-            }
             try {
-                storageProvider.restore(beforeSnapshot);
-                if (targetStatusRecord != null && !cacheIds.isEmpty()) {
-                    updateDeleteRetryState(
-                        targetStatusRecord,
-                        deletionStage,
-                        cacheIds,
-                        true,
-                        failure.getMessage()
-                    );
-                }
+                updateDeleteRetryState(
+                    retryStatusRecord(targetId, targetStatusRecord),
+                    deletionStage,
+                    cacheIds,
+                    true,
+                    failure.getMessage()
+                );
                 StorageSnapshots.persistIfConfigured(storageProvider, snapshotPath);
-            } catch (RuntimeException | Error restoreFailure) {
-                failure.addSuppressed(restoreFailure);
+            } catch (RuntimeException | Error statusUpdateFailure) {
+                failure.addSuppressed(statusUpdateFailure);
             }
             throw failure;
         }
@@ -243,7 +252,8 @@ public final class DeletionPipeline {
     private static SnapshotStore.Snapshot removeDocumentIncrementally(
         SnapshotStore.Snapshot snapshot,
         String documentId,
-        Set<String> targetChunkIds
+        Set<String> targetChunkIds,
+        io.github.lightrag.storage.DocumentStatusStore.StatusRecord retainedStatusRecord
     ) {
         var chunkIds = Set.copyOf(Objects.requireNonNull(targetChunkIds, "targetChunkIds"));
         var entities = snapshot.entities().stream()
@@ -281,12 +291,36 @@ public final class DeletionPipeline {
             entities,
             relations,
             Map.copyOf(vectors),
-            snapshot.documentStatuses().stream().filter(status -> !status.documentId().equals(documentId)).toList(),
+            retainDocumentStatus(snapshot.documentStatuses(), documentId, retainedStatusRecord),
             snapshot.documentGraphSnapshots().stream().filter(status -> !status.documentId().equals(documentId)).toList(),
             snapshot.chunkGraphSnapshots().stream().filter(chunk -> !chunk.documentId().equals(documentId)).toList(),
             snapshot.documentGraphJournals().stream().filter(journal -> !journal.documentId().equals(documentId)).toList(),
             snapshot.chunkGraphJournals().stream().filter(journal -> !journal.documentId().equals(documentId)).toList()
         );
+    }
+
+    private static List<io.github.lightrag.storage.DocumentStatusStore.StatusRecord> retainDocumentStatus(
+        List<io.github.lightrag.storage.DocumentStatusStore.StatusRecord> statusRecords,
+        String documentId,
+        io.github.lightrag.storage.DocumentStatusStore.StatusRecord retainedStatusRecord
+    ) {
+        if (retainedStatusRecord == null) {
+            return statusRecords;
+        }
+        var retained = new java.util.ArrayList<io.github.lightrag.storage.DocumentStatusStore.StatusRecord>();
+        var replaced = false;
+        for (var statusRecord : statusRecords) {
+            if (statusRecord.documentId().equals(documentId)) {
+                retained.add(retainedStatusRecord);
+                replaced = true;
+            } else {
+                retained.add(statusRecord);
+            }
+        }
+        if (!replaced) {
+            retained.add(retainedStatusRecord);
+        }
+        return List.copyOf(retained);
     }
 
     private static GraphStore.EntityRecord removeEntityChunkReferences(

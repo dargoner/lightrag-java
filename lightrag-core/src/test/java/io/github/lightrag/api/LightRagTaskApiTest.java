@@ -12,7 +12,7 @@ import io.github.lightrag.storage.memory.InMemoryGraphStore;
 import io.github.lightrag.task.TaskExecutionService;
 import io.github.lightrag.types.Chunk;
 import io.github.lightrag.types.Document;
-import io.github.lightrag.types.PreChunkedDocument;
+import io.github.lightrag.types.PreChunkedChunk;
 import org.junit.jupiter.api.Test;
 
 import java.time.Duration;
@@ -33,7 +33,7 @@ class LightRagTaskApiTest {
     private static final String WORKSPACE = "default";
 
     @Test
-    void ingestPreChunkedPersistsProvidedChunkIdsWithoutRechunking() {
+    void ingestChunksPersistsProvidedChunkIdsWithoutRechunking() {
         var storage = InMemoryStorageProvider.create();
         var rag = LightRag.builder()
             .chatModel(new FakeChatModel())
@@ -41,15 +41,20 @@ class LightRagTaskApiTest {
             .storage(storage)
             .build();
 
-        rag.ingestPreChunked(WORKSPACE, List.of(new PreChunkedDocument(
-            "doc-1",
-            "Title",
-            List.of(
-                new Chunk("chunk-1", "doc-1", "Alice works with Bob", 4, 0, Map.of("source", "prechunked-test")),
-                new Chunk("chunk-2", "doc-1", "Bob supports Carol", 4, 1, Map.of("source", "prechunked-test"))
+        rag.ingestChunks(WORKSPACE, List.of(
+            new PreChunkedChunk(
+                "doc-1",
+                "Title",
+                new Chunk("chunk-2", "doc-1", "Bob supports Carol", 4, 1, Map.of("source", "prechunked-test")),
+                Map.of("source", "chunk-api-test")
             ),
-            Map.of("source", "prechunked-test")
-        )));
+            new PreChunkedChunk(
+                "doc-1",
+                "Title",
+                new Chunk("chunk-1", "doc-1", "Alice works with Bob", 4, 0, Map.of("source", "prechunked-test")),
+                Map.of("source", "chunk-api-test")
+            )
+        ));
 
         assertThat(storage.documentStore().load("doc-1")).isPresent();
         assertThat(storage.chunkStore().listByDocument("doc-1"))
@@ -116,7 +121,7 @@ class LightRagTaskApiTest {
     }
 
     @Test
-    void submitIngestPreChunkedPublishesChunkLifecycleEventsToRegisteredListener() {
+    void submitIngestChunksPublishesChunkLifecycleEventsToRegisteredListener() {
         var events = new java.util.concurrent.CopyOnWriteArrayList<TaskEvent>();
         var rag = LightRag.builder()
             .chatModel(new FakeChatModel())
@@ -125,19 +130,7 @@ class LightRagTaskApiTest {
             .taskEventListener(events::add)
             .build();
 
-        var taskId = rag.submitIngestPreChunked(
-            WORKSPACE,
-            List.of(new PreChunkedDocument(
-                "doc-1",
-                "Title",
-                List.of(
-                    new Chunk("chunk-1", "doc-1", "Alice works with Bob", 4, 0, Map.of("source", "prechunked-task-test")),
-                    new Chunk("chunk-2", "doc-1", "Bob supports Carol", 4, 1, Map.of("source", "prechunked-task-test"))
-                ),
-                Map.of("source", "prechunked-task-test")
-            )),
-            TaskSubmitOptions.defaults()
-        );
+        var taskId = rag.submitIngestChunks(WORKSPACE, samplePreChunkedChunks("prechunked-task-test"), TaskSubmitOptions.defaults());
 
         awaitTerminalTask(rag, taskId);
 
@@ -158,7 +151,7 @@ class LightRagTaskApiTest {
     }
 
     @Test
-    void submitIngestPreChunkedPublishesPendingChunkEventsBeforeRuntimeChunkEvents() {
+    void submitIngestChunksUsesUnifiedIngestTaskAndPublishesChunkEvents() {
         var events = new java.util.concurrent.CopyOnWriteArrayList<TaskEvent>();
         var rag = LightRag.builder()
             .chatModel(new FakeChatModel())
@@ -167,19 +160,44 @@ class LightRagTaskApiTest {
             .taskEventListener(events::add)
             .build();
 
-        var taskId = rag.submitIngestPreChunked(
-            WORKSPACE,
-            List.of(new PreChunkedDocument(
+        var request = PreChunkedIngestRequest.ofChunks(List.of(
+            new PreChunkedChunk(
                 "doc-1",
                 "Title",
-                List.of(
-                    new Chunk("chunk-1", "doc-1", "Alice works with Bob", 4, 0, Map.of("source", "prechunked-task-test")),
-                    new Chunk("chunk-2", "doc-1", "Bob supports Carol", 4, 1, Map.of("source", "prechunked-task-test"))
-                ),
-                Map.of("source", "prechunked-task-test")
-            )),
-            TaskSubmitOptions.defaults()
-        );
+                new Chunk("chunk-1", "doc-1", "Alice works with Bob", 4, 0, Map.of("source", "chunk-task-test")),
+                Map.of("source", "chunk-task-test")
+            ),
+            new PreChunkedChunk(
+                "doc-1",
+                "Title",
+                new Chunk("chunk-2", "doc-1", "Bob supports Carol", 4, 1, Map.of("source", "chunk-task-test")),
+                Map.of("source", "chunk-task-test")
+            )
+        ));
+
+        var taskId = rag.submitIngest(WORKSPACE, request, TaskSubmitOptions.defaults());
+        var task = awaitTerminalTask(rag, taskId);
+
+        assertThat(task.taskType()).isEqualTo(TaskType.INGEST_DOCUMENTS);
+        assertThat(task.metadata()).containsEntry("documentCount", "1");
+        assertThat(task.metadata()).containsEntry("chunkCount", "2");
+        assertThat(events.stream()
+            .filter(event -> event.chunkId() != null)
+            .map(TaskEvent::chunkId)
+            .toList()).contains("chunk-1", "chunk-2");
+    }
+
+    @Test
+    void submitIngestChunksPublishesPendingChunkEventsBeforeRuntimeChunkEvents() {
+        var events = new java.util.concurrent.CopyOnWriteArrayList<TaskEvent>();
+        var rag = LightRag.builder()
+            .chatModel(new FakeChatModel())
+            .embeddingModel(new FakeEmbeddingModel())
+            .storage(InMemoryStorageProvider.create())
+            .taskEventListener(events::add)
+            .build();
+
+        var taskId = rag.submitIngestChunks(WORKSPACE, samplePreChunkedChunks("prechunked-task-test"), TaskSubmitOptions.defaults());
 
         awaitTerminalTask(rag, taskId);
 
@@ -582,6 +600,7 @@ class LightRagTaskApiTest {
             TaskType.REBUILD_GRAPH
         ));
         assertThat(newlyAddedTaskTypes).containsExactlyInAnyOrder(
+            TaskType.RESUME_DOCUMENT_INGEST,
             TaskType.MATERIALIZE_DOCUMENT_GRAPH,
             TaskType.MATERIALIZE_CHUNK_GRAPH
         );
@@ -773,6 +792,23 @@ class LightRagTaskApiTest {
         }
         assertThat(snapshot.status().isTerminal()).isTrue();
         return snapshot;
+    }
+
+    private static List<PreChunkedChunk> samplePreChunkedChunks(String source) {
+        return List.of(
+            new PreChunkedChunk(
+                "doc-1",
+                "Title",
+                new Chunk("chunk-1", "doc-1", "Alice works with Bob", 4, 0, Map.of("source", source)),
+                Map.of("source", source)
+            ),
+            new PreChunkedChunk(
+                "doc-1",
+                "Title",
+                new Chunk("chunk-2", "doc-1", "Bob supports Carol", 4, 1, Map.of("source", source)),
+                Map.of("source", source)
+            )
+        );
     }
 
     private static void await(java.util.concurrent.CountDownLatch latch) {
