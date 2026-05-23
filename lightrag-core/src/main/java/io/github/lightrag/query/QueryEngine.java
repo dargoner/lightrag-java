@@ -371,8 +371,9 @@ public final class QueryEngine {
         var retrievedContext = strategy.retrieve(retrievalRequest);
         var retrieveMs = elapsedMillis(retrieveStartedAt);
         var rerankStartedAt = System.nanoTime();
-        var rerankedChunks = rerankEnabled(resolvedQuery) && !useMultiHop
-            ? rerankChunks(resolvedQuery, retrievedContext.matchedChunks())
+        var rerankActive = rerankEnabled(resolvedQuery) && !useMultiHop;
+        var rerankedChunks = rerankActive
+            ? rerankChunksOrFallback(resolvedQuery, retrievedContext.matchedChunks())
             : retrievedContext.matchedChunks();
         var rerankMs = rerankEnabled(resolvedQuery) && !useMultiHop
             ? elapsedMillis(rerankStartedAt)
@@ -608,6 +609,17 @@ public final class QueryEngine {
         return ordered.stream()
             .limit(request.chunkTopK())
             .toList();
+    }
+
+    private List<ScoredChunk> rerankChunksOrFallback(QueryRequest request, List<ScoredChunk> matchedChunks) {
+        try {
+            return rerankChunks(request, matchedChunks);
+        } catch (RuntimeException exception) {
+            log.warn("LightRAG rerank failed; using original chunk order", exception);
+            return matchedChunks.stream()
+                .limit(request.chunkTopK())
+                .toList();
+        }
     }
 
     private static boolean sameChunkIds(List<ScoredChunk> left, List<ScoredChunk> right) {

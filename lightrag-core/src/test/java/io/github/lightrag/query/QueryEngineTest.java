@@ -684,6 +684,33 @@ class QueryEngineTest {
     }
 
     @Test
+    void expandsMixChunkTopKWhenRerankIsEnabledAndModelIsConfigured() {
+        var strategy = new RecordingQueryStrategy(baseContext());
+        var strategies = new EnumMap<QueryMode, QueryStrategy>(QueryMode.class);
+        strategies.put(QueryMode.MIX, strategy);
+        var engine = new QueryEngine(
+            new RecordingChatModel(),
+            new ContextAssembler(),
+            strategies,
+            new StubRerankModel(List.of(
+                new RerankModel.RerankResult("chunk-1", 0.99d),
+                new RerankModel.RerankResult("chunk-2", 0.88d),
+                new RerankModel.RerankResult("chunk-3", 0.77d)
+            ))
+        );
+
+        engine.query(QueryRequest.builder()
+            .query("which chunk?")
+            .mode(QueryMode.MIX)
+            .topK(3)
+            .chunkTopK(3)
+            .build());
+
+        assertThat(strategy.lastRequest()).isNotNull();
+        assertThat(strategy.lastRequest().chunkTopK()).isEqualTo(6);
+    }
+
+    @Test
     void usesConfiguredRerankCandidateMultiplier() {
         var strategy = new RecordingQueryStrategy(baseContext());
         var engine = new QueryEngine(
@@ -877,7 +904,7 @@ class QueryEngineTest {
     }
 
     @Test
-    void propagatesRerankFailures() {
+    void fallsBackToRetrievalOrderWhenRerankFails() {
         var engine = new QueryEngine(
             new RecordingChatModel(),
             new ContextAssembler(),
@@ -887,9 +914,11 @@ class QueryEngineTest {
             }
         );
 
-        assertThatThrownBy(() -> engine.query(baseRequest()))
-            .isInstanceOf(IllegalStateException.class)
-            .hasMessage("rerank failure");
+        var result = engine.query(baseRequest());
+
+        assertThat(result.contexts())
+            .extracting(context -> context.sourceId())
+            .containsExactly("chunk-1", "chunk-2", "chunk-3");
     }
 
     @Test

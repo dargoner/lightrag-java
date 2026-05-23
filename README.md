@@ -605,6 +605,7 @@ Notes:
 - rerank is especially useful with `MIX` queries because the engine expands the internal candidate window before reranking
 - rerank changes chunk order only; exposed context IDs/texts still come from the original retrieval records
 - if `enableRerank(true)` is used without configuring a rerank model, Java treats it as a deterministic no-op in this phase
+- if the configured rerank model fails, Java falls back to the original retrieved chunk order for that query
 
 ## Query Prompt Controls
 
