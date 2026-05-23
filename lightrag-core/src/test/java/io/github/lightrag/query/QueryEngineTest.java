@@ -904,6 +904,29 @@ class QueryEngineTest {
     }
 
     @Test
+    void filtersRerankedChunksBelowMinimumScore() {
+        var engine = new QueryEngine(
+            new RecordingChatModel(),
+            new ContextAssembler(),
+            strategiesReturning(baseContext()),
+            new StubRerankModel(List.of(
+                new RerankModel.RerankResult("chunk-3", 0.99d),
+                new RerankModel.RerankResult("chunk-2", 0.50d),
+                new RerankModel.RerankResult("chunk-1", 0.80d)
+            )),
+            true,
+            2,
+            0.80d
+        );
+
+        var result = engine.query(baseRequest());
+
+        assertThat(result.contexts())
+            .extracting(context -> context.sourceId())
+            .containsExactly("chunk-3", "chunk-1");
+    }
+
+    @Test
     void fallsBackToRetrievalOrderWhenRerankFails() {
         var engine = new QueryEngine(
             new RecordingChatModel(),

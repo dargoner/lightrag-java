@@ -348,6 +348,7 @@ class LightRagBuilderTest {
             .chunker(chunker)
             .automaticQueryKeywordExtraction(false)
             .rerankCandidateMultiplier(4)
+            .minRerankScore(0.25d)
             .embeddingBatchSize(3)
             .maxParallelInsert(2)
             .chunkExtractParallelism(4)
@@ -360,6 +361,7 @@ class LightRagBuilderTest {
         assertThat(rag.chunker()).isSameAs(chunker);
         assertThat(rag.automaticQueryKeywordExtraction()).isFalse();
         assertThat(rag.rerankCandidateMultiplier()).isEqualTo(4);
+        assertThat(rag.minRerankScore()).isEqualTo(0.25d);
         assertThat(rag.embeddingBatchSize()).isEqualTo(3);
         assertThat(rag.maxParallelInsert()).isEqualTo(2);
         assertThat(rag.chunkExtractParallelism()).isEqualTo(4);
@@ -802,6 +804,16 @@ class LightRagBuilderTest {
         assertThatThrownBy(() -> LightRag.builder().rerankCandidateMultiplier(0))
             .isInstanceOf(IllegalArgumentException.class)
             .hasMessage("rerankCandidateMultiplier must be positive");
+    }
+
+    @Test
+    void rejectsInvalidMinimumRerankScore() {
+        assertThatThrownBy(() -> LightRag.builder().minRerankScore(-0.01d))
+            .isInstanceOf(IllegalArgumentException.class)
+            .hasMessage("minRerankScore must be non-negative");
+        assertThatThrownBy(() -> LightRag.builder().minRerankScore(Double.NaN))
+            .isInstanceOf(IllegalArgumentException.class)
+            .hasMessage("minRerankScore must be non-negative");
     }
 
     @Test

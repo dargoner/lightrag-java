@@ -44,6 +44,7 @@ public final class LightRag implements AutoCloseable {
     private final Chunker chunker;
     private final boolean automaticQueryKeywordExtraction;
     private final int rerankCandidateMultiplier;
+    private final double minRerankScore;
     private final int embeddingBatchSize;
     private final int maxParallelInsert;
     private final int chunkExtractParallelism;
@@ -60,7 +61,7 @@ public final class LightRag implements AutoCloseable {
     private final AtomicBoolean closed = new AtomicBoolean();
 
     LightRag(LightRagConfig config) {
-        this(config, null, null, true, 2, Integer.MAX_VALUE, 1,
+        this(config, null, null, true, 2, 0.0d, Integer.MAX_VALUE, 1,
             1,
             io.github.lightrag.indexing.KnowledgeExtractor.DEFAULT_ENTITY_EXTRACT_MAX_GLEANING,
             io.github.lightrag.indexing.KnowledgeExtractor.DEFAULT_MAX_EXTRACT_INPUT_TOKENS,
@@ -73,7 +74,7 @@ public final class LightRag implements AutoCloseable {
     }
 
     LightRag(LightRagConfig config, Chunker chunker) {
-        this(config, chunker, null, true, 2, Integer.MAX_VALUE, 1,
+        this(config, chunker, null, true, 2, 0.0d, Integer.MAX_VALUE, 1,
             1,
             io.github.lightrag.indexing.KnowledgeExtractor.DEFAULT_ENTITY_EXTRACT_MAX_GLEANING,
             io.github.lightrag.indexing.KnowledgeExtractor.DEFAULT_MAX_EXTRACT_INPUT_TOKENS,
@@ -91,6 +92,7 @@ public final class LightRag implements AutoCloseable {
         DocumentParsingOrchestrator documentParsingOrchestrator,
         boolean automaticQueryKeywordExtraction,
         int rerankCandidateMultiplier,
+        double minRerankScore,
         int embeddingBatchSize,
         int maxParallelInsert,
         int chunkExtractParallelism,
@@ -107,6 +109,7 @@ public final class LightRag implements AutoCloseable {
         this.chunker = chunker;
         this.automaticQueryKeywordExtraction = automaticQueryKeywordExtraction;
         this.rerankCandidateMultiplier = rerankCandidateMultiplier;
+        this.minRerankScore = minRerankScore;
         this.embeddingBatchSize = embeddingBatchSize;
         this.maxParallelInsert = maxParallelInsert;
         this.chunkExtractParallelism = chunkExtractParallelism;
@@ -460,6 +463,10 @@ public final class LightRag implements AutoCloseable {
         return rerankCandidateMultiplier;
     }
 
+    double minRerankScore() {
+        return minRerankScore;
+    }
+
     int embeddingBatchSize() {
         return embeddingBatchSize;
     }
@@ -619,6 +626,7 @@ public final class LightRag implements AutoCloseable {
             config.rerankModel(),
             automaticQueryKeywordExtraction,
             rerankCandidateMultiplier,
+            minRerankScore,
             new RuleBasedQueryIntentClassifier(),
             multiHop,
             new PathAwareAnswerSynthesizer()

@@ -114,6 +114,7 @@ public final class QueryEngine {
     private final RerankModel rerankModel;
     private final QueryKeywordExtractor keywordExtractor;
     private final int rerankCandidateMultiplier;
+    private final double minRerankScore;
     private final QueryIntentClassifier queryIntentClassifier;
     private final QueryStrategy multiHopStrategy;
     private final PathAwareAnswerSynthesizer pathAwareAnswerSynthesizer;
@@ -124,7 +125,7 @@ public final class QueryEngine {
         Map<QueryMode, QueryStrategy> strategies,
         RerankModel rerankModel
     ) {
-        this(chatModel, contextAssembler, strategies, rerankModel, true, 2);
+        this(chatModel, contextAssembler, strategies, rerankModel, true, 2, 0.0d);
     }
 
     public QueryEngine(
@@ -134,7 +135,7 @@ public final class QueryEngine {
         Map<QueryMode, QueryStrategy> strategies,
         RerankModel rerankModel
     ) {
-        this(chatModel, keywordModel, contextAssembler, strategies, rerankModel, true, 2);
+        this(chatModel, keywordModel, contextAssembler, strategies, rerankModel, true, 2, 0.0d);
     }
 
     public QueryEngine(
@@ -145,6 +146,19 @@ public final class QueryEngine {
         boolean automaticKeywordExtractionEnabled,
         int rerankCandidateMultiplier
     ) {
+        this(chatModel, contextAssembler, strategies, rerankModel, automaticKeywordExtractionEnabled,
+            rerankCandidateMultiplier, 0.0d);
+    }
+
+    public QueryEngine(
+        ChatModel chatModel,
+        ContextAssembler contextAssembler,
+        Map<QueryMode, QueryStrategy> strategies,
+        RerankModel rerankModel,
+        boolean automaticKeywordExtractionEnabled,
+        int rerankCandidateMultiplier,
+        double minRerankScore
+    ) {
         this(
             chatModel,
             null,
@@ -153,6 +167,7 @@ public final class QueryEngine {
             rerankModel,
             automaticKeywordExtractionEnabled,
             rerankCandidateMultiplier,
+            minRerankScore,
             null,
             null,
             new PathAwareAnswerSynthesizer()
@@ -168,6 +183,20 @@ public final class QueryEngine {
         boolean automaticKeywordExtractionEnabled,
         int rerankCandidateMultiplier
     ) {
+        this(chatModel, keywordModel, contextAssembler, strategies, rerankModel, automaticKeywordExtractionEnabled,
+            rerankCandidateMultiplier, 0.0d);
+    }
+
+    public QueryEngine(
+        ChatModel chatModel,
+        ChatModel keywordModel,
+        ContextAssembler contextAssembler,
+        Map<QueryMode, QueryStrategy> strategies,
+        RerankModel rerankModel,
+        boolean automaticKeywordExtractionEnabled,
+        int rerankCandidateMultiplier,
+        double minRerankScore
+    ) {
         this(
             chatModel,
             keywordModel,
@@ -176,6 +205,7 @@ public final class QueryEngine {
             rerankModel,
             automaticKeywordExtractionEnabled,
             rerankCandidateMultiplier,
+            minRerankScore,
             null,
             null,
             new PathAwareAnswerSynthesizer()
@@ -194,7 +224,23 @@ public final class QueryEngine {
         PathAwareAnswerSynthesizer pathAwareAnswerSynthesizer
     ) {
         this(chatModel, null, contextAssembler, strategies, rerankModel, automaticKeywordExtractionEnabled,
-            rerankCandidateMultiplier, queryIntentClassifier, multiHopStrategy, pathAwareAnswerSynthesizer);
+            rerankCandidateMultiplier, 0.0d, queryIntentClassifier, multiHopStrategy, pathAwareAnswerSynthesizer);
+    }
+
+    public QueryEngine(
+        ChatModel chatModel,
+        ContextAssembler contextAssembler,
+        Map<QueryMode, QueryStrategy> strategies,
+        RerankModel rerankModel,
+        boolean automaticKeywordExtractionEnabled,
+        int rerankCandidateMultiplier,
+        double minRerankScore,
+        QueryIntentClassifier queryIntentClassifier,
+        QueryStrategy multiHopStrategy,
+        PathAwareAnswerSynthesizer pathAwareAnswerSynthesizer
+    ) {
+        this(chatModel, null, contextAssembler, strategies, rerankModel, automaticKeywordExtractionEnabled,
+            rerankCandidateMultiplier, minRerankScore, queryIntentClassifier, multiHopStrategy, pathAwareAnswerSynthesizer);
     }
 
     public QueryEngine(
@@ -205,6 +251,7 @@ public final class QueryEngine {
         RerankModel rerankModel,
         boolean automaticKeywordExtractionEnabled,
         int rerankCandidateMultiplier,
+        double minRerankScore,
         QueryIntentClassifier queryIntentClassifier,
         QueryStrategy multiHopStrategy,
         PathAwareAnswerSynthesizer pathAwareAnswerSynthesizer
@@ -217,8 +264,12 @@ public final class QueryEngine {
         if (rerankCandidateMultiplier <= 0) {
             throw new IllegalArgumentException("rerankCandidateMultiplier must be positive");
         }
+        if (!Double.isFinite(minRerankScore) || minRerankScore < 0.0d) {
+            throw new IllegalArgumentException("minRerankScore must be non-negative");
+        }
         this.keywordExtractor = new QueryKeywordExtractor(automaticKeywordExtractionEnabled);
         this.rerankCandidateMultiplier = rerankCandidateMultiplier;
+        this.minRerankScore = minRerankScore;
         this.queryIntentClassifier = queryIntentClassifier;
         this.multiHopStrategy = multiHopStrategy;
         this.pathAwareAnswerSynthesizer = Objects.requireNonNull(pathAwareAnswerSynthesizer, "pathAwareAnswerSynthesizer");
@@ -600,12 +651,17 @@ public final class QueryEngine {
 
         var ordered = new java.util.ArrayList<ScoredChunk>(matchedChunks.size());
         for (var result : rerankResults) {
+            if (result.score() < minRerankScore) {
+                continue;
+            }
             var chunk = originalById.remove(result.id());
             if (chunk != null) {
                 ordered.add(chunk);
             }
         }
-        ordered.addAll(originalById.values());
+        if (minRerankScore == 0.0d) {
+            ordered.addAll(originalById.values());
+        }
         return ordered.stream()
             .limit(request.chunkTopK())
             .toList();

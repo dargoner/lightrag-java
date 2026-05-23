@@ -426,6 +426,7 @@ public class LightRagProperties {
         private String defaultResponseType = "Multiple Paragraphs";
         private boolean automaticKeywordExtraction = true;
         private int rerankCandidateMultiplier = 2;
+        private double minRerankScore = 0.0d;
 
         public String getDefaultMode() {
             return defaultMode;
@@ -473,6 +474,14 @@ public class LightRagProperties {
 
         public void setRerankCandidateMultiplier(int rerankCandidateMultiplier) {
             this.rerankCandidateMultiplier = rerankCandidateMultiplier;
+        }
+
+        public double getMinRerankScore() {
+            return minRerankScore;
+        }
+
+        public void setMinRerankScore(double minRerankScore) {
+            this.minRerankScore = minRerankScore;
         }
     }
 

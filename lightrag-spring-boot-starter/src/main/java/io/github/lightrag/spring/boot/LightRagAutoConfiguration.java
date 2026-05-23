@@ -294,7 +294,8 @@ public class LightRagAutoConfiguration {
             .embeddingModel(embeddingModel)
             .workspaceStorage(workspaceStorageProvider)
             .automaticQueryKeywordExtraction(query.isAutomaticKeywordExtraction())
-            .rerankCandidateMultiplier(query.getRerankCandidateMultiplier());
+            .rerankCandidateMultiplier(query.getRerankCandidateMultiplier())
+            .minRerankScore(query.getMinRerankScore());
         var configuredQueryModel = queryModelProvider.getIfAvailable();
         if (configuredQueryModel != null) {
             builder.queryModel(configuredQueryModel);

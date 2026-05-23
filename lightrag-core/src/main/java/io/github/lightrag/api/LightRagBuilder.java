@@ -49,6 +49,7 @@ public final class LightRagBuilder {
     private Chunker chunker = new FixedWindowChunker(DEFAULT_CHUNK_WINDOW, DEFAULT_CHUNK_OVERLAP);
     private boolean automaticQueryKeywordExtraction = true;
     private int rerankCandidateMultiplier = 2;
+    private double minRerankScore = 0.0d;
     private int embeddingBatchSize = Integer.MAX_VALUE;
     private int maxParallelInsert = 1;
     private int chunkExtractParallelism = 1;
@@ -163,6 +164,14 @@ public final class LightRagBuilder {
             throw new IllegalArgumentException("rerankCandidateMultiplier must be positive");
         }
         this.rerankCandidateMultiplier = rerankCandidateMultiplier;
+        return this;
+    }
+
+    public LightRagBuilder minRerankScore(double minRerankScore) {
+        if (!Double.isFinite(minRerankScore) || minRerankScore < 0.0d) {
+            throw new IllegalArgumentException("minRerankScore must be non-negative");
+        }
+        this.minRerankScore = minRerankScore;
         return this;
     }
 
@@ -335,7 +344,8 @@ public final class LightRagBuilder {
             snapshotPath,
             rerankModel,
             resolvedWorkspaceStorageProvider
-        ), chunker, documentParsingOrchestrator, automaticQueryKeywordExtraction, rerankCandidateMultiplier, embeddingBatchSize, maxParallelInsert,
+        ), chunker, documentParsingOrchestrator, automaticQueryKeywordExtraction, rerankCandidateMultiplier, minRerankScore,
+            embeddingBatchSize, maxParallelInsert,
             chunkExtractParallelism,
             entityExtractMaxGleaning, maxExtractInputTokens, entityExtractionLanguage, entityTypes,
             embeddingSemanticMergeEnabled, embeddingSemanticMergeThreshold, extractionRefinementOptions, taskEventListeners);

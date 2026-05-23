@@ -581,6 +581,7 @@ var rag = LightRag.builder()
         .sorted(java.util.Comparator.comparing(RerankModel.RerankCandidate::id).reversed())
         .map(candidate -> new RerankModel.RerankResult(candidate.id(), 1.0d))
         .toList())
+    .minRerankScore(0.0d)
     .storage(storage)
     .build();
 ```
@@ -609,6 +610,7 @@ Notes:
 - `NAIVE` also participates in rerank through the shared `QueryEngine`; rerank is not specific to graph-aware modes
 - rerank is especially useful with `MIX` queries because the engine expands the internal candidate window before reranking
 - rerank changes chunk order only; exposed context IDs/texts still come from the original retrieval records
+- `minRerankScore(...)` defaults to `0.0`, matching upstream `MIN_RERANK_SCORE`; when set above `0.0`, chunks below the reranker score threshold are filtered out
 - if `enableRerank(true)` is used without configuring a rerank model, Java treats it as a deterministic no-op in this phase
 - if the configured rerank model fails, Java falls back to the original retrieved chunk order for that query
 
@@ -1038,6 +1040,7 @@ var rag = LightRag.builder()
     .entityTypes(List.of("Person", "Organization"))
     .automaticQueryKeywordExtraction(false)
     .rerankCandidateMultiplier(4)
+    .minRerankScore(0.0d)
     .build();
 ```
 
@@ -1050,6 +1053,7 @@ var rag = LightRag.builder()
 - `entityTypes(...)`: overrides the preferred entity taxonomy used in extraction prompts
 - `automaticQueryKeywordExtraction(...)`: turns graph-mode keyword extraction on or off
 - `rerankCandidateMultiplier(...)`: controls how far `QueryEngine` expands `chunkTopK` before reranking
+- `minRerankScore(...)`: filters reranked chunks below the configured score threshold; default `0.0` keeps all reranked candidates
 
 Defaults in this phase:
 
@@ -1062,6 +1066,7 @@ Defaults in this phase:
 - entity types: `Person, Creature, Organization, Location, Event, Concept, Method, Content, Data, Artifact, NaturalObject, Other`
 - automatic keyword extraction: `true`
 - rerank candidate multiplier: `2`
+- min rerank score: `0.0`
 
 These controls change indexing or retrieval internals only. They do not alter the `QueryRequest` surface or default query semantics unless you opt in through the builder.
 
@@ -1082,6 +1087,7 @@ lightrag:
   query:
     automatic-keyword-extraction: false
     rerank-candidate-multiplier: 4
+    min-rerank-score: 0.0
 ```
 
 Role-specific model properties follow upstream LightRAG's `EXTRACT`, `KEYWORD`, and `QUERY` roles. Each role falls back to `lightrag.chat` when not configured:

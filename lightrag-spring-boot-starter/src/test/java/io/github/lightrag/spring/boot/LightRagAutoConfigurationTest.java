@@ -70,6 +70,7 @@ class LightRagAutoConfigurationTest {
             "lightrag.query.default-response-type=Bullet Points",
             "lightrag.query.automatic-keyword-extraction=false",
             "lightrag.query.rerank-candidate-multiplier=4",
+            "lightrag.query.min-rerank-score=0.25",
             "lightrag.demo.async-ingest-enabled=false"
         );
 
@@ -253,6 +254,7 @@ class LightRagAutoConfigurationTest {
             assertThat(properties.getQuery().getDefaultResponseType()).isEqualTo("Bullet Points");
             assertThat(properties.getQuery().isAutomaticKeywordExtraction()).isFalse();
             assertThat(properties.getQuery().getRerankCandidateMultiplier()).isEqualTo(4);
+            assertThat(properties.getQuery().getMinRerankScore()).isEqualTo(0.25d);
             assertThat(properties.getDemo().isAsyncIngestEnabled()).isFalse();
             assertThat(properties.getWorkspace().getHeaderName()).isEqualTo("X-Workspace-Id");
             assertThat(properties.getWorkspace().getDefaultId()).isEqualTo("default");
@@ -486,6 +488,7 @@ class LightRagAutoConfigurationTest {
             assertThat(extractField(lightRag, "chunker")).isInstanceOf(Chunker.class);
             assertThat(extractField(lightRag, "automaticQueryKeywordExtraction")).isEqualTo(false);
             assertThat(extractField(lightRag, "rerankCandidateMultiplier")).isEqualTo(4);
+            assertThat(extractField(lightRag, "minRerankScore")).isEqualTo(0.25d);
             assertThat(extractField(lightRag, "embeddingBatchSize")).isEqualTo(2);
             assertThat(extractField(lightRag, "maxParallelInsert")).isEqualTo(3);
             assertThat(extractField(lightRag, "entityExtractMaxGleaning")).isEqualTo(2);
@@ -542,6 +545,7 @@ class LightRagAutoConfigurationTest {
                 assertThat(properties.getQuery().getDefaultResponseType()).isEqualTo("Multiple Paragraphs");
                 assertThat(properties.getQuery().isAutomaticKeywordExtraction()).isTrue();
                 assertThat(properties.getQuery().getRerankCandidateMultiplier()).isEqualTo(2);
+                assertThat(properties.getQuery().getMinRerankScore()).isEqualTo(0.0d);
                 assertThat(properties.getDemo().isAsyncIngestEnabled()).isTrue();
                 assertThat(properties.getWorkspace().getHeaderName()).isEqualTo("X-Workspace-Id");
                 assertThat(properties.getWorkspace().getDefaultId()).isEqualTo("default");
