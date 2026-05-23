@@ -30,7 +30,7 @@ class ChunkingOrchestratorTest {
     }
 
     @Test
-    void acceptsUpstreamParagraphAliasAsSmartStrategy() {
+    void acceptsUpstreamParagraphAliasAsParagraphStrategy() {
         var options = new DocumentIngestOptions(
             DocumentTypeHint.AUTO,
             ChunkGranularity.MEDIUM,
@@ -43,8 +43,214 @@ class ChunkingOrchestratorTest {
             RegexChunkerConfig.empty()
         );
 
-        assertThat(options.strategyOverride()).isEqualTo(ChunkingStrategyOverride.SMART);
-        assertThat(ChunkingOrchestrator.resolveInitialMode(profile)).isEqualTo(ChunkingMode.SMART);
+        assertThat(options.strategyOverride()).isEqualTo(ChunkingStrategyOverride.PARAGRAPH);
+        assertThat(ChunkingOrchestrator.resolveInitialMode(profile)).isEqualTo(ChunkingMode.PARAGRAPH);
+    }
+
+    @Test
+    void paragraphStrategyKeepsSiblingSectionsSeparated() {
+        var orchestrator = new ChunkingOrchestrator(
+            new DocumentTypeResolver(),
+            new SmartChunker(SmartChunkerConfig.defaults()),
+            new ParagraphSemanticChunker(
+                SmartChunkerConfig.builder()
+                    .targetTokens(40)
+                    .maxTokens(80)
+                    .overlapTokens(10)
+                    .semanticMergeEnabled(false)
+                    .build(),
+                new FixedWindowChunker(80, 10)
+            ),
+            new RegexChunker(new FixedWindowChunker(80, 10)),
+            new FixedWindowChunker(80, 10)
+        );
+        var parsed = new ParsedDocument(
+            "doc-p",
+            "Guide",
+            "",
+            List.of(
+                new ParsedBlock(
+                    "a",
+                    "paragraph",
+                    "alpha intro\nalpha detail",
+                    "Chapter > A",
+                    List.of("Chapter", "A"),
+                    null,
+                    "",
+                    1,
+                    Map.of("sidecar.level", "2")
+                ),
+                new ParsedBlock(
+                    "b",
+                    "paragraph",
+                    "beta intro\nbeta detail",
+                    "Chapter > B",
+                    List.of("Chapter", "B"),
+                    null,
+                    "",
+                    2,
+                    Map.of("sidecar.level", "2")
+                )
+            ),
+            Map.of("parse_mode", "sidecar")
+        );
+
+        var result = orchestrator.chunk(parsed, new DocumentIngestOptions(
+            DocumentTypeHint.AUTO,
+            ChunkGranularity.MEDIUM,
+            ChunkingStrategyOverride.PARAGRAPH,
+            RegexChunkerConfig.empty()
+        ));
+
+        assertThat(result.effectiveMode()).isEqualTo(ChunkingMode.PARAGRAPH);
+        assertThat(result.chunks()).hasSize(2);
+        assertThat(result.chunks().get(0).text()).contains("alpha").doesNotContain("beta");
+        assertThat(result.chunks().get(1).text()).contains("beta").doesNotContain("alpha");
+        assertThat(result.chunks().get(0).metadata())
+            .containsEntry(ParagraphSemanticChunker.METADATA_HEADING, "A")
+            .containsEntry(SmartChunkMetadata.SOURCE_BLOCK_IDS, "a");
+    }
+
+    @Test
+    void paragraphStrategySplitsOversizedBlocksAndAddsPartSuffixes() {
+        var orchestrator = new ChunkingOrchestrator(
+            new DocumentTypeResolver(),
+            new SmartChunker(SmartChunkerConfig.defaults()),
+            new ParagraphSemanticChunker(
+                SmartChunkerConfig.builder()
+                    .targetTokens(30)
+                    .maxTokens(45)
+                    .overlapTokens(5)
+                    .semanticMergeEnabled(false)
+                    .build(),
+                new FixedWindowChunker(45, 5)
+            ),
+            new RegexChunker(new FixedWindowChunker(45, 5)),
+            new FixedWindowChunker(45, 5)
+        );
+        var parsed = new ParsedDocument(
+            "doc-long",
+            "Guide",
+            "",
+            List.of(new ParsedBlock(
+                "long",
+                "paragraph",
+                "lead\n" + "a".repeat(70) + "\nanchor\n" + "b".repeat(70),
+                "Chapter > Long",
+                List.of("Chapter", "Long"),
+                null,
+                "",
+                1,
+                Map.of("sidecar.level", "2")
+            )),
+            Map.of("parse_mode", "sidecar")
+        );
+
+        var result = orchestrator.chunk(parsed, new DocumentIngestOptions(
+            DocumentTypeHint.AUTO,
+            ChunkGranularity.MEDIUM,
+            ChunkingStrategyOverride.PARAGRAPH,
+            RegexChunkerConfig.empty()
+        ));
+
+        assertThat(result.effectiveMode()).isEqualTo(ChunkingMode.PARAGRAPH);
+        assertThat(result.chunks()).hasSizeGreaterThan(1);
+        assertThat(result.chunks())
+            .allSatisfy(chunk -> assertThat(chunk.metadata().get(ParagraphSemanticChunker.METADATA_HEADING))
+                .contains("[part "));
+    }
+
+    @Test
+    void paragraphStrategySplitsJsonTablesByRows() {
+        var orchestrator = new ChunkingOrchestrator(
+            new DocumentTypeResolver(),
+            new SmartChunker(SmartChunkerConfig.defaults()),
+            new ParagraphSemanticChunker(
+                SmartChunkerConfig.builder()
+                    .targetTokens(40)
+                    .maxTokens(80)
+                    .overlapTokens(10)
+                    .semanticMergeEnabled(false)
+                    .build(),
+                new FixedWindowChunker(80, 10)
+            ),
+            new RegexChunker(new FixedWindowChunker(80, 10)),
+            new FixedWindowChunker(80, 10)
+        );
+        var table = "<table format=\"json\">["
+            + "{\"name\":\"alpha\",\"desc\":\"" + "a".repeat(30) + "\"},"
+            + "{\"name\":\"beta\",\"desc\":\"" + "b".repeat(30) + "\"},"
+            + "{\"name\":\"gamma\",\"desc\":\"" + "c".repeat(30) + "\"}"
+            + "]</table>";
+        var parsed = new ParsedDocument(
+            "doc-table",
+            "Guide",
+            "",
+            List.of(new ParsedBlock(
+                "table-block",
+                "table",
+                "intro\n" + table + "\noutro",
+                "Chapter > Table",
+                List.of("Chapter", "Table"),
+                null,
+                "",
+                1,
+                Map.of("sidecar.level", "2")
+            )),
+            Map.of("parse_mode", "sidecar")
+        );
+
+        var result = orchestrator.chunk(parsed, new DocumentIngestOptions(
+            DocumentTypeHint.AUTO,
+            ChunkGranularity.MEDIUM,
+            ChunkingStrategyOverride.PARAGRAPH,
+            RegexChunkerConfig.empty()
+        ));
+
+        assertThat(result.effectiveMode()).isEqualTo(ChunkingMode.PARAGRAPH);
+        assertThat(result.chunks()).hasSizeGreaterThan(1);
+        assertThat(result.chunks())
+            .anySatisfy(chunk -> assertThat(chunk.text()).contains("<table format=\"json\">["));
+        assertThat(result.chunks())
+            .allSatisfy(chunk -> assertThat(chunk.metadata())
+                .containsEntry(SmartChunkMetadata.SOURCE_BLOCK_IDS, "table-block"));
+    }
+
+    @Test
+    void paragraphStrategyFallsBackWhenSidecarBlocksAreUnavailable() {
+        var orchestrator = new ChunkingOrchestrator(
+            new DocumentTypeResolver(),
+            new SmartChunker(SmartChunkerConfig.defaults()),
+            new ParagraphSemanticChunker(
+                SmartChunkerConfig.builder()
+                    .targetTokens(40)
+                    .maxTokens(60)
+                    .overlapTokens(5)
+                    .semanticMergeEnabled(false)
+                    .build(),
+                new FixedWindowChunker(60, 5)
+            ),
+            new RegexChunker(new FixedWindowChunker(60, 5)),
+            new FixedWindowChunker(60, 5)
+        );
+        var parsed = new ParsedDocument(
+            "plain",
+            "plain.txt",
+            "plain content without sidecar",
+            List.of(),
+            Map.of("parse_mode", "plain")
+        );
+
+        var result = orchestrator.chunk(parsed, new DocumentIngestOptions(
+            DocumentTypeHint.AUTO,
+            ChunkGranularity.MEDIUM,
+            ChunkingStrategyOverride.PARAGRAPH,
+            RegexChunkerConfig.empty()
+        ));
+
+        assertThat(result.effectiveMode()).isEqualTo(ChunkingMode.FIXED);
+        assertThat(result.downgradedToFixed()).isTrue();
+        assertThat(result.fallbackReason()).contains("upstream P falls back to R");
     }
 
     @Test

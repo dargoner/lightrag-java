@@ -342,8 +342,9 @@ The hosted API does not accept local file bytes directly, so raw upload bytes st
 Chunk selection also stays business-oriented:
 
 - default `AUTO`: use regex/manual chunking when regex rules are supplied, otherwise use `SmartChunker`
-- force `SMART`, `REGEX`, or `FIXED` through `DocumentIngestOptions`
-- upstream-style aliases are accepted where Java has equivalent behavior: `F` / `Fix` maps to `FIXED`, and `P` / `Paragraph` maps to `SMART`
+- force `SMART`, `PARAGRAPH`, `REGEX`, or `FIXED` through `DocumentIngestOptions`
+- upstream-style aliases are accepted where Java has equivalent behavior: `F` / `Fix` maps to `FIXED`, and `P` / `Paragraph` maps to `PARAGRAPH`
+- `P` / `Paragraph` follows LightRAG's paragraph-semantic path for sidecar content blocks: heading-first basic chunks, paragraph/table-boundary splitting, `[part n]` suffixes for split content rows, and hierarchy-aware small-block merging; when sidecar blocks are missing, upstream falls back to `R`, while Java currently records the fallback reason and uses fixed-window fallback because `R` is not implemented yet
 - `R` / `Recursive` and `V` / `Vector` are rejected explicitly for now because Java does not yet implement upstream's recursive separator cascade or vector breakpoint splitter
 - enable optional parent/child chunks when you want retrieval to recall child hits and expand them back to parent context
 
@@ -384,7 +385,7 @@ The legacy properties below are still supported for backward compatibility:
 - `lightrag.indexing.ingest.parent-child-enabled`
 
 If no request-level `preset` override is provided, those legacy properties still override the preset-derived defaults.
-`lightrag.indexing.ingest.chunking-strategy` accepts `AUTO`, Java-native `SMART` / `REGEX` / `FIXED`, and the upstream-compatible aliases `F` / `Fix` / `P` / `Paragraph`.
+`lightrag.indexing.ingest.chunking-strategy` accepts `AUTO`, Java-native `SMART` / `PARAGRAPH` / `REGEX` / `FIXED`, and the upstream-compatible aliases `F` / `Fix` / `P` / `Paragraph`.
 
 `embedding-batch-size` controls how many texts are sent in each indexing-time embedding request. Leave it unset or `0` to preserve the current single-batch behavior.
 `max-parallel-insert` controls how many documents ingest can process concurrently. It defaults to `1` so existing runtime behavior stays serial unless you opt in.

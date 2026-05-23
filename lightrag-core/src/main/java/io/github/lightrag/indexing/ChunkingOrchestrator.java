@@ -16,11 +16,26 @@ public final class ChunkingOrchestrator {
 
     private final DocumentTypeResolver documentTypeResolver;
     private final SmartChunker smartChunkerOverride;
+    private final ParagraphSemanticChunker paragraphChunkerOverride;
     private final RegexChunker regexChunkerOverride;
     private final FixedWindowChunker fixedChunkerOverride;
 
     public ChunkingOrchestrator() {
-        this(new DocumentTypeResolver(), null, null, null);
+        this(new DocumentTypeResolver(), null, null, null, null);
+    }
+
+    ChunkingOrchestrator(
+        DocumentTypeResolver documentTypeResolver,
+        SmartChunker smartChunker,
+        ParagraphSemanticChunker paragraphChunker,
+        RegexChunker regexChunker,
+        FixedWindowChunker fixedChunker
+    ) {
+        this.documentTypeResolver = Objects.requireNonNull(documentTypeResolver, "documentTypeResolver");
+        this.smartChunkerOverride = smartChunker;
+        this.paragraphChunkerOverride = paragraphChunker;
+        this.regexChunkerOverride = regexChunker;
+        this.fixedChunkerOverride = fixedChunker;
     }
 
     ChunkingOrchestrator(
@@ -29,10 +44,7 @@ public final class ChunkingOrchestrator {
         RegexChunker regexChunker,
         FixedWindowChunker fixedChunker
     ) {
-        this.documentTypeResolver = Objects.requireNonNull(documentTypeResolver, "documentTypeResolver");
-        this.smartChunkerOverride = smartChunker;
-        this.regexChunkerOverride = regexChunker;
-        this.fixedChunkerOverride = fixedChunker;
+        this(documentTypeResolver, smartChunker, null, regexChunker, fixedChunker);
     }
 
     public ChunkingResult chunk(ParsedDocument document, DocumentIngestOptions options) {
@@ -47,6 +59,7 @@ public final class ChunkingOrchestrator {
         var initialMode = resolveInitialMode(profile);
         var result = switch (initialMode) {
             case REGEX -> regexChunker(profile).chunk(parsed, profile.regexConfig());
+            case PARAGRAPH -> paragraphChunker(profile).chunk(parsed);
             case SMART -> smartChunk(parsed, profile);
             case FIXED -> fixedChunk(parsed, profile);
         };
@@ -56,6 +69,7 @@ public final class ChunkingOrchestrator {
     static ChunkingMode resolveInitialMode(ChunkingProfile profile) {
         return switch (Objects.requireNonNull(profile, "profile").strategyOverride()) {
             case SMART -> ChunkingMode.SMART;
+            case PARAGRAPH -> ChunkingMode.PARAGRAPH;
             case REGEX -> ChunkingMode.REGEX;
             case FIXED -> ChunkingMode.FIXED;
             case AUTO -> profile.hasRegexRules() ? ChunkingMode.REGEX : ChunkingMode.SMART;
@@ -130,6 +144,12 @@ public final class ChunkingOrchestrator {
 
     private SmartChunker smartChunker(ChunkingProfile profile) {
         return smartChunkerOverride != null ? smartChunkerOverride : new SmartChunker(profile.smartChunkerConfig());
+    }
+
+    private ParagraphSemanticChunker paragraphChunker(ChunkingProfile profile) {
+        return paragraphChunkerOverride != null
+            ? paragraphChunkerOverride
+            : new ParagraphSemanticChunker(profile.smartChunkerConfig(), fixedChunker(profile));
     }
 
     private RegexChunker regexChunker(ChunkingProfile profile) {

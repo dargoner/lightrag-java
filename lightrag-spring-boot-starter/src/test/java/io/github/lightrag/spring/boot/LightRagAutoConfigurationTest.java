@@ -414,7 +414,7 @@ class LightRagAutoConfigurationTest {
                 assertThat(ingest.getChunkGranularity()).isEqualTo("COARSE");
                 assertThat(ingest.getChunkingStrategy()).isEqualTo("P");
                 assertThat(ingest.toDocumentIngestOptions(null).strategyOverride())
-                    .isEqualTo(ChunkingStrategyOverride.SMART);
+                    .isEqualTo(ChunkingStrategyOverride.PARAGRAPH);
                 assertThat(ingest.isParentChildEnabled()).isTrue();
                 assertThat(ingest.getPreset()).isEqualTo(IngestPreset.GENERAL);
             });
