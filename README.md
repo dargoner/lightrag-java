@@ -341,6 +341,8 @@ Chunk selection also stays business-oriented:
 
 - default `AUTO`: use regex/manual chunking when regex rules are supplied, otherwise use `SmartChunker`
 - force `SMART`, `REGEX`, or `FIXED` through `DocumentIngestOptions`
+- upstream-style aliases are accepted where Java has equivalent behavior: `F` / `Fix` maps to `FIXED`, and `P` / `Paragraph` maps to `SMART`
+- `R` / `Recursive` and `V` / `Vector` are rejected explicitly for now because Java does not yet implement upstream's recursive separator cascade or vector breakpoint splitter
 - enable optional parent/child chunks when you want retrieval to recall child hits and expand them back to parent context
 
 With Spring Boot Starter, fixed-window chunking can be configured optionally in `application.yml`. If omitted, it still defaults to `window-size=1000` and `overlap=100`:
@@ -353,6 +355,7 @@ lightrag:
       overlap: 150
     ingest:
       preset: GENERAL
+      chunking-strategy: P
       parent-child-window-size: 400
       parent-child-overlap: 40
     parsing:
@@ -379,6 +382,7 @@ The legacy properties below are still supported for backward compatibility:
 - `lightrag.indexing.ingest.parent-child-enabled`
 
 If no request-level `preset` override is provided, those legacy properties still override the preset-derived defaults.
+`lightrag.indexing.ingest.chunking-strategy` accepts `AUTO`, Java-native `SMART` / `REGEX` / `FIXED`, and the upstream-compatible aliases `F` / `Fix` / `P` / `Paragraph`.
 
 `embedding-batch-size` controls how many texts are sent in each indexing-time embedding request. Leave it unset or `0` to preserve the current single-batch behavior.
 `max-parallel-insert` controls how many documents ingest can process concurrently. It defaults to `1` so existing runtime behavior stays serial unless you opt in.

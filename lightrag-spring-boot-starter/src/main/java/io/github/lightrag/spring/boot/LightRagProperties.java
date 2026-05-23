@@ -264,6 +264,7 @@ public class LightRagProperties {
         private IngestPreset preset = IngestPreset.GENERAL;
         private String documentType;
         private String chunkGranularity;
+        private String chunkingStrategy;
         private Boolean parentChildEnabled;
         private int parentChildWindowSize = 400;
         private int parentChildOverlap = 40;
@@ -294,6 +295,14 @@ public class LightRagProperties {
         @Deprecated
         public void setChunkGranularity(String chunkGranularity) {
             this.chunkGranularity = normalizeLegacyEnum(chunkGranularity);
+        }
+
+        public String getChunkingStrategy() {
+            return chunkingStrategy == null ? io.github.lightrag.indexing.ChunkingStrategyOverride.AUTO.name() : chunkingStrategy;
+        }
+
+        public void setChunkingStrategy(String chunkingStrategy) {
+            this.chunkingStrategy = normalizeLegacyEnum(chunkingStrategy);
         }
 
         @Deprecated
@@ -339,7 +348,7 @@ public class LightRagProperties {
             return new io.github.lightrag.api.DocumentIngestOptions(
                 resolvedDocumentType,
                 resolvedChunkGranularity,
-                io.github.lightrag.indexing.ChunkingStrategyOverride.AUTO,
+                io.github.lightrag.indexing.ChunkingStrategyOverride.fromExternalName(chunkingStrategy),
                 io.github.lightrag.indexing.RegexChunkerConfig.empty(),
                 resolvedParentChildProfile
             );

@@ -3,6 +3,7 @@ package io.github.lightrag.spring.boot;
 import io.github.lightrag.api.LightRag;
 import io.github.lightrag.api.WorkspaceScope;
 import io.github.lightrag.indexing.Chunker;
+import io.github.lightrag.indexing.ChunkingStrategyOverride;
 import io.github.lightrag.indexing.DocumentParsingOrchestrator;
 import io.github.lightrag.indexing.FixedWindowChunker;
 import io.github.lightrag.indexing.MineruApiClient;
@@ -403,6 +404,7 @@ class LightRagAutoConfigurationTest {
             .withPropertyValues(
                 "lightrag.indexing.ingest.document-type=LAW",
                 "lightrag.indexing.ingest.chunk-granularity=COARSE",
+                "lightrag.indexing.ingest.chunking-strategy=P",
                 "lightrag.indexing.ingest.parent-child-enabled=true"
             )
             .run(context -> {
@@ -410,8 +412,24 @@ class LightRagAutoConfigurationTest {
 
                 assertThat(ingest.getDocumentType()).isEqualTo("LAW");
                 assertThat(ingest.getChunkGranularity()).isEqualTo("COARSE");
+                assertThat(ingest.getChunkingStrategy()).isEqualTo("P");
+                assertThat(ingest.toDocumentIngestOptions(null).strategyOverride())
+                    .isEqualTo(ChunkingStrategyOverride.SMART);
                 assertThat(ingest.isParentChildEnabled()).isTrue();
                 assertThat(ingest.getPreset()).isEqualTo(IngestPreset.GENERAL);
+            });
+    }
+
+    @Test
+    void rejectsUnsupportedUpstreamChunkingStrategiesInSpringIngestOptions() {
+        contextRunner
+            .withPropertyValues("lightrag.indexing.ingest.chunking-strategy=V")
+            .run(context -> {
+                var ingest = context.getBean(LightRagProperties.class).getIndexing().getIngest();
+
+                assertThatThrownBy(() -> ingest.toDocumentIngestOptions(null))
+                    .isInstanceOf(IllegalArgumentException.class)
+                    .hasMessageContaining("vector breakpoint chunking is not implemented");
             });
     }
 

@@ -39,6 +39,20 @@ public record DocumentIngestOptions(
     public DocumentIngestOptions(
         DocumentTypeHint documentTypeHint,
         ChunkGranularity chunkGranularity,
+        String chunkingStrategy
+    ) {
+        this(
+            documentTypeHint,
+            chunkGranularity,
+            ChunkingStrategyOverride.fromExternalName(chunkingStrategy),
+            RegexChunkerConfig.empty(),
+            ParentChildProfile.disabled()
+        );
+    }
+
+    public DocumentIngestOptions(
+        DocumentTypeHint documentTypeHint,
+        ChunkGranularity chunkGranularity,
         ChunkingStrategyOverride strategyOverride,
         RegexChunkerConfig regexConfig
     ) {

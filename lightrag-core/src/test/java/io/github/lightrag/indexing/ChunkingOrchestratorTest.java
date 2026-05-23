@@ -8,8 +8,56 @@ import java.util.List;
 import java.util.Map;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 class ChunkingOrchestratorTest {
+    @Test
+    void acceptsUpstreamFixedAliasAsFixedStrategy() {
+        var options = new DocumentIngestOptions(
+            DocumentTypeHint.AUTO,
+            ChunkGranularity.MEDIUM,
+            "F"
+        );
+        var profile = new ChunkingProfile(
+            DocumentType.GENERIC,
+            ChunkGranularity.MEDIUM,
+            options.strategyOverride(),
+            RegexChunkerConfig.empty()
+        );
+
+        assertThat(options.strategyOverride()).isEqualTo(ChunkingStrategyOverride.FIXED);
+        assertThat(ChunkingOrchestrator.resolveInitialMode(profile)).isEqualTo(ChunkingMode.FIXED);
+    }
+
+    @Test
+    void acceptsUpstreamParagraphAliasAsSmartStrategy() {
+        var options = new DocumentIngestOptions(
+            DocumentTypeHint.AUTO,
+            ChunkGranularity.MEDIUM,
+            "P"
+        );
+        var profile = new ChunkingProfile(
+            DocumentType.GENERIC,
+            ChunkGranularity.MEDIUM,
+            options.strategyOverride(),
+            RegexChunkerConfig.empty()
+        );
+
+        assertThat(options.strategyOverride()).isEqualTo(ChunkingStrategyOverride.SMART);
+        assertThat(ChunkingOrchestrator.resolveInitialMode(profile)).isEqualTo(ChunkingMode.SMART);
+    }
+
+    @Test
+    void rejectsUnsupportedUpstreamRecursiveAndVectorAliases() {
+        assertThatThrownBy(() -> ChunkingStrategyOverride.fromExternalName("R"))
+            .isInstanceOf(IllegalArgumentException.class)
+            .hasMessageContaining("recursive character chunking is not implemented");
+
+        assertThatThrownBy(() -> ChunkingStrategyOverride.fromExternalName("V"))
+            .isInstanceOf(IllegalArgumentException.class)
+            .hasMessageContaining("vector breakpoint chunking is not implemented");
+    }
+
     @Test
     void autoStrategySelectsRegexWhenRulesExistEvenWithoutExplicitOverride() {
         var orchestrator = new ChunkingOrchestrator(
