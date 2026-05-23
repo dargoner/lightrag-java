@@ -4,9 +4,11 @@ import io.github.lightrag.types.Chunk;
 import io.github.lightrag.types.Document;
 import org.junit.jupiter.api.Test;
 
+import java.util.List;
 import java.util.Map;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 class FixedWindowChunkerTest {
     @Test
@@ -83,6 +85,73 @@ class FixedWindowChunkerTest {
             .containsExactly(4, 4, 2);
     }
 
+    @Test
+    void usesConfiguredTokenizerForWindowingDecodingAndTokenCount() {
+        var chunker = new FixedWindowChunker(3, 1, new PipeSeparatedTokenizer());
+        var document = new Document("doc-tokenizer", "Title", "A|B|C|D|E", Map.of());
+
+        var chunks = chunker.chunk(document);
+
+        assertThat(chunks)
+            .extracting(Chunk::text)
+            .containsExactly("A|B|C", "C|D|E");
+        assertThat(chunks)
+            .extracting(Chunk::tokenCount)
+            .containsExactly(3, 3);
+    }
+
+    @Test
+    void splitByCharacterOnlyKeepsDelimitedSegmentsWithoutTokenWindowSplitting() {
+        var chunker = new FixedWindowChunker(
+            8,
+            1,
+            UnicodeCodePointChunkTextTokenizer.INSTANCE,
+            "\n## ",
+            true
+        );
+        var document = new Document("doc-delimited", "Title", "Intro\n## Alpha\n## Beta", Map.of());
+
+        var chunks = chunker.chunk(document);
+
+        assertThat(chunks)
+            .extracting(Chunk::text)
+            .containsExactly("Intro", "Alpha", "Beta");
+    }
+
+    @Test
+    void splitByCharacterThenTokenSplitsOversizedSegmentsWhenNotOnly() {
+        var chunker = new FixedWindowChunker(
+            4,
+            1,
+            UnicodeCodePointChunkTextTokenizer.INSTANCE,
+            "|",
+            false
+        );
+        var document = new Document("doc-delimited-long", "Title", "ab|cdefghi", Map.of());
+
+        var chunks = chunker.chunk(document);
+
+        assertThat(chunks)
+            .extracting(Chunk::text)
+            .containsExactly("ab", "cdef", "fghi");
+    }
+
+    @Test
+    void splitByCharacterOnlyRejectsOversizedSegmentsLikeUpstreamFixedChunker() {
+        var chunker = new FixedWindowChunker(
+            4,
+            1,
+            UnicodeCodePointChunkTextTokenizer.INSTANCE,
+            "|",
+            true
+        );
+        var document = new Document("doc-delimited-too-long", "Title", "ab|cdefghi", Map.of());
+
+        assertThatThrownBy(() -> chunker.chunk(document))
+            .isInstanceOf(IllegalArgumentException.class)
+            .hasMessageContaining("split_by_character exceeds token limit");
+    }
+
     private static boolean hasIsolatedSurrogate(String text) {
         for (var index = 0; index < text.length(); index++) {
             var current = text.charAt(index);
@@ -98,5 +167,22 @@ class FixedWindowChunkerTest {
             }
         }
         return false;
+    }
+
+    private static final class PipeSeparatedTokenizer implements ChunkTextTokenizer {
+        @Override
+        public List<String> encode(String text) {
+            return List.of(text.split("\\|", -1));
+        }
+
+        @Override
+        public String decode(List<String> tokens) {
+            return String.join("|", tokens);
+        }
+
+        @Override
+        public int count(String text) {
+            return encode(text).size();
+        }
     }
 }

@@ -344,6 +344,7 @@ Chunk selection also stays business-oriented:
 - default `AUTO`: use regex/manual chunking when regex rules are supplied, otherwise use `SmartChunker`
 - force `SMART`, `PARAGRAPH`, `REGEX`, or `FIXED` through `DocumentIngestOptions`
 - upstream-style aliases are accepted where Java has equivalent behavior: `F` / `Fix` maps to `FIXED`, and `P` / `Paragraph` maps to `PARAGRAPH`
+- `F` / `Fix` now uses the same token-window shape as upstream fixed-token chunking: `FixedWindowChunker` delegates windowing, overlap, and token counts to a `ChunkTextTokenizer`; the default tokenizer preserves the prior Unicode code point behavior, while custom tokenizers and `split_by_character` / `split_by_character_only` can be supplied through the chunker constructor
 - `P` / `Paragraph` follows LightRAG's paragraph-semantic path for sidecar content blocks: heading-first basic chunks, paragraph/table-boundary splitting, `[part n]` suffixes for split content rows, and hierarchy-aware small-block merging; when sidecar blocks are missing, upstream falls back to `R`, while Java currently records the fallback reason and uses fixed-window fallback because `R` is not implemented yet
 - `R` / `Recursive` and `V` / `Vector` are rejected explicitly for now because Java does not yet implement upstream's recursive separator cascade or vector breakpoint splitter
 - enable optional parent/child chunks when you want retrieval to recall child hits and expand them back to parent context
