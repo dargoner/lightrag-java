@@ -327,9 +327,11 @@ rag.ingestSources(
 Raw-source ingest keeps parser backend selection internal:
 
 - `.txt`, `.md`, `.markdown`: direct UTF-8 plain-text parsing
+- upstream LightRAG sidecar `*.blocks.jsonl` files: parsed directly as structured blocks with `parse_mode=sidecar`
 - `.pdf`, `.doc`, `.docx`, `.ppt`, `.pptx`, `.html`, `.htm`: `MinerU` first, then `Tika` fallback when enabled
 - `.png`, `.jpg`, `.jpeg`, `.webp`, `.gif`, `.bmp`: `MinerU` only; there is no OCR fallback outside MinerU
 - images and figures inside documents are first converted by `MinerU` into OCR text, captions, or layout text blocks before `SmartChunker` runs; pure visual content does not currently get its own image embedding path
+- sidecar drawings/tables/equations analysis files are not executed by Java yet; inline sidecar placeholders are preserved as text and chunk metadata
 
 For the hosted `mineru.net` API mode, the source must also provide a public file URL in metadata such as `sourceUrl`.
 The hosted API does not accept local file bytes directly, so raw upload bytes still need either:

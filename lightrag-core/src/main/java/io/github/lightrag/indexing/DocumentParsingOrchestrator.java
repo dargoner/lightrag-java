@@ -10,6 +10,7 @@ import java.util.Objects;
 
 public final class DocumentParsingOrchestrator {
     private final PlainTextParsingProvider plainTextProvider;
+    private final LightRagSidecarParsingProvider sidecarProvider;
     private final MineruParsingProvider mineruProvider;
     private final TikaFallbackParsingProvider tikaProvider;
 
@@ -23,6 +24,7 @@ public final class DocumentParsingOrchestrator {
         TikaFallbackParsingProvider tikaProvider
     ) {
         this.plainTextProvider = Objects.requireNonNull(plainTextProvider, "plainTextProvider");
+        this.sidecarProvider = new LightRagSidecarParsingProvider();
         this.mineruProvider = mineruProvider;
         this.tikaProvider = tikaProvider;
     }
@@ -48,6 +50,9 @@ public final class DocumentParsingOrchestrator {
     private ParsedDocument parseWithRouting(RawDocumentSource source) {
         var imageSource = isImageSource(source);
         var complexSource = isComplexDocumentSource(source);
+        if (isLightRagSidecarSource(source)) {
+            return sidecarProvider.parse(source);
+        }
         if (isPlainTextSource(source)) {
             return plainTextProvider.parse(source);
         }
@@ -107,6 +112,13 @@ public final class DocumentParsingOrchestrator {
         return "text/plain".equals(mediaType)
             || "text/markdown".equals(mediaType)
             || "text/x-markdown".equals(mediaType);
+    }
+
+    private static boolean isLightRagSidecarSource(RawDocumentSource source) {
+        var mediaType = normalizeMediaType(source.mediaType());
+        var fileName = source.fileName().toLowerCase(Locale.ROOT);
+        return LightRagSidecarParsingProvider.MEDIA_TYPE.equals(mediaType)
+            || fileName.endsWith(".blocks.jsonl");
     }
 
     private static boolean hasPlainTextExtension(String fileName) {

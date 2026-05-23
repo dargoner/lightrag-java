@@ -26,6 +26,43 @@ class DocumentParsingOrchestratorTest {
     }
 
     @Test
+    void parsesLightRagSidecarBlocksJsonlAsStructuredBlocks() {
+        var orchestrator = new DocumentParsingOrchestrator(new PlainTextParsingProvider());
+        var sidecar = """
+            {"type":"meta","format":"lightrag","version":"1.0","document_name":"manual.docx","doc_id":"doc-123","doc_title":"Manual","parse_engine":"native"}
+            {"type":"content","blockid":"b1","format":"plain_text","content":"第一章 总则\\n正文第一段。","heading":"第一章 总则","parent_headings":[],"level":1,"session_type":"body","table_slice":"none","positions":[{"type":"paraid","range":["p1","p2"]}]}
+            {"type":"content","blockid":"b2","format":"plain_text","content":"<table id=\\"tb-1\\" format=\\"html\\"><tr><td>A</td></tr></table>","heading":"第一章 总则","parent_headings":[],"level":1}
+            """;
+        var source = RawDocumentSource.bytes(
+            "manual.blocks.jsonl",
+            sidecar.getBytes(StandardCharsets.UTF_8),
+            LightRagSidecarParsingProvider.MEDIA_TYPE,
+            Map.of("source", "sidecar")
+        );
+
+        var parsed = orchestrator.parse(source, DocumentIngestOptions.defaults());
+
+        assertThat(parsed.documentId()).isEqualTo("doc-123");
+        assertThat(parsed.title()).isEqualTo("Manual");
+        assertThat(parsed.plainText())
+            .contains("正文第一段")
+            .contains("<table id=\"tb-1\"");
+        assertThat(parsed.metadata())
+            .containsEntry("parse_mode", "sidecar")
+            .containsEntry("parse_backend", "lightrag_blocks_jsonl")
+            .containsEntry("sidecar.format", "lightrag")
+            .containsEntry("sidecar.parse_engine", "native")
+            .containsEntry("source", "sidecar");
+        assertThat(parsed.blocks()).hasSize(2);
+        assertThat(parsed.blocks().get(0).blockId()).isEqualTo("b1");
+        assertThat(parsed.blocks().get(0).sectionHierarchy()).containsExactly("第一章 总则");
+        assertThat(parsed.blocks().get(0).metadata())
+            .containsEntry("sidecar.session_type", "body")
+            .containsKey("sidecar.positions");
+        assertThat(parsed.blocks().get(1).blockType()).isEqualTo("table");
+    }
+
+    @Test
     void rejectsUnsupportedBinaryMediaTypes() {
         var orchestrator = new DocumentParsingOrchestrator(new PlainTextParsingProvider());
         var source = RawDocumentSource.bytes(
