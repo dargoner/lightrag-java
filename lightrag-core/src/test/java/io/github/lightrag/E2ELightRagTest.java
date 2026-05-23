@@ -4,6 +4,7 @@ import io.github.lightrag.api.LightRag;
 import io.github.lightrag.api.QueryMode;
 import io.github.lightrag.api.CreateEntityRequest;
 import io.github.lightrag.api.CreateRelationRequest;
+import io.github.lightrag.api.DeletionResult;
 import io.github.lightrag.api.EditEntityRequest;
 import io.github.lightrag.api.UpdateRelationRequest;
 import io.github.lightrag.api.DocumentProcessingStatus;
@@ -295,11 +296,35 @@ class E2ELightRagTest {
             .build();
 
         rag.ingest(WORKSPACE, List.of(new Document("doc-1", "Title", "Alice works with Bob", Map.of())));
-        rag.deleteByDocumentId(WORKSPACE, "doc-1");
+        var result = rag.deleteByDocumentId(WORKSPACE, "doc-1");
 
+        assertThat(result).isEqualTo(DeletionResult.success("doc-1", "Document doc-1 successfully deleted"));
         assertThatThrownBy(() -> rag.getDocumentStatus(WORKSPACE, "doc-1"))
             .isInstanceOf(java.util.NoSuchElementException.class)
             .hasMessageContaining("document status does not exist");
+        assertThat(rag.listDocumentStatuses(WORKSPACE)).isEmpty();
+    }
+
+    @Test
+    void deleteByDocumentRemovesFailedStatusWithoutStoredDocument() {
+        var storage = InMemoryStorageProvider.create();
+        var rag = LightRag.builder()
+            .chatModel(new SelectiveFailingExtractionChatModel("doc-1"))
+            .embeddingModel(new FakeEmbeddingModel())
+            .storage(storage)
+            .build();
+
+        assertThatThrownBy(() -> rag.ingest(WORKSPACE, List.of(new Document("doc-1", "Title", "Alice works with Bob", Map.of()))))
+            .isInstanceOf(IllegalStateException.class)
+            .hasMessage("extract failed for doc-1");
+
+        var result = rag.deleteByDocumentId(WORKSPACE, "doc-1");
+
+        assertThat(result).isEqualTo(DeletionResult.success(
+            "doc-1",
+            "Document deleted without associated chunks: doc-1"
+        ));
+        assertThat(storage.documentStore().load("doc-1")).isEmpty();
         assertThat(rag.listDocumentStatuses(WORKSPACE)).isEmpty();
     }
 
@@ -2461,8 +2486,9 @@ class E2ELightRagTest {
 
         rag.ingest(WORKSPACE, List.of(new Document("doc-1", "Title", "Alice works with Bob", Map.of())));
 
-        rag.deleteByEntity(WORKSPACE, "Alice");
+        var result = rag.deleteByEntity(WORKSPACE, "Alice");
 
+        assertThat(result).isEqualTo(DeletionResult.success("Alice", "Entity Delete: remove 'Alice' and its 1 relations"));
         assertThat(storage.documentStore().load("doc-1")).isPresent();
         assertThat(storage.chunkStore().listByDocument("doc-1")).hasSize(1);
         assertThat(storage.graphStore().loadEntity("alice")).isEmpty();
@@ -2494,8 +2520,12 @@ class E2ELightRagTest {
 
         rag.ingest(WORKSPACE, List.of(new Document("doc-1", "Title", "Alice works with Bob", Map.of())));
 
-        rag.deleteByRelation(WORKSPACE, "Alice", "Bob");
+        var result = rag.deleteByRelation(WORKSPACE, "Alice", "Bob");
 
+        assertThat(result).isEqualTo(DeletionResult.success(
+            "Alice -> Bob",
+            "Relation Delete: `Alice`~`Bob` deleted successfully"
+        ));
         assertThat(storage.documentStore().load("doc-1")).isPresent();
         assertThat(storage.chunkStore().listByDocument("doc-1")).hasSize(1);
         assertThat(storage.graphStore().allRelations()).isEmpty();
@@ -2530,8 +2560,9 @@ class E2ELightRagTest {
             new Document("doc-2", "Title", "Bob reports to Carol", Map.of())
         ));
 
-        rag.deleteByDocumentId(WORKSPACE, "doc-1");
+        var result = rag.deleteByDocumentId(WORKSPACE, "doc-1");
 
+        assertThat(result).isEqualTo(DeletionResult.success("doc-1", "Document doc-1 successfully deleted"));
         assertThat(storage.documentStore().load("doc-1")).isEmpty();
         assertThat(storage.documentStore().load("doc-2")).isPresent();
         assertThat(storage.chunkStore().list())
@@ -2594,9 +2625,14 @@ class E2ELightRagTest {
 
         rag.ingest(WORKSPACE, List.of(new Document("doc-1", "Title", "Alice works with Bob", Map.of())));
 
-        rag.deleteByEntity(WORKSPACE, "Missing");
-        rag.deleteByRelation(WORKSPACE, "Missing", "Bob");
+        var entityResult = rag.deleteByEntity(WORKSPACE, "Missing");
+        var relationResult = rag.deleteByRelation(WORKSPACE, "Missing", "Bob");
 
+        assertThat(entityResult).isEqualTo(DeletionResult.notFound("Missing", "Entity 'Missing' not found."));
+        assertThat(relationResult).isEqualTo(DeletionResult.notFound(
+            "Missing -> Bob",
+            "Relation from 'Missing' to 'Bob' does not exist"
+        ));
         assertThat(storage.documentStore().list())
             .extracting(DocumentStore.DocumentRecord::id)
             .containsExactly("doc-1");

@@ -1,5 +1,6 @@
 package io.github.lightrag.indexing;
 
+import io.github.lightrag.api.DeletionResult;
 import io.github.lightrag.storage.AtomicStorageProvider;
 import io.github.lightrag.storage.DocumentGraphJournalStore;
 import io.github.lightrag.storage.DocumentGraphSnapshotStore;
@@ -33,12 +34,12 @@ public final class DeletionPipeline {
         this.snapshotPath = snapshotPath;
     }
 
-    public void deleteByEntity(String entityName) {
+    public DeletionResult deleteByEntity(String entityName) {
         var normalized = normalize(entityName);
         var snapshot = StorageSnapshots.capture(storageProvider);
         var entityIds = resolveEntityIds(snapshot.entities(), normalized);
         if (entityIds.isEmpty()) {
-            return;
+            return DeletionResult.notFound(entityName, "Entity '" + entityName + "' not found.");
         }
 
         var relationsToRemove = snapshot.relations().stream()
@@ -63,14 +64,21 @@ public final class DeletionPipeline {
             filterChunkGraphJournals(snapshot.chunkGraphJournals(), entityIds, relationsToRemove)
         ));
         StorageSnapshots.persistIfConfigured(storageProvider, snapshotPath);
+        return DeletionResult.success(
+            entityName,
+            "Entity Delete: remove '" + entityName + "' and its " + relationsToRemove.size() + " relations"
+        );
     }
 
-    public void deleteByRelation(String sourceEntityName, String targetEntityName) {
+    public DeletionResult deleteByRelation(String sourceEntityName, String targetEntityName) {
         var snapshot = StorageSnapshots.capture(storageProvider);
         var sourceIds = resolveEntityIds(snapshot.entities(), normalize(sourceEntityName));
         var targetIds = resolveEntityIds(snapshot.entities(), normalize(targetEntityName));
         if (sourceIds.isEmpty() || targetIds.isEmpty()) {
-            return;
+            return DeletionResult.notFound(
+                sourceEntityName + " -> " + targetEntityName,
+                "Relation from '" + sourceEntityName + "' to '" + targetEntityName + "' does not exist"
+            );
         }
 
         var relationsToRemove = snapshot.relations().stream()
@@ -78,7 +86,10 @@ public final class DeletionPipeline {
             .map(GraphStore.RelationRecord::id)
             .collect(java.util.stream.Collectors.toCollection(LinkedHashSet::new));
         if (relationsToRemove.isEmpty()) {
-            return;
+            return DeletionResult.notFound(
+                sourceEntityName + " -> " + targetEntityName,
+                "Relation from '" + sourceEntityName + "' to '" + targetEntityName + "' does not exist"
+            );
         }
 
         storageProvider.restore(new SnapshotStore.Snapshot(
@@ -98,15 +109,22 @@ public final class DeletionPipeline {
             filterChunkGraphJournals(snapshot.chunkGraphJournals(), Set.of(), relationsToRemove)
         ));
         StorageSnapshots.persistIfConfigured(storageProvider, snapshotPath);
+        return DeletionResult.success(
+            sourceEntityName + " -> " + targetEntityName,
+            "Relation Delete: `" + sourceEntityName + "`~`" + targetEntityName + "` deleted successfully"
+        );
     }
 
-    public void deleteByDocumentId(String documentId) {
+    public DeletionResult deleteByDocumentId(String documentId) {
         var targetId = Objects.requireNonNull(documentId, "documentId").strip();
         if (targetId.isEmpty()) {
             throw new IllegalArgumentException("documentId must not be blank");
         }
 
         var beforeSnapshot = StorageSnapshots.capture(storageProvider);
+        var targetStatus = beforeSnapshot.documentStatuses().stream()
+            .filter(statusRecord -> statusRecord.documentId().equals(targetId))
+            .findFirst();
         var remainingDocuments = beforeSnapshot.documents().stream()
             .filter(document -> !document.id().equals(targetId))
             .map(DeletionPipeline::toDocument)
@@ -120,7 +138,15 @@ public final class DeletionPipeline {
                 || !remainingDocumentIds.contains(statusRecord.documentId()))
             .toList();
         if (remainingDocuments.size() == beforeSnapshot.documents().size()) {
-            return;
+            if (targetStatus.isPresent()) {
+                storageProvider.documentStatusStore().delete(targetId);
+                StorageSnapshots.persistIfConfigured(storageProvider, snapshotPath);
+                return DeletionResult.success(
+                    targetId,
+                    "Document deleted without associated chunks: " + targetId
+                );
+            }
+            return DeletionResult.notFound(targetId, "Document " + targetId + " not found.");
         }
 
         try {
@@ -128,11 +154,12 @@ public final class DeletionPipeline {
             if (remainingDocuments.isEmpty()) {
                 restoreStatuses(preservedStatuses);
                 StorageSnapshots.persistIfConfigured(storageProvider, snapshotPath);
-                return;
+                return DeletionResult.success(targetId, "Document " + targetId + " successfully deleted");
             }
             indexingPipeline.ingest(remainingDocuments);
             restoreStatuses(preservedStatuses);
             StorageSnapshots.persistIfConfigured(storageProvider, snapshotPath);
+            return DeletionResult.success(targetId, "Document " + targetId + " successfully deleted");
         } catch (RuntimeException | Error failure) {
             try {
                 storageProvider.restore(beforeSnapshot);

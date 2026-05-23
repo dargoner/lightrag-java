@@ -820,9 +820,24 @@ For the current synchronous ingest flow:
 - a document becomes `PROCESSING` when its ingest attempt starts
 - it becomes `PROCESSED` on success, with a short summary such as processed chunk count
 - it becomes `FAILED` on ingest failure, with the top-level error message
-- `deleteByDocumentId(workspaceId, ...)` removes the persisted status entry when deletion succeeds
+- `deleteByDocumentId(workspaceId, ...)` removes the persisted status entry when deletion succeeds, including failed status-only records without stored chunks
 
 There is no background queue in this phase, so status visibility is per synchronous document ingest attempt rather than async job orchestration.
+
+## Deletion
+
+Document, entity, and relation deletion return `DeletionResult`, aligned with upstream LightRAG's `DeletionResult(status, doc_id, message, status_code, file_path)` shape:
+
+```java
+var documentDelete = rag.deleteByDocumentId("default", "doc-1");
+var entityDelete = rag.deleteByEntity("default", "Alice");
+var relationDelete = rag.deleteByRelation("default", "Alice", "Bob");
+```
+
+- `status` is one of the upstream-compatible string values such as `success`, `not_found`, or `fail`.
+- `deleteByDocumentId(...)` removes the target document/status and rebuilds remaining document-derived graph state through the current Java indexing pipeline.
+- `deleteByEntity(...)` removes the resolved entity, connected relations, entity/relation vectors, and per-chunk graph tracking while preserving source documents and chunks.
+- `deleteByRelation(...)` removes all relations between the resolved endpoint entities while preserving both entities.
 
 ## Graph Management
 

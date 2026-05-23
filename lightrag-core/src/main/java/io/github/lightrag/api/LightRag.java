@@ -289,27 +289,27 @@ public final class LightRag implements AutoCloseable {
      * Deletes the resolved entity from graph and vector storage while preserving source documents and chunks.
      * Use {@link #deleteByDocumentId(String, String)} to remove the originating text itself.
      */
-    public void deleteByEntity(String workspaceId, String entityName) {
+    public DeletionResult deleteByEntity(String workspaceId, String entityName) {
         var scope = resolveScope(workspaceId);
-        newDeletionPipeline(resolveProvider(scope)).deleteByEntity(entityName);
+        return newDeletionPipeline(resolveProvider(scope)).deleteByEntity(entityName);
     }
 
     /**
      * Deletes all relations between the resolved endpoint entities from graph and relation-vector storage.
      * Source documents and chunks remain available until removed by document deletion.
      */
-    public void deleteByRelation(String workspaceId, String sourceEntityName, String targetEntityName) {
+    public DeletionResult deleteByRelation(String workspaceId, String sourceEntityName, String targetEntityName) {
         var scope = resolveScope(workspaceId);
-        newDeletionPipeline(resolveProvider(scope)).deleteByRelation(sourceEntityName, targetEntityName);
+        return newDeletionPipeline(resolveProvider(scope)).deleteByRelation(sourceEntityName, targetEntityName);
     }
 
     /**
      * Deletes a document by clearing storage and rebuilding all remaining documents through the current
      * LightRag indexing pipeline.
      */
-    public void deleteByDocumentId(String workspaceId, String documentId) {
+    public DeletionResult deleteByDocumentId(String workspaceId, String documentId) {
         var scope = resolveScope(workspaceId);
-        newDeletionPipeline(resolveProvider(scope)).deleteByDocumentId(documentId);
+        return newDeletionPipeline(resolveProvider(scope)).deleteByDocumentId(documentId);
     }
 
     public QueryResult query(String workspaceId, QueryRequest request) {
