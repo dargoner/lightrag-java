@@ -59,7 +59,7 @@ public final class ParagraphSemanticChunker {
                 continue;
             }
             var semanticBlock = toSemanticBlock(block, source.title());
-            var expanded = expandTables(semanticBlock, tableMax, tableIdeal, tableMinLast);
+            var expanded = expandTables(semanticBlock, targetMax, tableMax, tableIdeal, tableMinLast);
             var afterLongSplit = new ArrayList<SemanticBlock>();
             for (var candidate : expanded) {
                 afterLongSplit.addAll(splitLongBlock(candidate, targetMax, targetIdeal));
@@ -132,7 +132,13 @@ public final class ParagraphSemanticChunker {
         return stripped.startsWith("<table ") && stripped.endsWith("</table>");
     }
 
-    private List<SemanticBlock> expandTables(SemanticBlock block, int tableMax, int tableIdeal, int tableMinLast) {
+    private List<SemanticBlock> expandTables(
+        SemanticBlock block,
+        int targetMax,
+        int tableMax,
+        int tableIdeal,
+        int tableMinLast
+    ) {
         if (block.paragraphs().stream().noneMatch(paragraph -> paragraph.isTable() && tokens(paragraph.text()) > tableMax)) {
             return List.of(block);
         }
@@ -150,7 +156,10 @@ public final class ParagraphSemanticChunker {
                 current.add(paragraph);
                 continue;
             }
-            if (!current.isEmpty()) {
+            if ("last".equals(currentRole)) {
+                out.addAll(bridgeConsecutiveLargeTables(block, current, slices.get(0), targetMax));
+                current.clear();
+            } else if (!current.isEmpty()) {
                 current.add(new Paragraph(slices.get(0), true));
                 out.add(block.withParagraphs(List.copyOf(current), "first"));
                 current.clear();
@@ -167,6 +176,56 @@ public final class ParagraphSemanticChunker {
             out.add(block.withParagraphs(List.copyOf(current), currentRole));
         }
         return List.copyOf(out);
+    }
+
+    private List<SemanticBlock> bridgeConsecutiveLargeTables(
+        SemanticBlock block,
+        List<Paragraph> previousLastWithBridge,
+        String nextFirstSlice,
+        int targetMax
+    ) {
+        var previousLast = previousLastWithBridge.get(0);
+        var bridge = joinParagraphs(previousLastWithBridge.subList(1, previousLastWithBridge.size()));
+        var bridgeTokens = tokens(bridge);
+        var previousBudget = bridgeBudget(targetMax, previousLast.text());
+        var nextBudget = bridgeBudget(targetMax, nextFirstSlice);
+        String leftBridge;
+        String rightBridge;
+        String middleBridge;
+        if (bridgeTokens <= previousBudget && bridgeTokens <= nextBudget) {
+            leftBridge = bridge;
+            rightBridge = bridge;
+            middleBridge = "";
+        } else {
+            leftBridge = prefixTokens(bridge, previousBudget);
+            rightBridge = suffixTokens(bridge, nextBudget);
+            middleBridge = middleTokens(bridge, previousBudget, nextBudget);
+        }
+
+        var result = new ArrayList<SemanticBlock>();
+        result.add(block.withParagraphs(appendText(previousLast, leftBridge), "last"));
+        if (!middleBridge.isBlank()) {
+            result.add(block.withParagraphs(List.of(new Paragraph(middleBridge, false)), "none"));
+        }
+        var nextFirst = new ArrayList<Paragraph>();
+        if (!rightBridge.isBlank()) {
+            nextFirst.add(new Paragraph(rightBridge, false));
+        }
+        nextFirst.add(new Paragraph(nextFirstSlice, true));
+        result.add(block.withParagraphs(List.copyOf(nextFirst), "first"));
+        return List.copyOf(result);
+    }
+
+    private int bridgeBudget(int targetMax, String boundaryText) {
+        var overlapCap = Math.min(boundedOverlap(targetMax), Math.max(targetMax / 2, 0));
+        return Math.min(overlapCap, Math.max(targetMax - tokens(boundaryText), 0));
+    }
+
+    private static List<Paragraph> appendText(Paragraph base, String text) {
+        if (text.isBlank()) {
+            return List.of(base);
+        }
+        return List.of(base, new Paragraph(text, false));
     }
 
     private List<String> splitTable(String text, int tableMax, int tableIdeal, int tableMinLast) {
@@ -508,6 +567,35 @@ public final class ParagraphSemanticChunker {
 
     private static int tokens(String text) {
         return text.codePointCount(0, text.length());
+    }
+
+    private static String prefixTokens(String text, int tokenCount) {
+        if (text.isBlank() || tokenCount <= 0) {
+            return "";
+        }
+        var end = text.offsetByCodePoints(0, Math.min(tokenCount, tokens(text)));
+        return text.substring(0, end).strip();
+    }
+
+    private static String suffixTokens(String text, int tokenCount) {
+        if (text.isBlank() || tokenCount <= 0) {
+            return "";
+        }
+        var total = tokens(text);
+        var start = text.offsetByCodePoints(0, Math.max(total - Math.min(tokenCount, total), 0));
+        return text.substring(start).strip();
+    }
+
+    private static String middleTokens(String text, int prefixTokenCount, int suffixTokenCount) {
+        var total = tokens(text);
+        var startTokens = Math.min(Math.max(prefixTokenCount, 0), total);
+        var endTokens = Math.max(startTokens, total - Math.min(Math.max(suffixTokenCount, 0), total));
+        if (startTokens >= endTokens) {
+            return "";
+        }
+        var start = text.offsetByCodePoints(0, startTokens);
+        var end = text.offsetByCodePoints(0, endTokens);
+        return text.substring(start, end).strip();
     }
 
     private static String joinParagraphs(List<Paragraph> paragraphs) {

@@ -273,6 +273,78 @@ class ChunkingOrchestratorTest {
     }
 
     @Test
+    void paragraphStrategyDuplicatesBridgeTextBetweenConsecutiveLargeTables() {
+        var orchestrator = new ChunkingOrchestrator(
+            new DocumentTypeResolver(),
+            new SmartChunker(SmartChunkerConfig.defaults()),
+            new ParagraphSemanticChunker(
+                SmartChunkerConfig.builder()
+                    .targetTokens(120)
+                    .maxTokens(180)
+                    .overlapTokens(40)
+                    .semanticMergeEnabled(false)
+                    .build(),
+                new RecursiveCharacterChunker(180, 40)
+            ),
+            new RegexChunker(new FixedWindowChunker(180, 40)),
+            new FixedWindowChunker(180, 40)
+        );
+        var rowPayload = "x".repeat(45);
+        var tableA = "<table format=\"html\">"
+            + "<tr><td>A1 " + rowPayload + "</td></tr>"
+            + "<tr><td>A2 " + rowPayload + "</td></tr>"
+            + "<tr><td>A3 " + rowPayload + "</td></tr>"
+            + "</table>";
+        var tableB = "<table format=\"html\">"
+            + "<tr><td>B1 " + rowPayload + "</td></tr>"
+            + "<tr><td>B2 " + rowPayload + "</td></tr>"
+            + "<tr><td>B3 " + rowPayload + "</td></tr>"
+            + "</table>";
+        var bridge = "bridge context between tables";
+        var parsed = new ParsedDocument(
+            "doc-bridge",
+            "Guide",
+            "",
+            List.of(new ParsedBlock(
+                "bridge-block",
+                "table",
+                tableA + "\n" + bridge + "\n" + tableB,
+                "Chapter > Tables",
+                List.of("Chapter", "Tables"),
+                null,
+                "",
+                1,
+                Map.of("sidecar.level", "2")
+            )),
+            Map.of("parse_mode", "sidecar")
+        );
+
+        var result = orchestrator.chunk(parsed, new DocumentIngestOptions(
+            DocumentTypeHint.AUTO,
+            ChunkGranularity.MEDIUM,
+            ChunkingStrategyOverride.PARAGRAPH,
+            RegexChunkerConfig.empty()
+        ));
+
+        var chunks = result.chunks();
+        var leftBoundary = chunks.stream()
+            .filter(chunk -> chunk.text().contains("A3"))
+            .findFirst()
+            .orElseThrow();
+        var rightBoundary = chunks.stream()
+            .filter(chunk -> chunk.text().contains("B1"))
+            .findFirst()
+            .orElseThrow();
+
+        assertThat(result.effectiveMode()).isEqualTo(ChunkingMode.PARAGRAPH);
+        assertThat(leftBoundary.text()).contains(bridge).doesNotContain("B1");
+        assertThat(rightBoundary.text()).contains(bridge).doesNotContain("A3");
+        assertThat(chunks.stream()
+            .filter(chunk -> chunk.text().contains("A3") && chunk.text().contains("B1"))
+            .toList()).isEmpty();
+    }
+
+    @Test
     void paragraphStrategyFallsBackWhenSidecarBlocksAreUnavailable() {
         var orchestrator = new ChunkingOrchestrator(
             new DocumentTypeResolver(),

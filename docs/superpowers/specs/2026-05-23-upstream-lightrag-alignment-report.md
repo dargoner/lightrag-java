@@ -9,6 +9,8 @@ This report records the current Java alignment status against the local upstream
 - Chunking entry names: `F/Fix` maps to fixed-window chunking, `R/Recursive` maps to recursive character chunking, `V/Vector` maps to semantic-vector chunking, and `P/Paragraph` maps to paragraph semantic chunking.
 - Semantic vector chunking: Java supports upstream threshold modes `percentile`, `standard_deviation`, `interquartile`, and `gradient`, plus `buffer_size`; when no embedding model is available it falls back to recursive chunking.
 - Paragraph table splitting: Java preserves table wrapper boundaries and uses balanced row splitting with upstream-style tiny-last-slice handling.
+- Paragraph bridge text: Java mirrors upstream Stage B.1 for consecutive large tables in one content block by duplicating short bridge text into both boundary table chunks, or splitting longer bridge text by overlap budget.
+- `process_options` / `chunk_options`: Java models upstream per-document process selectors and slim chunk option snapshots, persists them in document metadata, supports `!` to skip KG construction, and normalizes Spring kebab-case chunk option keys to upstream snake_case JSON.
 - Rerank candidate expansion: Java expands the internal `chunkTopK` candidate window before rerank and then trims to the original request budget.
 - Rerank score filtering: Java now exposes `minRerankScore`, default `0.0`, matching upstream `MIN_RERANK_SCORE`; chunks below the configured reranker score are filtered.
 - Rerank failure visibility: Java propagates configured reranker failures instead of silently using the original retrieval order; if no reranker is configured, rerank remains inactive.
@@ -20,8 +22,7 @@ This report records the current Java alignment status against the local upstream
 
 ## Partially Aligned
 
-- Paragraph chunking is aligned at the public strategy and main splitting semantics level, but the exact upstream multi-pass bridge-text duplication behavior is still not fully mirrored.
-- `chunk_options` / `process_options` are not fully modeled as first-class Java ingest fields. Java currently maps strategy-level options through the existing chunker/configuration surface instead of storing upstream's per-file option snapshot.
+- Paragraph chunking is aligned for F/R/V/P selection, table row slicing, bridge text, part suffixes, and hierarchy-aware merge constraints. Remaining differences are lower-level native sidecar details such as exact upstream anchor-position selection heuristics.
 - Original LightRAG document deletion is incremental and retry-aware around `doc_status`, chunk tracking, and LLM cache deletion. Java uses a simpler safe rebuild path and does not implement upstream's full async pipeline lock/retry state.
 - Deletion failures still throw Java exceptions for existing transactional/rebuild failures instead of always returning `DeletionResult(status="fail")`; this preserves current Java error semantics.
 - MinerU parsing is present for PDFs, Office documents, HTML, and image OCR through the Java parsing pipeline. Parser failures now surface directly instead of downgrading to Tika, but Java does not implement the full upstream multimodal analysis lifecycle.
@@ -37,11 +38,13 @@ This report records the current Java alignment status against the local upstream
 
 - `.\gradlew.bat :lightrag-core:test --tests io.github.lightrag.api.LightRagBuilderTest --tests io.github.lightrag.query.QueryEngineTest :lightrag-spring-boot-starter:test --tests io.github.lightrag.spring.boot.LightRagAutoConfigurationTest`
 - `.\gradlew.bat :lightrag-core:test --tests io.github.lightrag.E2ELightRagTest`
+- `.\gradlew.bat :lightrag-core:test --rerun-tasks --tests io.github.lightrag.indexing.DocumentIngestorTest --tests io.github.lightrag.E2ELightRagTest`
+- `.\gradlew.bat :lightrag-spring-boot-starter:test --rerun-tasks --tests io.github.lightrag.spring.boot.LightRagAutoConfigurationTest`
+- `.\gradlew.bat :lightrag-core:test --rerun-tasks --tests io.github.lightrag.indexing.ChunkingOrchestratorTest`
 - Earlier in this alignment sequence: chunking/Spring targeted tests for `F/R/V/P` and keyword role wiring passed.
 
 ## Remaining Recommended Order
 
-1. Decide whether Java should introduce first-class per-document `processOptions` and `chunkOptions`; this is an API/storage design task, not a small parity patch.
-2. If VLM is required, first design a minimal Java VLM model interface and sidecar analysis result schema before adding Spring role properties.
-3. If exact paragraph parity is required, port the remaining upstream bridge-text and anchor-position logic into `ParagraphSemanticChunker`.
-4. If upstream delete retry parity is required, design document status retry metadata and cache-id tracking before changing deletion failure behavior.
+1. If VLM is required, first design a minimal Java VLM model interface and sidecar analysis result schema before adding Spring role properties.
+2. If exact paragraph native-sidecar parity is required, port upstream's remaining anchor-position heuristics into `ParagraphSemanticChunker`.
+3. If upstream delete retry parity is required, design document status retry metadata and cache-id tracking before changing deletion failure behavior.
