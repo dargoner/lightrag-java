@@ -1,6 +1,8 @@
 package io.github.lightrag.indexing;
 
 import io.github.lightrag.storage.AtomicStorageProvider;
+import io.github.lightrag.storage.DocumentGraphJournalStore;
+import io.github.lightrag.storage.DocumentGraphSnapshotStore;
 import io.github.lightrag.storage.DocumentStore;
 import io.github.lightrag.storage.GraphStore;
 import io.github.lightrag.storage.SnapshotStore;
@@ -56,9 +58,9 @@ public final class DeletionPipeline {
             ),
             snapshot.documentStatuses(),
             snapshot.documentGraphSnapshots(),
-            snapshot.chunkGraphSnapshots(),
+            filterChunkGraphSnapshotsForEntities(snapshot.chunkGraphSnapshots(), entityIds),
             snapshot.documentGraphJournals(),
-            snapshot.chunkGraphJournals()
+            filterChunkGraphJournals(snapshot.chunkGraphJournals(), entityIds, relationsToRemove)
         ));
         StorageSnapshots.persistIfConfigured(storageProvider, snapshotPath);
     }
@@ -91,9 +93,9 @@ public final class DeletionPipeline {
             ),
             snapshot.documentStatuses(),
             snapshot.documentGraphSnapshots(),
-            snapshot.chunkGraphSnapshots(),
+            filterChunkGraphSnapshotsForRelations(snapshot.chunkGraphSnapshots(), relationsToRemove),
             snapshot.documentGraphJournals(),
-            snapshot.chunkGraphJournals()
+            filterChunkGraphJournals(snapshot.chunkGraphJournals(), Set.of(), relationsToRemove)
         ));
         StorageSnapshots.persistIfConfigured(storageProvider, snapshotPath);
     }
@@ -174,6 +176,106 @@ public final class DeletionPipeline {
             .stream()
             .filter(vector -> retainPredicate.test(vector.id()))
             .toList();
+    }
+
+    private static List<DocumentGraphSnapshotStore.ChunkGraphSnapshot> filterChunkGraphSnapshotsForEntities(
+        List<DocumentGraphSnapshotStore.ChunkGraphSnapshot> snapshots,
+        Set<String> entityIds
+    ) {
+        if (entityIds.isEmpty()) {
+            return snapshots;
+        }
+        return snapshots.stream()
+            .map(snapshot -> new DocumentGraphSnapshotStore.ChunkGraphSnapshot(
+                snapshot.documentId(),
+                snapshot.chunkId(),
+                snapshot.chunkOrder(),
+                snapshot.contentHash(),
+                snapshot.extractStatus(),
+                snapshot.entities().stream()
+                    .filter(entity -> !entityIds.contains(normalize(entity.name())))
+                    .toList(),
+                snapshot.relations().stream()
+                    .filter(relation -> !relationTouchesAny(relation, entityIds))
+                    .toList(),
+                snapshot.updatedAt(),
+                snapshot.errorMessage()
+            ))
+            .toList();
+    }
+
+    private static List<DocumentGraphSnapshotStore.ChunkGraphSnapshot> filterChunkGraphSnapshotsForRelations(
+        List<DocumentGraphSnapshotStore.ChunkGraphSnapshot> snapshots,
+        Set<String> relationIds
+    ) {
+        if (relationIds.isEmpty()) {
+            return snapshots;
+        }
+        return snapshots.stream()
+            .map(snapshot -> new DocumentGraphSnapshotStore.ChunkGraphSnapshot(
+                snapshot.documentId(),
+                snapshot.chunkId(),
+                snapshot.chunkOrder(),
+                snapshot.contentHash(),
+                snapshot.extractStatus(),
+                snapshot.entities(),
+                snapshot.relations().stream()
+                    .filter(relation -> !relationIds.contains(relationId(relation)))
+                    .toList(),
+                snapshot.updatedAt(),
+                snapshot.errorMessage()
+            ))
+            .toList();
+    }
+
+    private static List<DocumentGraphJournalStore.ChunkGraphJournal> filterChunkGraphJournals(
+        List<DocumentGraphJournalStore.ChunkGraphJournal> journals,
+        Set<String> entityIds,
+        Set<String> relationIds
+    ) {
+        if (entityIds.isEmpty() && relationIds.isEmpty()) {
+            return journals;
+        }
+        return journals.stream()
+            .map(journal -> new DocumentGraphJournalStore.ChunkGraphJournal(
+                journal.documentId(),
+                journal.chunkId(),
+                journal.snapshotVersion(),
+                journal.mergeStatus(),
+                journal.graphStatus(),
+                filterIds(journal.expectedEntityKeys(), entityIds),
+                filterIds(journal.expectedRelationKeys(), relationIds),
+                filterIds(journal.materializedEntityKeys(), entityIds),
+                filterIds(journal.materializedRelationKeys(), relationIds),
+                journal.lastFailureStage(),
+                journal.updatedAt(),
+                journal.errorMessage()
+            ))
+            .toList();
+    }
+
+    private static List<String> filterIds(List<String> ids, Set<String> idsToRemove) {
+        if (idsToRemove.isEmpty()) {
+            return ids;
+        }
+        return ids.stream()
+            .filter(id -> !idsToRemove.contains(id))
+            .toList();
+    }
+
+    private static boolean relationTouchesAny(
+        DocumentGraphSnapshotStore.ExtractedRelationRecord relation,
+        Set<String> entityIds
+    ) {
+        return entityIds.contains(normalize(relation.sourceEntityName()))
+            || entityIds.contains(normalize(relation.targetEntityName()));
+    }
+
+    private static String relationId(DocumentGraphSnapshotStore.ExtractedRelationRecord relation) {
+        return RelationCanonicalizer.relationId(
+            normalize(relation.sourceEntityName()),
+            normalize(relation.targetEntityName())
+        );
     }
 
     private static Set<String> resolveEntityIds(List<GraphStore.EntityRecord> entities, String normalizedName) {

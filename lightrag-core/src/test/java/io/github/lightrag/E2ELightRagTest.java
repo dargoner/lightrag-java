@@ -9,6 +9,7 @@ import io.github.lightrag.api.UpdateRelationRequest;
 import io.github.lightrag.api.DocumentProcessingStatus;
 import io.github.lightrag.api.DocumentStatus;
 import io.github.lightrag.api.GraphEntity;
+import io.github.lightrag.api.GraphMaterializationStatus;
 import io.github.lightrag.api.GraphRelation;
 import io.github.lightrag.api.MergeEntitiesRequest;
 import io.github.lightrag.api.QueryRequest;
@@ -2474,6 +2475,12 @@ class E2ELightRagTest {
             .extracting(VectorStore.VectorRecord::id)
             .containsExactly("bob");
         assertThat(storage.vectorStore().list("relations")).isEmpty();
+        var inspection = rag.inspectDocumentGraph(WORKSPACE, "doc-1");
+        assertThat(inspection.graphStatus()).isEqualTo(GraphMaterializationStatus.MERGED);
+        assertThat(inspection.expectedEntityCount()).isEqualTo(1);
+        assertThat(inspection.expectedRelationCount()).isZero();
+        assertThat(inspection.missingEntityKeys()).isEmpty();
+        assertThat(inspection.missingRelationKeys()).isEmpty();
     }
 
     @Test
@@ -2501,6 +2508,12 @@ class E2ELightRagTest {
             .extracting(VectorStore.VectorRecord::id)
             .containsExactly("alice", "bob");
         assertThat(storage.vectorStore().list("relations")).isEmpty();
+        var inspection = rag.inspectDocumentGraph(WORKSPACE, "doc-1");
+        assertThat(inspection.graphStatus()).isEqualTo(GraphMaterializationStatus.MERGED);
+        assertThat(inspection.expectedEntityCount()).isEqualTo(2);
+        assertThat(inspection.expectedRelationCount()).isZero();
+        assertThat(inspection.missingEntityKeys()).isEmpty();
+        assertThat(inspection.missingRelationKeys()).isEmpty();
     }
 
     @Test
