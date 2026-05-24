@@ -1,4 +1,35 @@
 .worktrees/
-.codex
+.codex/
+.claude/
+CLAUDE.md
 .gradle/
 build/
+
+# IDE and editor local state
+.idea/
+.vscode/
+*.iml
+*.ipr
+*.iws
+
+# Java and Gradle generated output
+out/
+target/
+*.class
+
+# Logs and local runtime files
+logs/
+*.log
+*.pid
+*.hprof
+
+# Local environment and temporary files
+.env
+.env.*
+!.env.example
+tmp/
+temp/
+*.tmp
+*.bak
+*.swp
+*~
