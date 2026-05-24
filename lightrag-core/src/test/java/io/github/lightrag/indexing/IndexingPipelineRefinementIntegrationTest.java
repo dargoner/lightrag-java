@@ -54,6 +54,7 @@ class IndexingPipelineRefinementIntegrationTest {
             .storage(storageProvider)
             .chunker(new TwoChunkChunker())
             .entityExtractMaxGleaning(0)
+            .chunkExtractParallelism(1)
             .contextualExtractionRefinement(true)
             .build()) {
 

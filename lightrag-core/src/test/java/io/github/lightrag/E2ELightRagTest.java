@@ -276,6 +276,7 @@ class E2ELightRagTest {
             .chatModel(new SelectiveFailingExtractionChatModel("doc-2"))
             .embeddingModel(new FakeEmbeddingModel())
             .storage(storage)
+            .maxParallelInsert(1)
             .build();
 
         seedRag.ingest(WORKSPACE, List.of(new Document("doc-0", "Title", "Alice works with Bob", Map.of())));
@@ -601,6 +602,7 @@ class E2ELightRagTest {
             .embeddingModel(new FakeEmbeddingModel())
             .storage(storage)
             .loadFromSnapshot(snapshotPath)
+            .maxParallelInsert(1)
             .build();
 
         seedRag.ingest(WORKSPACE, List.of(new Document("doc-1", "Title", "Alice works with Bob", Map.of())));
@@ -676,6 +678,7 @@ class E2ELightRagTest {
             .embeddingModel(new FakeEmbeddingModel())
             .storage(storage)
             .loadFromSnapshot(snapshotPath)
+            .maxParallelInsert(1)
             .build();
 
         assertThatThrownBy(() -> rag.ingest(WORKSPACE, List.of(
@@ -776,6 +779,7 @@ class E2ELightRagTest {
                     .chatModel(new SelectiveFailingExtractionChatModel("doc-2"))
                     .embeddingModel(new FakeEmbeddingModel())
                     .storage(storage)
+                    .maxParallelInsert(1)
                     .build();
 
                 assertThatThrownBy(() -> rag.ingest(WORKSPACE, List.of(
