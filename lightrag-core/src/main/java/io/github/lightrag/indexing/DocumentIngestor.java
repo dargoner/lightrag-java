@@ -163,7 +163,7 @@ public final class DocumentIngestor {
                 document.metadata()
             ));
 
-            var chunks = source.chunks();
+            var chunks = normalizePreChunkedChunks(source);
             validateChunkContract(document, chunks);
             chunkRecords.addAll(toChunkRecords(chunks));
             stagedChunks.addAll(chunks);
@@ -259,6 +259,26 @@ public final class DocumentIngestor {
             ));
         }
         return List.copyOf(records);
+    }
+
+    private static List<Chunk> normalizePreChunkedChunks(PreChunkedDocument source) {
+        var chunks = source.chunks();
+        var normalized = new ArrayList<Chunk>(chunks.size());
+        for (var chunk : chunks) {
+            if (source.documentId().equals(chunk.documentId())) {
+                normalized.add(chunk);
+                continue;
+            }
+            normalized.add(new Chunk(
+                chunk.id(),
+                source.documentId(),
+                chunk.text(),
+                chunk.tokenCount(),
+                chunk.order(),
+                chunk.metadata()
+            ));
+        }
+        return List.copyOf(normalized);
     }
 
     record PreparedIngest(

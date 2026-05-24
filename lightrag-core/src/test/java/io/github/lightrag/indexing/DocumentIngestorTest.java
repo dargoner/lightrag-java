@@ -15,6 +15,7 @@ import io.github.lightrag.storage.postgres.PostgresStorageConfig;
 import io.github.lightrag.storage.postgres.PostgresStorageProvider;
 import io.github.lightrag.types.Chunk;
 import io.github.lightrag.types.Document;
+import io.github.lightrag.types.PreChunkedDocument;
 import org.junit.jupiter.api.Test;
 import org.testcontainers.containers.PostgreSQLContainer;
 import org.testcontainers.utility.DockerImageName;
@@ -238,6 +239,40 @@ class DocumentIngestorTest {
         assertThat(chunks)
             .extracting(Chunk::id)
             .containsExactly("doc-1:0", "doc-1:1", "doc-1:2");
+    }
+
+    @Test
+    void preparePreChunkedUsesSourceDocumentIdForChunkRecords() {
+        var storage = InMemoryStorageProvider.create();
+        var ingestor = new DocumentIngestor(storage, new FixedWindowChunker(4, 1));
+        var document = new PreChunkedDocument(
+            "platform-doc-200",
+            "Title",
+            List.of(new Chunk(
+                "platform-chunk-300",
+                "platform-chunk-300",
+                "chunk text",
+                10,
+                0,
+                Map.of("sdkDocumentId", "platform-doc-200", "sdkChunkId", "platform-chunk-300")
+            )),
+            Map.of("sdkDocumentId", "platform-doc-200")
+        );
+
+        var prepared = ingestor.preparePreChunked(List.of(document));
+
+        assertThat(prepared.chunkRecords())
+            .containsExactly(new ChunkStore.ChunkRecord(
+                "platform-chunk-300",
+                "platform-doc-200",
+                "chunk text",
+                10,
+                0,
+                Map.of("sdkDocumentId", "platform-doc-200", "sdkChunkId", "platform-chunk-300")
+            ));
+        assertThat(prepared.chunks())
+            .extracting(Chunk::documentId)
+            .containsExactly("platform-doc-200");
     }
 
     @Test
