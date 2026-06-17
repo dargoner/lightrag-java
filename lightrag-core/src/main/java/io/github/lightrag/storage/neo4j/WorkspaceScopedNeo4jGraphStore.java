@@ -3,6 +3,7 @@ package io.github.lightrag.storage.neo4j;
 import io.github.lightrag.api.WorkspaceScope;
 import io.github.lightrag.exception.StorageException;
 import io.github.lightrag.storage.GraphStore;
+import io.github.lightrag.storage.MutableGraphStore;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.neo4j.driver.AuthTokens;
@@ -23,7 +24,7 @@ import java.util.Map;
 import java.util.Objects;
 import java.util.Optional;
 
-public final class WorkspaceScopedNeo4jGraphStore implements GraphStore, AutoCloseable {
+public final class WorkspaceScopedNeo4jGraphStore implements MutableGraphStore, AutoCloseable {
     private static final String ENTITY_LABEL = "Entity";
     private static final String RELATION_TYPE = "RELATION";
     private static final Logger log = LoggerFactory.getLogger(WorkspaceScopedNeo4jGraphStore.class);
@@ -336,6 +337,76 @@ public final class WorkspaceScopedNeo4jGraphStore implements GraphStore, AutoClo
         return relationsMap;
     }
 
+    @Override
+    public int deleteEntities(List<String> entityIds) {
+        var ids = List.copyOf(Objects.requireNonNull(entityIds, "entityIds"));
+        if (ids.isEmpty()) {
+            return 0;
+        }
+        var startedAt = System.nanoTime();
+        var scopedIds = ids.stream().map(this::scopedId).toList();
+        var deleted = write(tx -> {
+            var result = tx.run(
+                """
+                UNWIND $scopedEntityIds AS scopedEntityId
+                MATCH (entity:%s {scopedId: scopedEntityId})
+                WHERE entity.workspaceId = $workspaceId
+                WITH collect(entity) AS entities, count(entity) AS deletedCount
+                FOREACH (entity IN entities | DETACH DELETE entity)
+                RETURN deletedCount
+                """.formatted(ENTITY_LABEL),
+                org.neo4j.driver.Values.parameters(
+                    "workspaceId", workspaceId,
+                    "scopedEntityIds", scopedIds
+                )
+            );
+            return result.hasNext() ? result.next().get("deletedCount").asInt(0) : 0;
+        });
+        log.info(
+            "Neo4j graph deleteEntities completed: workspaceId={}, requestedCount={}, deletedCount={}, elapsedMs={}",
+            workspaceId,
+            ids.size(),
+            deleted,
+            elapsedMillis(startedAt)
+        );
+        return deleted;
+    }
+
+    @Override
+    public int deleteRelations(List<String> relationIds) {
+        var ids = List.copyOf(Objects.requireNonNull(relationIds, "relationIds"));
+        if (ids.isEmpty()) {
+            return 0;
+        }
+        var startedAt = System.nanoTime();
+        var scopedIds = ids.stream().map(this::scopedId).toList();
+        var deleted = write(tx -> {
+            var result = tx.run(
+                """
+                UNWIND $scopedRelationIds AS scopedRelationId
+                MATCH ()-[relation:%s {scopedId: scopedRelationId}]-()
+                WHERE relation.workspaceId = $workspaceId
+                WITH collect(relation) AS relations, count(relation) AS deletedCount
+                FOREACH (relation IN relations | DELETE relation)
+                RETURN deletedCount
+                """.formatted(RELATION_TYPE),
+                org.neo4j.driver.Values.parameters(
+                    "workspaceId", workspaceId,
+                    "scopedRelationIds", scopedIds
+                )
+            );
+            return result.hasNext() ? result.next().get("deletedCount").asInt(0) : 0;
+        });
+        log.info(
+            "Neo4j graph deleteRelations completed: workspaceId={}, requestedCount={}, deletedCount={}, elapsedMs={}",
+            workspaceId,
+            ids.size(),
+            deleted,
+            elapsedMillis(startedAt)
+        );
+        return deleted;
+    }
+
     public Neo4jGraphSnapshot captureSnapshot() {
         return new Neo4jGraphSnapshot(allEntities(), allRelations());
     }
@@ -434,6 +505,7 @@ public final class WorkspaceScopedNeo4jGraphStore implements GraphStore, AutoClo
     }
 
     private void saveEntities(TransactionContext tx, List<EntityRecord> records) {
+        var startedAt = System.nanoTime();
         tx.run(
             """
             UNWIND range(0, size($rows) - 1) AS idx
@@ -463,6 +535,12 @@ public final class WorkspaceScopedNeo4jGraphStore implements GraphStore, AutoClo
                     ))
                     .toList()
             )
+        );
+        log.info(
+            "Neo4j graph saveEntities completed: workspaceId={}, count={}, elapsedMs={}",
+            workspaceId,
+            records.size(),
+            elapsedMillis(startedAt)
         );
     }
 
@@ -526,6 +604,7 @@ public final class WorkspaceScopedNeo4jGraphStore implements GraphStore, AutoClo
     }
 
     private void saveRelations(TransactionContext tx, List<RelationRecord> records) {
+        var startedAt = System.nanoTime();
         var rows = records.stream()
             .map(record -> {
                 var row = new LinkedHashMap<String, Object>();
@@ -555,6 +634,7 @@ public final class WorkspaceScopedNeo4jGraphStore implements GraphStore, AutoClo
                 lastWriteRows.add(row);
             }
         }
+        var rowsPreparedAt = System.nanoTime();
         tx.run(
             """
             UNWIND range(0, size($allRows) - 1) AS idx
@@ -584,6 +664,7 @@ public final class WorkspaceScopedNeo4jGraphStore implements GraphStore, AutoClo
                 "allRows", rows
             )
         );
+        var endpointsSavedAt = System.nanoTime();
         tx.run(
             """
             UNWIND $lastRows AS row
@@ -595,6 +676,7 @@ public final class WorkspaceScopedNeo4jGraphStore implements GraphStore, AutoClo
                 "lastRows", lastWriteRows
             )
         );
+        var relationsDeletedAt = System.nanoTime();
         tx.run(
             """
             UNWIND range(0, size($lastRows) - 1) AS idx
@@ -617,6 +699,18 @@ public final class WorkspaceScopedNeo4jGraphStore implements GraphStore, AutoClo
                 "workspaceId", workspaceId,
                 "lastRows", lastWriteRows
             )
+        );
+        var relationsSavedAt = System.nanoTime();
+        log.info(
+            "Neo4j graph saveRelations completed: workspaceId={}, inputCount={}, distinctCount={}, prepareMs={}, endpointMergeMs={}, deleteMs={}, relationMergeMs={}, totalMs={}",
+            workspaceId,
+            records.size(),
+            lastWriteRows.size(),
+            elapsedMillis(startedAt, rowsPreparedAt),
+            elapsedMillis(rowsPreparedAt, endpointsSavedAt),
+            elapsedMillis(endpointsSavedAt, relationsDeletedAt),
+            elapsedMillis(relationsDeletedAt, relationsSavedAt),
+            elapsedMillis(startedAt, relationsSavedAt)
         );
     }
 
@@ -693,5 +787,9 @@ public final class WorkspaceScopedNeo4jGraphStore implements GraphStore, AutoClo
 
     private static long elapsedMillis(long startedAt) {
         return (System.nanoTime() - startedAt) / 1_000_000L;
+    }
+
+    private static long elapsedMillis(long startedAt, long endedAt) {
+        return Math.max(0L, (endedAt - startedAt) / 1_000_000L);
     }
 }

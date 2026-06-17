@@ -8,8 +8,11 @@ import java.util.Map;
 import java.util.Objects;
 import java.util.Optional;
 import java.util.PriorityQueue;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 public final class StorageCoordinator implements AtomicStorageProvider, AutoCloseable {
+    private static final Logger log = LoggerFactory.getLogger(StorageCoordinator.class);
     private static final Comparator<VectorStore.VectorMatch> VECTOR_MATCH_ORDER =
         Comparator.comparingDouble(VectorStore.VectorMatch::score).reversed().thenComparing(VectorStore.VectorMatch::id);
 
@@ -90,11 +93,16 @@ public final class StorageCoordinator implements AtomicStorageProvider, AutoClos
     @Override
     public <T> T writeAtomically(AtomicOperation<T> operation) {
         Objects.requireNonNull(operation, "operation");
+        long started = System.nanoTime();
         var relationalSnapshot = relationalAdapter.captureSnapshot();
+        long relationalSnapshotAt = System.nanoTime();
         var graphSnapshot = graphAdapter.captureSnapshot();
+        long graphSnapshotAt = System.nanoTime();
         var vectorSnapshot = vectorAdapter.captureSnapshot();
+        long vectorSnapshotAt = System.nanoTime();
         try {
-            return relationalAdapter.writeInTransaction(storage -> {
+            T result = relationalAdapter.writeInTransaction(storage -> {
+                long operationStarted = System.nanoTime();
                 var stagedGraphStore = new StagedGraphStore(
                     graphAdapter.graphStore(),
                     storage.transactionalGraphStore().orElse(null)
@@ -103,7 +111,7 @@ public final class StorageCoordinator implements AtomicStorageProvider, AutoClos
                     vectorAdapter.vectorStore(),
                     storage.transactionalVectorStore().orElse(null)
                 );
-                var result = operation.execute(new AtomicView(
+                var operationResult = operation.execute(new AtomicView(
                     storage.documentStore(),
                     storage.chunkStore(),
                     storage.documentGraphSnapshotStore(),
@@ -112,16 +120,36 @@ public final class StorageCoordinator implements AtomicStorageProvider, AutoClos
                     stagedVectorStore,
                     storage.documentStatusStore()
                 ));
+                long operationFinished = System.nanoTime();
                 var graphWrites = stagedGraphStore.toWrites();
                 if (!graphWrites.isEmpty()) {
                     graphAdapter.apply(graphWrites);
                 }
+                long graphAppliedAt = System.nanoTime();
                 var vectorWrites = stagedVectorStore.toWrites();
                 if (!vectorWrites.isEmpty()) {
                     vectorAdapter.apply(vectorWrites);
                 }
-                return result;
+                long vectorAppliedAt = System.nanoTime();
+                log.info(
+                    "LightRAG storage writeAtomically inner completed: graphEntities={}, graphRelations={}, vectorNamespaces={}, operationMs={}, graphApplyMs={}, vectorApplyMs={}",
+                    graphWrites.entities().size(),
+                    graphWrites.relations().size(),
+                    vectorWrites.upserts().size(),
+                    elapsedMillis(operationStarted, operationFinished),
+                    elapsedMillis(operationFinished, graphAppliedAt),
+                    elapsedMillis(graphAppliedAt, vectorAppliedAt)
+                );
+                return operationResult;
             });
+            log.info(
+                "LightRAG storage writeAtomically completed: relationalSnapshotMs={}, graphSnapshotMs={}, vectorSnapshotMs={}, totalMs={}",
+                elapsedMillis(started, relationalSnapshotAt),
+                elapsedMillis(relationalSnapshotAt, graphSnapshotAt),
+                elapsedMillis(graphSnapshotAt, vectorSnapshotAt),
+                elapsedMillis(started, System.nanoTime())
+            );
+            return result;
         } catch (RuntimeException | Error failure) {
             rollback(relationalSnapshot, graphSnapshot, vectorSnapshot, failure);
             throw failure;
@@ -131,13 +159,35 @@ public final class StorageCoordinator implements AtomicStorageProvider, AutoClos
     @Override
     public void restore(SnapshotStore.Snapshot snapshot) {
         var source = Objects.requireNonNull(snapshot, "snapshot");
+        long started = System.nanoTime();
         var relationalSnapshot = relationalAdapter.captureSnapshot();
+        long relationalSnapshotAt = System.nanoTime();
         var graphSnapshot = graphAdapter.captureSnapshot();
+        long graphSnapshotAt = System.nanoTime();
         var vectorSnapshot = vectorAdapter.captureSnapshot();
+        long vectorSnapshotAt = System.nanoTime();
         try {
             relationalAdapter.restore(relationalAdapter.toRelationalRestoreSnapshot(source));
+            long relationalRestoreAt = System.nanoTime();
             graphAdapter.restore(new GraphStorageAdapter.GraphSnapshot(source.entities(), source.relations()));
+            long graphRestoreAt = System.nanoTime();
             vectorAdapter.restore(new VectorStorageAdapter.VectorSnapshot(source.vectors()));
+            long vectorRestoreAt = System.nanoTime();
+            log.info(
+                "LightRAG storage restore completed: documents={}, chunks={}, entities={}, relations={}, vectorNamespaces={}, relationalSnapshotMs={}, graphSnapshotMs={}, vectorSnapshotMs={}, relationalRestoreMs={}, graphRestoreMs={}, vectorRestoreMs={}, totalMs={}",
+                source.documents().size(),
+                source.chunks().size(),
+                source.entities().size(),
+                source.relations().size(),
+                source.vectors().size(),
+                elapsedMillis(started, relationalSnapshotAt),
+                elapsedMillis(relationalSnapshotAt, graphSnapshotAt),
+                elapsedMillis(graphSnapshotAt, vectorSnapshotAt),
+                elapsedMillis(vectorSnapshotAt, relationalRestoreAt),
+                elapsedMillis(relationalRestoreAt, graphRestoreAt),
+                elapsedMillis(graphRestoreAt, vectorRestoreAt),
+                elapsedMillis(started, vectorRestoreAt)
+            );
         } catch (RuntimeException | Error failure) {
             rollback(relationalSnapshot, graphSnapshot, vectorSnapshot, failure);
             throw failure;
@@ -229,6 +279,10 @@ public final class StorageCoordinator implements AtomicStorageProvider, AutoClos
         if (target != suppressed) {
             target.addSuppressed(suppressed);
         }
+    }
+
+    private static long elapsedMillis(long startedNanos, long endedNanos) {
+        return Math.max(0L, (endedNanos - startedNanos) / 1_000_000L);
     }
 
     private static final class StagedGraphStore implements GraphStore {

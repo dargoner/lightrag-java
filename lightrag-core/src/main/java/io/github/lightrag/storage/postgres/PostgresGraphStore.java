@@ -2,6 +2,7 @@ package io.github.lightrag.storage.postgres;
 
 import io.github.lightrag.exception.StorageException;
 import io.github.lightrag.storage.GraphStore;
+import io.github.lightrag.storage.MutableGraphStore;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -18,7 +19,7 @@ import java.util.Objects;
 import java.util.Optional;
 import java.util.Set;
 
-public final class PostgresGraphStore implements GraphStore {
+public final class PostgresGraphStore implements MutableGraphStore {
     private static final Logger log = LoggerFactory.getLogger(PostgresGraphStore.class);
     private final JdbcConnectionAccess connectionAccess;
     private final String entitiesTable;
@@ -109,6 +110,8 @@ public final class PostgresGraphStore implements GraphStore {
     @Override
     public List<EntityRecord> allEntities() {
         return connectionAccess.withConnection(connection -> {
+            var aliasesByEntityId = selectStringLists(connection, entityAliasesTable, "entity_id", "alias");
+            var chunkIdsByEntityId = selectStringLists(connection, entityChunksTable, "entity_id", "chunk_id");
             try (var statement = connection.prepareStatement(
                 """
                 SELECT id, name, type, description
@@ -121,7 +124,7 @@ public final class PostgresGraphStore implements GraphStore {
                 try (var resultSet = statement.executeQuery()) {
                     var entities = new java.util.ArrayList<EntityRecord>();
                     while (resultSet.next()) {
-                        entities.add(readEntity(connection, resultSet));
+                        entities.add(readEntity(resultSet, aliasesByEntityId, chunkIdsByEntityId));
                     }
                     return List.copyOf(entities);
                 }
@@ -150,6 +153,40 @@ public final class PostgresGraphStore implements GraphStore {
                 }
             }
         });
+    }
+
+    @Override
+    public int deleteEntities(List<String> entityIds) {
+        var ids = List.copyOf(Objects.requireNonNull(entityIds, "entityIds"));
+        if (ids.isEmpty()) {
+            return 0;
+        }
+        var uniqueIds = new LinkedHashSet<>(ids);
+        return connectionAccess.withConnection(connection -> {
+            int[] deleted = {0};
+            inTransaction(connection, () -> {
+                deleteByIds(connection, entityAliasesTable, "entity_id", uniqueIds);
+                deleteByIds(connection, entityChunksTable, "entity_id", uniqueIds);
+                deleteByIds(connection, relationsTable, "src_id", uniqueIds);
+                deleteByIds(connection, relationsTable, "tgt_id", uniqueIds);
+                deleted[0] = deleteByIds(connection, entitiesTable, "id", uniqueIds);
+            });
+            return deleted[0];
+        });
+    }
+
+    @Override
+    public int deleteRelations(List<String> relationIds) {
+        var ids = List.copyOf(Objects.requireNonNull(relationIds, "relationIds"));
+        if (ids.isEmpty()) {
+            return 0;
+        }
+        return connectionAccess.withConnection(connection -> deleteByIds(
+            connection,
+            relationsTable,
+            "id",
+            new LinkedHashSet<>(ids)
+        ));
     }
 
     @Override
@@ -271,6 +308,22 @@ public final class PostgresGraphStore implements GraphStore {
         );
     }
 
+    private EntityRecord readEntity(
+        ResultSet resultSet,
+        Map<String, List<String>> aliasesByEntityId,
+        Map<String, List<String>> chunkIdsByEntityId
+    ) throws SQLException {
+        var entityId = resultSet.getString("id");
+        return new EntityRecord(
+            entityId,
+            resultSet.getString("name"),
+            resultSet.getString("type"),
+            resultSet.getString("description"),
+            aliasesByEntityId.getOrDefault(entityId, List.of()),
+            chunkIdsByEntityId.getOrDefault(entityId, List.of())
+        );
+    }
+
     private RelationRecord readRelation(Connection connection, ResultSet resultSet) throws SQLException {
         return new RelationRecord(
             resultSet.getString("id"),
@@ -308,6 +361,35 @@ public final class PostgresGraphStore implements GraphStore {
                     values.add(resultSet.getString(valueColumn));
                 }
                 return List.copyOf(values);
+            }
+        }
+    }
+
+    private Map<String, List<String>> selectStringLists(
+        Connection connection,
+        String tableName,
+        String idColumn,
+        String valueColumn
+    ) throws SQLException {
+        try (var statement = connection.prepareStatement(
+            """
+            SELECT %s, %s
+            FROM %s
+            WHERE workspace_id = ?
+            ORDER BY %s, %s
+            """.formatted(idColumn, valueColumn, tableName, idColumn, valueColumn)
+        )) {
+            statement.setString(1, workspaceId);
+            try (var resultSet = statement.executeQuery()) {
+                var valuesById = new LinkedHashMap<String, java.util.ArrayList<String>>();
+                while (resultSet.next()) {
+                    valuesById
+                        .computeIfAbsent(resultSet.getString(idColumn), ignored -> new java.util.ArrayList<>())
+                        .add(resultSet.getString(valueColumn));
+                }
+                var immutable = new LinkedHashMap<String, List<String>>();
+                valuesById.forEach((id, values) -> immutable.put(id, List.copyOf(values)));
+                return Collections.unmodifiableMap(immutable);
             }
         }
     }
@@ -409,6 +491,22 @@ public final class PostgresGraphStore implements GraphStore {
             statement.setString(1, workspaceId);
             statement.setString(2, idValue);
             statement.executeUpdate();
+        }
+    }
+
+    private int deleteByIds(Connection connection, String tableName, String idColumn, Set<String> ids) throws SQLException {
+        if (ids.isEmpty()) {
+            return 0;
+        }
+        try (var statement = connection.prepareStatement(
+            "DELETE FROM " + tableName + " WHERE workspace_id = ? AND " + idColumn + " IN (" + placeholders(ids.size()) + ")"
+        )) {
+            statement.setString(1, workspaceId);
+            int parameterIndex = 2;
+            for (var id : ids) {
+                statement.setString(parameterIndex++, id);
+            }
+            return statement.executeUpdate();
         }
     }
 

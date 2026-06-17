@@ -51,8 +51,12 @@ import java.util.Objects;
 import java.util.Set;
 import java.util.function.Function;
 import java.util.stream.Collectors;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 public final class GraphMaterializationPipeline {
+    private static final Logger log = LoggerFactory.getLogger(GraphMaterializationPipeline.class);
+
     private final AtomicStorageProvider storageProvider;
     private final KnowledgeExtractor knowledgeExtractor;
     private final ExtractionRefinementPipeline extractionRefinementPipeline;
@@ -276,13 +280,27 @@ public final class GraphMaterializationPipeline {
         if (state.chunkSnapshots().isEmpty()) {
             throw new IllegalStateException("document graph snapshot does not exist: " + state.documentId());
         }
+        long started = System.nanoTime();
+        log.info(
+            "LightRAG graph materializeDocumentState started: documentId={}, mode={}, chunks={}, expectedEntities={}, expectedRelations={}",
+            state.documentId(),
+            mode,
+            state.chunkSnapshots().size(),
+            state.expectedGraph().entities().size(),
+            state.expectedGraph().relations().size()
+        );
         progressListener.onStageStarted(io.github.lightrag.api.TaskStage.ENTITY_MATERIALIZATION, "materializing document entities");
         progressListener.onStageStarted(io.github.lightrag.api.TaskStage.RELATION_MATERIALIZATION, "materializing document relations");
         progressListener.onStageStarted(io.github.lightrag.api.TaskStage.VECTOR_REPAIR, "repairing graph vectors");
+        long writeStarted = System.nanoTime();
         storageProvider.writeAtomically(storage -> {
+            long saveGraphStarted = System.nanoTime();
             saveGraph(state.expectedGraph().entities(), state.expectedGraph().relations(), storage);
+            long saveGraphAt = System.nanoTime();
             saveEntityVectors(state.expectedGraph().entities(), storage.vectorStore());
+            long entityVectorsAt = System.nanoTime();
             saveRelationVectors(state.expectedGraph().relations(), storage.vectorStore());
+            long relationVectorsAt = System.nanoTime();
             storage.documentStatusStore().save(new DocumentStatusStore.StatusRecord(
                 state.documentId(),
                 DocumentStatus.PROCESSED,
@@ -290,25 +308,55 @@ public final class GraphMaterializationPipeline {
                 null,
                 statusMetadata(state.storedChunks())
             ));
+            long statusAt = System.nanoTime();
             appendSuccessJournals(state, mode);
+            long journalsAt = System.nanoTime();
+            log.info(
+                "LightRAG graph materializeDocumentState write phases completed: documentId={}, saveGraphMs={}, entityVectorsMs={}, relationVectorsMs={}, statusMs={}, journalsMs={}",
+                state.documentId(),
+                elapsedMillis(saveGraphStarted, saveGraphAt),
+                elapsedMillis(saveGraphAt, entityVectorsAt),
+                elapsedMillis(entityVectorsAt, relationVectorsAt),
+                elapsedMillis(relationVectorsAt, statusAt),
+                elapsedMillis(statusAt, journalsAt)
+            );
             return null;
         });
+        long writeAt = System.nanoTime();
         progressListener.onStageSucceeded(io.github.lightrag.api.TaskStage.ENTITY_MATERIALIZATION, "materialized document entities");
         progressListener.onStageSucceeded(io.github.lightrag.api.TaskStage.RELATION_MATERIALIZATION, "materialized document relations");
         progressListener.onStageSucceeded(io.github.lightrag.api.TaskStage.VECTOR_REPAIR, "repaired graph vectors");
         progressListener.onStageStarted(io.github.lightrag.api.TaskStage.FINALIZING, "finalizing graph materialization");
         persistSnapshotIfConfigured();
+        long finalizedAt = System.nanoTime();
         progressListener.onStageSucceeded(io.github.lightrag.api.TaskStage.FINALIZING, "graph materialization finalized");
+        log.info(
+            "LightRAG graph materializeDocumentState completed: documentId={}, mode={}, writeAtomicMs={}, finalizingMs={}, totalMs={}",
+            state.documentId(),
+            mode,
+            elapsedMillis(writeStarted, writeAt),
+            elapsedMillis(writeAt, finalizedAt),
+            elapsedMillis(started, finalizedAt)
+        );
     }
 
     private MaterializationState rebuildSnapshot(String documentId, MaterializationState currentState) {
+        long started = System.nanoTime();
         var storedChunks = storageProvider.chunkStore().listByDocument(documentId).stream()
             .map(chunk -> new Chunk(chunk.id(), chunk.documentId(), chunk.text(), chunk.tokenCount(), chunk.order(), chunk.metadata()))
             .toList();
+        long chunksListedAt = System.nanoTime();
         if (storedChunks.isEmpty()) {
             throw new IllegalStateException("cannot rebuild graph snapshot because stored chunks do not exist: " + documentId);
         }
+        log.info(
+            "LightRAG graph rebuildSnapshot chunks loaded: documentId={}, chunks={}, listChunksMs={}",
+            documentId,
+            storedChunks.size(),
+            elapsedMillis(started, chunksListedAt)
+        );
         var rebuiltExtractions = refineExtractions(storedChunks);
+        long refinedAt = System.nanoTime();
         var now = Instant.now();
         var version = currentState.snapshotVersion() + 1;
         var documentSnapshot = new DocumentGraphSnapshotStore.DocumentGraphSnapshot(
@@ -322,12 +370,23 @@ public final class GraphMaterializationPipeline {
             null
         );
         var chunkSnapshots = toChunkSnapshots(documentId, rebuiltExtractions, storedChunks, now);
+        long snapshotBuiltAt = System.nanoTime();
         storageProvider.writeAtomically(storage -> {
             storage.documentGraphSnapshotStore().saveDocument(documentSnapshot);
             storage.documentGraphSnapshotStore().saveChunks(documentId, chunkSnapshots);
             storage.documentGraphJournalStore().delete(documentId);
             return null;
         });
+        long writtenAt = System.nanoTime();
+        log.info(
+            "LightRAG graph rebuildSnapshot completed: documentId={}, chunks={}, refineExtractionsMs={}, buildSnapshotMs={}, writeAtomicMs={}, totalMs={}",
+            documentId,
+            storedChunks.size(),
+            elapsedMillis(chunksListedAt, refinedAt),
+            elapsedMillis(refinedAt, snapshotBuiltAt),
+            elapsedMillis(snapshotBuiltAt, writtenAt),
+            elapsedMillis(started, writtenAt)
+        );
         return loadState(documentId);
     }
 
@@ -549,13 +608,38 @@ public final class GraphMaterializationPipeline {
     }
 
     private List<GraphAssembler.ChunkExtraction> refineExtractions(List<Chunk> chunks) {
-        var primaryExtractions = chunks.stream()
-            .map(chunk -> {
-                var extraction = knowledgeExtractor.extractWithCacheIds(chunk);
-                return new PrimaryChunkExtraction(chunk, extraction.extraction(), extraction.cacheIds());
-            })
-            .toList();
-        return extractionRefinementPipeline.refine(primaryExtractions);
+        long started = System.nanoTime();
+        log.info("LightRAG graph refineExtractions started: chunks={}", chunks.size());
+        var primaryExtractions = new ArrayList<PrimaryChunkExtraction>(chunks.size());
+        int index = 0;
+        for (var chunk : chunks) {
+            long chunkStarted = System.nanoTime();
+            var extraction = knowledgeExtractor.extractWithCacheIds(chunk);
+            long chunkFinished = System.nanoTime();
+            primaryExtractions.add(new PrimaryChunkExtraction(chunk, extraction.extraction(), extraction.cacheIds()));
+            log.info(
+                "LightRAG graph refineExtractions chunk extracted: chunkId={}, order={}, index={}, entities={}, relations={}, cacheIds={}, elapsedMs={}",
+                chunk.id(),
+                chunk.order(),
+                index,
+                extraction.extraction().entities().size(),
+                extraction.extraction().relations().size(),
+                extraction.cacheIds().size(),
+                elapsedMillis(chunkStarted, chunkFinished)
+            );
+            index++;
+        }
+        long extractedAt = System.nanoTime();
+        var refined = extractionRefinementPipeline.refine(primaryExtractions);
+        long refinedAt = System.nanoTime();
+        log.info(
+            "LightRAG graph refineExtractions completed: chunks={}, extractionMs={}, refinementMs={}, totalMs={}",
+            chunks.size(),
+            elapsedMillis(started, extractedAt),
+            elapsedMillis(extractedAt, refinedAt),
+            elapsedMillis(started, refinedAt)
+        );
+        return refined;
     }
 
     private List<DocumentGraphSnapshotStore.ChunkGraphSnapshot> toChunkSnapshots(
@@ -634,10 +718,12 @@ public final class GraphMaterializationPipeline {
     private void saveGraph(List<Entity> entities, List<Relation> relations, AtomicStorageProvider.AtomicStorageView storage) {
         var graphStore = storage.graphStore();
         if (!entities.isEmpty()) {
+            long entityStarted = System.nanoTime();
             var existingEntitiesById = new LinkedHashMap<String, GraphStore.EntityRecord>();
             for (var entity : graphStore.loadEntities(distinctIds(entities.stream().map(Entity::id).toList()))) {
                 existingEntitiesById.put(entity.id(), entity);
             }
+            long entityLoadedAt = System.nanoTime();
             var mergedEntities = new LinkedHashMap<String, GraphStore.EntityRecord>();
             for (var entity : entities) {
                 var current = mergedEntities.get(entity.id());
@@ -649,13 +735,27 @@ public final class GraphMaterializationPipeline {
                 mergedEntities.remove(entity.id());
                 mergedEntities.put(entity.id(), mergedEntity);
             }
+            long entityMergedAt = System.nanoTime();
             graphStore.saveEntities(List.copyOf(mergedEntities.values()));
+            long entitySavedAt = System.nanoTime();
+            log.info(
+                "LightRAG graph saveGraph entities completed: inputEntities={}, distinctEntities={}, existingEntities={}, loadMs={}, mergeMs={}, saveMs={}, totalMs={}",
+                entities.size(),
+                mergedEntities.size(),
+                existingEntitiesById.size(),
+                elapsedMillis(entityStarted, entityLoadedAt),
+                elapsedMillis(entityLoadedAt, entityMergedAt),
+                elapsedMillis(entityMergedAt, entitySavedAt),
+                elapsedMillis(entityStarted, entitySavedAt)
+            );
         }
         if (!relations.isEmpty()) {
+            long relationStarted = System.nanoTime();
             var existingRelationsById = new LinkedHashMap<String, GraphStore.RelationRecord>();
             for (var relation : graphStore.loadRelations(distinctIds(relations.stream().map(Relation::id).toList()))) {
                 existingRelationsById.put(relation.id(), relation);
             }
+            long relationLoadedAt = System.nanoTime();
             var mergedRelations = new LinkedHashMap<String, GraphStore.RelationRecord>();
             for (var relation : relations) {
                 var current = mergedRelations.get(relation.id());
@@ -667,7 +767,19 @@ public final class GraphMaterializationPipeline {
                 mergedRelations.remove(relation.id());
                 mergedRelations.put(relation.id(), mergedRelation);
             }
+            long relationMergedAt = System.nanoTime();
             graphStore.saveRelations(List.copyOf(mergedRelations.values()));
+            long relationSavedAt = System.nanoTime();
+            log.info(
+                "LightRAG graph saveGraph relations completed: inputRelations={}, distinctRelations={}, existingRelations={}, loadMs={}, mergeMs={}, saveMs={}, totalMs={}",
+                relations.size(),
+                mergedRelations.size(),
+                existingRelationsById.size(),
+                elapsedMillis(relationStarted, relationLoadedAt),
+                elapsedMillis(relationLoadedAt, relationMergedAt),
+                elapsedMillis(relationMergedAt, relationSavedAt),
+                elapsedMillis(relationStarted, relationSavedAt)
+            );
         }
     }
 
@@ -679,28 +791,64 @@ public final class GraphMaterializationPipeline {
         if (entities.isEmpty()) {
             return;
         }
+        long started = System.nanoTime();
         var vectors = toVectorRecords(entities.stream().map(Entity::id).toList(), embeddingBatcher.embedAll(
             entities.stream().map(GraphMaterializationPipeline::entitySummary).toList()
         ));
+        long embeddedAt = System.nanoTime();
         if (vectorStore instanceof HybridVectorStore hybridVectorStore) {
             hybridVectorStore.saveAllEnriched(StorageSnapshots.ENTITY_NAMESPACE, HybridVectorPayloads.entityPayloads(entities, vectors));
+            long savedAt = System.nanoTime();
+            log.info(
+                "LightRAG graph saveEntityVectors completed: entities={}, embedMs={}, saveMs={}, totalMs={}",
+                entities.size(),
+                elapsedMillis(started, embeddedAt),
+                elapsedMillis(embeddedAt, savedAt),
+                elapsedMillis(started, savedAt)
+            );
             return;
         }
         vectorStore.saveAll(StorageSnapshots.ENTITY_NAMESPACE, vectors);
+        long savedAt = System.nanoTime();
+        log.info(
+            "LightRAG graph saveEntityVectors completed: entities={}, embedMs={}, saveMs={}, totalMs={}",
+            entities.size(),
+            elapsedMillis(started, embeddedAt),
+            elapsedMillis(embeddedAt, savedAt),
+            elapsedMillis(started, savedAt)
+        );
     }
 
     private void saveRelationVectors(List<Relation> relations, VectorStore vectorStore) {
         if (relations.isEmpty()) {
             return;
         }
+        long started = System.nanoTime();
         var vectors = toVectorRecords(relations.stream().map(Relation::id).toList(), embeddingBatcher.embedAll(
             relations.stream().map(GraphMaterializationPipeline::relationSummary).toList()
         ));
+        long embeddedAt = System.nanoTime();
         if (vectorStore instanceof HybridVectorStore hybridVectorStore) {
             hybridVectorStore.saveAllEnriched(StorageSnapshots.RELATION_NAMESPACE, HybridVectorPayloads.relationPayloads(relations, vectors));
+            long savedAt = System.nanoTime();
+            log.info(
+                "LightRAG graph saveRelationVectors completed: relations={}, embedMs={}, saveMs={}, totalMs={}",
+                relations.size(),
+                elapsedMillis(started, embeddedAt),
+                elapsedMillis(embeddedAt, savedAt),
+                elapsedMillis(started, savedAt)
+            );
             return;
         }
         vectorStore.saveAll(StorageSnapshots.RELATION_NAMESPACE, vectors);
+        long savedAt = System.nanoTime();
+        log.info(
+            "LightRAG graph saveRelationVectors completed: relations={}, embedMs={}, saveMs={}, totalMs={}",
+            relations.size(),
+            elapsedMillis(started, embeddedAt),
+            elapsedMillis(embeddedAt, savedAt),
+            elapsedMillis(started, savedAt)
+        );
     }
 
     private void persistSnapshotIfConfigured() {
@@ -868,6 +1016,10 @@ public final class GraphMaterializationPipeline {
             vectors.add(new VectorStore.VectorRecord(ids.get(index), embeddings.get(index)));
         }
         return List.copyOf(vectors);
+    }
+
+    private static long elapsedMillis(long startedNanos, long endedNanos) {
+        return Math.max(0L, (endedNanos - startedNanos) / 1_000_000L);
     }
 
     private static GraphStore.EntityRecord mergeEntity(GraphStore.EntityRecord existing, Entity incoming) {

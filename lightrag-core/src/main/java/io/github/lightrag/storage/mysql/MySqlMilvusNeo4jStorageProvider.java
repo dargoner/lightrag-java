@@ -778,6 +778,8 @@ public final class MySqlMilvusNeo4jStorageProvider implements AtomicStorageProvi
     public interface VectorProjection extends HybridVectorStore, AutoCloseable {
         void deleteNamespace(String namespace);
 
+        void deleteIds(String namespace, List<String> ids);
+
         void flushNamespaces(List<String> namespaces);
 
         @Override
@@ -858,6 +860,11 @@ public final class MySqlMilvusNeo4jStorageProvider implements AtomicStorageProvi
         @Override
         public void deleteNamespace(String namespace) {
             projection.deleteNamespace(namespace);
+        }
+
+        @Override
+        public void deleteIds(String namespace, List<String> ids) {
+            projection.deleteIds(namespace, ids);
         }
 
         @Override

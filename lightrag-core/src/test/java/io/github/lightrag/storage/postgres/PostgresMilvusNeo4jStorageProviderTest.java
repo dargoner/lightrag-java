@@ -25,6 +25,7 @@ import io.github.lightrag.storage.GraphStorageAdapter;
 import io.github.lightrag.storage.GraphStore;
 import io.github.lightrag.storage.HybridVectorStore;
 import io.github.lightrag.storage.SnapshotStore;
+import io.github.lightrag.storage.StorageLockManager;
 import io.github.lightrag.storage.VectorStorageAdapter;
 import io.github.lightrag.storage.VectorStore;
 import io.github.lightrag.storage.neo4j.Neo4jGraphSnapshot;
@@ -44,10 +45,12 @@ import java.util.Objects;
 import java.util.Optional;
 import java.util.UUID;
 import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicReference;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.locks.ReentrantReadWriteLock;
+import java.util.function.Supplier;
 import javax.sql.DataSource;
 import org.junit.jupiter.api.Test;
 import org.testcontainers.containers.PostgreSQLContainer;
@@ -168,6 +171,32 @@ class PostgresMilvusNeo4jStorageProviderTest {
                 if (providerLock.isWriteLockedByCurrentThread()) {
                     providerLock.writeLock().unlock();
                 }
+            }
+        }
+    }
+
+    @Test
+    void usesInjectedStorageLockManagerForWorkspaceWrites() {
+        var config = newConfig();
+        try (var dataSource = newDataSource(config)) {
+            var externalLock = new RecordingStorageLockManager();
+            try (var provider = new PostgresMilvusNeo4jStorageProvider(
+                dataSource,
+                config,
+                new InMemorySnapshotStore(),
+                new WorkspaceScope("default"),
+                new RecordingGraphProjection(),
+                new RecordingMilvusProjection(),
+                externalLock
+            )) {
+                provider.writeAtomically(storage -> {
+                    storage.documentStore().save(new DocumentStore.DocumentRecord("doc-external-lock", "Title", "Body", Map.of()));
+                    return null;
+                });
+
+                assertThat(provider.documentStore().load("doc-external-lock")).isPresent();
+                assertThat(externalLock.exclusiveCalls()).isEqualTo(1);
+                assertThat(externalLock.activeExclusiveCalls()).isZero();
             }
         }
     }
@@ -801,6 +830,16 @@ class PostgresMilvusNeo4jStorageProviderTest {
         }
 
         @Override
+        public void saveEntities(List<GraphStore.EntityRecord> records) {
+            records.forEach(this::saveEntity);
+        }
+
+        @Override
+        public void saveRelations(List<GraphStore.RelationRecord> records) {
+            records.forEach(this::saveRelation);
+        }
+
+        @Override
         public Optional<GraphStore.EntityRecord> loadEntity(String entityId) {
             return Optional.ofNullable(entities.get(entityId));
         }
@@ -825,6 +864,38 @@ class PostgresMilvusNeo4jStorageProviderTest {
             return relations.values().stream()
                 .filter(relation -> relation.srcId().equals(entityId) || relation.tgtId().equals(entityId))
                 .toList();
+        }
+
+        @Override
+        public Map<String, List<GraphStore.RelationRecord>> findRelations(List<String> entityIds) {
+            return entityIds.stream().collect(java.util.stream.Collectors.toMap(
+                entityId -> entityId,
+                this::findRelations,
+                (left, right) -> left,
+                LinkedHashMap::new
+            ));
+        }
+
+        @Override
+        public int deleteEntities(List<String> entityIds) {
+            int deleted = 0;
+            for (String entityId : entityIds) {
+                if (entities.remove(entityId) != null) {
+                    deleted++;
+                }
+            }
+            return deleted;
+        }
+
+        @Override
+        public int deleteRelations(List<String> relationIds) {
+            int deleted = 0;
+            for (String relationId : relationIds) {
+                if (relations.remove(relationId) != null) {
+                    deleted++;
+                }
+            }
+            return deleted;
         }
 
         @Override
@@ -893,6 +964,12 @@ class PostgresMilvusNeo4jStorageProviderTest {
         @Override
         public void deleteNamespace(String namespace) {
             namespace(namespace).clear();
+        }
+
+        @Override
+        public void deleteIds(String namespace, List<String> ids) {
+            var target = namespace(namespace);
+            ids.forEach(target::remove);
         }
 
         @Override
@@ -1013,6 +1090,30 @@ class PostgresMilvusNeo4jStorageProviderTest {
         @Override
         public List<Path> list() {
             return snapshots.keySet().stream().toList();
+        }
+    }
+
+    private static final class RecordingStorageLockManager implements StorageLockManager {
+        private final AtomicInteger exclusiveCalls = new AtomicInteger();
+        private final AtomicInteger activeExclusiveCalls = new AtomicInteger();
+
+        @Override
+        public <T> T withExclusiveLock(Supplier<T> supplier) {
+            exclusiveCalls.incrementAndGet();
+            activeExclusiveCalls.incrementAndGet();
+            try {
+                return supplier.get();
+            } finally {
+                activeExclusiveCalls.decrementAndGet();
+            }
+        }
+
+        int exclusiveCalls() {
+            return exclusiveCalls.get();
+        }
+
+        int activeExclusiveCalls() {
+            return activeExclusiveCalls.get();
         }
     }
 }

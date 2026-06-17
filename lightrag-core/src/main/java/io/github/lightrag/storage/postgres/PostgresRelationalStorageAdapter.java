@@ -347,6 +347,39 @@ public final class PostgresRelationalStorageAdapter implements RelationalStorage
         return workspaceId;
     }
 
+    RelationalDocumentDeleteResult deleteDocumentRows(String documentId, java.util.Set<String> chunkIds) {
+        var targetDocumentId = Objects.requireNonNull(documentId, "documentId");
+        var targetChunkIds = new java.util.LinkedHashSet<>(Objects.requireNonNull(chunkIds, "chunkIds"));
+        return PostgresRetrySupport.execute(
+            "delete document rows for workspace '%s'".formatted(workspaceId),
+            () -> {
+                try (var connection = dataSource.getConnection()) {
+                    return withTransaction(connection, () -> {
+                        int graphSnapshotsDeleted = deleteDocumentGraphSnapshots(connection, targetDocumentId);
+                        int graphJournalsDeleted = deleteDocumentGraphJournals(connection, targetDocumentId);
+                        int chunksDeleted = targetChunkIds.isEmpty()
+                            ? deleteRows(connection, "chunks", "document_id = ?", List.of(targetDocumentId))
+                            : deleteRowsIn(connection, "chunks", "id", targetChunkIds);
+                        int statusesDeleted = deleteRows(connection, "document_status", "document_id = ?", List.of(targetDocumentId));
+                        if (!targetChunkIds.isEmpty()) {
+                            statusesDeleted += deleteRowsIn(connection, "document_status", "document_id", targetChunkIds);
+                        }
+                        int documentsDeleted = deleteRows(connection, "documents", "id = ?", List.of(targetDocumentId));
+                        return new RelationalDocumentDeleteResult(
+                            documentsDeleted,
+                            chunksDeleted,
+                            statusesDeleted,
+                            graphSnapshotsDeleted,
+                            graphJournalsDeleted
+                        );
+                    });
+                } catch (SQLException exception) {
+                    throw new StorageException("Failed to delete PostgreSQL document rows", exception);
+                }
+            }
+        );
+    }
+
     @Override
     public void close() {
         if (ownsDataSource && ownedDataSource != null) {
@@ -408,6 +441,51 @@ public final class PostgresRelationalStorageAdapter implements RelationalStorage
         )) {
             statement.setString(1, workspaceId);
             statement.executeUpdate();
+        }
+    }
+
+    private int deleteDocumentGraphSnapshots(Connection connection, String documentId) throws SQLException {
+        int chunksDeleted = deleteRows(connection, "chunk_graph_snapshots", "document_id = ?", List.of(documentId));
+        int documentsDeleted = deleteRows(connection, "document_graph_snapshots", "document_id = ?", List.of(documentId));
+        return chunksDeleted + documentsDeleted;
+    }
+
+    private int deleteDocumentGraphJournals(Connection connection, String documentId) throws SQLException {
+        int chunksDeleted = deleteRows(connection, "chunk_graph_journals", "document_id = ?", List.of(documentId));
+        int documentsDeleted = deleteRows(connection, "document_graph_journals", "document_id = ?", List.of(documentId));
+        return chunksDeleted + documentsDeleted;
+    }
+
+    private int deleteRows(Connection connection, String tableName, String whereSql, List<String> params) throws SQLException {
+        try (PreparedStatement statement = connection.prepareStatement(
+            "DELETE FROM " + config.qualifiedTableName(tableName) + " WHERE workspace_id = ? AND " + whereSql
+        )) {
+            statement.setString(1, workspaceId);
+            int parameterIndex = 2;
+            for (var param : params) {
+                statement.setString(parameterIndex++, param);
+            }
+            return statement.executeUpdate();
+        }
+    }
+
+    private int deleteRowsIn(Connection connection, String tableName, String columnName, java.util.Set<String> values) throws SQLException {
+        if (values.isEmpty()) {
+            return 0;
+        }
+        var placeholders = java.util.stream.IntStream.range(0, values.size())
+            .mapToObj(index -> "?")
+            .collect(java.util.stream.Collectors.joining(", "));
+        try (PreparedStatement statement = connection.prepareStatement(
+            "DELETE FROM " + config.qualifiedTableName(tableName)
+                + " WHERE workspace_id = ? AND " + columnName + " IN (" + placeholders + ")"
+        )) {
+            statement.setString(1, workspaceId);
+            int parameterIndex = 2;
+            for (var value : values) {
+                statement.setString(parameterIndex++, value);
+            }
+            return statement.executeUpdate();
         }
     }
 

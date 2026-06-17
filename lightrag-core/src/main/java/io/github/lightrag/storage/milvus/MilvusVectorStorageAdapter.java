@@ -98,6 +98,8 @@ public final class MilvusVectorStorageAdapter implements VectorStorageAdapter {
     public interface Projection extends HybridVectorStore, AutoCloseable {
         void deleteNamespace(String namespace);
 
+        void deleteIds(String namespace, List<String> ids);
+
         void flushNamespaces(List<String> namespaces);
 
         @Override
@@ -157,6 +159,11 @@ public final class MilvusVectorStorageAdapter implements VectorStorageAdapter {
         @Override
         public void deleteNamespace(String namespace) {
             delegate.deleteNamespace(namespace);
+        }
+
+        @Override
+        public void deleteIds(String namespace, List<String> ids) {
+            delegate.deleteIds(namespace, ids);
         }
 
         @Override

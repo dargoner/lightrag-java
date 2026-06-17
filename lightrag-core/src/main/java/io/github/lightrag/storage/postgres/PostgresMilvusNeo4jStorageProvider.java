@@ -6,12 +6,15 @@ import io.github.lightrag.storage.AtomicStorageProvider;
 import io.github.lightrag.storage.ChunkStore;
 import io.github.lightrag.storage.DocumentGraphJournalStore;
 import io.github.lightrag.storage.DocumentGraphSnapshotStore;
+import io.github.lightrag.storage.DocumentScopedDeletionStorageProvider;
 import io.github.lightrag.storage.DocumentStatusStore;
 import io.github.lightrag.storage.DocumentStore;
 import io.github.lightrag.storage.GraphStorageAdapter;
 import io.github.lightrag.storage.GraphStore;
 import io.github.lightrag.storage.HybridVectorStore;
 import io.github.lightrag.storage.LlmCacheStore;
+import io.github.lightrag.storage.MutableGraphStore;
+import io.github.lightrag.storage.StorageLockManager;
 import io.github.lightrag.storage.StorageCoordinator;
 import io.github.lightrag.storage.SnapshotStore;
 import io.github.lightrag.storage.TaskDocumentStore;
@@ -31,16 +34,24 @@ import java.util.List;
 import java.util.Map;
 import java.util.Objects;
 import java.util.Optional;
+import java.util.LinkedHashSet;
+import java.util.Set;
 import java.util.concurrent.locks.ReentrantReadWriteLock;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
-public final class PostgresMilvusNeo4jStorageProvider implements AtomicStorageProvider, AutoCloseable {
+public final class PostgresMilvusNeo4jStorageProvider implements AtomicStorageProvider, DocumentScopedDeletionStorageProvider, AutoCloseable {
+    private static final Logger log = LoggerFactory.getLogger(PostgresMilvusNeo4jStorageProvider.class);
     private static final WorkspaceScope DEFAULT_WORKSPACE = new WorkspaceScope("default");
 
     private final ReentrantReadWriteLock lock;
-    private final PostgresAdvisoryLockManager advisoryLockManager;
-    private final ThreadLocal<Boolean> exclusiveAdvisoryLockHeld;
+    private final StorageLockManager storageLockManager;
+    private final ThreadLocal<Boolean> exclusiveStorageLockHeld;
     private final SnapshotStore snapshotStore;
     private final StorageCoordinator coordinator;
+    private final PostgresRelationalStorageAdapter relationalAdapter;
+    private final GraphStorageAdapter graphAdapter;
+    private final VectorStorageAdapter vectorAdapter;
     private final DocumentStore lockedDocumentStore;
     private final ChunkStore lockedChunkStore;
     private final DocumentStatusStore lockedDocumentStatusStore;
@@ -101,15 +112,16 @@ public final class PostgresMilvusNeo4jStorageProvider implements AtomicStoragePr
         GraphProjection graphProjection,
         VectorProjection vectorProjection
     ) {
-        this(
+        this(buildFromProjections(
             dataSource,
             postgresConfig,
             snapshotStore,
             workspaceScope,
             graphProjection,
             vectorProjection,
-            new ReentrantReadWriteLock(true)
-        );
+            new ReentrantReadWriteLock(true),
+            StorageLockManager.noop()
+        ));
     }
 
     public PostgresMilvusNeo4jStorageProvider(
@@ -129,6 +141,27 @@ public final class PostgresMilvusNeo4jStorageProvider implements AtomicStoragePr
         PostgresStorageConfig postgresConfig,
         SnapshotStore snapshotStore,
         WorkspaceScope workspaceScope,
+        GraphProjection graphProjection,
+        VectorProjection vectorProjection,
+        StorageLockManager storageLockManager
+    ) {
+        this(buildFromProjections(
+            dataSource,
+            postgresConfig,
+            snapshotStore,
+            workspaceScope,
+            graphProjection,
+            vectorProjection,
+            new ReentrantReadWriteLock(true),
+            storageLockManager
+        ));
+    }
+
+    public PostgresMilvusNeo4jStorageProvider(
+        DataSource dataSource,
+        PostgresStorageConfig postgresConfig,
+        SnapshotStore snapshotStore,
+        WorkspaceScope workspaceScope,
         GraphStorageAdapter graphAdapter,
         VectorStorageAdapter vectorAdapter
     ) {
@@ -138,17 +171,19 @@ public final class PostgresMilvusNeo4jStorageProvider implements AtomicStoragePr
     private PostgresMilvusNeo4jStorageProvider(Components components) {
         this.lock = components.lock;
         this.snapshotStore = components.snapshotStore;
+        this.relationalAdapter = components.relationalAdapter;
+        this.graphAdapter = components.graphAdapter;
+        this.vectorAdapter = components.vectorAdapter;
         this.coordinator = new StorageCoordinator(
             components.relationalAdapter,
             components.graphAdapter,
             components.vectorAdapter
         );
-        this.advisoryLockManager = new PostgresAdvisoryLockManager(
-            components.relationalAdapter.dataSource(),
-            components.relationalAdapter.config(),
-            components.relationalAdapter.workspaceId()
+        this.storageLockManager = Objects.requireNonNull(
+            components.storageLockManager,
+            "storageLockManager"
         );
-        this.exclusiveAdvisoryLockHeld = ThreadLocal.withInitial(() -> Boolean.FALSE);
+        this.exclusiveStorageLockHeld = ThreadLocal.withInitial(() -> Boolean.FALSE);
         this.lockedDocumentStore = new LockedDocumentStore(coordinator.documentStore());
         this.lockedChunkStore = new LockedChunkStore(coordinator.chunkStore());
         this.lockedDocumentStatusStore = new LockedDocumentStatusStore(coordinator.documentStatusStore());
@@ -225,17 +260,105 @@ public final class PostgresMilvusNeo4jStorageProvider implements AtomicStoragePr
     @Override
     public <T> T writeAtomically(AtomicOperation<T> operation) {
         Objects.requireNonNull(operation, "operation");
-        return withExclusiveProviderLock(() -> advisoryLockManager.withExclusiveLock(() -> withExclusiveAdvisoryScope(
-            () -> coordinator.writeAtomically(operation)
-        )));
+        long started = System.nanoTime();
+        try {
+            return withExclusiveProviderLock(() -> storageLockManager.withExclusiveLock(() -> withExclusiveStorageLockScope(
+                () -> coordinator.writeAtomically(operation)
+            )));
+        } finally {
+            log.info(
+                "LightRAG postgres-milvus-neo4j provider writeAtomically completed: totalMs={}",
+                elapsedMillis(started, System.nanoTime())
+            );
+        }
     }
 
     @Override
     public void restore(SnapshotStore.Snapshot snapshot) {
         var source = Objects.requireNonNull(snapshot, "snapshot");
-        withExclusiveProviderLock(() -> advisoryLockManager.withExclusiveLock(() -> withExclusiveAdvisoryScope(() -> {
-            coordinator.restore(source);
-            return null;
+        long started = System.nanoTime();
+        try {
+            withExclusiveProviderLock(() -> storageLockManager.withExclusiveLock(() -> withExclusiveStorageLockScope(() -> {
+                coordinator.restore(source);
+                return null;
+            })));
+        } finally {
+            log.info(
+                "LightRAG postgres-milvus-neo4j provider restore completed: documents={}, chunks={}, entities={}, relations={}, vectorNamespaces={}, totalMs={}",
+                source.documents().size(),
+                source.chunks().size(),
+                source.entities().size(),
+                source.relations().size(),
+                source.vectors().size(),
+                elapsedMillis(started, System.nanoTime())
+            );
+        }
+    }
+
+    @Override
+    public DocumentDeletionResult deleteDocumentDerivedState(String documentId, List<String> chunkIds) {
+        var targetDocumentId = requireNonBlank(documentId, "documentId");
+        var targetChunkIds = new LinkedHashSet<>(List.copyOf(Objects.requireNonNull(chunkIds, "chunkIds")));
+        long started = System.nanoTime();
+        return withExclusiveProviderLock(() -> storageLockManager.withExclusiveLock(() -> withExclusiveStorageLockScope(() -> {
+            long resolveStarted = System.nanoTime();
+            var existingChunks = targetChunkIds.isEmpty()
+                ? coordinator.chunkStore().listByDocument(targetDocumentId)
+                : coordinator.chunkStore().loadAll(List.copyOf(targetChunkIds)).values().stream()
+                    .filter(chunk -> chunk.documentId().equals(targetDocumentId))
+                    .toList();
+            var effectiveChunkIds = existingChunks.stream()
+                .map(ChunkStore.ChunkRecord::id)
+                .collect(java.util.stream.Collectors.toCollection(LinkedHashSet::new));
+            var graphMutation = resolveGraphMutation(effectiveChunkIds);
+            long resolvedAt = System.nanoTime();
+
+            int relationsDeleted = deleteRelations(graphMutation.relationsToDelete());
+            int entitiesDeleted = deleteEntities(graphMutation.entitiesToDelete());
+            int relationsUpdated = saveRelations(graphMutation.relationsToUpdate());
+            int entitiesUpdated = saveEntities(graphMutation.entitiesToUpdate());
+            long graphAt = System.nanoTime();
+
+            int vectorNamespacesTouched = deleteVectors(effectiveChunkIds, graphMutation.entitiesToDelete(), graphMutation.relationsToDelete());
+            long vectorsAt = System.nanoTime();
+
+            var relationalResult = deleteRelationalDocumentRows(targetDocumentId, effectiveChunkIds);
+            long relationalAt = System.nanoTime();
+            var result = new DocumentDeletionResult(
+                targetDocumentId,
+                effectiveChunkIds.size(),
+                relationalResult.documentsDeleted(),
+                relationalResult.chunksDeleted(),
+                relationalResult.statusesDeleted(),
+                relationalResult.graphSnapshotsDeleted(),
+                relationalResult.graphJournalsDeleted(),
+                entitiesDeleted,
+                entitiesUpdated,
+                relationsDeleted,
+                relationsUpdated,
+                vectorNamespacesTouched
+            );
+            log.info(
+                "LightRAG targeted document delete completed: documentId={}, chunks={}, documentsDeleted={}, chunksDeleted={}, statusesDeleted={}, graphSnapshotsDeleted={}, graphJournalsDeleted={}, entitiesDeleted={}, entitiesUpdated={}, relationsDeleted={}, relationsUpdated={}, vectorNamespacesTouched={}, resolveMs={}, graphMs={}, vectorMs={}, relationalMs={}, totalMs={}",
+                result.documentId(),
+                result.chunkCount(),
+                result.documentsDeleted(),
+                result.chunksDeleted(),
+                result.statusesDeleted(),
+                result.graphSnapshotsDeleted(),
+                result.graphJournalsDeleted(),
+                result.entitiesDeleted(),
+                result.entitiesUpdated(),
+                result.relationsDeleted(),
+                result.relationsUpdated(),
+                result.vectorNamespacesTouched(),
+                elapsedMillis(resolveStarted, resolvedAt),
+                elapsedMillis(resolvedAt, graphAt),
+                elapsedMillis(graphAt, vectorsAt),
+                elapsedMillis(vectorsAt, relationalAt),
+                elapsedMillis(started, relationalAt)
+            );
+            return result;
         })));
     }
 
@@ -267,7 +390,14 @@ public final class PostgresMilvusNeo4jStorageProvider implements AtomicStoragePr
             ),
             snapshot -> buildMilvusPayloads(snapshot, relationalAdapter)
         );
-        return new Components(snapshotStore, relationalAdapter, graphAdapter, vectorAdapter, new ReentrantReadWriteLock(true));
+        return new Components(
+            snapshotStore,
+            relationalAdapter,
+            graphAdapter,
+            vectorAdapter,
+            new ReentrantReadWriteLock(true),
+            StorageLockManager.noop()
+        );
     }
 
     private static Components buildFromDataSourceConfigs(
@@ -295,7 +425,14 @@ public final class PostgresMilvusNeo4jStorageProvider implements AtomicStoragePr
             ),
             snapshot -> buildMilvusPayloads(snapshot, relationalAdapter)
         );
-        return new Components(snapshotStore, relationalAdapter, graphAdapter, vectorAdapter, new ReentrantReadWriteLock(true));
+        return new Components(
+            snapshotStore,
+            relationalAdapter,
+            graphAdapter,
+            vectorAdapter,
+            new ReentrantReadWriteLock(true),
+            StorageLockManager.noop()
+        );
     }
 
     private static Components buildFromProjections(
@@ -306,6 +443,28 @@ public final class PostgresMilvusNeo4jStorageProvider implements AtomicStoragePr
         GraphProjection graphProjection,
         VectorProjection vectorProjection,
         ReentrantReadWriteLock lock
+    ) {
+        return buildFromProjections(
+            dataSource,
+            postgresConfig,
+            snapshotStore,
+            workspaceScope,
+            graphProjection,
+            vectorProjection,
+            lock,
+            StorageLockManager.noop()
+        );
+    }
+
+    private static Components buildFromProjections(
+        DataSource dataSource,
+        PostgresStorageConfig postgresConfig,
+        SnapshotStore snapshotStore,
+        WorkspaceScope workspaceScope,
+        GraphProjection graphProjection,
+        VectorProjection vectorProjection,
+        ReentrantReadWriteLock lock,
+        StorageLockManager storageLockManager
     ) {
         Objects.requireNonNull(lock, "lock");
         var relationalAdapter = new PostgresRelationalStorageAdapter(
@@ -319,7 +478,7 @@ public final class PostgresMilvusNeo4jStorageProvider implements AtomicStoragePr
             Objects.requireNonNull(vectorProjection, "vectorProjection"),
             snapshot -> buildMilvusPayloads(snapshot, relationalAdapter)
         );
-        return new Components(snapshotStore, relationalAdapter, graphAdapter, vectorAdapter, lock);
+        return new Components(snapshotStore, relationalAdapter, graphAdapter, vectorAdapter, lock, storageLockManager);
     }
 
     private static Components buildFromAdapters(
@@ -341,7 +500,8 @@ public final class PostgresMilvusNeo4jStorageProvider implements AtomicStoragePr
             relationalAdapter,
             Objects.requireNonNull(graphAdapter, "graphAdapter"),
             Objects.requireNonNull(vectorAdapter, "vectorAdapter"),
-            new ReentrantReadWriteLock(true)
+            new ReentrantReadWriteLock(true),
+            StorageLockManager.noop()
         );
     }
 
@@ -398,6 +558,140 @@ public final class PostgresMilvusNeo4jStorageProvider implements AtomicStoragePr
             chunkRecord.order(),
             chunkRecord.metadata()
         );
+    }
+
+    private GraphMutation resolveGraphMutation(Set<String> targetChunkIds) {
+        if (targetChunkIds.isEmpty()) {
+            return GraphMutation.empty();
+        }
+        var entitiesToDelete = new LinkedHashSet<String>();
+        var entitiesToUpdate = new java.util.ArrayList<GraphStore.EntityRecord>();
+        for (var entity : coordinator.graphStore().allEntities()) {
+            var retainedChunkIds = entity.sourceChunkIds().stream()
+                .filter(chunkId -> !targetChunkIds.contains(chunkId))
+                .toList();
+            if (retainedChunkIds.size() == entity.sourceChunkIds().size()) {
+                continue;
+            }
+            if (retainedChunkIds.isEmpty()) {
+                entitiesToDelete.add(entity.id());
+                continue;
+            }
+            entitiesToUpdate.add(new GraphStore.EntityRecord(
+                entity.id(),
+                entity.name(),
+                entity.type(),
+                entity.description(),
+                entity.aliases(),
+                retainedChunkIds
+            ));
+        }
+
+        var retainedEntityIds = new LinkedHashSet<String>();
+        for (var entity : coordinator.graphStore().allEntities()) {
+            if (!entitiesToDelete.contains(entity.id())) {
+                retainedEntityIds.add(entity.id());
+            }
+        }
+        for (var entity : entitiesToUpdate) {
+            retainedEntityIds.add(entity.id());
+        }
+
+        var relationsToDelete = new LinkedHashSet<String>();
+        var relationsToUpdate = new java.util.ArrayList<GraphStore.RelationRecord>();
+        for (var relation : coordinator.graphStore().allRelations()) {
+            var retainedChunkIds = relation.sourceChunkIds().stream()
+                .filter(chunkId -> !targetChunkIds.contains(chunkId))
+                .toList();
+            if (retainedChunkIds.isEmpty()
+                || !retainedEntityIds.contains(relation.srcId())
+                || !retainedEntityIds.contains(relation.tgtId())) {
+                relationsToDelete.add(relation.id());
+                continue;
+            }
+            if (retainedChunkIds.size() == relation.sourceChunkIds().size()) {
+                continue;
+            }
+            relationsToUpdate.add(new GraphStore.RelationRecord(
+                relation.id(),
+                relation.srcId(),
+                relation.tgtId(),
+                relation.keywords(),
+                relation.description(),
+                relation.weight(),
+                retainedChunkIds
+            ));
+        }
+        return new GraphMutation(
+            List.copyOf(entitiesToDelete),
+            List.copyOf(entitiesToUpdate),
+            List.copyOf(relationsToDelete),
+            List.copyOf(relationsToUpdate)
+        );
+    }
+
+    private int saveEntities(List<GraphStore.EntityRecord> entities) {
+        if (entities.isEmpty()) {
+            return 0;
+        }
+        coordinator.graphStore().saveEntities(entities);
+        return entities.size();
+    }
+
+    private int saveRelations(List<GraphStore.RelationRecord> relations) {
+        if (relations.isEmpty()) {
+            return 0;
+        }
+        coordinator.graphStore().saveRelations(relations);
+        return relations.size();
+    }
+
+    private int deleteEntities(List<String> entityIds) {
+        if (entityIds.isEmpty()) {
+            return 0;
+        }
+        var relationalDeleted = ((MutableGraphStore) relationalAdapter.graphStore()).deleteEntities(entityIds);
+        var graphDeleted = ((MutableGraphStore) graphAdapter.graphStore()).deleteEntities(entityIds);
+        return Math.max(relationalDeleted, graphDeleted);
+    }
+
+    private int deleteRelations(List<String> relationIds) {
+        if (relationIds.isEmpty()) {
+            return 0;
+        }
+        var relationalDeleted = ((MutableGraphStore) relationalAdapter.graphStore()).deleteRelations(relationIds);
+        var graphDeleted = ((MutableGraphStore) graphAdapter.graphStore()).deleteRelations(relationIds);
+        return Math.max(relationalDeleted, graphDeleted);
+    }
+
+    private int deleteVectors(Set<String> chunkIds, List<String> entityIds, List<String> relationIds) {
+        if (!(vectorAdapter instanceof MilvusVectorStorageAdapter milvusAdapter)) {
+            return 0;
+        }
+        if (!(milvusAdapter.vectorStore() instanceof MilvusVectorStorageAdapter.Projection projection)) {
+            return 0;
+        }
+        var touched = 0;
+        if (!chunkIds.isEmpty()) {
+            projection.deleteIds("chunks", List.copyOf(chunkIds));
+            touched++;
+        }
+        if (!entityIds.isEmpty()) {
+            projection.deleteIds("entities", entityIds);
+            touched++;
+        }
+        if (!relationIds.isEmpty()) {
+            projection.deleteIds("relations", relationIds);
+            touched++;
+        }
+        if (touched > 0) {
+            projection.flushNamespaces(List.of("chunks", "entities", "relations"));
+        }
+        return touched;
+    }
+
+    private RelationalDocumentDeleteResult deleteRelationalDocumentRows(String documentId, Set<String> chunkIds) {
+        return relationalAdapter.deleteDocumentRows(documentId, chunkIds);
     }
 
     public interface GraphProjection extends Neo4jGraphStorageAdapter.Projection {
@@ -733,7 +1027,7 @@ public final class PostgresMilvusNeo4jStorageProvider implements AtomicStoragePr
 
     private void withWriteLock(Runnable runnable) {
         withExclusiveProviderLock(() -> {
-            advisoryLockManager.withExclusiveLock(() -> withExclusiveAdvisoryScope(() -> {
+            storageLockManager.withExclusiveLock(() -> withExclusiveStorageLockScope(() -> {
                 runnable.run();
                 return null;
             }));
@@ -743,24 +1037,32 @@ public final class PostgresMilvusNeo4jStorageProvider implements AtomicStoragePr
 
     private <T> T withExclusiveProviderLock(RuntimeSupplier<T> supplier) {
         var writeLock = lock.writeLock();
+        long waitStarted = System.nanoTime();
         writeLock.lock();
+        long acquiredAt = System.nanoTime();
         try {
             return supplier.get();
         } finally {
+            long heldMillis = elapsedMillis(acquiredAt, System.nanoTime());
             writeLock.unlock();
+            log.info(
+                "LightRAG provider local write lock released: waitMs={}, heldMs={}",
+                elapsedMillis(waitStarted, acquiredAt),
+                heldMillis
+            );
         }
     }
 
-    private <T> T withExclusiveAdvisoryScope(RuntimeSupplier<T> supplier) {
-        boolean previous = exclusiveAdvisoryLockHeld.get();
-        exclusiveAdvisoryLockHeld.set(true);
+    private <T> T withExclusiveStorageLockScope(RuntimeSupplier<T> supplier) {
+        boolean previous = exclusiveStorageLockHeld.get();
+        exclusiveStorageLockHeld.set(true);
         try {
             return supplier.get();
         } finally {
             if (previous) {
-                exclusiveAdvisoryLockHeld.set(true);
+                exclusiveStorageLockHeld.set(true);
             } else {
-                exclusiveAdvisoryLockHeld.remove();
+                exclusiveStorageLockHeld.remove();
             }
         }
     }
@@ -770,7 +1072,8 @@ public final class PostgresMilvusNeo4jStorageProvider implements AtomicStoragePr
         PostgresRelationalStorageAdapter relationalAdapter,
         GraphStorageAdapter graphAdapter,
         VectorStorageAdapter vectorAdapter,
-        ReentrantReadWriteLock lock
+        ReentrantReadWriteLock lock,
+        StorageLockManager storageLockManager
     ) {
         private Components {
             snapshotStore = Objects.requireNonNull(snapshotStore, "snapshotStore");
@@ -778,11 +1081,35 @@ public final class PostgresMilvusNeo4jStorageProvider implements AtomicStoragePr
             graphAdapter = Objects.requireNonNull(graphAdapter, "graphAdapter");
             vectorAdapter = Objects.requireNonNull(vectorAdapter, "vectorAdapter");
             lock = Objects.requireNonNull(lock, "lock");
+            storageLockManager = Objects.requireNonNull(storageLockManager, "storageLockManager");
         }
     }
 
     @FunctionalInterface
     private interface RuntimeSupplier<T> {
         T get();
+    }
+
+    private record GraphMutation(
+        List<String> entitiesToDelete,
+        List<GraphStore.EntityRecord> entitiesToUpdate,
+        List<String> relationsToDelete,
+        List<GraphStore.RelationRecord> relationsToUpdate
+    ) {
+        static GraphMutation empty() {
+            return new GraphMutation(List.of(), List.of(), List.of(), List.of());
+        }
+    }
+
+    private static String requireNonBlank(String value, String label) {
+        var normalized = Objects.requireNonNull(value, label).strip();
+        if (normalized.isEmpty()) {
+            throw new IllegalArgumentException(label + " must not be blank");
+        }
+        return normalized;
+    }
+
+    private static long elapsedMillis(long startedNanos, long endedNanos) {
+        return Math.max(0L, (endedNanos - startedNanos) / 1_000_000L);
     }
 }

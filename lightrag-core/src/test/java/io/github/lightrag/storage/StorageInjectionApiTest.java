@@ -61,7 +61,8 @@ class StorageInjectionApiTest {
             SnapshotStore.class,
             WorkspaceScope.class,
             PostgresMilvusNeo4jStorageProvider.GraphProjection.class,
-            PostgresMilvusNeo4jStorageProvider.VectorProjection.class
+            PostgresMilvusNeo4jStorageProvider.VectorProjection.class,
+            StorageLockManager.class
         )).isNotNull();
         assertThat(PostgresMilvusNeo4jStorageProvider.class.getConstructor(
             DataSource.class,

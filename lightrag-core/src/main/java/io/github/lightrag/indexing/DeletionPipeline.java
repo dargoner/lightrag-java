@@ -22,8 +22,11 @@ import java.util.Map;
 import java.util.Objects;
 import java.util.Set;
 import java.util.function.Predicate;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 public final class DeletionPipeline {
+    private static final Logger log = LoggerFactory.getLogger(DeletionPipeline.class);
     public static final String METADATA_DELETION_LLM_CACHE_IDS = "deletion_llm_cache_ids";
     public static final String METADATA_LAST_DELETION_ATTEMPT_AT = "last_deletion_attempt_at";
     public static final String METADATA_DELETION_FAILED = "deletion_failed";
@@ -130,6 +133,7 @@ public final class DeletionPipeline {
     }
 
     public DeletionResult deleteByDocumentId(String documentId, DeleteDocumentOptions options) {
+        long started = System.nanoTime();
         var targetId = Objects.requireNonNull(documentId, "documentId").strip();
         if (targetId.isEmpty()) {
             throw new IllegalArgumentException("documentId must not be blank");
@@ -137,6 +141,7 @@ public final class DeletionPipeline {
         var deleteOptions = Objects.requireNonNull(options, "options");
 
         var beforeSnapshot = StorageSnapshots.capture(storageProvider);
+        long snapshotAt = System.nanoTime();
         var targetStatus = beforeSnapshot.documentStatuses().stream()
             .filter(statusRecord -> statusRecord.documentId().equals(targetId))
             .findFirst();
@@ -151,6 +156,16 @@ public final class DeletionPipeline {
             .map(io.github.lightrag.storage.ChunkStore.ChunkRecord::id)
             .collect(java.util.stream.Collectors.toCollection(LinkedHashSet::new));
         var targetDocumentExists = beforeSnapshot.documents().stream().anyMatch(document -> document.id().equals(targetId));
+        long resolvedTargetAt = System.nanoTime();
+        log.info(
+            "LightRAG deletion deleteByDocumentId resolved target: documentId={}, exists={}, targetChunks={}, cacheIds={}, captureMs={}, resolveMs={}",
+            targetId,
+            targetDocumentExists,
+            targetChunkIds.size(),
+            cacheIds.size(),
+            elapsedMillis(started, snapshotAt),
+            elapsedMillis(snapshotAt, resolvedTargetAt)
+        );
         if (!targetDocumentExists) {
             if (targetStatus.isPresent()) {
                 deletionStage = "delete_llm_cache";
@@ -167,6 +182,11 @@ public final class DeletionPipeline {
                 deletionStage = "delete_doc_entries";
                 storageProvider.documentStatusStore().delete(targetId);
                 StorageSnapshots.persistIfConfigured(storageProvider, snapshotPath);
+                log.info(
+                    "LightRAG deletion deleteByDocumentId completed without chunks: documentId={}, totalMs={}",
+                    targetId,
+                    elapsedMillis(started, System.nanoTime())
+                );
                 return DeletionResult.success(
                     targetId,
                     "Document deleted without associated chunks: " + targetId
@@ -187,15 +207,32 @@ public final class DeletionPipeline {
 
         try {
             deletionStage = "delete_document_derived_state";
-            storageProvider.restore(removeDocumentIncrementally(
+            long rewriteStarted = System.nanoTime();
+            var retainedSnapshot = removeDocumentIncrementally(
                 beforeSnapshot,
                 targetId,
                 targetChunkIds,
                 targetStatusRecord
-            ));
+            );
+            long rewriteBuiltAt = System.nanoTime();
+            storageProvider.restore(retainedSnapshot);
+            long restoredAt = System.nanoTime();
+            log.info(
+                "LightRAG deletion deleteByDocumentId derived state removed: documentId={}, targetChunks={}, retainedDocuments={}, retainedChunks={}, retainedEntities={}, retainedRelations={}, retainedVectorNamespaces={}, rewriteMs={}, restoreMs={}",
+                targetId,
+                targetChunkIds.size(),
+                retainedSnapshot.documents().size(),
+                retainedSnapshot.chunks().size(),
+                retainedSnapshot.entities().size(),
+                retainedSnapshot.relations().size(),
+                retainedSnapshot.vectors().size(),
+                elapsedMillis(rewriteStarted, rewriteBuiltAt),
+                elapsedMillis(rewriteBuiltAt, restoredAt)
+            );
 
             if (deleteOptions.deleteLlmCache() && !cacheIds.isEmpty()) {
                 deletionStage = "delete_llm_cache";
+                long cacheDeleteStarted = System.nanoTime();
                 var retryStatusRecord = retryStatusRecord(targetId, targetStatusRecord);
                 retryStatusRecord = updateDeleteRetryState(
                     retryStatusRecord,
@@ -205,10 +242,23 @@ public final class DeletionPipeline {
                     null
                 );
                 deleteLlmCacheOrMarkRetryFailed(targetId, retryStatusRecord, cacheIds);
+                log.info(
+                    "LightRAG deletion deleteByDocumentId llm cache delete completed: documentId={}, cacheIds={}, elapsedMs={}",
+                    targetId,
+                    cacheIds.size(),
+                    elapsedMillis(cacheDeleteStarted, System.nanoTime())
+                );
             }
             deletionStage = "delete_doc_entries";
+            long docEntriesStarted = System.nanoTime();
             storageProvider.documentStatusStore().delete(targetId);
             StorageSnapshots.persistIfConfigured(storageProvider, snapshotPath);
+            log.info(
+                "LightRAG deletion deleteByDocumentId completed: documentId={}, deleteDocEntriesMs={}, totalMs={}",
+                targetId,
+                elapsedMillis(docEntriesStarted, System.nanoTime()),
+                elapsedMillis(started, System.nanoTime())
+            );
             return DeletionResult.success(targetId, "Document " + targetId + " successfully deleted");
         } catch (RuntimeException | Error failure) {
             try {
@@ -495,6 +545,10 @@ public final class DeletionPipeline {
         for (var statusRecord : statusRecords) {
             storageProvider.documentStatusStore().save(statusRecord);
         }
+    }
+
+    private static long elapsedMillis(long startedNanos, long endedNanos) {
+        return Math.max(0L, (endedNanos - startedNanos) / 1_000_000L);
     }
 
     private void deleteLlmCacheOrMarkRetryFailed(

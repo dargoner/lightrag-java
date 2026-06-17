@@ -3,6 +3,7 @@ package io.github.lightrag.storage.neo4j;
 import io.github.lightrag.api.WorkspaceScope;
 import io.github.lightrag.storage.GraphStorageAdapter;
 import io.github.lightrag.storage.GraphStore;
+import io.github.lightrag.storage.MutableGraphStore;
 
 import java.util.Objects;
 
@@ -57,7 +58,7 @@ public final class Neo4jGraphStorageAdapter implements GraphStorageAdapter {
         projection.close();
     }
 
-    public interface Projection extends GraphStore, AutoCloseable {
+    public interface Projection extends MutableGraphStore, AutoCloseable {
         Neo4jGraphSnapshot captureSnapshot();
 
         void restore(Neo4jGraphSnapshot snapshot);
@@ -131,6 +132,16 @@ public final class Neo4jGraphStorageAdapter implements GraphStorageAdapter {
         @Override
         public java.util.Map<String, java.util.List<RelationRecord>> findRelations(java.util.List<String> entityIds) {
             return delegate.findRelations(entityIds);
+        }
+
+        @Override
+        public int deleteEntities(java.util.List<String> entityIds) {
+            return delegate.deleteEntities(entityIds);
+        }
+
+        @Override
+        public int deleteRelations(java.util.List<String> relationIds) {
+            return delegate.deleteRelations(relationIds);
         }
 
         @Override

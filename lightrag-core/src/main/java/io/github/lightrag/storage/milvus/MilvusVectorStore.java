@@ -154,6 +154,22 @@ public final class MilvusVectorStore implements HybridVectorStore, AutoCloseable
         clientAdapter.deleteAll(new MilvusClientAdapter.DeleteRequest(collectionName(), filter(normalizeNamespace(namespace))));
     }
 
+    public void deleteIds(String namespace, List<String> ids) {
+        var values = List.copyOf(Objects.requireNonNull(ids, "ids"));
+        if (values.isEmpty()) {
+            return;
+        }
+        var normalizedNamespace = normalizeNamespace(namespace);
+        var idFilter = values.stream()
+            .map(value -> technicalPrimaryKey(workspaceId, normalizedNamespace, value))
+            .map(value -> "\"" + escapeFilterLiteral(value) + "\"")
+            .collect(java.util.stream.Collectors.joining(", "));
+        clientAdapter.deleteAll(new MilvusClientAdapter.DeleteRequest(
+            collectionName(),
+            filter(normalizedNamespace) + " && pk_id in [" + idFilter + "]"
+        ));
+    }
+
     public void flushNamespaces(List<String> namespaces) {
         if (!config.flushOnWrite()) {
             return;

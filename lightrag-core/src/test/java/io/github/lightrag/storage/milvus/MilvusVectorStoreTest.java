@@ -237,6 +237,37 @@ class MilvusVectorStoreTest {
     }
 
     @Test
+    void deleteIdsUsesTechnicalPrimaryKeysInsideLogicalSlice() {
+        var adapter = new FakeMilvusClientAdapter();
+        var store = new MilvusVectorStore(adapter, testConfig(), "alpha");
+        store.saveAll(
+            "chunks",
+            List.of(
+                new VectorStore.VectorRecord("chunk-1", List.of(1.0d, 0.0d, 0.0d)),
+                new VectorStore.VectorRecord("chunk-2", List.of(0.0d, 1.0d, 0.0d))
+            )
+        );
+        var pkId = adapter.upsertedRows.get("rag").stream()
+            .filter(row -> row.vectorId().equals("chunk-1"))
+            .findFirst()
+            .orElseThrow()
+            .pkId();
+
+        store.deleteIds("chunks", List.of("chunk-1"));
+
+        assertThat(adapter.lastDeleteRequest).isEqualTo(
+            new MilvusClientAdapter.DeleteRequest(
+                "rag",
+                namespaceFilter("alpha", "chunks") + " && pk_id in [\"" + pkId + "\"]"
+            )
+        );
+        assertThat(adapter.lastDeleteRequest.filter()).doesNotContain(" id ", "vector_id");
+        assertThat(store.list("chunks")).containsExactly(
+            new VectorStore.VectorRecord("chunk-2", List.of(0.0d, 1.0d, 0.0d))
+        );
+    }
+
+    @Test
     void flushNamespacesDelegatesToMilvusWhenFlushOnWriteEnabled() {
         var adapter = new FakeMilvusClientAdapter();
         var store = new MilvusVectorStore(adapter, testConfig(), "alpha");
@@ -379,6 +410,10 @@ class MilvusVectorStoreTest {
                     if (!row.recordType().equals(extractQuotedValue(trimmed))) {
                         return false;
                     }
+                } else if (trimmed.startsWith("pk_id in [")) {
+                    if (!matchesInFilter(row.pkId(), trimmed)) {
+                        return false;
+                    }
                 }
             }
             return true;
@@ -388,6 +423,25 @@ class MilvusVectorStoreTest {
             var firstQuote = clause.indexOf('"');
             var lastQuote = clause.lastIndexOf('"');
             return clause.substring(firstQuote + 1, lastQuote);
+        }
+
+        private static boolean matchesInFilter(String value, String clause) {
+            var firstBracket = clause.indexOf('[');
+            var lastBracket = clause.lastIndexOf(']');
+            if (firstBracket < 0 || lastBracket < firstBracket) {
+                return false;
+            }
+            var rawValues = clause.substring(firstBracket + 1, lastBracket).split(",");
+            for (var rawValue : rawValues) {
+                var normalized = rawValue.trim();
+                if (normalized.length() >= 2
+                    && normalized.charAt(0) == '"'
+                    && normalized.charAt(normalized.length() - 1) == '"'
+                    && value.equals(normalized.substring(1, normalized.length() - 1))) {
+                    return true;
+                }
+            }
+            return false;
         }
     }
 }

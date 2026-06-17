@@ -1030,6 +1030,12 @@ class MySqlMilvusNeo4jStorageProviderTest {
         }
 
         @Override
+        public void deleteIds(String namespace, List<String> ids) {
+            var target = namespace(namespace);
+            ids.forEach(target::remove);
+        }
+
+        @Override
         public void flushNamespaces(List<String> namespaces) {
             if (failureOnFlushNamespaces != null) {
                 var failure = failureOnFlushNamespaces;
