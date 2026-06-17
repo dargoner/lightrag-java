@@ -4,6 +4,7 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import io.github.lightrag.api.DocumentProcessingStatus;
 import io.github.lightrag.api.DocumentStatus;
 import io.github.lightrag.api.LightRag;
+import io.github.lightrag.types.Document;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -137,7 +138,7 @@ class DocumentStatusControllerTest {
     @Test
     void jobLifecycleAndStatusEndpoints() throws Exception {
         var deleted = new AtomicBoolean(false);
-        doNothing().when(lightRag).ingest(eq(WORKSPACE_STATUS), argThat(documents ->
+        doNothing().when(lightRag).ingest(eq(WORKSPACE_STATUS), argThat((List<Document> documents) ->
             documents.size() == 1 && "doc-1".equals(documents.get(0).id())
         ));
         when(lightRag.listDocumentStatuses(WORKSPACE_STATUS)).thenReturn(List.of(
@@ -204,7 +205,9 @@ class DocumentStatusControllerTest {
 
     @Test
     void jobsEndpointReturnsPaginatedNewestFirstWithTimelineFields() throws Exception {
-        doNothing().when(lightRag).ingest(eq(WORKSPACE_STATUS), argThat(documents -> documents.size() == 1));
+        doNothing().when(lightRag).ingest(eq(WORKSPACE_STATUS), argThat((List<Document> documents) ->
+            documents.size() == 1
+        ));
 
         var firstJobId = submitJob(WORKSPACE_STATUS, INGEST_PAYLOAD);
         awaitJobStatus(WORKSPACE_STATUS, firstJobId, "SUCCEEDED");
@@ -234,7 +237,7 @@ class DocumentStatusControllerTest {
     @Test
     void failedJobExposesErrorMessageInDetailAndListResponses() throws Exception {
         doThrow(new IllegalStateException("simulated ingest failure"))
-            .when(lightRag).ingest(eq(WORKSPACE_STATUS), argThat(documents ->
+            .when(lightRag).ingest(eq(WORKSPACE_STATUS), argThat((List<Document> documents) ->
                 documents.size() == 1 && "doc-fail".equals(documents.get(0).id())
             ));
 
@@ -362,7 +365,7 @@ class DocumentStatusControllerTest {
 
     @Test
     void isolatesJobsStatusesAndControlsAcrossWorkspaces() throws Exception {
-        doNothing().when(lightRag).ingest(eq(WORKSPACE_ISOLATED), argThat(documents ->
+        doNothing().when(lightRag).ingest(eq(WORKSPACE_ISOLATED), argThat((List<Document> documents) ->
             documents.size() == 1 && "doc-ws-a".equals(documents.get(0).id())
         ));
         when(lightRag.listDocumentStatuses(WORKSPACE_ISOLATED)).thenReturn(List.of(
