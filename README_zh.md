@@ -123,7 +123,7 @@ SDK 内置异步任务运行时，适合长耗时 ingest、图谱重建和图谱
 
 - `queueWaitMs`、`totalDurationMs`
 - `stage.<STAGE>.durationMs`
-- `maxParallelInsert`、`embeddingBatchSize`、`chunkExtractParallelism`
+- `maxParallelInsert`、`embeddingBatchSize`、`chunkExtractParallelism`、`maxConcurrentDocumentTasks`
 - `graphExtractionEnabled`、`entityTypeCount`、`relationTypeCount`、`graphExtractionExampleCount`
 - `STAGE_SUCCEEDED`、`DOCUMENT_COMMITTED` / `DOCUMENT_FAILED`、`CHUNK_SUCCEEDED` / `CHUNK_FAILED` 事件会携带 `durationMs`
 
@@ -332,6 +332,7 @@ lightrag:
     embedding-batch-size: 32
     chunk-extract-parallelism: 4
     max-parallel-insert: 4
+    max-concurrent-document-tasks: 4
     entity-extract-max-gleaning: 1
     max-extract-input-tokens: 20480
     language: Chinese
@@ -364,13 +365,16 @@ lightrag:
 `embedding-batch-size` 用来控制 ingest 阶段每次 embedding 请求最多发送多少段文本。保持未配置或设为 `0`，就会继续沿用当前的单批次行为。
 `max-parallel-insert` 用来控制 ingest 阶段最多同时处理多少个文档，默认值是 `2`。
 `chunk-extract-parallelism` 用来控制单个文档内最多同时对多少个 chunk 执行 LLM 实体/关系抽取，默认值是 `2`。
+`max-concurrent-document-tasks` 用来控制同一 workspace 内最多同时执行多少个文档级任务，默认值是 `1`，即与旧版本行为一致：同一 workspace 的任务串行执行。
+它和 `max-parallel-insert` 限制的范围不同：后者并行的是**一次 ingest 调用内部**的多个文档，前者并行的是**独立提交的任务**；两者同时大于 `1` 时并行度相乘。
+装载多个文档的请求（`ingest(...)` 传列表、多个 ingest source、跨 document id 的预切分 chunk）以及删除、重建、清缓存、图管理、快照等破坏性操作始终独占整个 workspace；要让文档并行入库，请按「一文档一次提交」的方式提交任务。
 `entity-extract-max-gleaning` 用来控制每个 chunk 在首次抽取之后还能继续做多少轮补抽。
 `max-extract-input-tokens` 用来限制补抽前允许的估算上下文预算，超过后会跳过该轮补抽。
 `language` 用来控制实体描述和抽取提示语默认使用的语言，默认值是 `English`。
 `entity-types` 用来覆盖抽取阶段优先使用的实体类型列表；默认值是 `Person, Creature, Organization, Location, Event, Concept, Method, Content, Data, Artifact, NaturalObject, Other`。
 `graph-enabled` 用来控制当前配置作用域是否构建知识图谱；如果关闭，对应 workspace 的图谱重建/修复接口会直接报错。
 `relation-types` 和 `graph-examples` 对齐 WeKnora 的知识库图谱设置：`relation-types` 对应关系标签，`graph-examples` 对应 `text/nodes/relations` few-shot 示例，会进入抽取 prompt。
-当 `max-parallel-insert` 大于 `1` 时，自定义 `Chunker`、`ChatModel`、`EmbeddingModel` 实现需要具备并发安全性。
+当 `max-parallel-insert` 或 `max-concurrent-document-tasks` 大于 `1` 时，自定义 `Chunker`、`ChatModel`、`EmbeddingModel` 实现需要具备并发安全性。
 
 如果不配置这两个字段，starter 默认仍然使用 `window-size=1000`、`overlap=100`。
 
@@ -540,6 +544,7 @@ Starter 还额外暴露了几项 pipeline 配置：
 - `lightrag.indexing.embedding-batch-size`
 - `lightrag.indexing.max-parallel-insert`
 - `lightrag.indexing.chunk-extract-parallelism`
+- `lightrag.indexing.max-concurrent-document-tasks`
 - `lightrag.indexing.entity-extract-max-gleaning`
 - `lightrag.indexing.max-extract-input-tokens`
 - `lightrag.indexing.language`

@@ -116,7 +116,7 @@ Task snapshots include:
 - requested / started / finished timestamps
 - summary, error message, and cancel flag
 - stage snapshots such as `PARSING`, `CHUNKING`, `PRIMARY_EXTRACTION`, `GRAPH_ASSEMBLY`, `VECTOR_INDEXING`, `COMMITTING`, and `COMPLETED`
-- pipeline tunables in task metadata, including `maxParallelInsert`, `embeddingBatchSize`, `chunkExtractParallelism`, and graph extraction counts
+- pipeline tunables in task metadata, including `maxParallelInsert`, `embeddingBatchSize`, `chunkExtractParallelism`, `maxConcurrentDocumentTasks`, and graph extraction counts
 - performance metadata such as `queueWaitMs`, `totalDurationMs`, and `stage.<STAGE>.durationMs`
 
 Task events also carry structured performance attributes. `STAGE_SUCCEEDED`, `DOCUMENT_COMMITTED` / `DOCUMENT_FAILED`, and `CHUNK_SUCCEEDED` / `CHUNK_FAILED` include `durationMs`, so external monitors do not need to infer latency from logs. This follows the same operational direction as WeKnora's batch stats logs while keeping the Java SDK storage-neutral.
@@ -377,6 +377,7 @@ lightrag:
     embedding-batch-size: 32
     max-parallel-insert: 4
     chunk-extract-parallelism: 4
+    max-concurrent-document-tasks: 4
     entity-extract-max-gleaning: 1
     max-extract-input-tokens: 20480
     language: Chinese
@@ -410,13 +411,15 @@ If no request-level `preset` override is provided, those legacy properties still
 `embedding-batch-size` controls how many texts are sent in each indexing-time embedding request. Leave it unset or `0` to preserve the current single-batch behavior.
 `max-parallel-insert` controls how many documents ingest can process concurrently. It defaults to `2`.
 `chunk-extract-parallelism` controls how many chunks run LLM entity/relation extraction concurrently within one document. It defaults to `2`.
+`max-concurrent-document-tasks` controls how many document-scoped tasks run concurrently inside one workspace. It defaults to `1`, which preserves the previous behavior: tasks submitted to the same workspace run one after another.
+It bounds a different scope than `max-parallel-insert`, which parallelizes the documents of a single ingest call; when both are greater than `1`, the parallelisms multiply. Requests that carry several documents (`ingest(...)` with a list, several ingest sources, pre-chunked chunks spanning document ids) and destructive work (delete, rebuild, cache clearing, graph management, snapshots) always take the whole workspace, so index documents in parallel by submitting one task per document.
 `entity-extract-max-gleaning` controls how many follow-up extraction passes run for the same chunk after the first LLM extraction.
 `max-extract-input-tokens` caps the estimated extraction context budget before a glean pass is skipped.
 `language` controls the language used in entity descriptions and extraction guidance. It defaults to `English`.
 `entity-types` narrows or extends the preferred extraction taxonomy. The default list is `Person, Creature, Organization, Location, Event, Concept, Method, Content, Data, Artifact, NaturalObject, Other`.
 `graph-enabled` controls whether indexing builds the knowledge graph for this configuration scope. If it is `false`, graph materialization APIs fail fast for that workspace.
 `relation-types` and `graph-examples` align with WeKnora-style KB graph settings: relation tags constrain relationship keywords, while `text/nodes/relations` examples are injected as extraction prompt hints.
-When `max-parallel-insert` is greater than `1`, custom `Chunker`, `ChatModel`, and `EmbeddingModel` implementations must be safe for concurrent use.
+When `max-parallel-insert` or `max-concurrent-document-tasks` is greater than `1`, custom `Chunker`, `ChatModel`, and `EmbeddingModel` implementations must be safe for concurrent use.
 
 If the application provides its own `Chunker` bean, the starter backs off and uses that bean instead.
 
@@ -1070,6 +1073,7 @@ var rag = LightRag.builder()
     .embeddingBatchSize(32)
     .maxParallelInsert(4)
     .chunkExtractParallelism(4)
+    .maxConcurrentDocumentTasks(4)
     .entityExtractMaxGleaning(1)
     .maxExtractInputTokens(20_480)
     .entityExtractionLanguage("Chinese")
@@ -1084,6 +1088,7 @@ var rag = LightRag.builder()
 - `embeddingBatchSize(...)`: caps the number of texts per embedding request during indexing
 - `maxParallelInsert(...)`: caps how many documents `ingest(...)` processes concurrently
 - `chunkExtractParallelism(...)`: caps how many chunks run LLM entity/relation extraction concurrently within one document; default `2`
+- `maxConcurrentDocumentTasks(...)`: caps how many document-scoped tasks run concurrently inside one workspace; default `1` keeps tasks serial. It counts separately submitted tasks, unlike `maxParallelInsert`, which parallelizes the documents of one ingest call. Multi-document requests, delete, rebuild, and snapshot work stay workspace exclusive, so parallel indexing means one submitted task per document.
 - `entityExtractMaxGleaning(...)`: controls how many follow-up extraction passes run per chunk
 - `maxExtractInputTokens(...)`: caps estimated extraction context before gleaning is skipped
 - `entityExtractionLanguage(...)`: changes the language used in extraction-time guidance and generated descriptions
@@ -1159,6 +1164,7 @@ lightrag:
     embedding-batch-size: 32
     max-parallel-insert: 4
     chunk-extract-parallelism: 4
+    max-concurrent-document-tasks: 4
     entity-extract-max-gleaning: 1
     max-extract-input-tokens: 20480
     language: Chinese
