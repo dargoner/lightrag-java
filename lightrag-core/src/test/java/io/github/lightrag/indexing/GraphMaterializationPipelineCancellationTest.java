@@ -202,6 +202,29 @@ class GraphMaterializationPipelineCancellationTest {
         assertThat(chatModel.allWorkerThreadsTerminatedWithin(Duration.ofSeconds(5))).isTrue();
     }
 
+    @Test
+    void lightRagMaterializePassesCheckpointIntoPipeline() {
+        var storage = InMemoryStorageProvider.create();
+        seedStoredChunks(storage, List.of(DOCUMENT_ID + ":0"));
+        var checkpoint = new FailingCheckpoint(1);
+        try (var rag = LightRag.builder()
+            .chatModel(new FakeChatModel())
+            .embeddingModel(new FakeEmbeddingModel())
+            .storage(storage)
+            .build()) {
+
+            var thrown = catchThrowable(() -> rag.materializeDocumentGraph(
+                WORKSPACE,
+                DOCUMENT_ID,
+                GraphMaterializationMode.REBUILD,
+                checkpoint
+            ));
+
+            assertThat(thrown).isSameAs(checkpoint.failure());
+            assertThat(checkpoint.calls()).isGreaterThan(0);
+        }
+    }
+
     private static void assertGraphIsAllOrNothing(StorageProbe state, List<String> expectedChunkIds) {
         var snapshotCommitted = !state.chunkSnapshotIds().isEmpty();
         var graphCommitted = !state.entityIds().isEmpty();

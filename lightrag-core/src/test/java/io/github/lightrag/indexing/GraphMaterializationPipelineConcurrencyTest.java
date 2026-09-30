@@ -2,6 +2,7 @@ package io.github.lightrag.indexing;
 
 import io.github.lightrag.api.CancellationCheckpoint;
 import io.github.lightrag.api.GraphMaterializationMode;
+import io.github.lightrag.api.LightRag;
 import io.github.lightrag.indexing.refinement.ExtractionRefinementOptions;
 import io.github.lightrag.model.ChatModel;
 import io.github.lightrag.model.EmbeddingModel;
@@ -139,6 +140,36 @@ class GraphMaterializationPipelineConcurrencyTest {
         assertThat(storage.documentGraphSnapshotStore().listChunks("doc-1"))
             .extracting(DocumentGraphSnapshotStore.ChunkGraphSnapshot::chunkId)
             .containsExactly("doc-1:0", "doc-1:1", "doc-1:2");
+    }
+
+    @Test
+    void lightRagMaterializePassesConfiguredParallelismIntoPipeline() {
+        var storage = InMemoryStorageProvider.create();
+        for (int order = 0; order < 3; order++) {
+            storage.chunkStore().save(new ChunkStore.ChunkRecord(
+                "doc-1:" + order,
+                "doc-1",
+                "text " + order,
+                6,
+                order,
+                Map.of()
+            ));
+        }
+        var chatModel = new RecordingConcurrentChatModel(3);
+
+        try (var rag = LightRag.builder()
+            .chatModel(chatModel)
+            .embeddingModel(new FakeEmbeddingModel())
+            .storage(storage)
+            .chunkExtractParallelism(3)
+            .build()) {
+
+            var result = rag.materializeDocumentGraph("default", "doc-1", GraphMaterializationMode.REBUILD);
+
+            assertThat(result.executedMode()).isEqualTo(GraphMaterializationMode.REBUILD);
+        }
+
+        assertThat(chatModel.maxConcurrentCalls()).isGreaterThanOrEqualTo(2);
     }
 
     private static GraphMaterializationPipeline newPipeline(

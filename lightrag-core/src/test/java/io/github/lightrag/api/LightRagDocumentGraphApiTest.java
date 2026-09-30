@@ -30,6 +30,14 @@ class LightRagDocumentGraphApiTest {
             GraphMaterializationMode.class
         );
         assertMethod(
+            "materializeDocumentGraph",
+            DocumentGraphMaterializationResult.class,
+            String.class,
+            String.class,
+            GraphMaterializationMode.class,
+            CancellationCheckpoint.class
+        );
+        assertMethod(
             "getDocumentChunkGraphStatus",
             DocumentChunkGraphStatus.class,
             String.class,

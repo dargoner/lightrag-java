@@ -531,10 +531,27 @@ public final class LightRag implements AutoCloseable {
         String documentId,
         GraphMaterializationMode mode
     ) {
+        return materializeDocumentGraph(workspaceId, documentId, mode, null);
+    }
+
+    /**
+     * Materializes the document graph, polling {@code cancellationCheckpoint} while the work runs.
+     *
+     * @param cancellationCheckpoint polled between extraction steps and before every atomic commit; {@code null}
+     *     behaves as {@link CancellationCheckpoint#NONE}. The boundary semantics (a commit already entered is not
+     *     interruptible) are documented on {@link io.github.lightrag.indexing.GraphMaterializationPipeline}.
+     */
+    public DocumentGraphMaterializationResult materializeDocumentGraph(
+        String workspaceId,
+        String documentId,
+        GraphMaterializationMode mode,
+        CancellationCheckpoint cancellationCheckpoint
+    ) {
         var scope = resolveScope(workspaceId);
         return runInWorkspace(
             scope,
-            provider -> newGraphMaterializationPipeline(scope, provider).materialize(documentId, mode)
+            provider -> newGraphMaterializationPipeline(scope, provider, cancellationCheckpoint)
+                .materialize(documentId, mode)
         );
     }
 
@@ -804,7 +821,21 @@ public final class LightRag implements AutoCloseable {
     }
 
     private GraphMaterializationPipeline newGraphMaterializationPipeline(WorkspaceScope scope, AtomicStorageProvider storageProvider) {
-        return newGraphMaterializationPipeline(scope, storageProvider, IndexingProgressListener.noop(), TaskMetadataReporter.noop());
+        return newGraphMaterializationPipeline(scope, storageProvider, (CancellationCheckpoint) null);
+    }
+
+    private GraphMaterializationPipeline newGraphMaterializationPipeline(
+        WorkspaceScope scope,
+        AtomicStorageProvider storageProvider,
+        CancellationCheckpoint cancellationCheckpoint
+    ) {
+        return newGraphMaterializationPipeline(
+            scope,
+            storageProvider,
+            IndexingProgressListener.noop(),
+            TaskMetadataReporter.noop(),
+            cancellationCheckpoint
+        );
     }
 
     private GraphMaterializationPipeline newGraphMaterializationPipeline(
@@ -812,6 +843,16 @@ public final class LightRag implements AutoCloseable {
         AtomicStorageProvider storageProvider,
         IndexingProgressListener progressListener,
         TaskMetadataReporter metadataReporter
+    ) {
+        return newGraphMaterializationPipeline(scope, storageProvider, progressListener, metadataReporter, null);
+    }
+
+    private GraphMaterializationPipeline newGraphMaterializationPipeline(
+        WorkspaceScope scope,
+        AtomicStorageProvider storageProvider,
+        IndexingProgressListener progressListener,
+        TaskMetadataReporter metadataReporter,
+        CancellationCheckpoint cancellationCheckpoint
     ) {
         var llmCacheStore = storageProvider.llmCacheStore();
         var graphExtractionOptions = resolveGraphExtractionOptions(scope);
@@ -826,12 +867,14 @@ public final class LightRag implements AutoCloseable {
             config.snapshotPath(),
             metadataReporter,
             progressListener,
+            graphExtractionOptions.resolvedChunkExtractParallelism(),
             graphExtractionOptions.resolvedEntityExtractMaxGleaning(),
             graphExtractionOptions.resolvedMaxExtractInputTokens(),
             graphExtractionOptions.resolvedLanguage(),
             graphExtractionOptions.resolvedEntityTypes(),
             graphExtractionOptions.resolvedRelationTypes(),
-            graphExtractionOptions.resolvedExamples()
+            graphExtractionOptions.resolvedExamples(),
+            cancellationCheckpoint
         );
     }
 
