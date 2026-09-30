@@ -38,6 +38,7 @@ import java.sql.PreparedStatement;
 import java.sql.SQLException;
 import java.time.Instant;
 import java.util.Arrays;
+import java.util.Collection;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
@@ -379,6 +380,58 @@ class PostgresMilvusNeo4jStorageProviderTest {
         }
     }
 
+    @Test
+    void writeAtomicallyOmitsFullWorkspaceSnapshots() {
+        var config = newConfig();
+        try (var dataSource = newDataSource(config)) {
+            RecordingGraphStorageAdapter graphAdapter = new RecordingGraphStorageAdapter();
+            RecordingVectorStorageAdapter vectorAdapter = new RecordingVectorStorageAdapter();
+            var expectedRelationId = relationId("entity-1", "entity-2");
+
+            try (var provider = new PostgresMilvusNeo4jStorageProvider(
+                dataSource,
+                config,
+                new InMemorySnapshotStore(),
+                new WorkspaceScope("default"),
+                graphAdapter,
+                vectorAdapter
+            )) {
+                provider.writeAtomically(storage -> {
+                    storage.graphStore().saveEntity(new GraphStore.EntityRecord(
+                        "entity-1",
+                        "Alice",
+                        "person",
+                        "Researcher",
+                        List.of("A"),
+                        List.of("doc-1:0")
+                    ));
+                    storage.graphStore().saveRelation(new GraphStore.RelationRecord(
+                        expectedRelationId,
+                        "entity-1",
+                        "entity-2",
+                        "knows",
+                        "Alice knows Bob",
+                        1.0d,
+                        List.of("doc-1:0")
+                    ));
+                    storage.vectorStore().saveAll("chunks", List.of(new VectorStore.VectorRecord("doc-1:0", List.of(1.0d, 0.0d, 0.0d))));
+                    return null;
+                });
+
+                assertThat(graphAdapter.applyCount()).isEqualTo(1);
+                assertThat(vectorAdapter.applyCount()).isEqualTo(1);
+                assertThat(graphAdapter.captureSnapshotCount()).isZero();
+                assertThat(vectorAdapter.captureSnapshotCount()).isZero();
+                assertThat(graphAdapter.capturedEntityIds()).containsExactly("entity-1");
+                assertThat(graphAdapter.capturedRelationIds()).containsExactly(expectedRelationId);
+                assertThat(vectorAdapter.capturedVectorIdsByNamespace())
+                    .containsOnlyKeys("chunks");
+                assertThat(vectorAdapter.capturedVectorIdsByNamespace())
+                    .containsEntry("chunks", List.of("doc-1:0"));
+            }
+        }
+    }
+
 
     @Test
     void commitsAcrossPostgresMilvusAndNeo4jStoresWithoutPgvector() {
@@ -639,6 +692,54 @@ class PostgresMilvusNeo4jStorageProviderTest {
                     ));
                 assertThat(milvusProjection.list("chunks"))
                     .containsExactly(new VectorStore.VectorRecord("doc-0:0", List.of(1.0d, 0.0d, 0.0d)));
+            }
+        }
+    }
+
+    @Test
+    void restorePathStillUsesRelationalSnapshotCapability() {
+        var config = newConfig();
+        try (var dataSource = newDataSource(config)) {
+            RecordingGraphStorageAdapter graphAdapter = new RecordingGraphStorageAdapter();
+            RecordingVectorStorageAdapter vectorAdapter = new RecordingVectorStorageAdapter();
+
+            try (var provider = new PostgresMilvusNeo4jStorageProvider(
+                dataSource,
+                config,
+                new InMemorySnapshotStore(),
+                new WorkspaceScope("default"),
+                graphAdapter,
+                vectorAdapter
+            )) {
+                provider.documentStore().save(new DocumentStore.DocumentRecord("doc-0", "Seed", "seed", Map.of("seed", "true")));
+                provider.chunkStore().save(new ChunkStore.ChunkRecord("doc-0:0", "doc-0", "seed", 4, 0, Map.of("seed", "true")));
+                graphAdapter.graphStore().saveEntity(new GraphStore.EntityRecord(
+                    "entity-0",
+                    "Seed",
+                    "seed",
+                    "Seed entity",
+                    List.of(),
+                    List.of("doc-0:0")
+                ));
+
+                provider.restore(new SnapshotStore.Snapshot(
+                    List.of(new DocumentStore.DocumentRecord("doc-1", "Replacement", "body", Map.of())),
+                    List.of(new ChunkStore.ChunkRecord("doc-1:0", "doc-1", "body", 4, 0, Map.of())),
+                    List.of(new GraphStore.EntityRecord("entity-1", "Replacement", "person", "entity", List.of(), List.of("doc-1:0"))),
+                    List.of(),
+                    Map.of("chunks", List.of(new VectorStore.VectorRecord("doc-1:0", List.of(0.0d, 1.0d, 0.0d)))),
+                    List.of(new DocumentStatusStore.StatusRecord("doc-1", DocumentStatus.PROCESSED, "replacement", null))
+                ));
+
+                // The restore path keeps taking full snapshots for rollback safety; only writeAtomically was scoped.
+                assertThat(graphAdapter.captureSnapshotCount()).isEqualTo(1);
+                assertThat(vectorAdapter.captureSnapshotCount()).isEqualTo(1);
+                assertThat(provider.documentStore().list())
+                    .containsExactly(new DocumentStore.DocumentRecord("doc-1", "Replacement", "body", Map.of()));
+                assertThat(provider.chunkStore().list())
+                    .containsExactly(new ChunkStore.ChunkRecord("doc-1:0", "doc-1", "body", 4, 0, Map.of()));
+                assertThat(graphAdapter.graphStore().loadEntity("entity-1")).isPresent();
+                assertThat(graphAdapter.graphStore().loadEntity("entity-0")).isEmpty();
             }
         }
     }
@@ -998,6 +1099,9 @@ class PostgresMilvusNeo4jStorageProviderTest {
     private static final class RecordingGraphStorageAdapter implements GraphStorageAdapter {
         private final RecordingGraphProjection projection = new RecordingGraphProjection();
         private int applyCount;
+        private int captureSnapshotCount;
+        private List<String> capturedEntityIds = List.of();
+        private List<String> capturedRelationIds = List.of();
 
         @Override
         public GraphStore graphStore() {
@@ -1006,7 +1110,45 @@ class PostgresMilvusNeo4jStorageProviderTest {
 
         @Override
         public GraphSnapshot captureSnapshot() {
+            captureSnapshotCount++;
             return new GraphSnapshot(projection.allEntities(), projection.allRelations());
+        }
+
+        @Override
+        public Optional<PreImage> capturePreImage(Collection<String> entityIds, Collection<String> relationIds) {
+            capturedEntityIds = List.copyOf(entityIds);
+            capturedRelationIds = List.copyOf(relationIds);
+            return Optional.of(new ScopedPreImage(
+                capturedEntityIds,
+                capturedRelationIds,
+                capturedEntityIds.stream().map(projection::loadEntity).flatMap(Optional::stream).toList(),
+                capturedRelationIds.stream().map(projection::loadRelation).flatMap(Optional::stream).toList()
+            ));
+        }
+
+        @Override
+        public void restorePreImage(PreImage preImage) {
+            var scoped = (ScopedPreImage) preImage;
+            var presentEntityIds = scoped.entities().stream()
+                .map(GraphStore.EntityRecord::id)
+                .collect(java.util.stream.Collectors.toSet());
+            var absentEntityIds = scoped.entityIds().stream()
+                .filter(id -> !presentEntityIds.contains(id))
+                .toList();
+            if (!absentEntityIds.isEmpty()) {
+                projection.deleteEntities(absentEntityIds);
+            }
+            projection.saveEntities(scoped.entities());
+            var presentRelationIds = scoped.relations().stream()
+                .map(GraphStore.RelationRecord::id)
+                .collect(java.util.stream.Collectors.toSet());
+            var absentRelationIds = scoped.relationIds().stream()
+                .filter(id -> !presentRelationIds.contains(id))
+                .toList();
+            if (!absentRelationIds.isEmpty()) {
+                projection.deleteRelations(absentRelationIds);
+            }
+            projection.saveRelations(scoped.relations());
         }
 
         @Override
@@ -1028,11 +1170,33 @@ class PostgresMilvusNeo4jStorageProviderTest {
         int applyCount() {
             return applyCount;
         }
+
+        int captureSnapshotCount() {
+            return captureSnapshotCount;
+        }
+
+        List<String> capturedEntityIds() {
+            return capturedEntityIds;
+        }
+
+        List<String> capturedRelationIds() {
+            return capturedRelationIds;
+        }
+    }
+
+    private record ScopedPreImage(
+        List<String> entityIds,
+        List<String> relationIds,
+        List<GraphStore.EntityRecord> entities,
+        List<GraphStore.RelationRecord> relations
+    ) implements GraphStorageAdapter.PreImage {
     }
 
     private static final class RecordingVectorStorageAdapter implements VectorStorageAdapter {
         private final RecordingMilvusProjection projection = new RecordingMilvusProjection();
         private int applyCount;
+        private int captureSnapshotCount;
+        private Map<String, List<String>> capturedVectorIdsByNamespace = Map.of();
 
         @Override
         public VectorStore vectorStore() {
@@ -1041,11 +1205,51 @@ class PostgresMilvusNeo4jStorageProviderTest {
 
         @Override
         public VectorSnapshot captureSnapshot() {
+            captureSnapshotCount++;
             return new VectorSnapshot(Map.of(
                 "chunks", projection.list("chunks"),
                 "entities", projection.list("entities"),
                 "relations", projection.list("relations")
             ));
+        }
+
+        @Override
+        public Optional<PreImage> capturePreImage(Map<String, List<String>> idsByNamespace) {
+            var requestedByNamespace = new LinkedHashMap<String, List<String>>();
+            var recordsByNamespace = new LinkedHashMap<String, List<VectorStore.VectorRecord>>();
+            for (var entry : idsByNamespace.entrySet()) {
+                var ids = List.copyOf(entry.getValue());
+                if (ids.isEmpty()) {
+                    continue;
+                }
+                requestedByNamespace.put(entry.getKey(), ids);
+                var requestedIds = new java.util.LinkedHashSet<>(ids);
+                recordsByNamespace.put(entry.getKey(), projection.list(entry.getKey()).stream()
+                    .filter(record -> requestedIds.contains(record.id()))
+                    .toList());
+            }
+            capturedVectorIdsByNamespace = requestedByNamespace;
+            return Optional.of(new ScopedVectorPreImage(requestedByNamespace, recordsByNamespace));
+        }
+
+        @Override
+        public void restorePreImage(PreImage preImage) {
+            var scoped = (ScopedVectorPreImage) preImage;
+            for (var entry : scoped.recordsByNamespace().entrySet()) {
+                var namespace = entry.getKey();
+                var presentIds = entry.getValue().stream()
+                    .map(VectorStore.VectorRecord::id)
+                    .collect(java.util.stream.Collectors.toSet());
+                var absentIds = scoped.idsByNamespace().getOrDefault(namespace, List.of()).stream()
+                    .filter(id -> !presentIds.contains(id))
+                    .toList();
+                if (!absentIds.isEmpty()) {
+                    projection.deleteIds(namespace, absentIds);
+                }
+                if (!entry.getValue().isEmpty()) {
+                    projection.saveAll(namespace, entry.getValue());
+                }
+            }
         }
 
         @Override
@@ -1072,6 +1276,20 @@ class PostgresMilvusNeo4jStorageProviderTest {
         int applyCount() {
             return applyCount;
         }
+
+        int captureSnapshotCount() {
+            return captureSnapshotCount;
+        }
+
+        Map<String, List<String>> capturedVectorIdsByNamespace() {
+            return capturedVectorIdsByNamespace;
+        }
+    }
+
+    private record ScopedVectorPreImage(
+        Map<String, List<String>> idsByNamespace,
+        Map<String, List<VectorStore.VectorRecord>> recordsByNamespace
+    ) implements VectorStorageAdapter.PreImage {
     }
 
     private static final class InMemorySnapshotStore implements SnapshotStore {

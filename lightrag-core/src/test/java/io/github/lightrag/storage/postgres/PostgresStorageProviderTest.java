@@ -24,6 +24,7 @@ import io.github.lightrag.storage.DocumentStore;
 import io.github.lightrag.storage.GraphStore;
 import io.github.lightrag.storage.SnapshotStore;
 import io.github.lightrag.storage.TaskDocumentStore;
+import io.github.lightrag.storage.VectorStorageAdapter;
 import io.github.lightrag.storage.VectorStore;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
@@ -441,6 +442,25 @@ class PostgresStorageProviderTest {
                 .contains(new DocumentStore.DocumentRecord("doc-1", "Title", "Body", Map.of("source", "external")));
             assertThat(readField(provider, "jdbcDataSource")).isSameAs(externalDataSource);
             assertThat(readField(provider, "jdbcLockDataSource")).isSameAs(externalDataSource);
+        }
+    }
+
+    @Test
+    void rejectsForeignPreImagePayloadOnTheNoOpAdapter() {
+        var config = newConfig();
+
+        try (PostgresStorageProvider postgresProvider = new PostgresStorageProvider(config, new InMemorySnapshotStore())) {
+            var adapter = new PostgresVectorStorageAdapter(postgresProvider);
+            var ownPayload = adapter.capturePreImage(Map.of("chunks", List.of("doc-1:0")));
+
+            // EMPTY_PRE_IMAGE must be a present payload: Optional.empty() would mean "scoped pre-images not
+            // supported" and force a whole-workspace captureSnapshot() on the write path that no longer takes one.
+            assertThat(ownPayload).isPresent();
+
+            assertThatThrownBy(() -> adapter.restorePreImage(new VectorStorageAdapter.PreImage() {
+            }))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("unexpected pre-image payload");
         }
     }
 

@@ -7,10 +7,21 @@ import io.github.lightrag.storage.VectorStore;
 
 import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Map;
 import java.util.Objects;
+import java.util.Optional;
 
 public final class PostgresVectorStorageAdapter implements VectorStorageAdapter {
     private static final List<String> DEFAULT_NAMESPACES = List.of("chunks", "entities", "relations");
+
+    /**
+     * Sentinel for "scoped pre-image with nothing to restore": {@link #apply} is a no-op because Postgres baseline
+     * vectors are written through the transactional vector store, so there is no post-commit projection to roll
+     * back. Must be captured as {@code Optional.of(EMPTY_PRE_IMAGE)} — {@code Optional.empty()} would mean "scoped
+     * pre-images not supported" and force a whole-workspace {@link #captureSnapshot()}.
+     */
+    private static final PreImage EMPTY_PRE_IMAGE = new PreImage() {
+    };
 
     private final PostgresStorageProvider postgresProvider;
 
@@ -62,6 +73,18 @@ public final class PostgresVectorStorageAdapter implements VectorStorageAdapter 
             documentGraphState.documentJournals(),
             documentGraphState.chunkJournals()
         ));
+    }
+
+    @Override
+    public Optional<PreImage> capturePreImage(Map<String, List<String>> idsByNamespace) {
+        return Optional.of(EMPTY_PRE_IMAGE);
+    }
+
+    @Override
+    public void restorePreImage(PreImage preImage) {
+        if (preImage != EMPTY_PRE_IMAGE) {
+            throw new IllegalArgumentException("unexpected pre-image payload: " + preImage);
+        }
     }
 
 }
