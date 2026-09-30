@@ -3,11 +3,13 @@ package io.github.lightrag.storage;
 import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.LinkedHashMap;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
 import java.util.Optional;
 import java.util.PriorityQueue;
+import java.util.Set;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -94,12 +96,8 @@ public final class StorageCoordinator implements AtomicStorageProvider, AutoClos
     public <T> T writeAtomically(AtomicOperation<T> operation) {
         Objects.requireNonNull(operation, "operation");
         long started = System.nanoTime();
-        var relationalSnapshot = relationalAdapter.captureSnapshot();
-        long relationalSnapshotAt = System.nanoTime();
-        var graphSnapshot = graphAdapter.captureSnapshot();
-        long graphSnapshotAt = System.nanoTime();
-        var vectorSnapshot = vectorAdapter.captureSnapshot();
-        long vectorSnapshotAt = System.nanoTime();
+        var preImage = new PreImageAccumulator(graphAdapter, vectorAdapter);
+        var applied = new AppliedFlags();
         try {
             T result = relationalAdapter.writeInTransaction(storage -> {
                 long operationStarted = System.nanoTime();
@@ -122,36 +120,42 @@ public final class StorageCoordinator implements AtomicStorageProvider, AutoClos
                 ));
                 long operationFinished = System.nanoTime();
                 var graphWrites = stagedGraphStore.toWrites();
+                var vectorWrites = stagedVectorStore.toWrites();
+                long captureStarted = System.nanoTime();
+                preImage.captureOnce(graphWrites, vectorWrites);
+                long capturedAt = System.nanoTime();
                 if (!graphWrites.isEmpty()) {
+                    applied.graph = true;
                     graphAdapter.apply(graphWrites);
                 }
                 long graphAppliedAt = System.nanoTime();
-                var vectorWrites = stagedVectorStore.toWrites();
                 if (!vectorWrites.isEmpty()) {
+                    applied.vector = true;
                     vectorAdapter.apply(vectorWrites);
                 }
                 long vectorAppliedAt = System.nanoTime();
                 log.info(
-                    "LightRAG storage writeAtomically inner completed: graphEntities={}, graphRelations={}, vectorNamespaces={}, operationMs={}, graphApplyMs={}, vectorApplyMs={}",
+                    "LightRAG storage writeAtomically inner completed: graphEntities={}, graphRelations={}, vectorNamespaces={}, operationMs={}, preImageMs={}, graphApplyMs={}, vectorApplyMs={}",
                     graphWrites.entities().size(),
                     graphWrites.relations().size(),
                     vectorWrites.upserts().size(),
                     elapsedMillis(operationStarted, operationFinished),
-                    elapsedMillis(operationFinished, graphAppliedAt),
+                    elapsedMillis(captureStarted, capturedAt),
+                    elapsedMillis(capturedAt, graphAppliedAt),
                     elapsedMillis(graphAppliedAt, vectorAppliedAt)
                 );
                 return operationResult;
             });
             log.info(
-                "LightRAG storage writeAtomically completed: relationalSnapshotMs={}, graphSnapshotMs={}, vectorSnapshotMs={}, totalMs={}",
-                elapsedMillis(started, relationalSnapshotAt),
-                elapsedMillis(relationalSnapshotAt, graphSnapshotAt),
-                elapsedMillis(graphSnapshotAt, vectorSnapshotAt),
+                "LightRAG storage writeAtomically completed: preImageMode={}, graphPreImageIds={}, vectorPreImageIds={}, totalMs={}",
+                preImage.mode(),
+                preImage.graphIdCount(),
+                preImage.vectorIdCount(),
                 elapsedMillis(started, System.nanoTime())
             );
             return result;
         } catch (RuntimeException | Error failure) {
-            rollback(relationalSnapshot, graphSnapshot, vectorSnapshot, failure);
+            preImage.compensate(applied, failure);
             throw failure;
         }
     }
@@ -250,6 +254,204 @@ public final class StorageCoordinator implements AtomicStorageProvider, AutoClos
         VectorStore vectorStore,
         DocumentStatusStore documentStatusStore
     ) implements AtomicStorageView {
+    }
+
+    private enum PreImageMode {
+        UNDETERMINED,
+        SCOPED,
+        FALLBACK
+    }
+
+    private static final class AppliedFlags {
+        private boolean graph;
+        private boolean vector;
+    }
+
+    /**
+     * Per-call pre-image state for {@link #writeAtomically}: capability (scoped vs snapshot fallback) is frozen at
+     * the first capture, scoped captures keep only yet-uncaptured ids across PostgreSQL retries, and each capture
+     * result is appended as an independent payload replayed in order during compensation.
+     */
+    private static final class PreImageAccumulator {
+        private final GraphStorageAdapter graphAdapter;
+        private final VectorStorageAdapter vectorAdapter;
+
+        private PreImageMode graphMode = PreImageMode.UNDETERMINED;
+        private final List<GraphStorageAdapter.PreImage> graphPayloads = new ArrayList<>();
+        private final Set<String> capturedEntityIds = new LinkedHashSet<>();
+        private final Set<String> capturedRelationIds = new LinkedHashSet<>();
+        private GraphStorageAdapter.GraphSnapshot graphFallbackSnapshot;
+
+        private PreImageMode vectorMode = PreImageMode.UNDETERMINED;
+        private final List<VectorStorageAdapter.PreImage> vectorPayloads = new ArrayList<>();
+        private final Map<String, Set<String>> capturedVectorIdsByNamespace = new LinkedHashMap<>();
+        private VectorStorageAdapter.VectorSnapshot vectorFallbackSnapshot;
+
+        private PreImageAccumulator(GraphStorageAdapter graphAdapter, VectorStorageAdapter vectorAdapter) {
+            this.graphAdapter = Objects.requireNonNull(graphAdapter, "graphAdapter");
+            this.vectorAdapter = Objects.requireNonNull(vectorAdapter, "vectorAdapter");
+        }
+
+        private void captureOnce(
+            GraphStorageAdapter.StagedGraphWrites graphWrites,
+            VectorStorageAdapter.StagedVectorWrites vectorWrites
+        ) {
+            captureGraph(graphWrites);
+            captureVector(vectorWrites);
+        }
+
+        private void compensate(AppliedFlags applied, Throwable failure) {
+            if (applied.graph) {
+                try {
+                    restoreGraph();
+                } catch (RuntimeException | Error restoreFailure) {
+                    addSuppressedIfDistinct(failure, restoreFailure);
+                }
+            }
+            if (applied.vector) {
+                try {
+                    restoreVector();
+                } catch (RuntimeException | Error restoreFailure) {
+                    addSuppressedIfDistinct(failure, restoreFailure);
+                }
+            }
+        }
+
+        private String mode() {
+            return "graph=" + graphMode.name().toLowerCase(java.util.Locale.ROOT)
+                + ",vector=" + vectorMode.name().toLowerCase(java.util.Locale.ROOT);
+        }
+
+        private int graphIdCount() {
+            return capturedEntityIds.size() + capturedRelationIds.size();
+        }
+
+        private int vectorIdCount() {
+            return capturedVectorIdsByNamespace.values().stream().mapToInt(Set::size).sum();
+        }
+
+        private void captureGraph(GraphStorageAdapter.StagedGraphWrites writes) {
+            if (writes.isEmpty() || graphMode == PreImageMode.FALLBACK) {
+                return;
+            }
+            var newEntityIds = notYetCaptured(
+                capturedEntityIds,
+                writes.entities().stream().map(GraphStore.EntityRecord::id).toList()
+            );
+            var newRelationIds = notYetCaptured(
+                capturedRelationIds,
+                writes.relations().stream().map(GraphStore.RelationRecord::id).toList()
+            );
+            if (newEntityIds.isEmpty() && newRelationIds.isEmpty()) {
+                return;
+            }
+            var payload = graphAdapter.capturePreImage(newEntityIds, newRelationIds);
+            capturedEntityIds.addAll(newEntityIds);
+            capturedRelationIds.addAll(newRelationIds);
+            switch (graphMode) {
+                case UNDETERMINED -> {
+                    if (payload.isPresent()) {
+                        graphMode = PreImageMode.SCOPED;
+                        graphPayloads.add(payload.get());
+                    } else {
+                        graphMode = PreImageMode.FALLBACK;
+                        graphFallbackSnapshot = graphAdapter.captureSnapshot();
+                    }
+                }
+                case SCOPED -> {
+                    if (payload.isEmpty()) {
+                        throw new IllegalStateException(
+                            "scoped pre-image capability was lost for " + graphAdapter.getClass().getName()
+                        );
+                    }
+                    graphPayloads.add(payload.get());
+                }
+                case FALLBACK -> {
+                }
+            }
+        }
+
+        private void captureVector(VectorStorageAdapter.StagedVectorWrites writes) {
+            if (writes.isEmpty() || vectorMode == PreImageMode.FALLBACK) {
+                return;
+            }
+            var newIdsByNamespace = new LinkedHashMap<String, List<String>>();
+            for (var entry : writes.upserts().entrySet()) {
+                var capturedIds = capturedVectorIdsByNamespace.computeIfAbsent(
+                    entry.getKey(),
+                    ignored -> new LinkedHashSet<>()
+                );
+                var newIds = notYetCaptured(
+                    capturedIds,
+                    entry.getValue().stream().map(VectorStorageAdapter.VectorWrite::id).toList()
+                );
+                if (!newIds.isEmpty()) {
+                    newIdsByNamespace.put(entry.getKey(), newIds);
+                }
+            }
+            if (newIdsByNamespace.isEmpty()) {
+                return;
+            }
+            var payload = vectorAdapter.capturePreImage(newIdsByNamespace);
+            newIdsByNamespace.forEach((namespace, ids) -> capturedVectorIdsByNamespace.get(namespace).addAll(ids));
+            switch (vectorMode) {
+                case UNDETERMINED -> {
+                    if (payload.isPresent()) {
+                        vectorMode = PreImageMode.SCOPED;
+                        vectorPayloads.add(payload.get());
+                    } else {
+                        vectorMode = PreImageMode.FALLBACK;
+                        vectorFallbackSnapshot = vectorAdapter.captureSnapshot();
+                    }
+                }
+                case SCOPED -> {
+                    if (payload.isEmpty()) {
+                        throw new IllegalStateException(
+                            "scoped pre-image capability was lost for " + vectorAdapter.getClass().getName()
+                        );
+                    }
+                    vectorPayloads.add(payload.get());
+                }
+                case FALLBACK -> {
+                }
+            }
+        }
+
+        private void restoreGraph() {
+            switch (graphMode) {
+                case SCOPED -> {
+                    for (var payload : graphPayloads) {
+                        graphAdapter.restorePreImage(payload);
+                    }
+                }
+                case FALLBACK -> graphAdapter.restore(graphFallbackSnapshot);
+                case UNDETERMINED -> {
+                }
+            }
+        }
+
+        private void restoreVector() {
+            switch (vectorMode) {
+                case SCOPED -> {
+                    for (var payload : vectorPayloads) {
+                        vectorAdapter.restorePreImage(payload);
+                    }
+                }
+                case FALLBACK -> vectorAdapter.restore(vectorFallbackSnapshot);
+                case UNDETERMINED -> {
+                }
+            }
+        }
+
+        private static List<String> notYetCaptured(Set<String> capturedIds, List<String> ids) {
+            var newIds = new ArrayList<String>(ids.size());
+            for (var id : ids) {
+                if (!capturedIds.contains(id)) {
+                    newIds.add(id);
+                }
+            }
+            return List.copyOf(newIds);
+        }
     }
 
     private void rollback(

@@ -31,7 +31,7 @@ class StorageAssemblyTest {
     }
 
     @Test
-    void restoresRelationalGraphAndVectorSnapshotsWhenGraphProjectionFails() {
+    void compensatesGraphOnlyWhenGraphApplyFails() {
         var relational = new StorageAssemblyTestDoubles.FakeRelationalStorageAdapter();
         var graph = new StorageAssemblyTestDoubles.FakeGraphStorageAdapter();
         var vector = new StorageAssemblyTestDoubles.FakeVectorStorageAdapter();
@@ -96,9 +96,9 @@ class StorageAssemblyTest {
         }))
             .isSameAs(graphFailure);
 
-        assertThat(relational.restoreCount()).isEqualTo(1);
+        assertThat(relational.restoreCount()).isZero();
         assertThat(graph.restoreCount()).isEqualTo(1);
-        assertThat(vector.restoreCount()).isEqualTo(1);
+        assertThat(vector.restoreCount()).isZero();
         assertThat(graph.applyCount()).isEqualTo(1);
         assertThat(vector.applyCount()).isZero();
 
@@ -110,7 +110,7 @@ class StorageAssemblyTest {
     }
 
     @Test
-    void restoresRelationalGraphAndVectorSnapshotsWhenVectorProjectionFailsAfterGraphApply() {
+    void compensatesGraphAndVectorWhenVectorApplyFailsAfterGraphApply() {
         var relational = new StorageAssemblyTestDoubles.FakeRelationalStorageAdapter();
         var graph = new StorageAssemblyTestDoubles.FakeGraphStorageAdapter();
         var vector = new StorageAssemblyTestDoubles.FakeVectorStorageAdapter();
@@ -175,7 +175,7 @@ class StorageAssemblyTest {
         }))
             .isSameAs(vectorFailure);
 
-        assertThat(relational.restoreCount()).isEqualTo(1);
+        assertThat(relational.restoreCount()).isZero();
         assertThat(graph.restoreCount()).isEqualTo(1);
         assertThat(vector.restoreCount()).isEqualTo(1);
         assertThat(graph.applyCount()).isEqualTo(1);
