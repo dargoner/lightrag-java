@@ -29,6 +29,7 @@ import io.github.lightrag.storage.AtomicStorageProvider;
 import io.github.lightrag.storage.TaskDocumentStore;
 import io.github.lightrag.task.TaskExecutionService;
 import io.github.lightrag.task.TaskMetadataReporter;
+import io.github.lightrag.task.WorkspaceConcurrencyMode;
 import io.github.lightrag.types.Document;
 import io.github.lightrag.types.PreChunkedChunk;
 import io.github.lightrag.types.RawDocumentSource;
@@ -192,7 +193,7 @@ public final class LightRag implements AutoCloseable {
     public void ingest(String workspaceId, DocumentIngestRequest request) {
         var normalizedRequest = Objects.requireNonNull(request, "request");
         var scope = resolveScope(workspaceId);
-        runInWorkspace(scope, provider -> {
+        runInWorkspace(scope, modeForDocumentCount(normalizedRequest.documents().size()), provider -> {
             newIndexingPipeline(scope, provider).ingest(normalizedRequest.documents());
             return null;
         });
@@ -200,7 +201,7 @@ public final class LightRag implements AutoCloseable {
 
     public void ingestSources(String workspaceId, List<RawDocumentSource> sources, DocumentIngestOptions options) {
         var scope = resolveScope(workspaceId);
-        runInWorkspace(scope, provider -> {
+        runInWorkspace(scope, modeForDocumentCount(sources.size()), provider -> {
             newIndexingPipeline(scope, provider).ingestSources(sources, options);
             return null;
         });
@@ -209,7 +210,7 @@ public final class LightRag implements AutoCloseable {
     public void ingest(String workspaceId, PreChunkedIngestRequest request) {
         var normalizedRequest = Objects.requireNonNull(request, "request");
         var scope = resolveScope(workspaceId);
-        runInWorkspace(scope, provider -> {
+        runInWorkspace(scope, modeForDocumentCount(countDocuments(normalizedRequest.chunks())), provider -> {
             newIndexingPipeline(scope, provider).ingestPreChunkedChunks(normalizedRequest.chunks());
             return null;
         });
@@ -233,10 +234,12 @@ public final class LightRag implements AutoCloseable {
 
     public String submitIngest(String workspaceId, DocumentIngestRequest request, TaskSubmitOptions options) {
         var normalizedRequest = Objects.requireNonNull(request, "request");
+        var documentCount = normalizedRequest.documents().size();
         return submitIngestTask(
             workspaceId,
             options,
-            Map.of("documentCount", Integer.toString(normalizedRequest.documents().size())),
+            modeForDocumentCount(documentCount),
+            Map.of("documentCount", Integer.toString(documentCount)),
             (scope, progressListener) -> newIndexingPipeline(scope, resolveProvider(scope), progressListener)
                 .ingest(normalizedRequest.documents())
         );
@@ -248,11 +251,13 @@ public final class LightRag implements AutoCloseable {
 
     public String submitIngest(String workspaceId, PreChunkedIngestRequest request, TaskSubmitOptions options) {
         var normalizedRequest = Objects.requireNonNull(request, "request");
+        var documentCount = countDocuments(normalizedRequest.chunks());
         return submitIngestTask(
             workspaceId,
             options,
+            modeForDocumentCount(documentCount),
             Map.of(
-                "documentCount", Integer.toString(countDocuments(normalizedRequest.chunks())),
+                "documentCount", Integer.toString(documentCount),
                 "chunkCount", Integer.toString(normalizedRequest.chunks().size())
             ),
             (scope, progressListener) -> newIndexingPipeline(scope, resolveProvider(scope), progressListener)
@@ -271,6 +276,7 @@ public final class LightRag implements AutoCloseable {
     private String submitIngestTask(
         String workspaceId,
         TaskSubmitOptions options,
+        WorkspaceConcurrencyMode mode,
         Map<String, String> metadata,
         IngestTaskWork work
     ) {
@@ -281,6 +287,7 @@ public final class LightRag implements AutoCloseable {
             scope.workspaceId(),
             TaskType.INGEST_DOCUMENTS,
             pipelineMetadata(scope, metadata),
+            mode,
             submitOptions.listeners(),
             progressListener -> taskWork.run(scope, progressListener)
         );
@@ -311,6 +318,7 @@ public final class LightRag implements AutoCloseable {
             scope.workspaceId(),
             TaskType.INGEST_SOURCES,
             pipelineMetadata(scope, Map.of("sourceCount", Integer.toString(normalizedSources.size()))),
+            modeForDocumentCount(normalizedSources.size()),
             taskSubmitOptions.listeners(),
             progressListener -> {
                 newIndexingPipeline(scope, resolveProvider(scope), progressListener)
@@ -465,6 +473,7 @@ public final class LightRag implements AutoCloseable {
         var scope = resolveScope(workspaceId);
         return runInWorkspace(
             scope,
+            WorkspaceConcurrencyMode.DOCUMENT_SCOPED,
             provider -> resumeDocumentIngest(scope, provider, documentId, IndexingProgressListener.noop(), TaskMetadataReporter.noop())
         );
     }
@@ -481,6 +490,7 @@ public final class LightRag implements AutoCloseable {
             scope.workspaceId(),
             TaskType.RESUME_DOCUMENT_INGEST,
             pipelineMetadata(scope, Map.of("documentId", normalizedDocumentId)),
+            WorkspaceConcurrencyMode.DOCUMENT_SCOPED,
             submitOptions.listeners(),
             progressListener -> resumeDocumentIngest(
                 scope,
@@ -556,6 +566,7 @@ public final class LightRag implements AutoCloseable {
         var scope = resolveScope(workspaceId);
         return runInWorkspace(
             scope,
+            WorkspaceConcurrencyMode.DOCUMENT_SCOPED,
             provider -> newGraphMaterializationPipeline(scope, provider, cancellationCheckpoint)
                 .materialize(documentId, mode)
         );
@@ -575,6 +586,7 @@ public final class LightRag implements AutoCloseable {
         var scope = resolveScope(workspaceId);
         return runInWorkspace(
             scope,
+            WorkspaceConcurrencyMode.DOCUMENT_SCOPED,
             provider -> newGraphMaterializationPipeline(scope, provider).resumeChunk(documentId, chunkId)
         );
     }
@@ -583,6 +595,7 @@ public final class LightRag implements AutoCloseable {
         var scope = resolveScope(workspaceId);
         return runInWorkspace(
             scope,
+            WorkspaceConcurrencyMode.DOCUMENT_SCOPED,
             provider -> newGraphMaterializationPipeline(scope, provider).repairChunk(documentId, chunkId)
         );
     }
@@ -602,6 +615,8 @@ public final class LightRag implements AutoCloseable {
                 "documentId", normalizedDocumentId,
                 "requestedMode", requestedMode.name()
             )),
+            WorkspaceConcurrencyMode.DOCUMENT_SCOPED,
+            List.of(),
             progressListener -> {
                 newGraphMaterializationPipeline(
                     scope,
@@ -633,6 +648,8 @@ public final class LightRag implements AutoCloseable {
                 "chunkId", normalizedChunkId,
                 "requestedAction", requestedAction.name()
             )),
+            WorkspaceConcurrencyMode.DOCUMENT_SCOPED,
+            List.of(),
             progressListener -> {
                 var pipeline = newGraphMaterializationPipeline(
                     scope,
@@ -776,6 +793,32 @@ public final class LightRag implements AutoCloseable {
             normalizedScope.workspaceId(),
             provider -> Objects.requireNonNull(work, "work").apply(provider)
         );
+    }
+
+    private <T> T runInWorkspace(
+        WorkspaceScope scope,
+        WorkspaceConcurrencyMode mode,
+        Function<AtomicStorageProvider, T> work
+    ) {
+        var normalizedScope = Objects.requireNonNull(scope, "scope");
+        var normalizedMode = Objects.requireNonNull(mode, "mode");
+        return taskExecutionService.runInWorkspace(
+            normalizedScope.workspaceId(),
+            normalizedMode,
+            provider -> Objects.requireNonNull(work, "work").apply(provider)
+        );
+    }
+
+    /**
+     * Classifies an ingest request by the number of documents it carries: a request that provably touches exactly
+     * one document only rewrites that document's derived objects, while a request carrying several documents (batch
+     * documents, sources, pre-chunked chunks across document ids) keeps the whole workspace. A request that is
+     * neither of these stays exclusive without passing through here.
+     */
+    private static WorkspaceConcurrencyMode modeForDocumentCount(long documentCount) {
+        return documentCount == 1
+            ? WorkspaceConcurrencyMode.DOCUMENT_SCOPED
+            : WorkspaceConcurrencyMode.WORKSPACE_EXCLUSIVE;
     }
 
     private IndexingPipeline newIndexingPipeline(WorkspaceScope scope, AtomicStorageProvider storageProvider) {
