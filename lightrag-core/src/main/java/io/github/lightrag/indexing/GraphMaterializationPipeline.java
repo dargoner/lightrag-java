@@ -50,13 +50,51 @@ import java.util.Map;
 import java.util.NoSuchElementException;
 import java.util.Objects;
 import java.util.Set;
+import java.util.concurrent.ExecutionException;
+import java.util.concurrent.ExecutorCompletionService;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.Future;
+import java.util.concurrent.TimeUnit;
 import java.util.function.Function;
 import java.util.stream.Collectors;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
+/**
+ * Materializes a document's knowledge graph from its chunk snapshots, and inspects or repairs the durable
+ * snapshot/journal state.
+ *
+ * <p>Cancellation boundary semantics (pinned by {@code GraphMaterializationPipelineCancellationTest}):</p>
+ * <ol>
+ *   <li>Checkpoints are polled only <b>outside atomic commits</b>, and every {@code writeAtomically} call is preceded
+ *       by one. "The checkpoint threw" therefore means "this call wrote nothing" as long as no commit was entered.</li>
+ *   <li>Once {@code writeAtomically} is entered, that commit is not interruptible: the checkpoint is never polled
+ *       inside the transaction callback, because a cancellation exception crossing the transaction/compensation
+ *       boundary is exactly what scoped pre-images exist to avoid. A cancellation arriving during the commit leaves it
+ *       to complete whole or to roll back under the existing compensation semantics - never half-applied.</li>
+ *   <li>No checkpoint is polled after a commit, so a cancelled operation may still report a committed result. The
+ *       final task state is owned by task bookkeeping, and "document status = PROCESSED while the task is marked
+ *       cancelled" is declared semantics rather than a defect.</li>
+ *   <li>Cancellation latency: the sequential extraction path polls between model calls, the concurrent path polls
+ *       every 200 ms, and a commit takes as long as the commit itself (provider and lock waits included).</li>
+ * </ol>
+ *
+ * <p>A rebuild performs two commits (snapshot recovery, then graph materialization), so "snapshot committed, graph not
+ * yet" is an accepted inter-commit residue when cancellation lands between them; each commit individually is atomic.</p>
+ *
+ * <p>Extraction cancels by interrupting its worker threads, so a {@link ChatModel} used for extraction <b>must respond
+ * to thread interruption</b> (HTTP clients normally do, by throwing {@code InterruptedException} or an I/O error). A
+ * model that ignores interruption keeps its worker running until the model call returns naturally; that is a declared
+ * limitation whose cost is retained resources, not wrong data, because the pre-commit checkpoints already guarantee
+ * that nothing is written. Shutdown only bounds how long the pipeline waits (5 s plus a warning); it does not force a
+ * non-cooperative thread to terminate.</p>
+ */
 public final class GraphMaterializationPipeline {
     private static final Logger log = LoggerFactory.getLogger(GraphMaterializationPipeline.class);
+
+    private static final long COMPLETION_POLL_MILLIS = 200;
+    private static final long SHUTDOWN_TIMEOUT_SECONDS = 5;
 
     private final AtomicStorageProvider storageProvider;
     private final KnowledgeExtractor knowledgeExtractor;
@@ -130,6 +168,15 @@ public final class GraphMaterializationPipeline {
         );
     }
 
+    /**
+     * Creates the pipeline.
+     *
+     * @param chunkExtractParallelism number of chunks extracted concurrently; values below 1 are normalized to 1, and
+     *     the effective parallelism never exceeds the chunk count. A value of 1 extracts sequentially.
+     * @param cancellationCheckpoint polled between extraction steps and before every atomic commit; {@code null}
+     *     behaves as {@link CancellationCheckpoint#NONE}. The extraction {@link ChatModel} must respond to thread
+     *     interruption (see the class Javadoc for the cancellation contract).
+     */
     public GraphMaterializationPipeline(
         ChatModel extractionModel,
         EmbeddingModel embeddingModel,
@@ -192,6 +239,7 @@ public final class GraphMaterializationPipeline {
     }
 
     public DocumentGraphMaterializationResult materialize(String documentId, GraphMaterializationMode mode) {
+        cancellationCheckpoint.check();
         var normalizedDocumentId = requireNonBlank(documentId, "documentId");
         var requestedMode = Objects.requireNonNull(mode, "mode");
         var inspection = inspect(normalizedDocumentId);
@@ -256,6 +304,7 @@ public final class GraphMaterializationPipeline {
     }
 
     private ChunkGraphMaterializationResult materializeChunk(String documentId, String chunkId, GraphChunkAction action) {
+        cancellationCheckpoint.check();
         progressListener.onStageStarted(io.github.lightrag.api.TaskStage.SNAPSHOT_LOADING, "loading chunk graph state");
         var state = loadState(documentId);
         progressListener.onStageSucceeded(io.github.lightrag.api.TaskStage.SNAPSHOT_LOADING, "loaded chunk graph state");
@@ -321,6 +370,7 @@ public final class GraphMaterializationPipeline {
     }
 
     private void materializeDocumentState(MaterializationState state, GraphMaterializationMode mode) {
+        cancellationCheckpoint.check();
         if (state.chunkSnapshots().isEmpty()) {
             throw new IllegalStateException("document graph snapshot does not exist: " + state.documentId());
         }
@@ -337,6 +387,7 @@ public final class GraphMaterializationPipeline {
         progressListener.onStageStarted(io.github.lightrag.api.TaskStage.RELATION_MATERIALIZATION, "materializing document relations");
         progressListener.onStageStarted(io.github.lightrag.api.TaskStage.VECTOR_REPAIR, "repairing graph vectors");
         long writeStarted = System.nanoTime();
+        cancellationCheckpoint.check();
         storageProvider.writeAtomically(storage -> {
             long saveGraphStarted = System.nanoTime();
             saveGraph(state.expectedGraph().entities(), state.expectedGraph().relations(), storage);
@@ -385,6 +436,7 @@ public final class GraphMaterializationPipeline {
     }
 
     private MaterializationState rebuildSnapshot(String documentId, MaterializationState currentState) {
+        cancellationCheckpoint.check();
         long started = System.nanoTime();
         var storedChunks = storageProvider.chunkStore().listByDocument(documentId).stream()
             .map(chunk -> new Chunk(chunk.id(), chunk.documentId(), chunk.text(), chunk.tokenCount(), chunk.order(), chunk.metadata()))
@@ -415,6 +467,7 @@ public final class GraphMaterializationPipeline {
         );
         var chunkSnapshots = toChunkSnapshots(documentId, rebuiltExtractions, storedChunks, now);
         long snapshotBuiltAt = System.nanoTime();
+        cancellationCheckpoint.check();
         storageProvider.writeAtomically(storage -> {
             storage.documentGraphSnapshotStore().saveDocument(documentSnapshot);
             storage.documentGraphSnapshotStore().saveChunks(documentId, chunkSnapshots);
@@ -440,6 +493,7 @@ public final class GraphMaterializationPipeline {
         GraphAssembler.Graph chunkGraph,
         GraphChunkAction action
     ) {
+        cancellationCheckpoint.check();
         storageProvider.writeAtomically(storage -> {
             saveGraph(chunkGraph.entities(), chunkGraph.relations(), storage);
             saveEntityVectors(chunkGraph.entities(), storage.vectorStore());
@@ -652,27 +706,18 @@ public final class GraphMaterializationPipeline {
     }
 
     private List<GraphAssembler.ChunkExtraction> refineExtractions(List<Chunk> chunks) {
+        cancellationCheckpoint.check();
         long started = System.nanoTime();
-        log.info("LightRAG graph refineExtractions started: chunks={}", chunks.size());
-        var primaryExtractions = new ArrayList<PrimaryChunkExtraction>(chunks.size());
-        int index = 0;
-        for (var chunk : chunks) {
-            long chunkStarted = System.nanoTime();
-            var extraction = knowledgeExtractor.extractWithCacheIds(chunk);
-            long chunkFinished = System.nanoTime();
-            primaryExtractions.add(new PrimaryChunkExtraction(chunk, extraction.extraction(), extraction.cacheIds()));
-            log.info(
-                "LightRAG graph refineExtractions chunk extracted: chunkId={}, order={}, index={}, entities={}, relations={}, cacheIds={}, elapsedMs={}",
-                chunk.id(),
-                chunk.order(),
-                index,
-                extraction.extraction().entities().size(),
-                extraction.extraction().relations().size(),
-                extraction.cacheIds().size(),
-                elapsedMillis(chunkStarted, chunkFinished)
-            );
-            index++;
-        }
+        var parallelism = Math.min(chunkExtractParallelism, Math.max(1, chunks.size()));
+        log.info(
+            "LightRAG graph refineExtractions started: chunks={}, mode={}, parallelism={}",
+            chunks.size(),
+            parallelism <= 1 || chunks.size() <= 1 ? "SEQUENTIAL" : "CONCURRENT",
+            parallelism
+        );
+        var primaryExtractions = parallelism <= 1 || chunks.size() <= 1
+            ? extractPrimarySequentially(chunks)
+            : extractPrimaryConcurrently(chunks);
         long extractedAt = System.nanoTime();
         var refined = extractionRefinementPipeline.refine(primaryExtractions);
         long refinedAt = System.nanoTime();
@@ -684,6 +729,113 @@ public final class GraphMaterializationPipeline {
             elapsedMillis(started, refinedAt)
         );
         return refined;
+    }
+
+    private List<PrimaryChunkExtraction> extractPrimarySequentially(List<Chunk> chunks) {
+        var primaryExtractions = new ArrayList<PrimaryChunkExtraction>(chunks.size());
+        for (int index = 0; index < chunks.size(); index++) {
+            cancellationCheckpoint.check();
+            primaryExtractions.add(primaryChunkExtraction(chunks.get(index), index));
+        }
+        return List.copyOf(primaryExtractions);
+    }
+
+    private List<PrimaryChunkExtraction> extractPrimaryConcurrently(List<Chunk> chunks) {
+        ExecutorService executor = Executors.newFixedThreadPool(Math.min(chunkExtractParallelism, chunks.size()));
+        var completionService = new ExecutorCompletionService<IndexedPrimaryExtraction>(executor);
+        var pendingTasks = new LinkedHashMap<Future<IndexedPrimaryExtraction>, Integer>();
+        try {
+            var results = new PrimaryChunkExtraction[chunks.size()];
+            for (int index = 0; index < chunks.size(); index++) {
+                final int taskIndex = index;
+                pendingTasks.put(
+                    completionService.submit(() -> {
+                        cancellationCheckpoint.check();
+                        return new IndexedPrimaryExtraction(taskIndex, primaryChunkExtraction(chunks.get(taskIndex), taskIndex));
+                    }),
+                    taskIndex
+                );
+            }
+            while (!pendingTasks.isEmpty()) {
+                cancellationCheckpoint.check();
+                var completed = completionService.poll(COMPLETION_POLL_MILLIS, TimeUnit.MILLISECONDS);
+                if (completed == null) {
+                    continue;
+                }
+                pendingTasks.remove(completed);
+                var extraction = completed.get();
+                results[extraction.index()] = extraction.extraction();
+            }
+            return List.of(results);
+        } catch (ExecutionException exception) {
+            cancelPending(pendingTasks.keySet());
+            rethrowTaskFailure(exception.getCause());
+            throw new IllegalStateException("chunk extraction failed", exception.getCause());
+        } catch (InterruptedException exception) {
+            cancelPending(pendingTasks.keySet());
+            Thread.currentThread().interrupt();
+            throw new RuntimeException("chunk extraction interrupted", exception);
+        } catch (RuntimeException exception) {
+            cancelPending(pendingTasks.keySet());
+            throw exception;
+        } finally {
+            shutdownExecutor(executor);
+        }
+    }
+
+    private PrimaryChunkExtraction primaryChunkExtraction(Chunk chunk, int index) {
+        log.info(
+            "LightRAG graph refineExtractions chunk extraction started: chunkId={}, order={}, index={}, thread={}",
+            chunk.id(),
+            chunk.order(),
+            index,
+            Thread.currentThread().getName()
+        );
+        long chunkStarted = System.nanoTime();
+        var extraction = knowledgeExtractor.extractWithCacheIds(chunk);
+        long chunkFinished = System.nanoTime();
+        log.info(
+            "LightRAG graph refineExtractions chunk extracted: chunkId={}, order={}, index={}, entities={}, relations={}, cacheIds={}, elapsedMs={}, thread={}",
+            chunk.id(),
+            chunk.order(),
+            index,
+            extraction.extraction().entities().size(),
+            extraction.extraction().relations().size(),
+            extraction.cacheIds().size(),
+            elapsedMillis(chunkStarted, chunkFinished),
+            Thread.currentThread().getName()
+        );
+        return new PrimaryChunkExtraction(chunk, extraction.extraction(), extraction.cacheIds());
+    }
+
+    private static void cancelPending(Collection<? extends Future<?>> futures) {
+        for (var future : futures) {
+            future.cancel(true);
+        }
+    }
+
+    private static void shutdownExecutor(ExecutorService executor) {
+        executor.shutdownNow();
+        try {
+            if (!executor.awaitTermination(SHUTDOWN_TIMEOUT_SECONDS, TimeUnit.SECONDS)) {
+                log.warn(
+                    "LightRAG graph extraction workers did not terminate within {}s; in-flight ChatModel calls are expected to honour thread interruption (see the contract on the ChatModel parameter)",
+                    SHUTDOWN_TIMEOUT_SECONDS
+                );
+            }
+        } catch (InterruptedException interruption) {
+            Thread.currentThread().interrupt();
+        }
+    }
+
+    private static void rethrowTaskFailure(Throwable failure) {
+        if (failure instanceof RuntimeException runtimeException) {
+            throw runtimeException;
+        }
+        if (failure instanceof Error error) {
+            throw error;
+        }
+        throw new IllegalStateException("chunk extraction failed", failure);
     }
 
     private List<DocumentGraphSnapshotStore.ChunkGraphSnapshot> toChunkSnapshots(
@@ -1151,6 +1303,9 @@ public final class GraphMaterializationPipeline {
             throw new IllegalArgumentException(label + " must not be blank");
         }
         return normalized;
+    }
+
+    private record IndexedPrimaryExtraction(int index, PrimaryChunkExtraction extraction) {
     }
 
     private record MaterializationState(
