@@ -1,5 +1,6 @@
 package io.github.lightrag.indexing;
 
+import io.github.lightrag.api.CancellationCheckpoint;
 import io.github.lightrag.api.ChunkExtractStatus;
 import io.github.lightrag.api.ChunkGraphMaterializationResult;
 import io.github.lightrag.api.ChunkGraphStatus;
@@ -66,6 +67,8 @@ public final class GraphMaterializationPipeline {
     private final Path snapshotPath;
     private final TaskMetadataReporter metadataReporter;
     private final IndexingProgressListener progressListener;
+    private final int chunkExtractParallelism;
+    private final CancellationCheckpoint cancellationCheckpoint;
 
     public GraphMaterializationPipeline(
         ChatModel extractionModel,
@@ -108,6 +111,44 @@ public final class GraphMaterializationPipeline {
         List<String> relationTypes,
         List<GraphExtractionExample> graphExtractionExamples
     ) {
+        this(
+            extractionModel,
+            embeddingModel,
+            storageProvider,
+            extractionRefinementOptions,
+            snapshotPath,
+            metadataReporter,
+            progressListener,
+            1,
+            entityExtractMaxGleaning,
+            maxExtractInputTokens,
+            entityExtractionLanguage,
+            entityTypes,
+            relationTypes,
+            graphExtractionExamples,
+            CancellationCheckpoint.NONE
+        );
+    }
+
+    public GraphMaterializationPipeline(
+        ChatModel extractionModel,
+        EmbeddingModel embeddingModel,
+        AtomicStorageProvider storageProvider,
+        ExtractionRefinementOptions extractionRefinementOptions,
+        Path snapshotPath,
+        TaskMetadataReporter metadataReporter,
+        IndexingProgressListener progressListener,
+        int chunkExtractParallelism,
+        int entityExtractMaxGleaning,
+        int maxExtractInputTokens,
+        String entityExtractionLanguage,
+        List<String> entityTypes,
+        List<String> relationTypes,
+        List<GraphExtractionExample> graphExtractionExamples,
+        CancellationCheckpoint cancellationCheckpoint
+    ) {
+        this.chunkExtractParallelism = Math.max(1, chunkExtractParallelism);
+        this.cancellationCheckpoint = cancellationCheckpoint == null ? CancellationCheckpoint.NONE : cancellationCheckpoint;
         this.storageProvider = Objects.requireNonNull(storageProvider, "storageProvider");
         this.extractionRefinementOptions = extractionRefinementOptions == null
             ? ExtractionRefinementOptions.disabled()
@@ -131,7 +172,10 @@ public final class GraphMaterializationPipeline {
             this.extractionRefinementOptions,
             new DefaultExtractionGapDetector(),
             new DefaultRefinementWindowResolver(),
-            (window, ignored) -> this.knowledgeExtractor.extractWindow(window),
+            (window, ignored) -> {
+                this.cancellationCheckpoint.check();
+                return this.knowledgeExtractor.extractWindow(window);
+            },
             new DefaultAttributionResolver(this.extractionRefinementOptions.allowDeterministicAttributionFallback()),
             new DefaultExtractionMergePolicy()
         );
