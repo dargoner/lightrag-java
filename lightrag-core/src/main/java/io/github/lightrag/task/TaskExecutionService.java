@@ -23,6 +23,7 @@ import org.slf4j.LoggerFactory;
 import java.time.Duration;
 import java.time.Instant;
 import java.util.LinkedHashMap;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.NoSuchElementException;
@@ -34,9 +35,11 @@ import java.util.concurrent.ConcurrentMap;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.Future;
+import java.util.concurrent.Semaphore;
 import java.util.concurrent.ThreadFactory;
 import java.util.concurrent.atomic.AtomicLong;
-import java.util.concurrent.locks.ReentrantLock;
+import java.util.concurrent.atomic.AtomicReference;
+import java.util.concurrent.locks.ReentrantReadWriteLock;
 import java.util.function.Function;
 
 public final class TaskExecutionService implements AutoCloseable {
@@ -46,18 +49,34 @@ public final class TaskExecutionService implements AutoCloseable {
     private final Function<String, AtomicStorageProvider> providerResolver;
     private final TaskEventPublisher eventPublisher;
     private final ExecutorService executor;
+    private final int maxConcurrentDocumentTasks;
     private final ConcurrentMap<String, Future<?>> runningTasks = new ConcurrentHashMap<>();
     private final Set<String> recoveredWorkspaces = ConcurrentHashMap.newKeySet();
-    private final ConcurrentMap<String, ReentrantLock> workspaceLocks = new ConcurrentHashMap<>();
+    // Gates are cached per workspace and never evicted, the same lifecycle the previous per-workspace lock map had:
+    // the number of workspaces one JVM serves is bounded. Never move the ThreadLocal slot registrations out of the
+    // gate into a static holder, that would leak slot state across workspaces.
+    private final ConcurrentMap<String, WorkspaceGate> workspaceGates = new ConcurrentHashMap<>();
 
     public TaskExecutionService(Function<String, AtomicStorageProvider> providerResolver) {
-        this(providerResolver, List.of());
+        this(providerResolver, List.of(), 1);
     }
 
     public TaskExecutionService(
         Function<String, AtomicStorageProvider> providerResolver,
         List<TaskEventListener> listeners
     ) {
+        this(providerResolver, listeners, 1);
+    }
+
+    public TaskExecutionService(
+        Function<String, AtomicStorageProvider> providerResolver,
+        List<TaskEventListener> listeners,
+        int maxConcurrentDocumentTasks
+    ) {
+        if (maxConcurrentDocumentTasks <= 0) {
+            throw new IllegalArgumentException("maxConcurrentDocumentTasks must be positive");
+        }
+        this.maxConcurrentDocumentTasks = maxConcurrentDocumentTasks;
         this.providerResolver = Objects.requireNonNull(providerResolver, "providerResolver");
         this.eventPublisher = new TaskEventPublisher(Objects.requireNonNull(listeners, "listeners"));
         var sequence = new AtomicLong();
@@ -72,25 +91,25 @@ public final class TaskExecutionService implements AutoCloseable {
     }
 
     public <T> T runInWorkspace(String workspaceId, WorkspaceWork<T> work) {
+        return runInWorkspace(workspaceId, WorkspaceConcurrencyMode.WORKSPACE_EXCLUSIVE, work);
+    }
+
+    public <T> T runInWorkspace(String workspaceId, WorkspaceConcurrencyMode mode, WorkspaceWork<T> work) {
         var normalizedWorkspaceId = requireNonBlank(workspaceId, "workspaceId");
+        var normalizedMode = Objects.requireNonNull(mode, "mode");
+        var workspaceWork = Objects.requireNonNull(work, "work");
         var provider = providerResolver.apply(normalizedWorkspaceId);
         recoverInterruptedTasks(normalizedWorkspaceId, provider);
-        var workspaceLock = workspaceLocks.computeIfAbsent(normalizedWorkspaceId, ignored -> new ReentrantLock(true));
         try {
-            workspaceLock.lockInterruptibly();
-            return Objects.requireNonNull(work, "work").run(provider);
+            return gateFor(normalizedWorkspaceId).run(normalizedMode, () -> workspaceWork.run(provider));
         } catch (InterruptedException exception) {
             Thread.currentThread().interrupt();
             throw new RuntimeException("workspace operation interrupted", exception);
-        } finally {
-            if (workspaceLock.isHeldByCurrentThread()) {
-                workspaceLock.unlock();
-            }
         }
     }
 
     public String submit(String workspaceId, TaskType taskType, Map<String, String> metadata, TaskWork work) {
-        return submit(workspaceId, taskType, metadata, List.of(), work);
+        return submit(workspaceId, taskType, metadata, WorkspaceConcurrencyMode.WORKSPACE_EXCLUSIVE, List.of(), work);
     }
 
     public String submit(
@@ -100,7 +119,26 @@ public final class TaskExecutionService implements AutoCloseable {
         List<TaskEventListener> listeners,
         TaskWork work
     ) {
+        return submit(
+            workspaceId,
+            taskType,
+            metadata,
+            WorkspaceConcurrencyMode.WORKSPACE_EXCLUSIVE,
+            listeners,
+            work
+        );
+    }
+
+    public String submit(
+        String workspaceId,
+        TaskType taskType,
+        Map<String, String> metadata,
+        WorkspaceConcurrencyMode mode,
+        List<TaskEventListener> listeners,
+        TaskWork work
+    ) {
         var normalizedWorkspaceId = requireNonBlank(workspaceId, "workspaceId");
+        var normalizedMode = Objects.requireNonNull(mode, "mode");
         var provider = providerResolver.apply(normalizedWorkspaceId);
         recoverInterruptedTasks(normalizedWorkspaceId, provider);
         var taskId = UUID.randomUUID().toString();
@@ -146,6 +184,7 @@ public final class TaskExecutionService implements AutoCloseable {
             taskType,
             requestedAt,
             Map.copyOf(metadata),
+            normalizedMode,
             taskListeners,
             Objects.requireNonNull(work, "work")
         ));
@@ -219,6 +258,7 @@ public final class TaskExecutionService implements AutoCloseable {
         TaskType taskType,
         Instant requestedAt,
         Map<String, String> metadata,
+        WorkspaceConcurrencyMode mode,
         List<TaskEventListener> listeners,
         TaskWork work
     ) {
@@ -230,41 +270,48 @@ public final class TaskExecutionService implements AutoCloseable {
             metadata,
             combinePublishers(eventPublisher, listeners)
         );
-        var workspaceLock = workspaceLocks.computeIfAbsent(workspaceId, ignored -> new ReentrantLock(true));
-        var lockAcquired = false;
-        Instant startedAt = null;
+        var startedAt = new AtomicReference<Instant>();
         try {
-            workspaceLock.lockInterruptibly();
-            lockAcquired = true;
-            startedAt = Instant.now();
-            var queueWaitMs = Math.max(0L, Duration.between(requestedAt, startedAt).toMillis());
-            reporter.updateMetadata(Map.of("queueWaitMs", Long.toString(queueWaitMs)));
-            log.info("task_event=PERF taskId={} workspaceId={} scope=task phase=queue_wait durationMs={}",
-                taskId, workspaceId, queueWaitMs);
-            reporter.markRunning("running");
-            reporter.onStageStarted(TaskStage.PREPARING, "starting task");
-            reporter.onStageSucceeded(TaskStage.PREPARING, "task started");
-            work.run(reporter);
-            reporter.complete("completed");
+            gateFor(workspaceId).run(mode, () -> {
+                try {
+                    var started = Instant.now();
+                    startedAt.set(started);
+                    var queueWaitMs = Math.max(0L, Duration.between(requestedAt, started).toMillis());
+                    reporter.updateMetadata(Map.of("queueWaitMs", Long.toString(queueWaitMs)));
+                    log.info("task_event=PERF taskId={} workspaceId={} scope=task phase=queue_wait durationMs={}",
+                        taskId, workspaceId, queueWaitMs);
+                    reporter.markRunning("running");
+                    reporter.onStageStarted(TaskStage.PREPARING, "starting task");
+                    reporter.onStageSucceeded(TaskStage.PREPARING, "task started");
+                    work.run(reporter);
+                    reporter.complete("completed");
+                } catch (TaskCancelledException exception) {
+                    reporter.cancel(exception.getMessage());
+                } catch (Throwable failure) {
+                    reporter.fail(failure);
+                }
+                return null;
+            });
         } catch (InterruptedException exception) {
             Thread.currentThread().interrupt();
             reporter.cancel("task cancelled before workspace pipeline slot was acquired");
-        } catch (TaskCancelledException exception) {
-            reporter.cancel(exception.getMessage());
-        } catch (Throwable failure) {
-            reporter.fail(failure);
         } finally {
-            if (lockAcquired) {
-                workspaceLock.unlock();
-            }
-            if (startedAt != null) {
-                var totalDurationMs = Math.max(0L, Duration.between(startedAt, Instant.now()).toMillis());
+            var started = startedAt.get();
+            if (started != null) {
+                var totalDurationMs = Math.max(0L, Duration.between(started, Instant.now()).toMillis());
                 reporter.updateMetadata(Map.of("totalDurationMs", Long.toString(totalDurationMs)));
                 log.info("task_event=PERF taskId={} workspaceId={} scope=task phase=total durationMs={}",
                     taskId, workspaceId, totalDurationMs);
             }
             runningTasks.remove(taskKey(workspaceId, taskId));
         }
+    }
+
+    private WorkspaceGate gateFor(String workspaceId) {
+        return workspaceGates.computeIfAbsent(
+            workspaceId,
+            id -> new WorkspaceGate(id, maxConcurrentDocumentTasks)
+        );
     }
 
     private void recoverInterruptedTasks(String workspaceId, AtomicStorageProvider provider) {
@@ -411,6 +458,145 @@ public final class TaskExecutionService implements AutoCloseable {
     @FunctionalInterface
     public interface WorkspaceWork<T> {
         T run(AtomicStorageProvider provider);
+    }
+
+    @FunctionalInterface
+    private interface RuntimeSupplier<T> {
+        T get();
+    }
+
+    // Package-private hooks for TaskExecutionServiceTest: the gate is an ordinary class, so the tests read its
+    // permit and slot state directly instead of inferring a leak from "something still runs".
+    int availableDocumentPermits(String workspaceId) {
+        return gateFor(workspaceId).documents.availablePermits();
+    }
+
+    int queuedDocumentPermitWaiters(String workspaceId) {
+        return gateFor(workspaceId).documents.getQueueLength();
+    }
+
+    int queuedGateWaiters(String workspaceId) {
+        return gateFor(workspaceId).lock.getQueueLength();
+    }
+
+    boolean currentThreadHoldsDocumentSlot(String workspaceId) {
+        return gateFor(workspaceId).documentSlotHeld.get().contains(workspaceId);
+    }
+
+    boolean currentThreadHoldsExclusiveSlot(String workspaceId) {
+        return gateFor(workspaceId).exclusiveSlotHeld.get().contains(workspaceId);
+    }
+
+    int workspaceGateCount() {
+        return workspaceGates.size();
+    }
+
+    /**
+     * Per-workspace gate that separates document-scoped work from workspace-exclusive work.
+     *
+     * <p>Document-scoped work takes a permit from the fair {@code documents} semaphore first and then the shared read
+     * lock; workspace-exclusive work takes the write lock. Acquisition order matters: taking the permit before the
+     * read lock keeps a reader from holding the lock while it waits for a permit, which would starve the writer.
+     * Fairness of the write lock makes a queued exclusive task block newly arriving readers.</p>
+     *
+     * <p>The semaphore is not reentrant, so the {@code ThreadLocal} slot registrations let nested work on the same
+     * thread reuse the outer slot: nested document-scoped work runs inline without taking a second permit, and a
+     * thread that already holds a document slot is refused an exclusive acquisition (the read-to-write upgrade would
+     * self-lock). A thread that already holds an exclusive slot is refused a document-scoped acquisition: that call
+     * would wait for a permit while the write lock is held, and a document task that already holds the only permit
+     * and waits for the read lock would never release it (see the reentry contract on {@code TaskEventListener}).</p>
+     */
+    private final class WorkspaceGate {
+        private final String workspaceId;
+        private final ReentrantReadWriteLock lock = new ReentrantReadWriteLock(true);
+        private final Semaphore documents;
+        private final ThreadLocal<Set<String>> documentSlotHeld = ThreadLocal.withInitial(LinkedHashSet::new);
+        private final ThreadLocal<Set<String>> exclusiveSlotHeld = ThreadLocal.withInitial(LinkedHashSet::new);
+
+        private WorkspaceGate(String workspaceId, int maxConcurrentDocumentTasks) {
+            this.workspaceId = workspaceId;
+            this.documents = new Semaphore(maxConcurrentDocumentTasks, true);
+        }
+
+        private <T> T run(WorkspaceConcurrencyMode mode, RuntimeSupplier<T> work) throws InterruptedException {
+            return switch (mode) {
+                case WORKSPACE_EXCLUSIVE -> runExclusive(work);
+                case DOCUMENT_SCOPED -> runDocumentScoped(work);
+            };
+        }
+
+        private <T> T runExclusive(RuntimeSupplier<T> work) throws InterruptedException {
+            if (documentSlotHeld.get().contains(workspaceId)) {
+                log.error(
+                    "LightRAG workspace gate rejected an exclusive acquisition from a thread holding a document-scoped slot: workspace={}",
+                    workspaceId,
+                    new IllegalStateException("rejected exclusive acquisition")
+                );
+                throw new IllegalStateException(
+                    "workspace-exclusive work cannot start from a thread that already holds a document-scoped slot: "
+                        + workspaceId
+                );
+            }
+            var writeLock = lock.writeLock();
+            writeLock.lockInterruptibly();
+            var registered = false;
+            try {
+                if (!exclusiveSlotHeld.get().contains(workspaceId)) {
+                    exclusiveSlotHeld.get().add(workspaceId);
+                    registered = true;
+                }
+                return work.get();
+            } finally {
+                if (registered) {
+                    exclusiveSlotHeld.get().remove(workspaceId);
+                }
+                writeLock.unlock();
+            }
+        }
+
+        private <T> T runDocumentScoped(RuntimeSupplier<T> work) throws InterruptedException {
+            if (exclusiveSlotHeld.get().contains(workspaceId)) {
+                log.error(
+                    "LightRAG workspace gate rejected a document-scoped acquisition from a thread holding an exclusive slot: workspace={}",
+                    workspaceId,
+                    new IllegalStateException("rejected document-scoped acquisition")
+                );
+                throw new IllegalStateException(
+                    "document-scoped work cannot start from a thread that already holds an exclusive slot: "
+                        + workspaceId
+                );
+            }
+            var nested = documentSlotHeld.get().contains(workspaceId);
+            var permitAcquired = false;
+            if (!nested) {
+                documents.acquire();
+                permitAcquired = true;
+            }
+            try {
+                var readLock = lock.readLock();
+                readLock.lockInterruptibly();
+                try {
+                    var registered = false;
+                    if (!nested) {
+                        documentSlotHeld.get().add(workspaceId);
+                        registered = true;
+                    }
+                    try {
+                        return work.get();
+                    } finally {
+                        if (registered) {
+                            documentSlotHeld.get().remove(workspaceId);
+                        }
+                    }
+                } finally {
+                    readLock.unlock();
+                }
+            } finally {
+                if (permitAcquired) {
+                    documents.release();
+                }
+            }
+        }
     }
 
     private List<TaskEventListener> mergeListeners(List<TaskEventListener> listeners) {

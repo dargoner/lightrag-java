@@ -3,6 +3,17 @@ package io.github.lightrag.indexing;
 import io.github.lightrag.api.TaskEventScope;
 import io.github.lightrag.api.TaskStage;
 
+/**
+ * Progress callbacks for a running ingest task.
+ *
+ * <p>Every callback is dispatched synchronously, on the task thread, while the task holds its workspace gate slot, and
+ * is subject to the same callback reentrancy contract as
+ * {@link io.github.lightrag.api.TaskEventListener#onEvent(io.github.lightrag.api.TaskEvent)}: do not call any
+ * workspace-level API and do not block waiting for another task from a callback. A violating call is refused with an
+ * error log and an {@link IllegalStateException} before the gate work starts; the publisher isolates it and the task
+ * continues. See {@code TaskEventListener} for the full contract, including the {@code TASK_SUBMITTED} boundary, which
+ * this listener does not have.</p>
+ */
 public interface IndexingProgressListener {
     IndexingProgressListener NOOP = new IndexingProgressListener() {
     };
