@@ -8,7 +8,9 @@ import org.slf4j.LoggerFactory;
 import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
+import java.util.ArrayList;
 import java.util.HexFormat;
+import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Objects;
@@ -18,6 +20,14 @@ import java.util.concurrent.ConcurrentHashMap;
 public final class MilvusVectorStore implements HybridVectorStore, AutoCloseable {
     private static final List<Float> DEFAULT_HYBRID_WEIGHTS = List.of(0.5f, 0.5f);
     private static final Logger log = LoggerFactory.getLogger(MilvusVectorStore.class);
+
+    /**
+     * Upper bound on the number of ids per {@code pk_id in [...]} point-read expression. {@link #technicalPrimaryKey}
+     * yields {@code "pk-" + hex(MD5)} = 35 characters; with quotes and separators each id costs about 39 characters,
+     * so 512 ids keep the expression near 20 KB — a 3x+ margin over the {@code max_expression_length} values
+     * common on Milvus 3.x deployments. Re-verify against the actual deployment configuration before release.
+     */
+    static final int READ_ROWS_ID_BATCH_SIZE = 512;
 
     private final MilvusClientAdapter clientAdapter;
     private final MilvusVectorConfig config;
@@ -178,6 +188,66 @@ public final class MilvusVectorStore implements HybridVectorStore, AutoCloseable
             return;
         }
         clientAdapter.flush(List.of(collectionName()));
+    }
+
+    /**
+     * Point-reads the rows for the given ids: input ids are deduplicated while keeping order, split into
+     * {@link #READ_ROWS_ID_BATCH_SIZE} batches, and the merged result is rebuilt in deduplicated input order
+     * (Milvus does not promise result order). An id with no row simply has no entry — that is the "absent" half
+     * of the pre-image contract.
+     */
+    public List<MilvusClientAdapter.StoredVectorRow> readRows(String namespace, List<String> ids) {
+        var values = List.copyOf(Objects.requireNonNull(ids, "ids"));
+        if (values.isEmpty()) {
+            return List.of();
+        }
+        var normalizedNamespace = normalizeNamespace(namespace);
+        var uniqueIds = new ArrayList<>(new LinkedHashSet<>(values));
+        var rowsByVectorId = new LinkedHashMap<String, MilvusClientAdapter.StoredVectorRow>();
+        for (int from = 0; from < uniqueIds.size(); from += READ_ROWS_ID_BATCH_SIZE) {
+            var batch = uniqueIds.subList(from, Math.min(from + READ_ROWS_ID_BATCH_SIZE, uniqueIds.size()));
+            var idFilter = batch.stream()
+                .map(value -> technicalPrimaryKey(workspaceId, normalizedNamespace, value))
+                .map(value -> "\"" + escapeFilterLiteral(value) + "\"")
+                .collect(java.util.stream.Collectors.joining(", "));
+            for (var row : clientAdapter.readRows(new MilvusClientAdapter.RowReadRequest(
+                collectionName(),
+                filter(normalizedNamespace) + " && pk_id in [" + idFilter + "]"
+            ))) {
+                rowsByVectorId.put(row.vectorId(), new MilvusClientAdapter.StoredVectorRow(
+                    technicalPrimaryKey(workspaceId, normalizedNamespace, row.vectorId()),
+                    row.vectorId(),
+                    workspaceId,
+                    normalizedNamespace,
+                    row.vectorId(),
+                    row.denseVector(),
+                    row.searchableText(),
+                    row.keywords(),
+                    row.fullText(),
+                    row.srcId(),
+                    row.tgtId(),
+                    row.filePath()
+                ));
+            }
+        }
+        return uniqueIds.stream()
+            .map(rowsByVectorId::get)
+            .filter(Objects::nonNull)
+            .toList();
+    }
+
+    /**
+     * Writes rows back verbatim: {@code full_text} is never recomputed here, because the persisted text already
+     * carries the keywords that {@link #composeFullText} folded in (keywords themselves are not persisted).
+     */
+    public void writeRows(String namespace, List<MilvusClientAdapter.StoredVectorRow> rows) {
+        if (rows.isEmpty()) {
+            return;
+        }
+        var normalizedNamespace = normalizeNamespace(namespace);
+        var collectionName = collectionName();
+        ensureCollection(normalizedNamespace, collectionName);
+        clientAdapter.upsert(collectionName, rows);
     }
 
     private void ensureCollection(String namespace, String collectionName) {

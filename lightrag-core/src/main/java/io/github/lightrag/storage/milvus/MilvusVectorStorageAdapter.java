@@ -9,6 +9,8 @@ import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
+import java.util.Optional;
+import java.util.stream.Collectors;
 
 public final class MilvusVectorStorageAdapter implements VectorStorageAdapter {
     private static final List<String> DEFAULT_NAMESPACES = List.of("chunks", "entities", "relations");
@@ -91,6 +93,54 @@ public final class MilvusVectorStorageAdapter implements VectorStorageAdapter {
     }
 
     @Override
+    public Optional<PreImage> capturePreImage(Map<String, List<String>> idsByNamespace) {
+        var requestedByNamespace = new LinkedHashMap<String, List<String>>();
+        var rowsByNamespace = new LinkedHashMap<String, List<MilvusClientAdapter.StoredVectorRow>>();
+        try {
+            for (var entry : idsByNamespace.entrySet()) {
+                var ids = List.copyOf(entry.getValue());
+                if (ids.isEmpty()) {
+                    continue;
+                }
+                requestedByNamespace.put(entry.getKey(), ids);
+                rowsByNamespace.put(entry.getKey(), projection.readRows(entry.getKey(), ids));
+            }
+        } catch (UnsupportedOperationException exception) {
+            // Projections (or client adapters) that predate row point-reads keep their existing semantics: the
+            // default readRows throws, and the caller falls back to the whole-workspace snapshot. Point reads have
+            // no side effects, so the partially filled capture is discarded safely.
+            return Optional.empty();
+        }
+        return Optional.of(new ScopedPreImage(requestedByNamespace, rowsByNamespace));
+    }
+
+    @Override
+    public void restorePreImage(PreImage preImage) {
+        if (!(preImage instanceof ScopedPreImage scoped)) {
+            throw new IllegalArgumentException("unexpected pre-image payload: " + preImage);
+        }
+        var namespaces = new LinkedHashSet<String>(scoped.rowsByNamespace().keySet());
+        namespaces.addAll(scoped.idsByNamespace().keySet());
+        for (var namespace : namespaces) {
+            var requestedIds = scoped.idsByNamespace().getOrDefault(namespace, List.of());
+            var rows = scoped.rowsByNamespace().getOrDefault(namespace, List.of());
+            var presentIds = rows.stream()
+                .map(MilvusClientAdapter.StoredVectorRow::vectorId)
+                .collect(Collectors.toSet());
+            var absentIds = requestedIds.stream()
+                .filter(id -> !presentIds.contains(id))
+                .toList();
+            if (!absentIds.isEmpty()) {
+                projection.deleteIds(namespace, absentIds);
+            }
+            if (!rows.isEmpty()) {
+                projection.writeRows(namespace, rows);
+            }
+        }
+        projection.flushNamespaces(List.copyOf(namespaces));
+    }
+
+    @Override
     public void close() {
         projection.close();
     }
@@ -102,8 +152,22 @@ public final class MilvusVectorStorageAdapter implements VectorStorageAdapter {
 
         void flushNamespaces(List<String> namespaces);
 
+        default List<MilvusClientAdapter.StoredVectorRow> readRows(String namespace, List<String> ids) {
+            throw new UnsupportedOperationException("row point-read is not implemented");
+        }
+
+        default void writeRows(String namespace, List<MilvusClientAdapter.StoredVectorRow> rows) {
+            throw new UnsupportedOperationException("row write-back is not implemented");
+        }
+
         @Override
         void close();
+    }
+
+    private record ScopedPreImage(
+        Map<String, List<String>> idsByNamespace,
+        Map<String, List<MilvusClientAdapter.StoredVectorRow>> rowsByNamespace
+    ) implements PreImage {
     }
 
     @FunctionalInterface
@@ -169,6 +233,16 @@ public final class MilvusVectorStorageAdapter implements VectorStorageAdapter {
         @Override
         public void flushNamespaces(List<String> namespaces) {
             delegate.flushNamespaces(namespaces);
+        }
+
+        @Override
+        public List<MilvusClientAdapter.StoredVectorRow> readRows(String namespace, List<String> ids) {
+            return delegate.readRows(namespace, ids);
+        }
+
+        @Override
+        public void writeRows(String namespace, List<MilvusClientAdapter.StoredVectorRow> rows) {
+            delegate.writeRows(namespace, rows);
         }
 
         @Override

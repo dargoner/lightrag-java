@@ -268,6 +268,158 @@ class MilvusVectorStoreTest {
     }
 
     @Test
+    void readRowsFiltersByTechnicalPrimaryKey() {
+        var adapter = new FakeMilvusClientAdapter();
+        var store = newStore(adapter);
+        store.saveAllEnriched(
+            "chunks",
+            List.of(enriched("chunk-1", "first body"), enriched("chunk-2", "second body"))
+        );
+
+        var rows = store.readRows("chunks", List.of("chunk-1"));
+
+        assertThat(rows).singleElement().satisfies(row -> {
+            assertThat(row.vectorId()).isEqualTo("chunk-1");
+            assertThat(row.fullText()).isEqualTo("first body");
+        });
+        assertThat(adapter.rowReadRequests).hasSize(1);
+        var filter = adapter.rowReadRequests.get(0).filter();
+        assertThat(filter).contains("workspace_id == \"alpha\"");
+        assertThat(filter).contains("record_type == \"chunks\"");
+        assertThat(filter).contains("pk_id in [");
+        assertThat(filteredPkIds(adapter.rowReadRequests.get(0)))
+            .containsExactly(rows.get(0).pkId());
+    }
+
+    @Test
+    void readRowsPreservesPersistedFullTextAndEndpoints() {
+        var adapter = new FakeMilvusClientAdapter();
+        var store = newStore(adapter);
+        store.saveAllEnriched("relations", List.of(new HybridVectorStore.EnrichedVectorRecord(
+            "relation-1",
+            List.of(0.0d, 1.0d, 0.0d),
+            "relation body",
+            List.of("links", "alpha"),
+            "entity-1",
+            "entity-2",
+            "doc-1.pdf"
+        )));
+
+        var rows = store.readRows("relations", List.of("relation-1"));
+
+        assertThat(rows).singleElement().satisfies(row -> {
+            assertThat(row.fullText()).isEqualTo("relation body\nlinks alpha");
+            assertThat(row.searchableText()).isEqualTo("relation body");
+            assertThat(row.srcId()).isEqualTo("entity-1");
+            assertThat(row.tgtId()).isEqualTo("entity-2");
+            assertThat(row.filePath()).isEqualTo("doc-1.pdf");
+            assertThat(row.keywords()).isEmpty();
+        });
+    }
+
+    @Test
+    void restorePreImageReupsertsExistingRowsAndDeletesAbsentOnes() {
+        var adapter = new FakeMilvusClientAdapter();
+        var store = newStore(adapter);
+        var storageAdapter = new MilvusVectorStorageAdapter(store);
+        store.saveAllEnriched("chunks", List.of(enriched("chunk-1", "original body")));
+        var originalFullText = adapter.upsertedRows.get("rag").get(0).fullText();
+
+        var preImage = storageAdapter.capturePreImage(
+            Map.of("chunks", List.of("chunk-1", "chunk-2"))
+        ).orElseThrow();
+
+        store.saveAllEnriched(
+            "chunks",
+            List.of(enriched("chunk-1", "attempt body"), enriched("chunk-2", "attempt body"))
+        );
+
+        storageAdapter.restorePreImage(preImage);
+
+        assertThat(adapter.upsertedRows.get("rag")).singleElement().satisfies(row -> {
+            assertThat(row.vectorId()).isEqualTo("chunk-1");
+            assertThat(row.searchableText()).isEqualTo("original body");
+            assertThat(row.fullText()).isEqualTo(originalFullText);
+            assertThat(row.denseVector()).containsExactly(1.0d, 0.0d, 0.0d);
+        });
+    }
+
+    @Test
+    void capturePreImageFallsBackWhenProjectionDoesNotSupportRowReads() {
+        var storageAdapter = new MilvusVectorStorageAdapter(new LegacyProjection(), snapshot -> Map.of());
+
+        var preImage = storageAdapter.capturePreImage(Map.of("chunks", List.of("chunk-1")));
+
+        assertThat(preImage).isEmpty();
+    }
+
+    @Test
+    void readRowsBatchesLargeIdSetsAndPreservesOrder() {
+        var adapter = new FakeMilvusClientAdapter();
+        var store = newStore(adapter);
+        var ids = java.util.stream.IntStream.range(0, 600).mapToObj(index -> "chunk-" + index).toList();
+        store.saveAllEnriched("chunks", ids.stream().map(id -> enriched(id, "body")).toList());
+
+        var rows = store.readRows("chunks", ids);
+
+        var batchSize = MilvusVectorStore.READ_ROWS_ID_BATCH_SIZE;
+        var expectedBatches = (ids.size() + batchSize - 1) / batchSize;
+        assertThat(adapter.rowReadRequests).hasSize(expectedBatches);
+        for (var index = 0; index < expectedBatches; index++) {
+            assertThat(filteredPkIds(adapter.rowReadRequests.get(index)))
+                .hasSize(Math.min(batchSize, ids.size() - index * batchSize));
+        }
+        var requestedPkIds = new ArrayList<String>();
+        adapter.rowReadRequests.forEach(request -> requestedPkIds.addAll(filteredPkIds(request)));
+        assertThat(requestedPkIds).containsExactlyElementsOf(adapter.upsertedRows.get("rag").stream()
+            .map(MilvusClientAdapter.StoredVectorRow::pkId)
+            .toList());
+        assertThat(rows).hasSize(ids.size());
+        assertThat(rows).extracting(MilvusClientAdapter.StoredVectorRow::vectorId)
+            .containsExactlyElementsOf(ids);
+    }
+
+    @Test
+    void readRowsDeduplicatesIdsBeforeQuerying() {
+        var adapter = new FakeMilvusClientAdapter();
+        var store = newStore(adapter);
+        store.saveAllEnriched(
+            "chunks",
+            List.of(enriched("chunk-1", "first body"), enriched("chunk-2", "second body"))
+        );
+
+        var rows = store.readRows("chunks", List.of("chunk-1", "chunk-2", "chunk-1"));
+
+        assertThat(adapter.rowReadRequests).hasSize(1);
+        assertThat(filteredPkIds(adapter.rowReadRequests.get(0))).hasSize(2);
+        assertThat(rows).extracting(MilvusClientAdapter.StoredVectorRow::vectorId)
+            .containsExactly("chunk-1", "chunk-2");
+    }
+
+    @Test
+    void readRowsIssuesNoQueryForEmptyIds() {
+        var adapter = new FakeMilvusClientAdapter();
+        var store = newStore(adapter);
+
+        assertThat(store.readRows("chunks", List.of())).isEmpty();
+        assertThat(adapter.rowReadRequests).isEmpty();
+    }
+
+    @Test
+    void readRowsReturnsRowsInRequestedOrderEvenWhenClientShuffles() {
+        var adapter = new FakeMilvusClientAdapter();
+        var store = newStore(adapter);
+        var ids = java.util.stream.IntStream.range(0, 600).mapToObj(index -> "chunk-" + index).toList();
+        store.saveAllEnriched("chunks", ids.stream().map(id -> enriched(id, "body")).toList());
+        adapter.shuffleReadRows = true;
+
+        var rows = store.readRows("chunks", ids);
+
+        assertThat(rows).extracting(MilvusClientAdapter.StoredVectorRow::vectorId)
+            .containsExactlyElementsOf(ids);
+    }
+
+    @Test
     void flushNamespacesDelegatesToMilvusWhenFlushOnWriteEnabled() {
         var adapter = new FakeMilvusClientAdapter();
         var store = new MilvusVectorStore(adapter, testConfig(), "alpha");
@@ -317,8 +469,67 @@ class MilvusVectorStoreTest {
         );
     }
 
+    private static MilvusVectorStore newStore(FakeMilvusClientAdapter adapter) {
+        return new MilvusVectorStore(adapter, testConfig(), "alpha");
+    }
+
+    private static HybridVectorStore.EnrichedVectorRecord enriched(String id, String body) {
+        return new HybridVectorStore.EnrichedVectorRecord(id, List.of(1.0d, 0.0d, 0.0d), body, List.of());
+    }
+
+    private static List<String> filteredPkIds(MilvusClientAdapter.RowReadRequest request) {
+        var filter = request.filter();
+        var start = filter.indexOf("pk_id in [");
+        var body = filter.substring(start + "pk_id in [".length(), filter.lastIndexOf(']'));
+        return java.util.Arrays.stream(body.split(","))
+            .map(String::trim)
+            .map(token -> token.substring(1, token.length() - 1))
+            .toList();
+    }
+
     private static String namespaceFilter(String workspaceId, String namespace) {
         return "workspace_id == \"" + workspaceId + "\" && record_type == \"" + namespace + "\"";
+    }
+
+    private static final class LegacyProjection implements MilvusVectorStorageAdapter.Projection {
+        @Override
+        public void saveAll(String namespace, List<VectorStore.VectorRecord> vectors) {
+        }
+
+        @Override
+        public List<VectorStore.VectorMatch> search(String namespace, List<Double> queryVector, int topK) {
+            return List.of();
+        }
+
+        @Override
+        public List<VectorStore.VectorRecord> list(String namespace) {
+            return List.of();
+        }
+
+        @Override
+        public void saveAllEnriched(String namespace, List<HybridVectorStore.EnrichedVectorRecord> records) {
+        }
+
+        @Override
+        public List<VectorStore.VectorMatch> search(String namespace, HybridVectorStore.SearchRequest request) {
+            return List.of();
+        }
+
+        @Override
+        public void deleteNamespace(String namespace) {
+        }
+
+        @Override
+        public void deleteIds(String namespace, List<String> ids) {
+        }
+
+        @Override
+        public void flushNamespaces(List<String> namespaces) {
+        }
+
+        @Override
+        public void close() {
+        }
     }
 
     private static final class FakeMilvusClientAdapter implements MilvusClientAdapter {
@@ -330,6 +541,8 @@ class MilvusVectorStoreTest {
         private MilvusClientAdapter.ListRequest lastListRequest;
         private MilvusClientAdapter.DeleteRequest lastDeleteRequest;
         private final List<String> flushedCollectionNames = new ArrayList<>();
+        private final List<MilvusClientAdapter.RowReadRequest> rowReadRequests = new ArrayList<>();
+        private boolean shuffleReadRows;
         private List<VectorStore.VectorMatch> semanticResults = List.of();
         private List<VectorStore.VectorMatch> keywordResults = List.of();
         private List<VectorStore.VectorMatch> hybridResults = List.of();
@@ -342,7 +555,14 @@ class MilvusVectorStoreTest {
 
         @Override
         public void upsert(String collectionName, List<MilvusClientAdapter.StoredVectorRow> rows) {
-            upsertedRows.put(collectionName, new ArrayList<>(rows));
+            var merged = new LinkedHashMap<String, MilvusClientAdapter.StoredVectorRow>();
+            for (var row : upsertedRows.getOrDefault(collectionName, List.of())) {
+                merged.put(row.pkId(), row);
+            }
+            for (var row : rows) {
+                merged.put(row.pkId(), row);
+            }
+            upsertedRows.put(collectionName, new ArrayList<>(merged.values()));
         }
 
         @Override
@@ -358,6 +578,21 @@ class MilvusVectorStoreTest {
                 .sorted(java.util.Comparator.comparing(MilvusClientAdapter.StoredVectorRow::id))
                 .map(row -> new VectorStore.VectorRecord(row.vectorId(), row.denseVector()))
                 .toList();
+        }
+
+        @Override
+        public List<MilvusClientAdapter.StoredVectorRow> readRows(MilvusClientAdapter.RowReadRequest request) {
+            rowReadRequests.add(request);
+            var rows = upsertedRows.getOrDefault(request.collectionName(), List.of()).stream()
+                .filter(row -> matchesFilter(row, request.filter()))
+                .map(FakeMilvusClientAdapter::toSdkReadRow)
+                .toList();
+            if (!shuffleReadRows) {
+                return List.copyOf(rows);
+            }
+            var shuffled = new ArrayList<>(rows);
+            java.util.Collections.reverse(shuffled);
+            return List.copyOf(shuffled);
         }
 
         @Override
@@ -393,6 +628,23 @@ class MilvusVectorStoreTest {
 
         @Override
         public void close() {
+        }
+
+        private static MilvusClientAdapter.StoredVectorRow toSdkReadRow(MilvusClientAdapter.StoredVectorRow stored) {
+            return new MilvusClientAdapter.StoredVectorRow(
+                "",
+                stored.vectorId(),
+                "",
+                "",
+                stored.vectorId(),
+                stored.denseVector(),
+                stored.searchableText(),
+                List.of(),
+                stored.fullText(),
+                stored.srcId(),
+                stored.tgtId(),
+                stored.filePath()
+            );
         }
 
         private static boolean matchesFilter(MilvusClientAdapter.StoredVectorRow row, String filter) {

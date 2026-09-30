@@ -15,6 +15,10 @@ public interface MilvusClientAdapter extends AutoCloseable {
         throw new UnsupportedOperationException("list with filter is not implemented");
     }
 
+    default List<StoredVectorRow> readRows(RowReadRequest request) {
+        throw new UnsupportedOperationException("row point-read is not implemented");
+    }
+
     List<VectorStore.VectorMatch> semanticSearch(SemanticSearchRequest request);
 
     List<VectorStore.VectorMatch> keywordSearch(KeywordSearchRequest request);
@@ -86,6 +90,9 @@ public interface MilvusClientAdapter extends AutoCloseable {
     }
 
     record ListRequest(String collectionName, String filter) {
+    }
+
+    record RowReadRequest(String collectionName, String filter) {
     }
 
     record DeleteRequest(String collectionName, String filter) {

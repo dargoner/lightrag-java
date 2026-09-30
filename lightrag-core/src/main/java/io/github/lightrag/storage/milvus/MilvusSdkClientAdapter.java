@@ -171,6 +171,66 @@ public final class MilvusSdkClientAdapter implements MilvusClientAdapter {
     }
 
     @Override
+    public List<StoredVectorRow> readRows(RowReadRequest request) {
+        var readRequest = Objects.requireNonNull(request, "request");
+        var targetCollection = readRequest.collectionName();
+        if (!hasCollection(targetCollection)) {
+            return List.of();
+        }
+        try {
+            var rows = new ArrayList<StoredVectorRow>();
+            long offset = 0;
+            while (true) {
+                var response = client.query(QueryReq.builder()
+                    .databaseName(config.databaseName())
+                    .collectionName(targetCollection)
+                    .filter(readRequest.filter())
+                    .outputFields(List.of(
+                        VECTOR_ID_FIELD,
+                        DENSE_VECTOR_FIELD,
+                        SEARCHABLE_TEXT_FIELD,
+                        FULL_TEXT_FIELD,
+                        SRC_ID_FIELD,
+                        TGT_ID_FIELD,
+                        FILE_PATH_FIELD
+                    ))
+                    .limit(QUERY_PAGE_SIZE)
+                    .offset(offset)
+                    .consistencyLevel(queryConsistency)
+                    .build());
+                var page = response.getQueryResults();
+                if (page == null || page.isEmpty()) {
+                    break;
+                }
+                for (var row : page) {
+                    var entity = row.getEntity();
+                    rows.add(new StoredVectorRow(
+                        "",
+                        Objects.toString(entity.get(VECTOR_ID_FIELD)),
+                        "",
+                        "",
+                        Objects.toString(entity.get(VECTOR_ID_FIELD)),
+                        toDoubleList(entity.get(DENSE_VECTOR_FIELD)),
+                        Objects.toString(entity.get(SEARCHABLE_TEXT_FIELD), ""),
+                        List.of(),
+                        Objects.toString(entity.get(FULL_TEXT_FIELD), ""),
+                        Objects.toString(entity.get(SRC_ID_FIELD), ""),
+                        Objects.toString(entity.get(TGT_ID_FIELD), ""),
+                        Objects.toString(entity.get(FILE_PATH_FIELD), "")
+                    ));
+                }
+                if (page.size() < QUERY_PAGE_SIZE) {
+                    break;
+                }
+                offset += page.size();
+            }
+            return List.copyOf(rows);
+        } catch (RuntimeException exception) {
+            throw new StorageException("Failed to read vector rows from Milvus collection: " + targetCollection, exception);
+        }
+    }
+
+    @Override
     public List<VectorStore.VectorMatch> semanticSearch(SemanticSearchRequest request) {
         var searchRequest = Objects.requireNonNull(request, "request");
         if (!hasCollection(searchRequest.collectionName())) {
