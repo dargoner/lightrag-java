@@ -1073,6 +1073,16 @@ public final class GraphMaterializationPipeline {
         return GraphMaterializationStatus.MISSING;
     }
 
+    /**
+     * Chooses the repair strategy for a document.
+     *
+     * <p>The chunk-snapshot mismatch check compares chunk-id <em>sets</em>: adding or removing even a single chunk
+     * escalates to a full {@link GraphMaterializationMode#REBUILD} rather than a per-chunk repair. This is a
+     * safety-first trade — a set mismatch means the persisted snapshot no longer corresponds to the current chunking,
+     * and arguing a minimal per-chunk repair correct costs more than re-extraction — so expect rebuilds to be more
+     * frequent than strictly necessary. The comparison is order-insensitive, and an empty stored chunk set is never a
+     * mismatch.</p>
+     */
     private static GraphMaterializationMode determineRecommendedMode(
         MaterializationState state,
         GraphMaterializationStatus graphStatus,
@@ -1082,6 +1092,9 @@ public final class GraphMaterializationPipeline {
         List<String> orphanRelations
     ) {
         if (state.chunkSnapshots().isEmpty()) {
+            return GraphMaterializationMode.REBUILD;
+        }
+        if (state.chunkSnapshotMismatch()) {
             return GraphMaterializationMode.REBUILD;
         }
         if (graphStatus == GraphMaterializationStatus.MERGED) {
@@ -1335,6 +1348,22 @@ public final class GraphMaterializationPipeline {
                 (left, right) -> right,
                 LinkedHashMap::new
             ));
+        }
+
+        private Set<String> storedChunkIds() {
+            return storedChunks.stream().map(Chunk::id)
+                .collect(Collectors.toCollection(LinkedHashSet::new));
+        }
+
+        private Set<String> chunkSnapshotIds() {
+            return chunkSnapshots.stream()
+                .map(DocumentGraphSnapshotStore.ChunkGraphSnapshot::chunkId)
+                .collect(Collectors.toCollection(LinkedHashSet::new));
+        }
+
+        private boolean chunkSnapshotMismatch() {
+            var currentChunkIds = storedChunkIds();
+            return !currentChunkIds.isEmpty() && !currentChunkIds.equals(chunkSnapshotIds());
         }
 
         private Set<String> expectedEntityIds() {

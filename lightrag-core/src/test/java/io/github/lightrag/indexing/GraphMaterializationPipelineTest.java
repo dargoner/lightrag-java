@@ -250,6 +250,94 @@ class GraphMaterializationPipelineTest {
         );
     }
 
+    @Test
+    void recommendsRebuildWhenStoredChunksDifferFromSnapshotChunkSet() {
+        var storage = InMemoryStorageProvider.create();
+        seedDocumentGraphState(storage, "doc-1", Instant.parse("2026-04-12T00:00:00Z"), List.of(
+            chunkSnapshot("doc-1", "doc-1:0", 0, "Alice works with Bob")
+        ));
+        storage.chunkStore().save(new ChunkStore.ChunkRecord("doc-1:0", "doc-1", "Alice works with Bob", 4, 0, Map.of()));
+        storage.chunkStore().save(new ChunkStore.ChunkRecord("doc-1:1", "doc-1", "Bob works with Carol", 4, 1, Map.of()));
+
+        var pipeline = new GraphMaterializationPipeline(
+            new FakeChatModel(),
+            new FakeEmbeddingModel(),
+            storage,
+            io.github.lightrag.indexing.refinement.ExtractionRefinementOptions.disabled(),
+            null,
+            TaskMetadataReporter.noop(),
+            IndexingProgressListener.noop()
+        );
+
+        assertThat(pipeline.inspect("doc-1").recommendedMode()).isEqualTo(GraphMaterializationMode.REBUILD);
+    }
+
+    @Test
+    void keepsExistingRecommendationWhenSnapshotMatchesStoredChunks() {
+        var storage = InMemoryStorageProvider.create();
+        seedDocumentGraphState(storage, "doc-1", Instant.parse("2026-04-12T00:00:00Z"), List.of(
+            chunkSnapshot("doc-1", "doc-1:0", 0, "Alice works with Bob"),
+            chunkSnapshot("doc-1", "doc-1:1", 1, "Bob works with Carol")
+        ));
+        storage.chunkStore().save(new ChunkStore.ChunkRecord("doc-1:0", "doc-1", "Alice works with Bob", 4, 0, Map.of()));
+        storage.chunkStore().save(new ChunkStore.ChunkRecord("doc-1:1", "doc-1", "Bob works with Carol", 4, 1, Map.of()));
+
+        var pipeline = new GraphMaterializationPipeline(
+            new FakeChatModel(),
+            new FakeEmbeddingModel(),
+            storage,
+            io.github.lightrag.indexing.refinement.ExtractionRefinementOptions.disabled(),
+            null,
+            TaskMetadataReporter.noop(),
+            IndexingProgressListener.noop()
+        );
+
+        assertThat(pipeline.inspect("doc-1").recommendedMode()).isNotEqualTo(GraphMaterializationMode.REBUILD);
+    }
+
+    @Test
+    void doesNotTreatEmptyStoredChunksAsMismatch() {
+        var storage = InMemoryStorageProvider.create();
+        seedDocumentGraphState(storage, "doc-1", Instant.parse("2026-04-12T00:00:00Z"), List.of(
+            chunkSnapshot("doc-1", "doc-1:0", 0, "Alice works with Bob")
+        ));
+
+        var pipeline = new GraphMaterializationPipeline(
+            new FakeChatModel(),
+            new FakeEmbeddingModel(),
+            storage,
+            io.github.lightrag.indexing.refinement.ExtractionRefinementOptions.disabled(),
+            null,
+            TaskMetadataReporter.noop(),
+            IndexingProgressListener.noop()
+        );
+
+        assertThat(pipeline.inspect("doc-1").recommendedMode()).isNotEqualTo(GraphMaterializationMode.REBUILD);
+    }
+
+    @Test
+    void doesNotRebuildWhenStoredChunksAreMerelyReordered() {
+        var storage = InMemoryStorageProvider.create();
+        seedDocumentGraphState(storage, "doc-1", Instant.parse("2026-04-12T00:00:00Z"), List.of(
+            chunkSnapshot("doc-1", "doc-1:1", 1, "Bob works with Carol"),
+            chunkSnapshot("doc-1", "doc-1:0", 0, "Alice works with Bob")
+        ));
+        storage.chunkStore().save(new ChunkStore.ChunkRecord("doc-1:0", "doc-1", "Alice works with Bob", 4, 0, Map.of()));
+        storage.chunkStore().save(new ChunkStore.ChunkRecord("doc-1:1", "doc-1", "Bob works with Carol", 4, 1, Map.of()));
+
+        var pipeline = new GraphMaterializationPipeline(
+            new FakeChatModel(),
+            new FakeEmbeddingModel(),
+            storage,
+            io.github.lightrag.indexing.refinement.ExtractionRefinementOptions.disabled(),
+            null,
+            TaskMetadataReporter.noop(),
+            IndexingProgressListener.noop()
+        );
+
+        assertThat(pipeline.inspect("doc-1").recommendedMode()).isNotEqualTo(GraphMaterializationMode.REBUILD);
+    }
+
     private static LightRag newLightRag(InMemoryStorageProvider storage) {
         return LightRag.builder()
             .chatModel(new FakeChatModel())
