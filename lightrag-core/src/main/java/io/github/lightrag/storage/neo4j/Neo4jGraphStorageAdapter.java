@@ -5,7 +5,11 @@ import io.github.lightrag.storage.GraphStorageAdapter;
 import io.github.lightrag.storage.GraphStore;
 import io.github.lightrag.storage.MutableGraphStore;
 
+import java.util.Collection;
+import java.util.List;
 import java.util.Objects;
+import java.util.Optional;
+import java.util.stream.Collectors;
 
 public final class Neo4jGraphStorageAdapter implements GraphStorageAdapter {
     private final Projection projection;
@@ -54,8 +58,66 @@ public final class Neo4jGraphStorageAdapter implements GraphStorageAdapter {
     }
 
     @Override
+    public Optional<PreImage> capturePreImage(Collection<String> entityIds, Collection<String> relationIds) {
+        var requestedEntityIds = List.copyOf(entityIds);
+        var requestedRelationIds = List.copyOf(relationIds);
+        return Optional.of(new ScopedPreImage(
+            requestedEntityIds,
+            projection.loadEntities(requestedEntityIds),
+            requestedRelationIds,
+            projection.loadRelations(requestedRelationIds)
+        ));
+    }
+
+    /**
+     * Entities are restored before relations because {@code deleteEntities} issues a DETACH DELETE: an absent entity
+     * takes any relation attached to it down with it, and the relation pass re-writes the pre-image relations
+     * afterwards. A relation that disappears this way can only be one that was also absent from the pre-image (a
+     * relation present in the pre-image had both endpoints present before the write), so the order never drops
+     * pre-image state.
+     */
+    @Override
+    public void restorePreImage(PreImage preImage) {
+        if (!(preImage instanceof ScopedPreImage scoped)) {
+            throw new IllegalArgumentException("unexpected pre-image payload: " + preImage);
+        }
+        var presentEntityIds = scoped.entities().stream()
+            .map(GraphStore.EntityRecord::id)
+            .collect(Collectors.toSet());
+        var absentEntityIds = scoped.entityIds().stream()
+            .filter(id -> !presentEntityIds.contains(id))
+            .toList();
+        if (!absentEntityIds.isEmpty()) {
+            projection.deleteEntities(absentEntityIds);
+        }
+        if (!scoped.entities().isEmpty()) {
+            projection.saveEntities(scoped.entities());
+        }
+        var presentRelationIds = scoped.relations().stream()
+            .map(GraphStore.RelationRecord::id)
+            .collect(Collectors.toSet());
+        var absentRelationIds = scoped.relationIds().stream()
+            .filter(id -> !presentRelationIds.contains(id))
+            .toList();
+        if (!absentRelationIds.isEmpty()) {
+            projection.deleteRelations(absentRelationIds);
+        }
+        if (!scoped.relations().isEmpty()) {
+            projection.saveRelations(scoped.relations());
+        }
+    }
+
+    @Override
     public void close() {
         projection.close();
+    }
+
+    private record ScopedPreImage(
+        List<String> entityIds,
+        List<GraphStore.EntityRecord> entities,
+        List<String> relationIds,
+        List<GraphStore.RelationRecord> relations
+    ) implements PreImage {
     }
 
     public interface Projection extends MutableGraphStore, AutoCloseable {
