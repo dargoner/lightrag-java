@@ -53,6 +53,7 @@ public final class LightRagBuilder {
     private int embeddingBatchSize = Integer.MAX_VALUE;
     private int maxParallelInsert = 2;
     private int chunkExtractParallelism = 2;
+    private int maxConcurrentDocumentTasks = 1;
     private int entityExtractMaxGleaning = io.github.lightrag.indexing.KnowledgeExtractor.DEFAULT_ENTITY_EXTRACT_MAX_GLEANING;
     private int maxExtractInputTokens = io.github.lightrag.indexing.KnowledgeExtractor.DEFAULT_MAX_EXTRACT_INPUT_TOKENS;
     private String entityExtractionLanguage = io.github.lightrag.indexing.KnowledgeExtractor.DEFAULT_LANGUAGE;
@@ -200,6 +201,20 @@ public final class LightRagBuilder {
             throw new IllegalArgumentException("chunkExtractParallelism must be positive");
         }
         this.chunkExtractParallelism = chunkExtractParallelism;
+        return this;
+    }
+
+    /**
+     * Bounds how many document-scoped tasks run concurrently inside one workspace. Unlike
+     * {@code maxParallelInsert}, which parallelizes the documents of a single ingest call, this is the
+     * knob that matters when the caller submits one task per document. Workspace-exclusive work
+     * (delete, rebuild, snapshots) always runs alone regardless of this value.
+     */
+    public LightRagBuilder maxConcurrentDocumentTasks(int maxConcurrentDocumentTasks) {
+        if (maxConcurrentDocumentTasks <= 0) {
+            throw new IllegalArgumentException("maxConcurrentDocumentTasks must be positive");
+        }
+        this.maxConcurrentDocumentTasks = maxConcurrentDocumentTasks;
         return this;
     }
 
@@ -374,6 +389,7 @@ public final class LightRagBuilder {
         ), chunker, documentParsingOrchestrator, automaticQueryKeywordExtraction, rerankCandidateMultiplier, minRerankScore,
             embeddingBatchSize, maxParallelInsert,
             chunkExtractParallelism,
+            maxConcurrentDocumentTasks,
             entityExtractMaxGleaning, maxExtractInputTokens, entityExtractionLanguage, entityTypes,
             graphExtractionEnabled, relationTypes, graphExtractionExamples,
             embeddingSemanticMergeEnabled, embeddingSemanticMergeThreshold, extractionRefinementOptions,

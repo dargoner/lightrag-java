@@ -52,6 +52,7 @@ public final class LightRag implements AutoCloseable {
     private final int embeddingBatchSize;
     private final int maxParallelInsert;
     private final int chunkExtractParallelism;
+    private final int maxConcurrentDocumentTasks;
     private final int entityExtractMaxGleaning;
     private final int maxExtractInputTokens;
     private final String entityExtractionLanguage;
@@ -72,6 +73,7 @@ public final class LightRag implements AutoCloseable {
     LightRag(LightRagConfig config) {
         this(config, null, null, true, 2, 0.0d, Integer.MAX_VALUE, 1,
             1,
+            1,
             io.github.lightrag.indexing.KnowledgeExtractor.DEFAULT_ENTITY_EXTRACT_MAX_GLEANING,
             io.github.lightrag.indexing.KnowledgeExtractor.DEFAULT_MAX_EXTRACT_INPUT_TOKENS,
             io.github.lightrag.indexing.KnowledgeExtractor.DEFAULT_LANGUAGE,
@@ -88,6 +90,7 @@ public final class LightRag implements AutoCloseable {
 
     LightRag(LightRagConfig config, Chunker chunker) {
         this(config, chunker, null, true, 2, 0.0d, Integer.MAX_VALUE, 1,
+            1,
             1,
             io.github.lightrag.indexing.KnowledgeExtractor.DEFAULT_ENTITY_EXTRACT_MAX_GLEANING,
             io.github.lightrag.indexing.KnowledgeExtractor.DEFAULT_MAX_EXTRACT_INPUT_TOKENS,
@@ -113,6 +116,7 @@ public final class LightRag implements AutoCloseable {
         int embeddingBatchSize,
         int maxParallelInsert,
         int chunkExtractParallelism,
+        int maxConcurrentDocumentTasks,
         int entityExtractMaxGleaning,
         int maxExtractInputTokens,
         String entityExtractionLanguage,
@@ -134,6 +138,7 @@ public final class LightRag implements AutoCloseable {
         this.embeddingBatchSize = embeddingBatchSize;
         this.maxParallelInsert = maxParallelInsert;
         this.chunkExtractParallelism = chunkExtractParallelism;
+        this.maxConcurrentDocumentTasks = maxConcurrentDocumentTasks;
         this.entityExtractMaxGleaning = entityExtractMaxGleaning;
         this.maxExtractInputTokens = maxExtractInputTokens;
         this.entityExtractionLanguage = Objects.requireNonNull(entityExtractionLanguage, "entityExtractionLanguage");
@@ -162,7 +167,8 @@ public final class LightRag implements AutoCloseable {
         this.taskEventListeners = List.copyOf(Objects.requireNonNull(taskEventListeners, "taskEventListeners"));
         this.taskExecutionService = new TaskExecutionService(
             workspaceId -> resolveProvider(resolveScope(workspaceId)),
-            this.taskEventListeners
+            this.taskEventListeners,
+            maxConcurrentDocumentTasks
         );
     }
 
@@ -697,6 +703,10 @@ public final class LightRag implements AutoCloseable {
         return chunkExtractParallelism;
     }
 
+    int maxConcurrentDocumentTasks() {
+        return maxConcurrentDocumentTasks;
+    }
+
     int entityExtractMaxGleaning() {
         return entityExtractMaxGleaning;
     }
@@ -973,6 +983,7 @@ public final class LightRag implements AutoCloseable {
         var graphOptions = resolveGraphExtractionOptions(scope);
         var metadata = new LinkedHashMap<String, String>(Objects.requireNonNull(baseMetadata, "baseMetadata"));
         metadata.put("maxParallelInsert", Integer.toString(maxParallelInsert));
+        metadata.put("maxConcurrentDocumentTasks", Integer.toString(maxConcurrentDocumentTasks));
         metadata.put("embeddingBatchSize", Integer.toString(embeddingBatchSize));
         metadata.put("chunkExtractParallelism", Integer.toString(graphOptions.resolvedChunkExtractParallelism()));
         metadata.put("entityExtractMaxGleaning", Integer.toString(graphOptions.resolvedEntityExtractMaxGleaning()));

@@ -940,6 +940,25 @@ class LightRagBuilderTest {
     }
 
     @Test
+    void exposesMaxConcurrentDocumentTasksConfiguration() {
+        var rag = LightRag.builder()
+            .chatModel(new FakeChatModel())
+            .embeddingModel(new FakeEmbeddingModel())
+            .storage(new FakeStorageProvider())
+            .maxConcurrentDocumentTasks(4)
+            .build();
+
+        assertThat(rag.maxConcurrentDocumentTasks()).isEqualTo(4);
+    }
+
+    @Test
+    void rejectsNonPositiveMaxConcurrentDocumentTasks() {
+        assertThatThrownBy(() -> LightRag.builder().maxConcurrentDocumentTasks(0))
+            .isInstanceOf(IllegalArgumentException.class)
+            .hasMessage("maxConcurrentDocumentTasks must be positive");
+    }
+
+    @Test
     void defaultsToTwoWayIngestAndChunkExtractionParallelism() {
         var rag = LightRag.builder()
             .chatModel(new FakeChatModel())
@@ -951,6 +970,17 @@ class LightRagBuilderTest {
         assertThat(rag.chunkExtractParallelism()).isEqualTo(2);
         assertThat(GraphExtractionOptions.defaults().resolvedChunkExtractParallelism()).isEqualTo(2);
         assertThat(GraphExtractionOptions.builder().build().resolvedChunkExtractParallelism()).isEqualTo(2);
+    }
+
+    @Test
+    void keepsMaxConcurrentDocumentTasksAtOneByDefault() {
+        var rag = LightRag.builder()
+            .chatModel(new FakeChatModel())
+            .embeddingModel(new FakeEmbeddingModel())
+            .storage(new FakeStorageProvider())
+            .build();
+
+        assertThat(rag.maxConcurrentDocumentTasks()).isEqualTo(1);
     }
 
     @Test
