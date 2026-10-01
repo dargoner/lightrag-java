@@ -7,7 +7,9 @@ import java.util.List;
 import java.util.NoSuchElementException;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.Semaphore;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicReference;
 
@@ -191,6 +193,139 @@ class LlmConcurrencyBudgetTest {
 
         stream.close();
         assertThat(closed).hasValue(1);
+    }
+
+    @Test
+    void hasNextFailureClosesTheDelegateIteratorWithoutMaskingTheOriginalError() {
+        var closed = new AtomicInteger();
+        var budget = new LlmConcurrencyBudget(1, 8);
+        var model = budget.limitChat("query", new ChatModel() {
+            @Override
+            public String generate(ChatRequest request) {
+                return "unused";
+            }
+
+            @Override
+            public CloseableIterator<String> stream(ChatRequest request) {
+                return new CloseableIterator<>() {
+                    @Override
+                    public boolean hasNext() {
+                        throw new IllegalStateException("stream broken");
+                    }
+
+                    @Override
+                    public String next() {
+                        throw new NoSuchElementException();
+                    }
+
+                    @Override
+                    public void close() {
+                        closed.incrementAndGet();
+                        throw new IllegalStateException("provider close failed");
+                    }
+                };
+            }
+        });
+
+        var stream = model.stream(request("stream"));
+        assertThatThrownBy(stream::hasNext)
+            .isInstanceOf(IllegalStateException.class)
+            .hasMessageContaining("stream broken");
+        assertThat(closed).hasValue(1);
+
+        stream.close();
+        assertThat(closed).hasValue(1);
+    }
+
+    @Test
+    void nextFailureClosesTheDelegateIteratorAndReleasesItsSlot() throws Exception {
+        var closed = new AtomicInteger();
+        var budget = new LlmConcurrencyBudget(1, 8);
+        var model = budget.limitChat("query", new ChatModel() {
+            @Override
+            public String generate(ChatRequest request) {
+                return "unused";
+            }
+
+            @Override
+            public CloseableIterator<String> stream(ChatRequest request) {
+                return new CloseableIterator<>() {
+                    @Override
+                    public boolean hasNext() {
+                        return true;
+                    }
+
+                    @Override
+                    public String next() {
+                        throw new IllegalStateException("chunk failed");
+                    }
+
+                    @Override
+                    public void close() {
+                        closed.incrementAndGet();
+                    }
+                };
+            }
+        });
+
+        var stream = model.stream(request("stream"));
+        assertThatThrownBy(stream::next)
+            .isInstanceOf(IllegalStateException.class)
+            .hasMessageContaining("chunk failed");
+        assertThat(closed).hasValue(1);
+
+        stream.close();
+        assertThat(closed).hasValue(1);
+
+        var recovered = CompletableFuture.supplyAsync(
+            () -> budget.limitChat("query", (ChatModel) request -> "answered").generate(request("answer")));
+        assertThat(recovered.get(5, TimeUnit.SECONDS)).isEqualTo("answered");
+    }
+
+    @Test
+    void exhaustionClosesTheDelegateBeforeReleasingItsSlot() {
+        var closeCalled = new AtomicBoolean();
+        var slotReleasedAfterClose = new AtomicBoolean();
+        // release() runs only from the SlotReleasingIterator, so recording the delegate state at
+        // that moment pins the close-before-release order (review round 3, nit).
+        var slots = new Semaphore(1) {
+            @Override
+            public void release() {
+                slotReleasedAfterClose.set(closeCalled.get());
+                super.release();
+            }
+        };
+        var model = new LimitedChatModel(slots, new ChatModel() {
+            @Override
+            public String generate(ChatRequest request) {
+                return "unused";
+            }
+
+            @Override
+            public CloseableIterator<String> stream(ChatRequest request) {
+                return new CloseableIterator<>() {
+                    @Override
+                    public boolean hasNext() {
+                        return false;
+                    }
+
+                    @Override
+                    public String next() {
+                        throw new NoSuchElementException();
+                    }
+
+                    @Override
+                    public void close() {
+                        closeCalled.set(true);
+                    }
+                };
+            }
+        });
+
+        var stream = model.stream(request("stream"));
+        assertThat(stream.hasNext()).isFalse();
+        assertThat(closeCalled).isTrue();
+        assertThat(slotReleasedAfterClose).isTrue();
     }
 
     @Test

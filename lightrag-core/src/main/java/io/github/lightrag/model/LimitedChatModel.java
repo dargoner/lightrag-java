@@ -70,11 +70,12 @@ final class LimitedChatModel implements ChatModel {
             try {
                 var hasNext = iterator.hasNext();
                 if (!hasNext) {
+                    closeDelegateQuietly();
                     release();
-                    closeDelegateAfterExhaustion();
                 }
                 return hasNext;
             } catch (RuntimeException exception) {
+                closeDelegateQuietly();
                 release();
                 throw exception;
             }
@@ -85,6 +86,7 @@ final class LimitedChatModel implements ChatModel {
             try {
                 return iterator.next();
             } catch (RuntimeException exception) {
+                closeDelegateQuietly();
                 release();
                 throw exception;
             }
@@ -101,14 +103,16 @@ final class LimitedChatModel implements ChatModel {
             }
         }
 
-        private void closeDelegateAfterExhaustion() {
-            // An exhausted stream already reported completion, so a failing close must not turn the
-            // successful read into an error; an explicit close() still propagates such failures.
+        private void closeDelegateQuietly() {
+            // The stream already reported completion or failed, so a failing close must not turn
+            // that outcome into a different error; an explicit close() still propagates close
+            // failures. Closing before releasing keeps the slot held while the underlying
+            // resource may still be open.
             if (delegateClosed.compareAndSet(false, true)) {
                 try {
                     iterator.close();
                 } catch (RuntimeException ignored) {
-                    // best effort after exhaustion
+                    // best effort on the exhausted or failed path
                 }
             }
         }
