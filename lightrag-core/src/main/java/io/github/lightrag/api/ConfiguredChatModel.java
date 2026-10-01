@@ -31,7 +31,16 @@ final class ConfiguredChatModel implements ChatModel {
 
     @Override
     public String cacheIdentity() {
-        return delegate.cacheIdentity();
+        if (defaults.equals(ChatRequestOptions.NONE)) {
+            return delegate.cacheIdentity();
+        }
+        // The answer cache keys the request before this wrapper merges its defaults in, so the
+        // defaults must ride in the identity or differently configured models share cache entries.
+        return delegate.cacheIdentity()
+            + "|defaults:t=" + defaults.temperature()
+            + ",max_tokens=" + defaults.maxTokens()
+            + ",top_p=" + defaults.topP()
+            + ",format=" + defaults.responseFormat();
     }
 
     @Override

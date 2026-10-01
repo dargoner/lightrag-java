@@ -1,13 +1,16 @@
 package io.github.lightrag.api;
 
+import io.github.lightrag.model.CachedChatModel;
 import io.github.lightrag.model.ChatModel;
 import io.github.lightrag.model.ChatRequestOptions;
 import io.github.lightrag.model.ChatResponse;
 import io.github.lightrag.model.CloseableIterator;
+import io.github.lightrag.storage.memory.InMemoryLlmCacheStore;
 import org.junit.jupiter.api.Test;
 
 import java.util.ArrayList;
 import java.util.List;
+import java.util.concurrent.locks.ReentrantReadWriteLock;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
@@ -67,7 +70,48 @@ class ConfiguredChatModelTest {
         assertThat(response.usage().completionTokens()).isEqualTo(3);
         assertThat(delegate.requests().get(0).options())
             .isEqualTo(new ChatRequestOptions(null, 512, null, null));
+        assertThat(model.cacheIdentity())
+            .isEqualTo("recording:metadata|defaults:t=null,max_tokens=512,top_p=null,format=null");
+    }
+
+    @Test
+    void emptyDefaultsLeaveTheCacheIdentityUntouched() {
+        var model = new ConfiguredChatModel(new RecordingChatModel(), ChatRequestOptions.NONE);
+
         assertThat(model.cacheIdentity()).isEqualTo("recording:metadata");
+    }
+
+    @Test
+    void differentlyConfiguredDefaultsDoNotShareCachedAnswers() {
+        var store = new InMemoryLlmCacheStore(new ReentrantReadWriteLock());
+        var request = new ChatModel.ChatRequest("system", "user");
+        var cold = new CachedChatModel("query",
+            new ConfiguredChatModel(ignored -> "cold", new ChatRequestOptions(0.1d, null, null, null)), store);
+        var warm = new CachedChatModel("query",
+            new ConfiguredChatModel(ignored -> "warm", new ChatRequestOptions(0.9d, null, null, null)), store);
+
+        assertThat(cold.generate(request)).isEqualTo("cold");
+        assertThat(warm.generate(request)).isEqualTo("warm");
+        assertThat(cold.generate(request)).isEqualTo("cold");
+        assertThat(warm.generate(request)).isEqualTo("warm");
+    }
+
+    @Test
+    void identicalDefaultsKeepSharingCachedAnswers() {
+        var store = new InMemoryLlmCacheStore(new ReentrantReadWriteLock());
+        var request = new ChatModel.ChatRequest("system", "user");
+        var defaults = new ChatRequestOptions(null, 256, null, null);
+        var secondCalls = new int[1];
+        var first = new CachedChatModel("query",
+            new ConfiguredChatModel(ignored -> "first", defaults), store);
+        var second = new CachedChatModel("query", new ConfiguredChatModel(ignored -> {
+            secondCalls[0]++;
+            return "second";
+        }, defaults), store);
+
+        assertThat(first.generate(request)).isEqualTo("first");
+        assertThat(second.generate(request)).isEqualTo("first");
+        assertThat(secondCalls[0]).isZero();
     }
 
     private static final class RecordingChatModel implements ChatModel {
