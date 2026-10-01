@@ -1,5 +1,6 @@
 package io.github.lightrag.indexing;
 
+import io.github.lightrag.indexing.refinement.ExtractionRefinementOptions;
 import io.github.lightrag.model.ChatModel;
 import io.github.lightrag.model.EmbeddingModel;
 import io.github.lightrag.storage.AtomicStorageProvider;
@@ -16,6 +17,7 @@ import io.github.lightrag.storage.TaskStore;
 import io.github.lightrag.storage.VectorStore;
 import io.github.lightrag.storage.memory.InMemoryGraphStore;
 import io.github.lightrag.support.RelationIds;
+import io.github.lightrag.types.Chunk;
 import io.github.lightrag.types.Document;
 import org.junit.jupiter.api.Test;
 
@@ -117,6 +119,29 @@ class IndexingPipelineBatchGraphPersistenceTest {
     }
 
     @Test
+    void countsEveryBatchRowWhenVotingAgainstTheStoredType() {
+        // Upstream tallies each batch row plus the stored type once: rows [person, location, location]
+        // against a stored "person" give person:2, location:2, and the first-seen type wins the tie
+        // (operate.py:2576-2583). Collapsing the batch to its own winner first would pick "location".
+        var storage = InMemoryStorageProvider.create();
+        var pipeline = rowVotingPipeline(storage, new RowVotingChatModel());
+
+        pipeline.ingest(List.of(new Document("doc-1", "Title", "TYPE_PERSON Alice appears", Map.of())));
+        assertThat(storage.graphStore().loadEntity(entityKey("Alice"))).get()
+            .extracting(GraphStore.EntityRecord::type)
+            .isEqualTo("person");
+
+        pipeline.ingest(List.of(new Document("doc-2", "Title",
+            "TYPE_PERSON Alice appears\nTYPE_LOCATION Alice visits\nTYPE_LOCATION Alice leaves", Map.of())));
+
+        // One paragraph per chunk, so the batch really carried the three rows person/location/location.
+        assertThat(storage.chunkStore().listByDocument("doc-2")).hasSize(3);
+        assertThat(storage.graphStore().loadEntity(entityKey("Alice"))).get()
+            .extracting(GraphStore.EntityRecord::type)
+            .isEqualTo("person");
+    }
+
+    @Test
     void treatsAnEmptyIncomingEntityTypeAsNoVote() {
         var storage = InMemoryStorageProvider.create();
         var pipeline = new IndexingPipeline(
@@ -138,6 +163,40 @@ class IndexingPipelineBatchGraphPersistenceTest {
         return "" + name.strip().toLowerCase(Locale.ROOT);
     }
 
+    private static IndexingPipeline rowVotingPipeline(AtomicStorageProvider storage, ChatModel model) {
+        return new IndexingPipeline(
+            model,
+            new FakeEmbeddingModel(),
+            storage,
+            null,
+            document -> {
+                var paragraphs = document.content().split("\n");
+                var chunks = new java.util.ArrayList<Chunk>();
+                for (int index = 0; index < paragraphs.length; index++) {
+                    chunks.add(new Chunk(
+                        document.id() + ":" + index,
+                        document.id(),
+                        paragraphs[index],
+                        4,
+                        index,
+                        Map.of()
+                    ));
+                }
+                return chunks;
+            },
+            null,
+            100,
+            1,
+            1,
+            KnowledgeExtractor.DEFAULT_MAX_EXTRACT_INPUT_TOKENS,
+            KnowledgeExtractor.DEFAULT_LANGUAGE,
+            KnowledgeExtractor.DEFAULT_ENTITY_TYPES,
+            false,
+            0.80d,
+            ExtractionRefinementOptions.disabled()
+        );
+    }
+
     private static String relationKey(String source, String type, String target) {
         return RelationIds.relationId(entityKey(source), entityKey(target));
     }
@@ -155,6 +214,16 @@ class IndexingPipelineBatchGraphPersistenceTest {
             return """
                 {"entities":[{"name":"Alice","type":"%s","description":"Alice","aliases":[]},{"name":"Bob","type":"%s","description":"Bob","aliases":[]}],"relations":[{"source_entity":"Alice","target_entity":"Bob","relationship_keywords":"works_with","relationship_description":"works with","weight":1.0}]}
                 """.formatted(type, type);
+        }
+    }
+
+    private static final class RowVotingChatModel implements ChatModel {
+        @Override
+        public String generate(ChatRequest request) {
+            var type = request.userPrompt().contains("TYPE_LOCATION") ? "location" : "person";
+            return """
+                {"entities":[{"name":"Alice","type":"%s","description":"Alice","aliases":[]}],"relations":[]}
+                """.formatted(type);
         }
     }
 

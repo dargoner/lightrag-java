@@ -1434,7 +1434,7 @@ public final class IndexingPipeline {
         synchronized (storageMutationMonitor) {
             storageProvider.writeAtomically(storage -> {
                 saveChunkLlmCacheMetadata(computed.prepared().chunks(), computed.extractions(), storage.chunkStore());
-                saveGraph(computed.graph().entities(), computed.graph().relations(), storage);
+                saveGraph(computed.graph(), storage);
                 var spaceSample = computed.entityVectors().isEmpty() ? computed.relationVectors() : computed.entityVectors();
                 EmbeddingSpaceGuard.verifyOrRecord(storage, embeddingBatcher.cacheIdentity(), spaceSample);
                 GraphVectorIndexer.saveEntityVectors(computed.graph().entities(), computed.entityVectors(), storage.vectorStore());
@@ -1519,15 +1519,17 @@ public final class IndexingPipeline {
         return storageProvider.vectorStore() instanceof NoopVectorStore;
     }
 
-    private void saveGraph(List<Entity> entities, List<Relation> relations, AtomicStorageProvider.AtomicStorageView storage) {
+    private void saveGraph(GraphAssembler.Graph graph, AtomicStorageProvider.AtomicStorageView storage) {
         long startedAtNanos = System.nanoTime();
         var graphStore = storage.graphStore();
+        var entities = graph.entities();
+        var relations = graph.relations();
         if (!entities.isEmpty()) {
             var existingEntitiesById = new LinkedHashMap<String, GraphStore.EntityRecord>();
             for (var entity : graphStore.loadEntities(distinctIds(entities.stream().map(Entity::id).toList()))) {
                 existingEntitiesById.put(entity.id(), entity);
             }
-            graphStore.saveEntities(mergeEntitiesByKey(entities, existingEntitiesById));
+            graphStore.saveEntities(mergeEntitiesByKey(entities, graph.entityTypeCounts(), existingEntitiesById));
         }
 
         if (!relations.isEmpty()) {
@@ -1550,6 +1552,7 @@ public final class IndexingPipeline {
 
     private List<GraphStore.EntityRecord> mergeEntitiesByKey(
         List<Entity> entities,
+        Map<String, Map<String, Integer>> entityTypeCountsByEntityId,
         Map<String, GraphStore.EntityRecord> existingEntitiesById
     ) {
         var grouped = new LinkedHashMap<String, List<Entity>>();
@@ -1558,7 +1561,11 @@ public final class IndexingPipeline {
         }
         return mergeGroupedConcurrently(
             grouped,
-            (id, group) -> mergeEntityGroup(existingEntitiesById.get(id), group)
+            (id, group) -> mergeEntityGroup(
+                existingEntitiesById.get(id),
+                group,
+                entityTypeCountsByEntityId.getOrDefault(id, Map.of())
+            )
         );
     }
 
@@ -1866,12 +1873,13 @@ public final class IndexingPipeline {
 
     // Upstream counts every batch row first and appends the stored type last (operate.py:2576-2583,
     // :2471); its stable sort lets the first-seen type win ties, so the batch type beats the stored
-    // type on a tie. The assembler already collapsed the batch into one aggregate vote per side here.
-    static String voteEntityType(List<String> incomingTypes, String storedType) {
+    // type on a tie. The counts arrive per row from the assembler (Graph#entityTypeCounts), which is
+    // exactly the upstream tally; the stored type still counts exactly once.
+    static String voteEntityType(Map<String, Integer> incomingTypeCounts, String storedType) {
         var counts = new LinkedHashMap<String, Integer>();
-        for (var type : incomingTypes) {
-            if (!type.isEmpty()) {
-                counts.merge(type, 1, Integer::sum);
+        for (var entry : incomingTypeCounts.entrySet()) {
+            if (!entry.getKey().isEmpty() && entry.getValue() != null && entry.getValue() > 0) {
+                counts.merge(entry.getKey(), entry.getValue(), Integer::sum);
             }
         }
         if (storedType != null && !storedType.isEmpty()) {
@@ -1883,9 +1891,20 @@ public final class IndexingPipeline {
             .orElse(storedType == null ? "" : storedType);
     }
 
+    static String voteEntityType(List<String> incomingTypes, String storedType) {
+        var counts = new LinkedHashMap<String, Integer>();
+        for (var type : incomingTypes) {
+            if (!type.isEmpty()) {
+                counts.merge(type, 1, Integer::sum);
+            }
+        }
+        return voteEntityType(counts, storedType);
+    }
+
     private GraphStore.EntityRecord mergeEntityGroup(
         GraphStore.EntityRecord existing,
-        List<Entity> incoming
+        List<Entity> incoming,
+        Map<String, Integer> batchTypeCounts
     ) {
         if (incoming.isEmpty()) {
             return Objects.requireNonNull(existing, "existing");
@@ -1895,13 +1914,23 @@ public final class IndexingPipeline {
             merged = mergeEntity(merged, incoming.get(index));
         }
         var votedType = voteEntityType(
-            incoming.stream().map(Entity::type).toList(),
+            batchTypeCounts.isEmpty() ? countEntityTypes(incoming) : batchTypeCounts,
             existing == null ? null : existing.type()
         );
         return votedType.equals(merged.type())
             ? merged
             : new GraphStore.EntityRecord(merged.id(), merged.name(), votedType, merged.description(),
                 merged.aliases(), merged.sourceChunkIds());
+    }
+
+    static Map<String, Integer> countEntityTypes(List<Entity> entities) {
+        var counts = new LinkedHashMap<String, Integer>();
+        for (var entity : entities) {
+            if (!entity.type().isEmpty()) {
+                counts.merge(entity.type(), 1, Integer::sum);
+            }
+        }
+        return counts;
     }
 
     private GraphStore.RelationRecord mergeRelation(GraphStore.RelationRecord existing, Relation incoming) {

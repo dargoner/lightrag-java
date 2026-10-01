@@ -613,7 +613,7 @@ public final class GraphMaterializationPipeline {
         cancellationCheckpoint.check();
         storageProvider.writeAtomically(storage -> {
             long saveGraphStarted = System.nanoTime();
-            saveGraph(state.expectedGraph().entities(), state.expectedGraph().relations(), storage);
+            saveGraph(state.expectedGraph(), storage);
             long saveGraphAt = System.nanoTime();
             saveEntityVectors(state.expectedGraph().entities(), storage);
             long entityVectorsAt = System.nanoTime();
@@ -718,7 +718,7 @@ public final class GraphMaterializationPipeline {
     ) {
         cancellationCheckpoint.check();
         storageProvider.writeAtomically(storage -> {
-            saveGraph(chunkGraph.entities(), chunkGraph.relations(), storage);
+            saveGraph(chunkGraph, storage);
             saveEntityVectors(chunkGraph.entities(), storage);
             saveRelationVectors(chunkGraph.relations(), storage);
             storage.documentStatusStore().save(new DocumentStatusStore.StatusRecord(
@@ -1134,7 +1134,9 @@ public final class GraphMaterializationPipeline {
         return graphAssembler.assemble(toChunkExtractions(List.of(chunkSnapshot)));
     }
 
-    private void saveGraph(List<Entity> entities, List<Relation> relations, AtomicStorageProvider.AtomicStorageView storage) {
+    private void saveGraph(GraphAssembler.Graph graph, AtomicStorageProvider.AtomicStorageView storage) {
+        var entities = graph.entities();
+        var relations = graph.relations();
         var graphStore = storage.graphStore();
         if (!entities.isEmpty()) {
             long entityStarted = System.nanoTime();
@@ -1151,7 +1153,11 @@ public final class GraphMaterializationPipeline {
             for (var group : entitiesById.values()) {
                 mergedEntities.put(
                     group.get(0).id(),
-                    mergeEntityBatch(existingEntitiesById.get(group.get(0).id()), group)
+                    mergeEntityBatch(
+                        existingEntitiesById.get(group.get(0).id()),
+                        group,
+                        graph.entityTypeCounts().getOrDefault(group.get(0).id(), Map.of())
+                    )
                 );
             }
             long entityMergedAt = System.nanoTime();
@@ -1478,13 +1484,17 @@ public final class GraphMaterializationPipeline {
         );
     }
 
-    private GraphStore.EntityRecord mergeEntityBatch(GraphStore.EntityRecord existing, List<Entity> incoming) {
+    private GraphStore.EntityRecord mergeEntityBatch(
+        GraphStore.EntityRecord existing,
+        List<Entity> incoming,
+        Map<String, Integer> batchTypeCounts
+    ) {
         var merged = existing == null ? mergeNewEntity(incoming.get(0)) : mergeEntity(existing, incoming.get(0));
         for (int index = 1; index < incoming.size(); index++) {
             merged = mergeEntity(merged, incoming.get(index));
         }
         var votedType = IndexingPipeline.voteEntityType(
-            incoming.stream().map(Entity::type).toList(),
+            batchTypeCounts.isEmpty() ? IndexingPipeline.countEntityTypes(incoming) : batchTypeCounts,
             existing == null ? null : existing.type()
         );
         return votedType.equals(merged.type())

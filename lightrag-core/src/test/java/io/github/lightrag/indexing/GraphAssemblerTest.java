@@ -10,6 +10,7 @@ import org.junit.jupiter.api.Test;
 import java.util.List;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.entry;
 import static org.assertj.core.api.Assertions.tuple;
 import static io.github.lightrag.support.RelationIds.relationId;
 
@@ -284,6 +285,35 @@ class GraphAssemblerTest {
                 List.of("chunk-1", "chunk-2", "chunk-3")
             )
         );
+    }
+
+    @Test
+    void exposesPerRowEntityTypeCountsInFirstSeenOrder() {
+        var assembler = new GraphAssembler();
+
+        var graph = assembler.assemble(List.of(
+            extraction("chunk-1", List.of(new ExtractedEntity("Alice", "organization", "Founder", List.of())), List.of()),
+            extraction("chunk-2", List.of(new ExtractedEntity("Alice", "person", "Researcher", List.of())), List.of()),
+            extraction("chunk-3", List.of(new ExtractedEntity("Alice", "person", "Scientist", List.of())), List.of())
+        ));
+
+        assertThat(graph.entityTypeCounts()).containsOnlyKeys("alice");
+        assertThat(graph.entityTypeCounts().get("alice"))
+            .containsExactly(entry("organization", 1), entry("person", 2));
+    }
+
+    @Test
+    void countsTypeVotesFromAliasMergedEntitiesPerRow() {
+        var assembler = new GraphAssembler();
+
+        var graph = assembler.assemble(List.of(
+            extraction("chunk-1", List.of(new ExtractedEntity("Robert", "person", "Lead", List.of("Bob"))), List.of()),
+            extraction("chunk-2", List.of(new ExtractedEntity("Bobby", "organization", "Agency", List.of())), List.of()),
+            extraction("chunk-3", List.of(new ExtractedEntity("Bob", "person", "Engineer", List.of("Bobby"))), List.of())
+        ));
+
+        assertThat(graph.entityTypeCounts().get("robert"))
+            .containsExactly(entry("person", 2), entry("organization", 1));
     }
 
     @Test

@@ -6,6 +6,7 @@ import io.github.lightrag.types.ExtractedRelation;
 import io.github.lightrag.types.ExtractionResult;
 import io.github.lightrag.types.Relation;
 import java.util.ArrayList;
+import java.util.Collections;
 import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
@@ -58,9 +59,15 @@ public final class GraphAssembler {
             );
         }
 
+        var entityTypeCounts = new LinkedHashMap<String, Map<String, Integer>>();
+        for (var entity : entitiesById.values()) {
+            entityTypeCounts.put(entity.id, entity.typeCountsSnapshot());
+        }
+
         return new Graph(
             entitiesById.values().stream().map(MutableEntity::toEntity).toList(),
-            relationsById.values().stream().map(MutableRelation::toRelation).toList()
+            relationsById.values().stream().map(MutableRelation::toRelation).toList(),
+            entityTypeCounts
         );
     }
 
@@ -222,10 +229,30 @@ public final class GraphAssembler {
         }
     }
 
-    public record Graph(List<Entity> entities, List<Relation> relations) {
+    /**
+     * The assembled graph plus the per-row entity type tallies behind each entity id. The tallies keep
+     * insertion order (first-seen type first) because upstream counts the batch rows row by row and
+     * breaks ties by first appearance (operate.py:2576-2583); merging against stored entities needs the
+     * row-level counts, not just the winning type.
+     */
+    public record Graph(
+        List<Entity> entities,
+        List<Relation> relations,
+        Map<String, Map<String, Integer>> entityTypeCounts
+    ) {
         public Graph {
             entities = List.copyOf(Objects.requireNonNull(entities, "entities"));
             relations = List.copyOf(Objects.requireNonNull(relations, "relations"));
+            Objects.requireNonNull(entityTypeCounts, "entityTypeCounts");
+            var counts = new LinkedHashMap<String, Map<String, Integer>>();
+            for (var entry : entityTypeCounts.entrySet()) {
+                counts.put(entry.getKey(), Collections.unmodifiableMap(new LinkedHashMap<>(entry.getValue())));
+            }
+            entityTypeCounts = Collections.unmodifiableMap(counts);
+        }
+
+        public Graph(List<Entity> entities, List<Relation> relations) {
+            this(entities, relations, Map.of());
         }
     }
 
@@ -363,6 +390,10 @@ public final class GraphAssembler {
             if (!type.isEmpty()) {
                 typeCounts.merge(type, 1, Integer::sum);
             }
+        }
+
+        private Map<String, Integer> typeCountsSnapshot() {
+            return new LinkedHashMap<>(typeCounts);
         }
 
         // Upstream votes the entity type across the batch rows (operate.py:2576-2583); max() returns the
