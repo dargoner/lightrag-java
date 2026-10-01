@@ -9,6 +9,7 @@ import io.github.lightrag.indexing.refinement.ExtractionRefinementOptions;
 import io.github.lightrag.model.ChatModel;
 import io.github.lightrag.model.EmbeddingModel;
 import io.github.lightrag.model.LlmConcurrencyBudget;
+import io.github.lightrag.model.RerankFailureMode;
 import io.github.lightrag.model.RerankModel;
 import io.github.lightrag.model.openai.ModelRetrySupport;
 import io.github.lightrag.model.openai.OpenAiCompatibleChatModel;
@@ -59,6 +60,7 @@ public final class LightRagBuilder {
     private boolean automaticQueryKeywordExtraction = true;
     private int rerankCandidateMultiplier = 2;
     private double minRerankScore = 0.0d;
+    private RerankFailureMode rerankFailureMode = RerankFailureMode.FAIL_FAST;
     private String failResponse = QueryEngine.DEFAULT_FAIL_RESPONSE;
     private String userPromptPrefix = "";
     private int forceLlmSummaryOnMerge = io.github.lightrag.indexing.DescriptionSummarizer.DEFAULT_FORCE_LLM_SUMMARY_ON_MERGE;
@@ -216,9 +218,10 @@ public final class LightRagBuilder {
 
     /**
      * Configures the second-stage chunk reranker; {@code OpenAiCompatibleRerankModel} is the bundled
-     * Cohere/Jina-compatible HTTP binding over {@code POST {baseUrl}rerank}. If a configured reranker
-     * fails during query execution, Java propagates the error instead of falling back to the original
-     * retrieval order.
+     * Cohere/Jina-compatible HTTP binding over {@code POST {baseUrl}rerank}. Provider results are
+     * authoritative: chunks missing from the response are not re-appended, and entries with unknown
+     * ids or non-finite scores are ignored. A failing reranker is propagated to the caller by
+     * default; configure {@link #rerankFailureMode} to fall back to the retrieval order instead.
      */
     public LightRagBuilder rerankModel(RerankModel rerankModel) {
         this.rerankModel = Objects.requireNonNull(rerankModel, "rerankModel");
@@ -271,6 +274,16 @@ public final class LightRagBuilder {
             throw new IllegalArgumentException("minRerankScore must be non-negative");
         }
         this.minRerankScore = minRerankScore;
+        return this;
+    }
+
+    /**
+     * How a query reacts when the configured reranker throws: {@link RerankFailureMode#FAIL_FAST}
+     * (default) propagates the error; {@link RerankFailureMode#FALLBACK_TO_ORIGINAL} logs a warning
+     * and keeps the original retrieval order (upstream {@code utils.py:7013-7021}).
+     */
+    public LightRagBuilder rerankFailureMode(RerankFailureMode rerankFailureMode) {
+        this.rerankFailureMode = Objects.requireNonNull(rerankFailureMode, "rerankFailureMode");
         return this;
     }
 
@@ -627,7 +640,7 @@ public final class LightRagBuilder {
             embeddingMaxAsync,
             maxGraphNodes
         ), chunker, documentParsingOrchestrator, automaticQueryKeywordExtraction, rerankCandidateMultiplier, minRerankScore,
-            embeddingBatchSize, maxParallelInsert,
+            rerankFailureMode, embeddingBatchSize, maxParallelInsert,
             chunkExtractParallelism,
             maxConcurrentDocumentTasks,
             entityExtractMaxGleaning, maxExtractInputTokens, entityExtractionLanguage, entityTypes,

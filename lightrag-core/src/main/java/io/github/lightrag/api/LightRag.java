@@ -15,6 +15,7 @@ import io.github.lightrag.model.CachedChatModel;
 import io.github.lightrag.model.ChatModel;
 import io.github.lightrag.model.EmbeddingModel;
 import io.github.lightrag.model.LlmConcurrencyBudget;
+import io.github.lightrag.model.RerankFailureMode;
 import io.github.lightrag.query.ContextAssembler;
 import io.github.lightrag.query.DefaultPathRetriever;
 import io.github.lightrag.query.DefaultPathScorer;
@@ -57,6 +58,7 @@ public final class LightRag implements AutoCloseable {
     private final boolean automaticQueryKeywordExtraction;
     private final int rerankCandidateMultiplier;
     private final double minRerankScore;
+    private final RerankFailureMode rerankFailureMode;
     private final int embeddingBatchSize;
     private final int maxParallelInsert;
     private final int chunkExtractParallelism;
@@ -82,7 +84,7 @@ public final class LightRag implements AutoCloseable {
     private final AtomicBoolean closed = new AtomicBoolean();
 
     LightRag(LightRagConfig config) {
-        this(config, null, null, true, 2, 0.0d, Integer.MAX_VALUE, 1,
+        this(config, null, null, true, 2, 0.0d, RerankFailureMode.FAIL_FAST, Integer.MAX_VALUE, 1,
             1,
             1,
             io.github.lightrag.indexing.KnowledgeExtractor.DEFAULT_ENTITY_EXTRACT_MAX_GLEANING,
@@ -102,7 +104,7 @@ public final class LightRag implements AutoCloseable {
     }
 
     LightRag(LightRagConfig config, Chunker chunker) {
-        this(config, chunker, null, true, 2, 0.0d, Integer.MAX_VALUE, 1,
+        this(config, chunker, null, true, 2, 0.0d, RerankFailureMode.FAIL_FAST, Integer.MAX_VALUE, 1,
             1,
             1,
             io.github.lightrag.indexing.KnowledgeExtractor.DEFAULT_ENTITY_EXTRACT_MAX_GLEANING,
@@ -128,6 +130,7 @@ public final class LightRag implements AutoCloseable {
         boolean automaticQueryKeywordExtraction,
         int rerankCandidateMultiplier,
         double minRerankScore,
+        RerankFailureMode rerankFailureMode,
         int embeddingBatchSize,
         int maxParallelInsert,
         int chunkExtractParallelism,
@@ -153,6 +156,7 @@ public final class LightRag implements AutoCloseable {
         this.automaticQueryKeywordExtraction = automaticQueryKeywordExtraction;
         this.rerankCandidateMultiplier = rerankCandidateMultiplier;
         this.minRerankScore = minRerankScore;
+        this.rerankFailureMode = Objects.requireNonNull(rerankFailureMode, "rerankFailureMode");
         this.embeddingBatchSize = embeddingBatchSize;
         this.maxParallelInsert = maxParallelInsert;
         this.chunkExtractParallelism = chunkExtractParallelism;
@@ -804,6 +808,10 @@ public final class LightRag implements AutoCloseable {
         return minRerankScore;
     }
 
+    RerankFailureMode rerankFailureMode() {
+        return rerankFailureMode;
+    }
+
     String failResponse() {
         return failResponse;
     }
@@ -1204,7 +1212,8 @@ public final class LightRag implements AutoCloseable {
             multiHop,
             new PathAwareAnswerSynthesizer(),
             failResponse,
-            userPromptPrefix
+            userPromptPrefix,
+            rerankFailureMode
         );
     }
 

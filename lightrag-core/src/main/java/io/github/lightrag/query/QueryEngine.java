@@ -9,6 +9,7 @@ import io.github.lightrag.api.StructuredQueryRelation;
 import io.github.lightrag.api.StructuredQueryResult;
 import io.github.lightrag.model.ChatModel;
 import io.github.lightrag.model.CloseableIterator;
+import io.github.lightrag.model.RerankFailureMode;
 import io.github.lightrag.model.RerankModel;
 import io.github.lightrag.synthesis.PathAwareAnswerSynthesizer;
 import io.github.lightrag.types.QueryContext;
@@ -18,6 +19,7 @@ import io.github.lightrag.types.ScoredRelation;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
+import java.util.ArrayList;
 import java.util.EnumMap;
 import java.util.LinkedHashMap;
 import java.util.List;
@@ -119,6 +121,7 @@ public final class QueryEngine {
     private final QueryKeywordExtractor keywordExtractor;
     private final int rerankCandidateMultiplier;
     private final double minRerankScore;
+    private final RerankFailureMode rerankFailureMode;
     private final QueryIntentClassifier queryIntentClassifier;
     private final QueryStrategy multiHopStrategy;
     private final PathAwareAnswerSynthesizer pathAwareAnswerSynthesizer;
@@ -301,6 +304,27 @@ public final class QueryEngine {
         String failResponse,
         String userPromptPrefix
     ) {
+        this(chatModel, keywordModel, contextAssembler, strategies, rerankModel, automaticKeywordExtractionEnabled,
+            rerankCandidateMultiplier, minRerankScore, queryIntentClassifier, multiHopStrategy,
+            pathAwareAnswerSynthesizer, failResponse, userPromptPrefix, RerankFailureMode.FAIL_FAST);
+    }
+
+    public QueryEngine(
+        ChatModel chatModel,
+        ChatModel keywordModel,
+        ContextAssembler contextAssembler,
+        Map<QueryMode, QueryStrategy> strategies,
+        RerankModel rerankModel,
+        boolean automaticKeywordExtractionEnabled,
+        int rerankCandidateMultiplier,
+        double minRerankScore,
+        QueryIntentClassifier queryIntentClassifier,
+        QueryStrategy multiHopStrategy,
+        PathAwareAnswerSynthesizer pathAwareAnswerSynthesizer,
+        String failResponse,
+        String userPromptPrefix,
+        RerankFailureMode rerankFailureMode
+    ) {
         this.chatModel = Objects.requireNonNull(chatModel, "chatModel");
         this.keywordModel = keywordModel == null ? chatModel : keywordModel;
         this.contextAssembler = Objects.requireNonNull(contextAssembler, "contextAssembler");
@@ -315,6 +339,7 @@ public final class QueryEngine {
         this.keywordExtractor = new QueryKeywordExtractor(automaticKeywordExtractionEnabled);
         this.rerankCandidateMultiplier = rerankCandidateMultiplier;
         this.minRerankScore = minRerankScore;
+        this.rerankFailureMode = Objects.requireNonNull(rerankFailureMode, "rerankFailureMode");
         this.queryIntentClassifier = queryIntentClassifier;
         this.multiHopStrategy = multiHopStrategy;
         this.pathAwareAnswerSynthesizer = Objects.requireNonNull(pathAwareAnswerSynthesizer, "pathAwareAnswerSynthesizer");
@@ -734,34 +759,45 @@ public final class QueryEngine {
     }
 
     private List<ScoredChunk> rerankChunks(QueryRequest request, List<ScoredChunk> matchedChunks) {
-        var originalById = new LinkedHashMap<String, ScoredChunk>();
+        var originalOrder = List.copyOf(matchedChunks);
+        var byId = new LinkedHashMap<String, ScoredChunk>();
         for (var chunk : matchedChunks) {
-            originalById.put(chunk.chunkId(), chunk);
+            byId.put(chunk.chunkId(), chunk);
+        }
+        List<RerankModel.RerankResult> results;
+        try {
+            results = Objects.requireNonNull(rerankModel, "rerankModel").rerank(new RerankModel.RerankRequest(
+                request.query(),
+                matchedChunks.stream()
+                    .map(chunk -> new RerankModel.RerankCandidate(chunk.chunkId(), chunk.chunk().text()))
+                    .toList(),
+                request.chunkTopK()
+            ));
+        } catch (RuntimeException exception) {
+            if (rerankFailureMode == RerankFailureMode.FALLBACK_TO_ORIGINAL) {
+                log.warn("LightRAG rerank failed, using original retrieval order: {}", exception.toString());
+                return originalOrder.stream().limit(request.chunkTopK()).toList();
+            }
+            throw exception;
         }
 
-        var rerankResults = Objects.requireNonNull(rerankModel, "rerankModel").rerank(new RerankModel.RerankRequest(
-            request.query(),
-            matchedChunks.stream()
-                .map(chunk -> new RerankModel.RerankCandidate(chunk.chunkId(), chunk.chunk().text()))
-                .toList()
-        ));
-
-        var ordered = new java.util.ArrayList<ScoredChunk>(matchedChunks.size());
-        for (var result : rerankResults) {
-            if (result.score() < minRerankScore) {
+        var ordered = new ArrayList<ScoredChunk>(matchedChunks.size());
+        for (var result : results) {
+            if (!Double.isFinite(result.score()) || result.score() < minRerankScore) {
                 continue;
             }
-            var chunk = originalById.remove(result.id());
-            if (chunk != null) {
-                ordered.add(chunk);
+            var chunk = byId.remove(result.id());
+            if (chunk == null) {
+                log.warn("LightRAG rerank returned unknown chunk id, ignoring: {}", result.id());
+                continue;
             }
+            ordered.add(chunk);
         }
-        if (minRerankScore == 0.0d) {
-            ordered.addAll(originalById.values());
+        // Empty provider output means "no opinion": keep the retrieval order (upstream utils.py:7019-7021).
+        if (ordered.isEmpty()) {
+            return originalOrder.stream().limit(request.chunkTopK()).toList();
         }
-        return ordered.stream()
-            .limit(request.chunkTopK())
-            .toList();
+        return ordered.stream().limit(request.chunkTopK()).toList();
     }
 
     private static boolean sameChunkIds(List<ScoredChunk> left, List<ScoredChunk> right) {

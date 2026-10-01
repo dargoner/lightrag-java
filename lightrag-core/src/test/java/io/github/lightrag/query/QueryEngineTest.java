@@ -6,8 +6,10 @@ import ch.qos.logback.classic.spi.ILoggingEvent;
 import ch.qos.logback.core.read.ListAppender;
 import io.github.lightrag.api.QueryMode;
 import io.github.lightrag.api.QueryRequest;
+import io.github.lightrag.api.StructuredQueryChunk;
 import io.github.lightrag.api.StructuredQueryResult;
 import io.github.lightrag.model.ChatModel;
+import io.github.lightrag.model.RerankFailureMode;
 import io.github.lightrag.model.RerankModel;
 import io.github.lightrag.types.Chunk;
 import io.github.lightrag.types.QueryContext;
@@ -872,6 +874,74 @@ class QueryEngineTest {
     }
 
     @Test
+    void passesChunkTopKAsRerankTopNAndTreatsProviderOrderAsAuthoritative() {
+        var model = new RecordingRerankModel(List.of(
+            new RerankModel.RerankResult("chunk-2", 0.9d),
+            new RerankModel.RerankResult("chunk-1", 0.5d)
+        ));
+
+        var result = engineWithRerank(model).queryStructured(QueryRequest.builder()
+            .query("tariff schedule")
+            .mode(QueryMode.LOCAL)
+            .chunkTopK(2)
+            .enableRerank(true)
+            .build());
+
+        assertThat(model.lastRequest()).isNotNull();
+        assertThat(model.lastRequest().topN()).isEqualTo(2);
+        assertThat(result.chunks())
+            .extracting(StructuredQueryChunk::id)
+            .containsExactly("chunk-2", "chunk-1");
+    }
+
+    @Test
+    void ignoresOutOfRangeAndNonFiniteRerankResults() {
+        var model = new RecordingRerankModel(List.of(
+            new RerankModel.RerankResult("unknown-id", 0.9d),
+            new RerankModel.RerankResult("chunk-1", Double.NaN),
+            new RerankModel.RerankResult("chunk-2", 0.4d)
+        ));
+
+        // Only chunk-2 survives: unknown ids are ignored, non-finite scores are rejected, and
+        // candidates missing from the provider response are not appended (provider order wins).
+        var result = engineWithRerank(model).queryStructured(QueryRequest.builder()
+            .query("tariff schedule")
+            .mode(QueryMode.LOCAL)
+            .chunkTopK(2)
+            .enableRerank(true)
+            .build());
+
+        assertThat(result.chunks())
+            .extracting(StructuredQueryChunk::id)
+            .containsExactly("chunk-2");
+    }
+
+    @Test
+    void fallsBackToOriginalOrderWhenConfiguredAndTheRerankerFails() {
+        var engine = engineWithRerankAndMode(new FailingRerankModel(), RerankFailureMode.FALLBACK_TO_ORIGINAL);
+
+        var result = engine.queryStructured(QueryRequest.builder()
+            .query("tariff schedule")
+            .mode(QueryMode.LOCAL)
+            .chunkTopK(2)
+            .enableRerank(true)
+            .build());
+
+        assertThat(result.chunks())
+            .extracting(StructuredQueryChunk::id)
+            .containsExactly("chunk-1", "chunk-2");
+    }
+
+    @Test
+    void defaultFailureModeStillFailsFast() {
+        var engine = engineWithRerank(new FailingRerankModel());
+
+        assertThatThrownBy(() -> engine.query(baseRequest()))
+            .isInstanceOf(IllegalStateException.class)
+            .hasMessageContaining("rerank unavailable");
+    }
+
+    @Test
     void bypassesRerankWhenQueryRequestDisablesIt() {
         var strategy = new RecordingQueryStrategy(baseContext());
         var engine = new QueryEngine(
@@ -901,7 +971,7 @@ class QueryEngineTest {
     }
 
     @Test
-    void appendsOmittedCandidatesInOriginalOrderAfterRerankResults() {
+    void dropsCandidatesOmittedByTheRerankerAndIgnoresUnknownIds() {
         var engine = new QueryEngine(
             new RecordingChatModel(),
             new ContextAssembler(),
@@ -916,7 +986,7 @@ class QueryEngineTest {
 
         assertThat(result.contexts())
             .extracting(context -> context.sourceId())
-            .containsExactly("chunk-2", "chunk-1", "chunk-3");
+            .containsExactly("chunk-2");
     }
 
     @Test
@@ -1618,6 +1688,34 @@ class QueryEngineTest {
         );
     }
 
+    private static QueryEngine engineWithRerank(RerankModel rerankModel) {
+        return new QueryEngine(
+            new RecordingChatModel(),
+            new ContextAssembler(),
+            strategiesReturning(baseContext()),
+            rerankModel
+        );
+    }
+
+    private static QueryEngine engineWithRerankAndMode(RerankModel rerankModel, RerankFailureMode rerankFailureMode) {
+        return new QueryEngine(
+            new RecordingChatModel(),
+            null,
+            new ContextAssembler(),
+            strategiesReturning(baseContext()),
+            rerankModel,
+            true,
+            2,
+            0.0d,
+            null,
+            null,
+            new io.github.lightrag.synthesis.PathAwareAnswerSynthesizer(),
+            QueryEngine.DEFAULT_FAIL_RESPONSE,
+            "",
+            rerankFailureMode
+        );
+    }
+
     private static final class FailingQueryStrategy implements QueryStrategy {
         private int callCount;
 
@@ -1650,6 +1748,32 @@ class QueryEngineTest {
         @Override
         public List<RerankResult> rerank(RerankRequest request) {
             return results;
+        }
+    }
+
+    private static final class RecordingRerankModel implements RerankModel {
+        private final List<RerankModel.RerankResult> results;
+        private RerankModel.RerankRequest lastRequest;
+
+        private RecordingRerankModel(List<RerankModel.RerankResult> results) {
+            this.results = results;
+        }
+
+        @Override
+        public List<RerankResult> rerank(RerankRequest request) {
+            lastRequest = request;
+            return results;
+        }
+
+        RerankModel.RerankRequest lastRequest() {
+            return lastRequest;
+        }
+    }
+
+    private static final class FailingRerankModel implements RerankModel {
+        @Override
+        public List<RerankResult> rerank(RerankRequest request) {
+            throw new IllegalStateException("rerank unavailable");
         }
     }
 

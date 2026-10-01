@@ -6,10 +6,15 @@ import java.util.Objects;
 public interface RerankModel {
     List<RerankResult> rerank(RerankRequest request);
 
-    record RerankRequest(String query, List<RerankCandidate> candidates) {
+    record RerankRequest(String query, List<RerankCandidate> candidates, int topN) {
         public RerankRequest {
             query = Objects.requireNonNull(query, "query");
             candidates = List.copyOf(Objects.requireNonNull(candidates, "candidates"));
+            topN = topN <= 0 ? candidates.size() : topN;
+        }
+
+        public RerankRequest(String query, List<RerankCandidate> candidates) {
+            this(query, candidates, 0);
         }
     }
 
@@ -20,12 +25,10 @@ public interface RerankModel {
         }
     }
 
+    /** Scores are validated by the query engine (non-finite entries are ignored), not here. */
     record RerankResult(String id, double score) {
         public RerankResult {
             id = requireNonBlank(id, "id");
-            if (!Double.isFinite(score)) {
-                throw new IllegalArgumentException("score must be finite");
-            }
         }
     }
 
