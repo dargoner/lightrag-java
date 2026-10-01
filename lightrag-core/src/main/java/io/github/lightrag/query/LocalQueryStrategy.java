@@ -16,6 +16,7 @@ import io.github.lightrag.types.ScoredRelation;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
+import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.LinkedHashMap;
 import java.util.List;
@@ -79,7 +80,7 @@ public final class LocalQueryStrategy implements QueryStrategy {
         var matchedChunks = QueryMetadataFilterSupport.expandAndFilter(
             metadataPlan,
             retrieval.result().chunks().isEmpty()
-                ? collectChunks(limitedEntities, limitedRelations)
+                ? selectKgChunks(limitedEntities, limitedRelations, query, queryVector)
                 : retainChunks(retrieval.result().chunks(), limitedEntities, limitedRelations),
             parentChunkExpander,
             query.chunkTopK()
@@ -173,7 +174,40 @@ public final class LocalQueryStrategy implements QueryStrategy {
             .toList();
     }
 
-    private List<ScoredChunk> collectChunks(
+    /**
+     * Picks KG-related chunks through {@link KgChunkSelector} (upstream
+     * {@code _find_related_text_unit_from_entities}) instead of unioning every source
+     * chunk of the matched entities and relations. Selected ids are loaded with a
+     * single batch call and emitted in selection order.
+     */
+    private List<ScoredChunk> selectKgChunks(
+        List<ScoredEntity> matchedEntities,
+        List<ScoredRelation> matchedRelations,
+        QueryRequest query,
+        List<Double> queryVector
+    ) {
+        var selection = KgChunkSelector.select(
+            query.chunkPickMethod(),
+            query.relatedChunkNumber(),
+            matchedEntities.stream()
+                .map(entity -> new KgChunkSelector.Group(entity.entityId(), entity.entity().sourceChunkIds(), entity.score()))
+                .toList(),
+            () -> queryVector,
+            new VectorStoreChunkVectorRanker(storageProvider.vectorStore())
+        );
+        log.info(
+            "LightRAG local KG chunk selection: requestedMethod={}, method={}, relatedChunkNumber={}, selected={}, candidates={}, frequencyTotal={}",
+            query.chunkPickMethod(),
+            selection.method(),
+            query.relatedChunkNumber(),
+            selection.chunkIds().size(),
+            selection.frequency().size(),
+            selection.frequencyTotal()
+        );
+        return loadChunksInOrder(selection.chunkIds(), chunkScores(matchedEntities, matchedRelations));
+    }
+
+    private static Map<String, Double> chunkScores(
         List<ScoredEntity> matchedEntities,
         List<ScoredRelation> matchedRelations
     ) {
@@ -188,16 +222,22 @@ public final class LocalQueryStrategy implements QueryStrategy {
                 chunkScores.merge(chunkId, relation.score(), Math::max);
             }
         }
+        return chunkScores;
+    }
 
-        var chunksById = storageProvider.chunkStore().loadAll(List.copyOf(chunkScores.keySet()));
-        return chunkScores.entrySet().stream()
-            .map(entry -> {
-                var chunk = chunksById.get(entry.getKey());
-                return chunk == null ? null : new ScoredChunk(entry.getKey(), toChunk(chunk), entry.getValue());
-            })
-            .filter(Objects::nonNull)
-            .sorted(scoreOrder(ScoredChunk::score, ScoredChunk::chunkId))
-            .toList();
+    private List<ScoredChunk> loadChunksInOrder(List<String> chunkIds, Map<String, Double> scoreByChunkId) {
+        if (chunkIds.isEmpty()) {
+            return List.of();
+        }
+        var chunksById = storageProvider.chunkStore().loadAll(chunkIds);
+        var ordered = new ArrayList<ScoredChunk>(chunkIds.size());
+        for (var chunkId : chunkIds) {
+            var chunk = chunksById.get(chunkId);
+            if (chunk != null) {
+                ordered.add(new ScoredChunk(chunkId, toChunk(chunk), scoreByChunkId.getOrDefault(chunkId, 0.0d)));
+            }
+        }
+        return List.copyOf(ordered);
     }
 
     private List<Double> embed(String query) {

@@ -9,6 +9,16 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Objects;
 
+/**
+ * Storage-side fast path that resolves retrieval (entities, relations and related
+ * chunks) in one store call instead of the strategy-side KG traversal.
+ *
+ * <p>Divergence: when an implementation returns related chunks, those chunks bypass the
+ * Java KG chunk selection ({@code io.github.lightrag.query.KgChunkSelector}, upstream
+ * {@code _find_related_text_unit_from_entities}) and its {@code relatedChunkNumber}
+ * kill switch. Revisit the fast path once the store contract accepts a
+ * {@code relatedChunkNumber} input.
+ */
 public interface OneShotRetrievalStore {
     default boolean supportsMixRetrieval() {
         return false;

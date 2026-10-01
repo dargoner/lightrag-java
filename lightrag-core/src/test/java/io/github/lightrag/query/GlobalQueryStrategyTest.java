@@ -1,5 +1,6 @@
 package io.github.lightrag.query;
 
+import io.github.lightrag.api.KgChunkPickMethod;
 import io.github.lightrag.api.QueryMode;
 import io.github.lightrag.api.QueryRequest;
 import io.github.lightrag.indexing.ParentChildChunkBuilder;
@@ -356,6 +357,53 @@ class GlobalQueryStrategyTest {
         assertThat(context.matchedRelations())
             .extracting(match -> match.relationId())
             .containsExactly("relation:alpha");
+        assertThat(context.matchedChunks()).isEmpty();
+    }
+
+    @Test
+    void globalSelectsKgChunksByQuotaInsteadOfUnioningEverySourceChunk() {
+        var storage = InMemoryStorageProvider.create();
+        LocalQueryStrategyTest.seedQuotaGraph(storage);
+        var strategy = new GlobalQueryStrategy(
+            new FakeEmbeddingModel(Map.of("quota relation question", List.of(1.0d, 0.0d))),
+            storage,
+            new ContextAssembler()
+        );
+
+        var context = strategy.retrieve(QueryRequest.builder()
+            .query("quota relation question")
+            .mode(QueryMode.GLOBAL)
+            .topK(2)
+            .relatedChunkNumber(1)
+            .chunkPickMethod(KgChunkPickMethod.WEIGHT)
+            .build());
+
+        assertThat(context.matchedRelations())
+            .extracting(match -> match.relationId())
+            .containsExactly(relationId("e1", "e3"), relationId("e2", "e3"));
+        assertThat(context.matchedChunks())
+            .extracting(match -> match.chunkId())
+            .containsExactly("c1", "c3");
+    }
+
+    @Test
+    void globalZeroRelatedChunkNumberDisablesKgChunksEntirely() {
+        var storage = InMemoryStorageProvider.create();
+        LocalQueryStrategyTest.seedQuotaGraph(storage);
+        var strategy = new GlobalQueryStrategy(
+            new FakeEmbeddingModel(Map.of("quota relation question", List.of(1.0d, 0.0d))),
+            storage,
+            new ContextAssembler()
+        );
+
+        var context = strategy.retrieve(QueryRequest.builder()
+            .query("quota relation question")
+            .mode(QueryMode.GLOBAL)
+            .topK(2)
+            .relatedChunkNumber(0)
+            .build());
+
+        assertThat(context.matchedRelations()).isNotEmpty();
         assertThat(context.matchedChunks()).isEmpty();
     }
 

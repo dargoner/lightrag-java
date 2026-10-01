@@ -1,5 +1,6 @@
 package io.github.lightrag.query;
 
+import io.github.lightrag.api.KgChunkPickMethod;
 import io.github.lightrag.api.MetadataCondition;
 import io.github.lightrag.api.MetadataOperator;
 import io.github.lightrag.api.QueryMode;
@@ -332,6 +333,50 @@ class LocalQueryStrategyTest {
         assertThat(context.matchedChunks()).isEmpty();
     }
 
+    @Test
+    void selectsKgChunksByQuotaInsteadOfUnioningEverySourceChunk() {
+        var storage = InMemoryStorageProvider.create();
+        seedQuotaGraph(storage);
+        var strategy = new LocalQueryStrategy(
+            new FakeEmbeddingModel(Map.of("quota question", List.of(1.0d, 0.0d))),
+            storage,
+            new ContextAssembler()
+        );
+
+        var context = strategy.retrieve(QueryRequest.builder()
+            .query("quota question")
+            .mode(QueryMode.LOCAL)
+            .topK(2)
+            .relatedChunkNumber(1)
+            .chunkPickMethod(KgChunkPickMethod.WEIGHT)
+            .build());
+
+        assertThat(context.matchedChunks())
+            .extracting(match -> match.chunkId())
+            .containsExactly("c1", "c3");
+    }
+
+    @Test
+    void zeroRelatedChunkNumberDisablesKgChunksEntirely() {
+        var storage = InMemoryStorageProvider.create();
+        seedQuotaGraph(storage);
+        var strategy = new LocalQueryStrategy(
+            new FakeEmbeddingModel(Map.of("quota question", List.of(1.0d, 0.0d))),
+            storage,
+            new ContextAssembler()
+        );
+
+        var context = strategy.retrieve(QueryRequest.builder()
+            .query("quota question")
+            .mode(QueryMode.LOCAL)
+            .topK(2)
+            .relatedChunkNumber(0)
+            .build());
+
+        assertThat(context.matchedEntities()).isNotEmpty();
+        assertThat(context.matchedChunks()).isEmpty();
+    }
+
     static void seedGraph(InMemoryStorageProvider storage) {
         storage.chunkStore().save(new ChunkStore.ChunkRecord(
             "chunk-1",
@@ -416,6 +461,77 @@ class LocalQueryStrategyTest {
         storage.vectorStore().saveAll("relations", List.of(
             new VectorStore.VectorRecord(relationId("alice", "bob"), List.of(1.0d, 0.0d)),
             new VectorStore.VectorRecord(relationId("bob", "carol"), List.of(0.0d, 1.0d))
+        ));
+    }
+
+    /**
+     * Disjoint chunk groups (no shared chunk ids) so the quota assertion cannot be
+     * affected by occurrence-count reordering; e1 also covers the empty-group case
+     * through the bridge entity e3.
+     */
+    static void seedQuotaGraph(InMemoryStorageProvider storage) {
+        storage.chunkStore().save(new ChunkStore.ChunkRecord("c1", "doc-quota", "Quota chunk one", 3, 0, Map.of()));
+        storage.chunkStore().save(new ChunkStore.ChunkRecord("c2", "doc-quota", "Quota chunk two", 3, 1, Map.of()));
+        storage.chunkStore().save(new ChunkStore.ChunkRecord("c3", "doc-quota", "Quota chunk three", 3, 2, Map.of()));
+        storage.chunkStore().save(new ChunkStore.ChunkRecord("c4", "doc-quota", "Quota chunk four", 3, 3, Map.of()));
+
+        storage.graphStore().saveEntity(new GraphStore.EntityRecord(
+            "e1",
+            "E1",
+            "concept",
+            "Quota entity one",
+            List.of(),
+            List.of("c1", "c2")
+        ));
+        storage.graphStore().saveEntity(new GraphStore.EntityRecord(
+            "e2",
+            "E2",
+            "concept",
+            "Quota entity two",
+            List.of(),
+            List.of("c3", "c4")
+        ));
+        storage.graphStore().saveEntity(new GraphStore.EntityRecord(
+            "e3",
+            "E3",
+            "concept",
+            "Bridge entity without chunks",
+            List.of(),
+            List.of()
+        ));
+        storage.graphStore().saveRelation(new GraphStore.RelationRecord(
+            relationId("e1", "e3"),
+            "e1",
+            "e3",
+            "quota_rel",
+            "Quota relation one",
+            0.8d,
+            List.of("c1", "c2")
+        ));
+        storage.graphStore().saveRelation(new GraphStore.RelationRecord(
+            relationId("e2", "e3"),
+            "e2",
+            "e3",
+            "quota_rel",
+            "Quota relation two",
+            0.8d,
+            List.of("c3", "c4")
+        ));
+
+        storage.vectorStore().saveAll("chunks", List.of(
+            new VectorStore.VectorRecord("c1", List.of(1.0d, 0.0d)),
+            new VectorStore.VectorRecord("c2", List.of(0.9d, 0.1d)),
+            new VectorStore.VectorRecord("c3", List.of(0.5d, 0.5d)),
+            new VectorStore.VectorRecord("c4", List.of(0.4d, 0.6d))
+        ));
+        storage.vectorStore().saveAll("entities", List.of(
+            new VectorStore.VectorRecord("e1", List.of(1.0d, 0.0d)),
+            new VectorStore.VectorRecord("e2", List.of(0.5d, 0.5d)),
+            new VectorStore.VectorRecord("e3", List.of(0.0d, 1.0d))
+        ));
+        storage.vectorStore().saveAll("relations", List.of(
+            new VectorStore.VectorRecord(relationId("e1", "e3"), List.of(1.0d, 0.0d)),
+            new VectorStore.VectorRecord(relationId("e2", "e3"), List.of(0.5d, 0.5d))
         ));
     }
 

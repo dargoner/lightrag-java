@@ -16,9 +16,11 @@ import io.github.lightrag.types.ScoredRelation;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
+import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Map;
 import java.util.Objects;
 
 public final class GlobalQueryStrategy implements QueryStrategy {
@@ -73,7 +75,7 @@ public final class GlobalQueryStrategy implements QueryStrategy {
         var chunkStartedAt = System.nanoTime();
         var matchedChunks = QueryMetadataFilterSupport.expandAndFilter(metadataPlan,
             retrieval.result().chunks().isEmpty()
-                ? collectChunks(matchedRelations)
+                ? selectKgChunks(matchedRelations, query, queryVector)
                 : retainChunks(retrieval.result().chunks(), matchedRelations),
             parentChunkExpander,
             query.chunkTopK()
@@ -146,23 +148,59 @@ public final class GlobalQueryStrategy implements QueryStrategy {
     private record GlobalRetrieval(OneShotRetrievalStore.GlobalRetrievalResult result, boolean oneShotUsed) {
     }
 
-    private List<ScoredChunk> collectChunks(List<ScoredRelation> matchedRelations) {
+    /**
+     * Picks KG-related chunks through {@link KgChunkSelector} (upstream
+     * {@code _find_related_text_unit_from_entities}) instead of unioning every source
+     * chunk of the matched relations. Upstream's relation path also excludes chunks
+     * already delivered by the entity path; Java retrieves entities and relations in
+     * separate strategies, so there is nothing to exclude here. Selected ids are loaded
+     * with a single batch call and emitted in selection order.
+     */
+    private List<ScoredChunk> selectKgChunks(
+        List<ScoredRelation> matchedRelations,
+        QueryRequest query,
+        List<Double> queryVector
+    ) {
+        var selection = KgChunkSelector.select(
+            query.chunkPickMethod(),
+            query.relatedChunkNumber(),
+            matchedRelations.stream()
+                .map(relation -> new KgChunkSelector.Group(relation.relationId(), relation.relation().sourceChunkIds(), relation.score()))
+                .toList(),
+            () -> queryVector,
+            new VectorStoreChunkVectorRanker(storageProvider.vectorStore())
+        );
+        log.info(
+            "LightRAG global KG chunk selection: requestedMethod={}, method={}, relatedChunkNumber={}, selected={}, candidates={}, frequencyTotal={}",
+            query.chunkPickMethod(),
+            selection.method(),
+            query.relatedChunkNumber(),
+            selection.chunkIds().size(),
+            selection.frequency().size(),
+            selection.frequencyTotal()
+        );
         var chunkScores = new LinkedHashMap<String, Double>();
         for (var relation : matchedRelations) {
             for (var chunkId : relation.relation().sourceChunkIds()) {
                 chunkScores.merge(chunkId, relation.score(), Math::max);
             }
         }
+        return loadChunksInOrder(selection.chunkIds(), chunkScores);
+    }
 
-        var chunksById = storageProvider.chunkStore().loadAll(List.copyOf(chunkScores.keySet()));
-        return chunkScores.entrySet().stream()
-            .map(entry -> {
-                var chunk = chunksById.get(entry.getKey());
-                return chunk == null ? null : new ScoredChunk(entry.getKey(), toChunk(chunk), entry.getValue());
-            })
-            .filter(Objects::nonNull)
-            .sorted(scoreOrder(ScoredChunk::score, ScoredChunk::chunkId))
-            .toList();
+    private List<ScoredChunk> loadChunksInOrder(List<String> chunkIds, Map<String, Double> scoreByChunkId) {
+        if (chunkIds.isEmpty()) {
+            return List.of();
+        }
+        var chunksById = storageProvider.chunkStore().loadAll(chunkIds);
+        var ordered = new ArrayList<ScoredChunk>(chunkIds.size());
+        for (var chunkId : chunkIds) {
+            var chunk = chunksById.get(chunkId);
+            if (chunk != null) {
+                ordered.add(new ScoredChunk(chunkId, toChunk(chunk), scoreByChunkId.getOrDefault(chunkId, 0.0d)));
+            }
+        }
+        return List.copyOf(ordered);
     }
 
     private static List<ScoredChunk> retainChunks(List<ScoredChunk> chunks, List<ScoredRelation> matchedRelations) {

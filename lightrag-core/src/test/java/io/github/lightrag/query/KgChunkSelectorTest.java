@@ -1,5 +1,6 @@
 package io.github.lightrag.query;
 
+import io.github.lightrag.api.KgChunkPickMethod;
 import org.junit.jupiter.api.Test;
 
 import java.util.List;
@@ -64,5 +65,36 @@ class KgChunkSelectorTest {
         assertThat(KgChunkSelector.vectorQuota(1, 1)).isEqualTo(1);    // floor of 1
         assertThat(KgChunkSelector.vectorQuota(0, 5)).isZero();        // kill switch
         assertThat(KgChunkSelector.vectorQuota(5, 0)).isZero();
+    }
+
+    @Test
+    void vectorSelectionFallsBackToWeightedPollingWhenTheRankerReturnsNothing() {
+        var groups = List.of(group("e1", "a", "b"), group("e2", "c"));
+        var selection = KgChunkSelector.select(KgChunkPickMethod.VECTOR, 5, groups,
+            () -> List.of(), (queryVector, candidates, topK) -> List.of());
+        assertThat(selection.chunkIds()).containsExactly("a", "b", "c");
+        assertThat(selection.method()).isEqualTo(KgChunkPickMethod.WEIGHT);
+    }
+
+    @Test
+    void vectorSelectionFallsBackWhenTheRankerThrows() {
+        var groups = List.of(group("e1", "a", "b"));
+        var selection = KgChunkSelector.select(KgChunkPickMethod.VECTOR, 5, groups,
+            () -> List.of(0.1d), (queryVector, candidates, topK) -> {
+                throw new IllegalStateException("vdb down");
+            });
+        assertThat(selection.chunkIds()).containsExactly("a", "b");
+        assertThat(selection.method()).isEqualTo(KgChunkPickMethod.WEIGHT);
+    }
+
+    @Test
+    void vectorSelectionHonoursQuotaAndKillSwitch() {
+        var groups = List.of(group("e1", "a", "b", "c"), group("e2", "d"));
+        var selection = KgChunkSelector.select(KgChunkPickMethod.VECTOR, 5, groups,
+            () -> List.of(0.1d), (queryVector, candidates, topK) -> List.of("c", "d"));
+        assertThat(selection.chunkIds()).containsExactly("c", "d"); // quota = max(1, 5*2/2) = 5, ranker decides
+        assertThat(selection.method()).isEqualTo(KgChunkPickMethod.VECTOR);
+        assertThat(KgChunkSelector.select(KgChunkPickMethod.VECTOR, 0, groups,
+            () -> List.of(0.1d), (queryVector, candidates, topK) -> List.of("c")).chunkIds()).isEmpty();
     }
 }

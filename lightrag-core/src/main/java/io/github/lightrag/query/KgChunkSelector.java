@@ -1,11 +1,16 @@
 package io.github.lightrag.query;
 
+import io.github.lightrag.api.KgChunkPickMethod;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+
 import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
+import java.util.function.Supplier;
 
 /**
  * Pure helpers behind the KG-to-chunk selection stage, ported from the upstream
@@ -14,6 +19,8 @@ import java.util.Objects;
  * ({@code utils.py:6642-6721}).
  */
 final class KgChunkSelector {
+
+    private static final Logger log = LoggerFactory.getLogger(KgChunkSelector.class);
 
     record Group(String groupId, List<String> chunkIds, double score) {
         Group {
@@ -25,7 +32,58 @@ final class KgChunkSelector {
     record Tracked(List<Group> groups, Map<String, Integer> frequency) {
     }
 
+    record Selection(List<String> chunkIds, KgChunkPickMethod method, Map<String, Integer> frequency) {
+        Selection {
+            chunkIds = List.copyOf(Objects.requireNonNull(chunkIds, "chunkIds"));
+            method = Objects.requireNonNull(method, "method");
+            frequency = Map.copyOf(Objects.requireNonNull(frequency, "frequency"));
+        }
+
+        int frequencyTotal() {
+            return frequency.values().stream().mapToInt(Integer::intValue).sum();
+        }
+    }
+
     private KgChunkSelector() {
+    }
+
+    /**
+     * Runs the upstream selection chain: de-duplicate by first owner, then either
+     * vector ranking over the per-group quota or weighted polling, falling back to
+     * WEIGHT when VECTOR yields nothing or throws ({@code operate.py:6445-6526}).
+     * {@code relatedChunkNumber <= 0} disables KG chunk retrieval entirely.
+     */
+    static Selection select(
+        KgChunkPickMethod requestedMethod,
+        int relatedChunkNumber,
+        List<Group> groups,
+        Supplier<List<Double>> queryVector,
+        ChunkVectorRanker ranker
+    ) {
+        var tracked = dedupeByFirstOwner(groups);
+        if (relatedChunkNumber <= 0 || tracked.groups().isEmpty()) {
+            return new Selection(List.of(), KgChunkPickMethod.WEIGHT, Map.of());
+        }
+        if (requestedMethod == KgChunkPickMethod.VECTOR) {
+            var quota = vectorQuota(relatedChunkNumber, tracked.groups().size());
+            try {
+                var vector = queryVector.get();
+                if (vector != null && !vector.isEmpty()) {
+                    var candidates = tracked.groups().stream()
+                        .flatMap(group -> group.chunkIds().stream())
+                        .distinct()
+                        .toList();
+                    var ranked = ranker.rank(vector, candidates, quota);
+                    if (!ranked.isEmpty()) {
+                        return new Selection(ranked, KgChunkPickMethod.VECTOR, tracked.frequency());
+                    }
+                }
+            } catch (RuntimeException exception) {
+                log.warn("LightRAG vector chunk selection failed, falling back to WEIGHT: {}", exception.toString());
+            }
+        }
+        var selected = pickByWeightedPolling(tracked.groups(), relatedChunkNumber, 1);
+        return new Selection(selected, KgChunkPickMethod.WEIGHT, tracked.frequency());
     }
 
     /**
