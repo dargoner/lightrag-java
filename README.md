@@ -762,7 +762,12 @@ Notes:
 - `multiHopEnabled(false)` forces graph-aware modes back to their normal single-hop retrieval behavior
 - defaults are `maxEntityTokens=6000`, `maxRelationTokens=8000`, and `maxTotalTokens=30000`
 - defaults are also `maxHop=2`, `pathTopK=3`, and `multiHopEnabled=true`
-- chunk budgeting uses stored `Chunk.tokenCount()`, while prompt/query/entity/relation budgeting uses a shared lightweight text-token approximation in this phase
+- `topK` defaults to `40` and `chunkTopK` to `20`, matching upstream's retrieval defaults
+- `relatedChunkNumber` (default `5`) caps how many chunks each matched KG entity or relation contributes to the graph context; `chunkPickMethod` picks those chunks by `VECTOR` similarity (default) or stored `WEIGHT` order
+- `disableUserPromptPrefix(true)` drops the builder-level `userPromptPrefix` for one request only
+- when retrieval comes back empty, standard modes short-circuit to the configured `failResponse` without calling the chat model; `QueryResult.llmGenerated()` is `false` there and for `onlyNeedContext` / `onlyNeedPrompt` previews
+- `QueryResult.responseTime()` reports the measured query duration in seconds
+- all query-time budgeting (prompt, query, entity, relation, chunk, and reference-list budgets) runs through the pluggable `TokenCounter`; the default heuristic counter is a documented approximation (see Token counting below)
 - recent query-request additions such as `stream` and `modelFunc` change the public `QueryRequest` record shape; builder-based callers remain source-compatible, but canonical-constructor or record-pattern consumers need updates
 - in `HYBRID` and `MIX`, when manual keyword overrides are provided, only the non-empty keyword side participates in graph retrieval; direct chunk retrieval in `MIX` still uses the raw query text
 - if automatic extraction returns no usable keywords, Java falls back to an upstream-like raw-query default by mode: `LOCAL`/`HYBRID`/`MIX` use low-level fallback, while `GLOBAL` uses high-level fallback
@@ -1112,6 +1117,28 @@ var rag = LightRag.builder()
     .tokenCounter(text -> tokenizer.encode(text).size())
     .build();
 ```
+
+### Query-side parity options (0.24.0)
+
+The 2026-09-28 query-side alignment added these builder controls:
+
+```java
+var rag = LightRag.builder()
+    .chatModel(chatModel)
+    .embeddingModel(embeddingModel)
+    .storage(storage)
+    .failResponse("Sorry, I'm not able to provide an answer to that question.[no-context]") // default
+    .userPromptPrefix("")                              // prepended to the user prompt of every standard query
+    .tokenCounter(new HeuristicTokenCounter())         // default; see Token counting above
+    .rerankFailureMode(RerankFailureMode.FAIL_FAST)    // default; FALLBACK_TO_ORIGINAL keeps the retrieval order
+    .build();
+```
+
+- `failResponse(...)`: canned answer returned when retrieval produces no context. The chat model is not called, `QueryResult.llmGenerated()` is `false`, and streaming requests deliver the same text as a single chunk
+- `userPromptPrefix(...)`: upstream `user_prompt_prefix`, prepended to the user prompt in standard retrieval modes; `disableUserPromptPrefix(true)` overrides it per request
+- `rerankFailureMode(...)`: `FAIL_FAST` (default) propagates a reranker failure to the caller; `FALLBACK_TO_ORIGINAL` keeps the original retrieval order and logs a warning, mirroring upstream `utils.py:7013-7021`
+- `tokenCounter(...)`: one counter for every query-time budget; see Token counting above
+- assembled chunk context renders upstream-style citation lines (`- [n] chunk-id | score | headings: ... | text`) plus a `Reference Document List:` section, and `QueryResult.Context` carries the matching `referenceId` / `source` when `includeReferences(true)` is set
 
 ### Merge and extraction parity options (0.24.0)
 
