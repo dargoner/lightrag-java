@@ -329,6 +329,240 @@ class LlmConcurrencyBudgetTest {
     }
 
     @Test
+    void concurrentExplicitCloseWaitsForTheInFlightDelegateClose() throws Exception {
+        var delegateCloseEntered = new CountDownLatch(1);
+        var allowDelegateCloseToFinish = new CountDownLatch(1);
+        var delegateCloseFinished = new AtomicBoolean();
+        var releasedBeforeCloseFinished = new AtomicBoolean();
+        // release() runs only from the SlotReleasingIterator, so sampling the delegate state here
+        // pins every release to a finished delegate close even when an explicit close() races the
+        // exhaustion close (review round 4).
+        var slots = new Semaphore(1) {
+            @Override
+            public void release() {
+                if (!delegateCloseFinished.get()) {
+                    releasedBeforeCloseFinished.set(true);
+                }
+                super.release();
+            }
+        };
+        var model = new LimitedChatModel(slots, new ChatModel() {
+            @Override
+            public String generate(ChatRequest request) {
+                return "unused";
+            }
+
+            @Override
+            public CloseableIterator<String> stream(ChatRequest request) {
+                return new CloseableIterator<>() {
+                    @Override
+                    public boolean hasNext() {
+                        return false;
+                    }
+
+                    @Override
+                    public String next() {
+                        throw new NoSuchElementException();
+                    }
+
+                    @Override
+                    public void close() {
+                        delegateCloseEntered.countDown();
+                        awaitQuietly(allowDelegateCloseToFinish);
+                        delegateCloseFinished.set(true);
+                    }
+                };
+            }
+        });
+
+        var stream = model.stream(request("stream"));
+        var exhausted = new AtomicBoolean();
+        var exhaustThread = new Thread(() -> exhausted.set(!stream.hasNext()));
+        exhaustThread.start();
+        assertThat(delegateCloseEntered.await(5, TimeUnit.SECONDS)).isTrue();
+
+        var closeCallStarted = new CountDownLatch(1);
+        var closeReturned = new CompletableFuture<Void>();
+        var closeThread = new Thread(() -> {
+            closeCallStarted.countDown();
+            stream.close();
+            closeReturned.complete(null);
+        });
+        closeThread.start();
+        try {
+            assertThat(closeCallStarted.await(5, TimeUnit.SECONDS)).isTrue();
+            // The explicit close must park until the in-flight delegate close finishes; the old
+            // release-first behaviour returned here immediately.
+            Thread.sleep(200L);
+            assertThat(closeReturned).isNotDone();
+            assertThat(releasedBeforeCloseFinished).isFalse();
+        } finally {
+            allowDelegateCloseToFinish.countDown();
+            exhaustThread.join(5_000L);
+            closeThread.join(5_000L);
+        }
+        assertThat(exhausted).isTrue();
+        assertThat(closeReturned).isDone();
+        assertThat(releasedBeforeCloseFinished).isFalse();
+        assertThat(slots.availablePermits()).isEqualTo(1);
+    }
+
+    @Test
+    void delegateHasNextErrorsStillCloseTheDelegateAndReleaseTheSlot() throws Exception {
+        var budget = new LlmConcurrencyBudget(1, 8);
+        var closed = new AtomicInteger();
+        var broken = budget.limitChat("query", new ChatModel() {
+            @Override
+            public String generate(ChatRequest request) {
+                return "unused";
+            }
+
+            @Override
+            public CloseableIterator<String> stream(ChatRequest request) {
+                return new CloseableIterator<>() {
+                    @Override
+                    public boolean hasNext() {
+                        throw new AssertionError("delegate blew up");
+                    }
+
+                    @Override
+                    public String next() {
+                        throw new NoSuchElementException();
+                    }
+
+                    @Override
+                    public void close() {
+                        closed.incrementAndGet();
+                        throw new AssertionError("provider close failed");
+                    }
+                };
+            }
+        });
+
+        var stream = broken.stream(request("stream"));
+        assertThatThrownBy(stream::hasNext)
+            .isInstanceOf(AssertionError.class)
+            .hasMessageContaining("delegate blew up");
+        assertThat(closed).hasValue(1);
+
+        var recovered = CompletableFuture.supplyAsync(
+            () -> budget.limitChat("query", (ChatModel) request -> "answered").generate(request("answer")));
+        assertThat(recovered.get(5, TimeUnit.SECONDS)).isEqualTo("answered");
+
+        stream.close();
+        assertThat(closed).hasValue(1);
+    }
+
+    @Test
+    void delegateNextErrorsStillCloseTheDelegateAndReleaseTheSlot() throws Exception {
+        var budget = new LlmConcurrencyBudget(1, 8);
+        var closed = new AtomicInteger();
+        var broken = budget.limitChat("query", new ChatModel() {
+            @Override
+            public String generate(ChatRequest request) {
+                return "unused";
+            }
+
+            @Override
+            public CloseableIterator<String> stream(ChatRequest request) {
+                return new CloseableIterator<>() {
+                    @Override
+                    public boolean hasNext() {
+                        return true;
+                    }
+
+                    @Override
+                    public String next() {
+                        throw new AssertionError("chunk blew up");
+                    }
+
+                    @Override
+                    public void close() {
+                        closed.incrementAndGet();
+                    }
+                };
+            }
+        });
+
+        var stream = broken.stream(request("stream"));
+        assertThatThrownBy(stream::next)
+            .isInstanceOf(AssertionError.class)
+            .hasMessageContaining("chunk blew up");
+        assertThat(closed).hasValue(1);
+
+        var recovered = CompletableFuture.supplyAsync(
+            () -> budget.limitChat("query", (ChatModel) request -> "answered").generate(request("answer")));
+        assertThat(recovered.get(5, TimeUnit.SECONDS)).isEqualTo("answered");
+
+        stream.close();
+        assertThat(closed).hasValue(1);
+    }
+
+    @Test
+    void delegateCloseErrorsAfterExhaustionDoNotMaskCompletionAndStillReleaseTheSlot() throws Exception {
+        var budget = new LlmConcurrencyBudget(1, 8);
+        var model = budget.limitChat("query", new ChatModel() {
+            @Override
+            public String generate(ChatRequest request) {
+                return "unused";
+            }
+
+            @Override
+            public CloseableIterator<String> stream(ChatRequest request) {
+                return new CloseableIterator<>() {
+                    @Override
+                    public boolean hasNext() {
+                        return false;
+                    }
+
+                    @Override
+                    public String next() {
+                        throw new NoSuchElementException();
+                    }
+
+                    @Override
+                    public void close() {
+                        throw new AssertionError("close blew up");
+                    }
+                };
+            }
+        });
+
+        var stream = model.stream(request("stream"));
+        assertThat(stream.hasNext()).isFalse();
+
+        var recovered = CompletableFuture.supplyAsync(
+            () -> budget.limitChat("query", (ChatModel) request -> "answered").generate(request("answer")));
+        assertThat(recovered.get(5, TimeUnit.SECONDS)).isEqualTo("answered");
+
+        stream.close();
+    }
+
+    @Test
+    void streamCreationErrorsReleaseTheSlotImmediately() throws Exception {
+        var budget = new LlmConcurrencyBudget(1, 8);
+        var failing = budget.limitChat("query", new ChatModel() {
+            @Override
+            public String generate(ChatRequest request) {
+                throw new AssertionError("provider down");
+            }
+
+            @Override
+            public CloseableIterator<String> stream(ChatRequest request) {
+                throw new AssertionError("provider down");
+            }
+        });
+
+        assertThatThrownBy(() -> failing.stream(request("stream")))
+            .isInstanceOf(AssertionError.class)
+            .hasMessageContaining("provider down");
+
+        var recovered = CompletableFuture.supplyAsync(
+            () -> budget.limitChat("query", (ChatModel) request -> "answered").generate(request("answer")));
+        assertThat(recovered.get(5, TimeUnit.SECONDS)).isEqualTo("answered");
+    }
+
+    @Test
     void failingCloseAfterExhaustionDoesNotTurnTheCompletedReadIntoAnError() {
         var budget = new LlmConcurrencyBudget(1, 8);
         var model = budget.limitChat("query", new ChatModel() {

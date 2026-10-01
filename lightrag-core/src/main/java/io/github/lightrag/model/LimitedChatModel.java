@@ -49,9 +49,9 @@ final class LimitedChatModel implements ChatModel {
         CloseableIterator<String> stream;
         try {
             stream = delegate.stream(request);
-        } catch (RuntimeException exception) {
+        } catch (RuntimeException | Error failure) {
             slots.release();
-            throw exception;
+            throw failure;
         }
         return new SlotReleasingIterator(stream);
     }
@@ -59,7 +59,8 @@ final class LimitedChatModel implements ChatModel {
     private final class SlotReleasingIterator implements CloseableIterator<String> {
         private final CloseableIterator<String> iterator;
         private final AtomicBoolean released = new AtomicBoolean();
-        private final AtomicBoolean delegateClosed = new AtomicBoolean();
+        private final Object closeLock = new Object();
+        private boolean closeAttempted;
 
         private SlotReleasingIterator(CloseableIterator<String> iterator) {
             this.iterator = iterator;
@@ -74,10 +75,10 @@ final class LimitedChatModel implements ChatModel {
                     release();
                 }
                 return hasNext;
-            } catch (RuntimeException exception) {
+            } catch (RuntimeException | Error failure) {
                 closeDelegateQuietly();
                 release();
-                throw exception;
+                throw failure;
             }
         }
 
@@ -85,18 +86,21 @@ final class LimitedChatModel implements ChatModel {
         public String next() {
             try {
                 return iterator.next();
-            } catch (RuntimeException exception) {
+            } catch (RuntimeException | Error failure) {
                 closeDelegateQuietly();
                 release();
-                throw exception;
+                throw failure;
             }
         }
 
         @Override
         public void close() {
             try {
-                if (delegateClosed.compareAndSet(false, true)) {
-                    iterator.close();
+                synchronized (closeLock) {
+                    if (!closeAttempted) {
+                        closeAttempted = true;
+                        iterator.close();
+                    }
                 }
             } finally {
                 release();
@@ -106,12 +110,18 @@ final class LimitedChatModel implements ChatModel {
         private void closeDelegateQuietly() {
             // The stream already reported completion or failed, so a failing close must not turn
             // that outcome into a different error; an explicit close() still propagates close
-            // failures. Closing before releasing keeps the slot held while the underlying
-            // resource may still be open.
-            if (delegateClosed.compareAndSet(false, true)) {
+            // failures. The lock serialises every close attempt: a concurrent explicit close()
+            // waits for an in-flight attempt instead of releasing the slot while the delegate may
+            // still be open, and the delegate close runs at most once. Errors are swallowed here
+            // too - the primary outcome must survive and the slot must never leak.
+            synchronized (closeLock) {
+                if (closeAttempted) {
+                    return;
+                }
+                closeAttempted = true;
                 try {
                     iterator.close();
-                } catch (RuntimeException ignored) {
+                } catch (Throwable ignored) {
                     // best effort on the exhausted or failed path
                 }
             }
