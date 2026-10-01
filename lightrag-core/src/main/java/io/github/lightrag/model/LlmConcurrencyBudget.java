@@ -19,8 +19,9 @@ import java.util.concurrent.Semaphore;
  * platform-level gate wait (gate first, model second). Slots are not re-entrant — do not
  * call a budget-limited model of a role from inside another model call of that role.
  *
- * <p>{@code generate} and {@code generateResponse} are bounded; {@code stream} is not,
- * because a streamed response is consumed after the call window closes.
+ * <p>{@code generate}, {@code generateResponse} and {@code stream} are all bounded: a streamed
+ * response holds its slot until the returned iterator is exhausted, closed or fails, so open
+ * provider connections cannot exceed the role budget.
  *
  * <p>A call that finds a free slot takes it without consulting the interrupt status, so a
  * pending cancellation flag never fails an uncontended call. Only a thread that actually has

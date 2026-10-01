@@ -2,11 +2,12 @@ package io.github.lightrag.model;
 
 import java.util.Objects;
 import java.util.concurrent.Semaphore;
+import java.util.concurrent.atomic.AtomicBoolean;
 
 /**
- * Takes one slot from its role's budget for the duration of each delegate call. {@code stream}
- * passes through unbounded: the returned iterator is consumed after this method returns, so the
- * slot window cannot cover the actual network read.
+ * Takes one slot from its role's budget for the duration of each delegate call. A stream keeps its
+ * slot until the returned iterator is exhausted, closed or fails, so open provider connections
+ * count against the role budget too.
  */
 final class LimitedChatModel implements ChatModel {
     private final Semaphore slots;
@@ -44,7 +45,63 @@ final class LimitedChatModel implements ChatModel {
 
     @Override
     public CloseableIterator<String> stream(ChatRequest request) {
-        return delegate.stream(request);
+        acquire();
+        CloseableIterator<String> stream;
+        try {
+            stream = delegate.stream(request);
+        } catch (RuntimeException exception) {
+            slots.release();
+            throw exception;
+        }
+        return new SlotReleasingIterator(stream);
+    }
+
+    private final class SlotReleasingIterator implements CloseableIterator<String> {
+        private final CloseableIterator<String> iterator;
+        private final AtomicBoolean released = new AtomicBoolean();
+
+        private SlotReleasingIterator(CloseableIterator<String> iterator) {
+            this.iterator = iterator;
+        }
+
+        @Override
+        public boolean hasNext() {
+            try {
+                var hasNext = iterator.hasNext();
+                if (!hasNext) {
+                    release();
+                }
+                return hasNext;
+            } catch (RuntimeException exception) {
+                release();
+                throw exception;
+            }
+        }
+
+        @Override
+        public String next() {
+            try {
+                return iterator.next();
+            } catch (RuntimeException exception) {
+                release();
+                throw exception;
+            }
+        }
+
+        @Override
+        public void close() {
+            try {
+                iterator.close();
+            } finally {
+                release();
+            }
+        }
+
+        private void release() {
+            if (released.compareAndSet(false, true)) {
+                slots.release();
+            }
+        }
     }
 
     private void acquire() {

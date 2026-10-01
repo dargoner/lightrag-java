@@ -752,7 +752,7 @@ Notes:
 - `includeReferences(true)` adds `QueryResult.references()` plus `referenceId` / `source` on each returned `QueryResult.Context`
 - `stream(true)` returns `QueryResult.streaming() == true`, leaves `QueryResult.answer()` empty, and exposes incremental model output through `QueryResult.answerStream()`
 - `modelFunc(...)` affects query-time generation only; indexing and extraction still use the builder-configured `chatModel`
-- streaming `QueryResult` implements `AutoCloseable`; close the result or its `answerStream()` when you stop reading early
+- streaming `QueryResult` implements `AutoCloseable`; close the result or its `answerStream()` when you stop reading early — the stream holds one slot of the per-role `maxAsyncLlm` budget until it is closed or exhausted
 - structured references are derived from the final chunk list after merge, rerank, and final token-budget trimming
 - source resolution priority is `file_path`, then `source`, then `documentId`
 - `maxEntityTokens` and `maxRelationTokens` cap formatted graph context rows in score order
@@ -1181,7 +1181,7 @@ var rag = LightRag.builder()
 - `kgExtractionValidator(...)`: per-chunk hook (`validate(chunkId, chunkText, extracted)`) that can drop, rewrite, or augment an extraction before graph assembly; a `null` return fails the chunk
 - `chatRequestOptions(...)`: default `temperature` / `maxTokens` / `topP` / `responseFormat` for every chat request; per-request options win. `ChatRequestOptions` is a record, with `NONE` and `JSON_OBJECT` presets
 - `modelMaxAttempts(...)`: retries transient provider failures for injected chat and embedding models with exponential backoff capped at 1 s; `1` disables retry. The built-in OpenAI-compatible models keep their constructor-provided policy
-- `maxAsyncLlm(...)` / `embeddingMaxAsync(...)`: fair per-role concurrency budgets (defaults `4` / `8`); upstream's priority ordering is not implemented
+- `maxAsyncLlm(...)` / `embeddingMaxAsync(...)`: fair per-role concurrency budgets (defaults `4` / `8`); buffered and streaming chat calls both count, and a stream holds its slot until closed or exhausted; upstream's priority ordering is not implemented
 - `maxGraphNodes(...)`: upper bound for `getKnowledgeGraph` node budgets (default `1000`)
 - `noopVectorStore(...)`: routes all vector operations to a no-op store so ingestion builds only the graph and KV state and never calls the embedding model
 

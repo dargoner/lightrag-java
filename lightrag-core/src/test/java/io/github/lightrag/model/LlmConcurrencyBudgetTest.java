@@ -4,6 +4,7 @@ import org.junit.jupiter.api.Test;
 
 import java.util.ArrayList;
 import java.util.List;
+import java.util.NoSuchElementException;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
@@ -118,8 +119,86 @@ class LlmConcurrencyBudgetTest {
     }
 
     @Test
-    void streamedResponsesDoNotConsumeSlots() throws Exception {
+    void streamedResponsesHoldTheirSlotUntilTheIteratorIsExhausted() throws Exception {
         var budget = new LlmConcurrencyBudget(1, 8);
+        var streamer = budget.limitChat("query", (ChatModel) request -> "streamed");
+        var generator = budget.limitChat("query", (ChatModel) request -> "answered");
+
+        try (var stream = streamer.stream(request("stream"))) {
+            assertThat(stream.next()).isEqualTo("streamed");
+            var blocked = new Thread(() -> generator.generate(request("answer")));
+            blocked.start();
+            awaitParked(blocked);
+            assertThat(stream.hasNext()).isFalse();
+            blocked.join(5_000L);
+            assertThat(blocked.isAlive()).isFalse();
+        }
+    }
+
+    @Test
+    void closingAStreamEarlyReleasesItsSlot() throws Exception {
+        var budget = new LlmConcurrencyBudget(1, 8);
+        var streamer = budget.limitChat("query", (ChatModel) request -> "streamed");
+        var generator = budget.limitChat("query", (ChatModel) request -> "answered");
+
+        var stream = streamer.stream(request("stream"));
+        var blocked = new Thread(() -> generator.generate(request("answer")));
+        blocked.start();
+        awaitParked(blocked);
+        stream.close();
+        blocked.join(5_000L);
+        assertThat(blocked.isAlive()).isFalse();
+    }
+
+    @Test
+    void streamCreationFailuresReleaseTheSlotImmediately() throws Exception {
+        var budget = new LlmConcurrencyBudget(1, 8);
+        var failing = budget.limitChat("query", (ChatModel) request -> {
+            throw new IllegalStateException("provider down");
+        });
+
+        assertThatThrownBy(() -> failing.stream(request("stream")))
+            .isInstanceOf(IllegalStateException.class)
+            .hasMessageContaining("provider down");
+
+        var recovered = CompletableFuture.supplyAsync(
+            () -> budget.limitChat("query", (ChatModel) request -> "answered").generate(request("answer")));
+        assertThat(recovered.get(5, TimeUnit.SECONDS)).isEqualTo("answered");
+    }
+
+    @Test
+    void failingStreamsReleaseTheirSlotExactlyOnce() throws Exception {
+        var budget = new LlmConcurrencyBudget(1, 8);
+        var broken = budget.limitChat("query", new ChatModel() {
+            @Override
+            public String generate(ChatRequest request) {
+                return "unused";
+            }
+
+            @Override
+            public CloseableIterator<String> stream(ChatRequest request) {
+                return new CloseableIterator<>() {
+                    @Override
+                    public boolean hasNext() {
+                        throw new IllegalStateException("stream broken");
+                    }
+
+                    @Override
+                    public String next() {
+                        throw new NoSuchElementException();
+                    }
+                };
+            }
+        });
+
+        try (var stream = broken.stream(request("stream"))) {
+            assertThatThrownBy(() -> stream.hasNext())
+                .isInstanceOf(IllegalStateException.class)
+                .hasMessageContaining("stream broken");
+        }
+
+        // The single permit must be back exactly once: holding it parks a second caller, so a
+        // double release (which would leave two permits) would let the second caller through.
         var holderEntered = new CountDownLatch(1);
         var releaseHolder = new CountDownLatch(1);
         var holder = budget.limitChat("query", (ChatModel) request -> {
@@ -127,20 +206,18 @@ class LlmConcurrencyBudgetTest {
             awaitQuietly(releaseHolder);
             return "held";
         });
-        var streamer = budget.limitChat("query", (ChatModel) request -> "streamed");
-
         var holderThread = new Thread(() -> holder.generate(request("hold")));
         holderThread.start();
         assertThat(holderEntered.await(5, TimeUnit.SECONDS)).isTrue();
         try {
-            var streamed = CompletableFuture.supplyAsync(() -> {
-                try (var iterator = streamer.stream(request("stream"))) {
-                    var chunks = new ArrayList<String>();
-                    iterator.forEachRemaining(chunks::add);
-                    return chunks;
-                }
-            });
-            assertThat(streamed.get(5, TimeUnit.SECONDS)).containsExactly("streamed");
+            var second = new Thread(() -> budget.limitChat("query", (ChatModel) request -> "second")
+                .generate(request("second")));
+            second.start();
+            awaitParked(second);
+            releaseHolder.countDown();
+            holderThread.join(5_000L);
+            second.join(5_000L);
+            assertThat(second.isAlive()).isFalse();
         } finally {
             releaseHolder.countDown();
             holderThread.join();
