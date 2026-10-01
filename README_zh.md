@@ -127,6 +127,15 @@ SDK 内置异步任务运行时，适合长耗时 ingest、图谱重建和图谱
 - `graphExtractionEnabled`、`entityTypeCount`、`relationTypeCount`、`graphExtractionExampleCount`
 - `STAGE_SUCCEEDED`、`DOCUMENT_COMMITTED` / `DOCUMENT_FAILED`、`CHUNK_SUCCEEDED` / `CHUNK_FAILED` 事件会携带 `durationMs`
 
+图谱重建/修复由 `inspectDocumentGraph` 与 `materializeDocumentGraph` 驱动，后者的四参重载接收 `CancellationCheckpoint`，支持协作式取消：
+
+- 检查点在抽取步骤之间与每次原子提交之前轮询；提交前抛出即零写入，异常原样传播给调用方，`null` 等价于 `CancellationCheckpoint.NONE`。
+- 一旦进入提交则不可中断：整体提交或按既有补偿语义回滚，绝无中间态；提交后不再轮询，因此取消的操作仍可能返回已提交结果。
+- 存储 chunk 与 chunk 快照的 chunk-id 集合不一致（新增/删除任一 chunk；纯改顺序不算）会升级为整篇 `GraphMaterializationMode.REBUILD`。
+- 抽取并行度复用 `chunkExtractParallelism`：并发抽取结果保持输入 chunk 顺序，某个 chunk 抽取失败会取消剩余待执行抽取；抽取用的 `ChatModel` 需要响应线程中断。
+
+完整语义与示例见 [README.md](./README.md) 的 “Document graph materialization (0.24.0)” 一节。
+
 ## 快速开始
 
 下面是最小 Java 用法：

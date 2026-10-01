@@ -1307,6 +1307,31 @@ Compatibility note:
 - the new pipeline controls are builder-level and starter-level options, not new `QueryRequest` fields
 - external integrations should prefer `LightRag.builder()` for new pipeline tuning
 
+### Document graph materialization (0.24.0)
+
+`inspectDocumentGraph(workspaceId, documentId)` reports a document's graph status and the repair strategy recommended for it; `materializeDocumentGraph(workspaceId, documentId, mode)` executes that strategy. A document whose stored chunks no longer match its persisted chunk snapshots is always escalated to `GraphMaterializationMode.REBUILD`: the comparison is a chunk-id set comparison, so adding or removing even a single chunk rebuilds the whole document, while a pure reorder does not. This is a safety-first trade — rebuilds can be more frequent than strictly necessary — and the recommendation is visible before materializing.
+
+Materialization can be cancelled cooperatively through the four-argument overload:
+
+```java
+var inspection = rag.inspectDocumentGraph("default", "doc-1");
+
+var result = rag.materializeDocumentGraph(
+    "default",
+    "doc-1",
+    inspection.recommendedMode(),
+    () -> {
+        if (cancelled.get()) {
+            throw new CancellationException("knowledge graph materialization cancelled");
+        }
+    }
+);
+```
+
+The `CancellationCheckpoint` is polled between extraction steps and before every atomic commit, and the exception it throws propagates out of `materializeDocumentGraph` unchanged; `null` behaves as `CancellationCheckpoint.NONE`. Cancellation semantics: a checkpoint that throws before a commit leaves storages untouched; once a commit has been entered it is not interruptible — it completes whole or rolls back under the existing compensation semantics, never half-applied — and no checkpoint is polled afterwards, so a cancelled materialization may still report a committed result. Cancellation latency is one model call on the sequential path, about 200 ms on the concurrent path, and one commit's duration while a commit is in flight.
+
+`chunkExtractParallelism(...)` applies to materialization too: concurrent chunk extractions keep the input chunk order in their results, and a failing chunk cancels the remaining pending extractions. An extraction `ChatModel` must respond to thread interruption; shutdown waits 5 seconds and then logs a warning, leaving a non-cooperative call running to completion (retained resources, never wrong data). Parallel extraction emits two `INFO` lines per chunk from `io.github.lightrag.indexing.GraphMaterializationPipeline` — configure that logger when the interleaved output is too noisy.
+
 ## Evaluation CLI
 
 The evaluation tasks now emit structured JSON envelopes so different runs can be compared more reliably.
