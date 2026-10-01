@@ -2,14 +2,10 @@ package io.github.lightrag.query;
 
 import io.github.lightrag.api.QueryRequest;
 import io.github.lightrag.types.QueryContext;
-import io.github.lightrag.types.ScoredChunk;
-import io.github.lightrag.types.ScoredEntity;
-import io.github.lightrag.types.ScoredRelation;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
-import java.util.Comparator;
-import java.util.LinkedHashMap;
+import java.util.List;
 import java.util.Objects;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionException;
@@ -35,42 +31,23 @@ public final class HybridQueryStrategy implements QueryStrategy {
         var local = awaitBranch(localFuture, globalFuture);
         var global = awaitBranch(globalFuture, localFuture);
 
-        var mergedEntities = new LinkedHashMap<String, ScoredEntity>();
-        for (var entity : local.context().matchedEntities()) {
-            mergedEntities.put(entity.entityId(), entity);
-        }
-        for (var entity : global.context().matchedEntities()) {
-            mergedEntities.merge(entity.entityId(), entity, HybridQueryStrategy::pickEntity);
-        }
-
-        var mergedRelations = new LinkedHashMap<String, ScoredRelation>();
-        for (var relation : local.context().matchedRelations()) {
-            mergedRelations.put(relation.relationId(), relation);
-        }
-        for (var relation : global.context().matchedRelations()) {
-            mergedRelations.merge(relation.relationId(), relation, HybridQueryStrategy::pickRelation);
-        }
-
-        var mergedChunks = new LinkedHashMap<String, ScoredChunk>();
-        for (var chunk : local.context().matchedChunks()) {
-            mergedChunks.put(chunk.chunkId(), chunk);
-        }
-        for (var chunk : global.context().matchedChunks()) {
-            mergedChunks.merge(chunk.chunkId(), chunk, HybridQueryStrategy::pickChunk);
-        }
-
-        var matchedChunks = QueryMetadataFilterSupport.filterChunks(query, mergedChunks.values().stream()
-            .sorted(scoreOrder(ScoredChunk::score, ScoredChunk::chunkId))
-            .toList()).stream()
+        var mergedEntities = ChunkMerges.roundRobinEntities(
+            local.context().matchedEntities(),
+            global.context().matchedEntities()
+        );
+        var mergedRelations = ChunkMerges.roundRobinRelations(
+            local.context().matchedRelations(),
+            global.context().matchedRelations()
+        );
+        var matchedChunks = QueryMetadataFilterSupport.filterChunks(query, ChunkMerges.roundRobinChunks(List.of(
+                local.context().matchedChunks(),
+                global.context().matchedChunks()
+            ))).stream()
             .limit(query.chunkTopK())
             .toList();
         var context = new QueryContext(
-            QueryBudgeting.limitEntities(mergedEntities.values().stream()
-                .sorted(scoreOrder(ScoredEntity::score, ScoredEntity::entityId))
-                .toList(), query.maxEntityTokens()),
-            QueryBudgeting.limitRelations(mergedRelations.values().stream()
-                .sorted(scoreOrder(ScoredRelation::score, ScoredRelation::relationId))
-                .toList(), query.maxRelationTokens()),
+            QueryBudgeting.limitEntities(mergedEntities, query.maxEntityTokens()),
+            QueryBudgeting.limitRelations(mergedRelations, query.maxRelationTokens()),
             matchedChunks,
             ""
         );
@@ -102,25 +79,6 @@ public final class HybridQueryStrategy implements QueryStrategy {
             context.matchedChunks(),
             assembledContext
         );
-    }
-
-    private static ScoredEntity pickEntity(ScoredEntity left, ScoredEntity right) {
-        return left.score() >= right.score() ? left : right;
-    }
-
-    private static ScoredRelation pickRelation(ScoredRelation left, ScoredRelation right) {
-        return left.score() >= right.score() ? left : right;
-    }
-
-    private static ScoredChunk pickChunk(ScoredChunk left, ScoredChunk right) {
-        return left.score() >= right.score() ? left : right;
-    }
-
-    private static <T> Comparator<T> scoreOrder(
-        java.util.function.ToDoubleFunction<T> scoreExtractor,
-        java.util.function.Function<T, String> idExtractor
-    ) {
-        return Comparator.comparingDouble(scoreExtractor).reversed().thenComparing(idExtractor);
     }
 
     private static TimedQueryContext timedRetrieve(QueryStrategy strategy, QueryRequest query) {

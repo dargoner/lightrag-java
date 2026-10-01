@@ -12,8 +12,8 @@ import io.github.lightrag.types.ScoredChunk;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
-import java.util.Comparator;
 import java.util.LinkedHashMap;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
@@ -140,16 +140,10 @@ public final class MixQueryStrategy implements QueryStrategy {
         var graphMs = elapsedMillis(graphStartedAt);
 
         var mergeStartedAt = System.nanoTime();
-        var mergedChunks = new LinkedHashMap<String, ScoredChunk>();
-        for (var chunk : retrieval.graphChunks()) {
-            mergedChunks.merge(chunk.chunkId(), chunk, (left, right) -> left.score() >= right.score() ? left : right);
-        }
-        for (var chunk : retrieval.directChunks()) {
-            mergedChunks.merge(chunk.chunkId(), chunk, (left, right) -> left.score() >= right.score() ? left : right);
-        }
-        var matchedChunks = QueryMetadataFilterSupport.filterChunks(metadataPlan, mergedChunks.values().stream()
-            .sorted(scoreOrder())
-            .toList()).stream()
+        var matchedChunks = QueryMetadataFilterSupport.filterChunks(metadataPlan, ChunkMerges.roundRobinChunks(List.of(
+                retrieval.graphChunks(),
+                retrieval.directChunks()
+            ))).stream()
             .limit(query.chunkTopK())
             .toList();
         var mergeFilterMs = elapsedMillis(mergeStartedAt);
@@ -200,7 +194,7 @@ public final class MixQueryStrategy implements QueryStrategy {
         );
         var chunkVectorSearchMs = elapsedMillis(vectorSearchStartedAt);
         var directChunks = loadDirectChunks(matches);
-        return new DirectChunkPass(queryVector, directChunks.chunks(), directChunks.oneShotUsed(), embedMs, chunkVectorSearchMs, query.chunkTopK(), matches.size());
+        return new DirectChunkPass(queryVector, List.copyOf(directChunks.chunks().values()), directChunks.oneShotUsed(), embedMs, chunkVectorSearchMs, query.chunkTopK(), matches.size());
     }
 
     private MergeOutcome mergeDirectChunkMatches(
@@ -209,13 +203,9 @@ public final class MixQueryStrategy implements QueryStrategy {
         QueryContext hybrid,
         DirectChunkPass firstPass
     ) {
-        var mergedChunks = new LinkedHashMap<String, ScoredChunk>();
-        for (var chunk : hybrid.matchedChunks()) {
-            mergedChunks.put(chunk.chunkId(), chunk);
-        }
-        for (var chunk : firstPass.directChunks().values()) {
-            mergedChunks.merge(chunk.chunkId(), chunk, (left, right) -> left.score() >= right.score() ? left : right);
-        }
+        var directChunkIds = new LinkedHashSet<String>();
+        var directChunksById = new LinkedHashMap<String, ScoredChunk>();
+        mergeDirectChunks(directChunkIds, directChunksById, firstPass.directChunks());
 
         var searchTopK = firstPass.lastSearchTopK();
         var previousMatchCount = -1;
@@ -224,9 +214,11 @@ public final class MixQueryStrategy implements QueryStrategy {
         boolean directOneShotUsed = firstPass.oneShotUsed();
         while (true) {
             var mergeFilterStartedAt = System.nanoTime();
-            var matchedChunks = QueryMetadataFilterSupport.filterChunks(metadataPlan, mergedChunks.values().stream()
-                .sorted(scoreOrder())
-                .toList()).stream()
+            var directChunks = directChunkIds.stream().map(directChunksById::get).toList();
+            var matchedChunks = QueryMetadataFilterSupport.filterChunks(metadataPlan, ChunkMerges.roundRobinChunks(List.of(
+                    directChunks,
+                    hybrid.matchedChunks()
+                ))).stream()
                 .limit(query.chunkTopK())
                 .toList();
             totalMergeFilterMs += elapsedMillis(mergeFilterStartedAt);
@@ -243,7 +235,7 @@ public final class MixQueryStrategy implements QueryStrategy {
             var additionalOutcome = searchAdditionalDirectChunkMatches(query, firstPass.queryVector(), QueryMetadataFilterSupport.toVectorFilter(metadataPlan), searchTopK);
             totalVectorSearchMs += additionalOutcome.chunkVectorSearchMs();
             directOneShotUsed = directOneShotUsed || additionalOutcome.oneShotUsed();
-            mergeAdditionalChunks(mergedChunks, additionalOutcome.directChunks());
+            mergeDirectChunks(directChunkIds, directChunksById, additionalOutcome.directChunks());
             firstPass = additionalOutcome;
         }
     }
@@ -266,7 +258,7 @@ public final class MixQueryStrategy implements QueryStrategy {
         );
         var chunkVectorSearchMs = elapsedMillis(vectorSearchStartedAt);
         var directChunks = loadDirectChunks(matches);
-        return new DirectChunkPass(queryVector, directChunks.chunks(), directChunks.oneShotUsed(), 0L, chunkVectorSearchMs, searchTopK, matches.size());
+        return new DirectChunkPass(queryVector, List.copyOf(directChunks.chunks().values()), directChunks.oneShotUsed(), 0L, chunkVectorSearchMs, searchTopK, matches.size());
     }
 
     private DirectChunkLoad loadDirectChunks(List<io.github.lightrag.storage.VectorStore.VectorMatch> matches) {
@@ -298,12 +290,15 @@ public final class MixQueryStrategy implements QueryStrategy {
         return new DirectChunkLoad(directChunks, false);
     }
 
-    private static void mergeAdditionalChunks(
-        LinkedHashMap<String, ScoredChunk> mergedChunks,
-        LinkedHashMap<String, ScoredChunk> additionalChunks
+    private static void mergeDirectChunks(
+        LinkedHashSet<String> directChunkIds,
+        LinkedHashMap<String, ScoredChunk> directChunksById,
+        List<ScoredChunk> additionalChunks
     ) {
-        for (var chunk : additionalChunks.values()) {
-            mergedChunks.merge(chunk.chunkId(), chunk, (left, right) -> left.score() >= right.score() ? left : right);
+        for (var chunk : additionalChunks) {
+            if (directChunkIds.add(chunk.chunkId())) {
+                directChunksById.put(chunk.chunkId(), chunk);
+            }
         }
     }
 
@@ -405,10 +400,6 @@ public final class MixQueryStrategy implements QueryStrategy {
         return request.query();
     }
 
-    private static Comparator<ScoredChunk> scoreOrder() {
-        return Comparator.comparingDouble(ScoredChunk::score).reversed().thenComparing(ScoredChunk::chunkId);
-    }
-
     private static long elapsedMillis(long startedAt) {
         return (System.nanoTime() - startedAt) / 1_000_000L;
     }
@@ -451,7 +442,7 @@ public final class MixQueryStrategy implements QueryStrategy {
 
     private record DirectChunkPass(
         List<Double> queryVector,
-        LinkedHashMap<String, ScoredChunk> directChunks,
+        List<ScoredChunk> directChunks,
         boolean oneShotUsed,
         long embedMs,
         long chunkVectorSearchMs,

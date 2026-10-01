@@ -101,7 +101,7 @@ class MixQueryStrategyTest {
             .containsExactly(relationId("alice", "bob"));
         assertThat(context.matchedChunks())
             .extracting(match -> match.chunkId())
-            .containsExactly("chunk-1", "chunk-2", "chunk-3");
+            .containsExactly("chunk-3", "chunk-1", "chunk-2");
     }
 
     @Test
@@ -144,7 +144,7 @@ class MixQueryStrategyTest {
         assertThat(vectorStore.recordedRequest.keywords()).containsExactly("alice", "org");
         assertThat(context.matchedChunks())
             .extracting(match -> match.chunkId())
-            .containsExactly("chunk-1", "chunk-3");
+            .containsExactly("chunk-3", "chunk-1");
     }
 
     @Test
@@ -197,7 +197,7 @@ class MixQueryStrategyTest {
         assertThat(countingChunkStore.loadAllCalls()).isEqualTo(1);
         assertThat(context.matchedChunks())
             .extracting(ScoredChunk::chunkId)
-            .containsExactly("chunk-1", "chunk-2", "chunk-3");
+            .containsExactly("chunk-2", "chunk-1", "chunk-3");
     }
 
     @Test
@@ -243,7 +243,7 @@ class MixQueryStrategyTest {
         assertThat(chunkStore.loadAllCalls()).isZero();
         assertThat(context.matchedChunks())
             .extracting(ScoredChunk::chunkId)
-            .containsExactly("chunk-1", "chunk-2");
+            .containsExactly("chunk-2", "chunk-1");
     }
 
     @Test
@@ -378,7 +378,7 @@ class MixQueryStrategyTest {
 
         assertThat(context.matchedChunks())
             .extracting(ScoredChunk::chunkId)
-            .containsExactly("chunk-1", "chunk-2");
+            .containsExactly("chunk-2", "chunk-1");
     }
 
     @Test
@@ -427,7 +427,7 @@ class MixQueryStrategyTest {
 
         assertThat(context.matchedChunks())
             .extracting(ScoredChunk::chunkId)
-            .containsExactly("chunk-2", "chunk-3");
+            .containsExactly("chunk-3", "chunk-2");
     }
 
     @Test
