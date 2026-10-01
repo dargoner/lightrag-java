@@ -64,25 +64,6 @@ final class QueryBudgeting {
         return limitByTextTokens(relations, maxTokens, QueryBudgeting::formatRelation);
     }
 
-    List<ScoredChunk> limitChunks(List<ScoredChunk> chunks, int maxTokens) {
-        if (maxTokens <= 0 || chunks.isEmpty()) {
-            return List.of();
-        }
-        var limited = new ArrayList<ScoredChunk>(chunks.size());
-        var remaining = maxTokens;
-        for (var chunk : chunks) {
-            var tokenCost = chunk.chunk().tokenCount() > 0
-                ? chunk.chunk().tokenCount()
-                : approximateTokenCount(chunk.chunk().text());
-            if (tokenCost > remaining) {
-                break;
-            }
-            limited.add(chunk);
-            remaining -= tokenCost;
-        }
-        return List.copyOf(limited);
-    }
-
     private <T> List<T> limitByTextTokens(List<T> items, int maxTokens, Function<T, String> formatter) {
         if (maxTokens <= 0 || items.isEmpty()) {
             return List.of();

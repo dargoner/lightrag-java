@@ -9,6 +9,7 @@ import io.github.lightrag.api.QueryRequest;
 import io.github.lightrag.api.StructuredQueryChunk;
 import io.github.lightrag.api.StructuredQueryResult;
 import io.github.lightrag.model.ChatModel;
+import io.github.lightrag.model.HeuristicTokenCounter;
 import io.github.lightrag.model.RerankFailureMode;
 import io.github.lightrag.model.RerankModel;
 import io.github.lightrag.types.Chunk;
@@ -1346,7 +1347,10 @@ class QueryEngineTest {
         var fallbackBudget = invokeRemainingChunkBudget(engine, probeRequest, retrievedContext, null);
         assertThat(fallbackBudget).isGreaterThan(reasoningBudget);
         var fallbackOverhead = probeRequest.maxTotalTokens() - fallbackBudget;
-        var targetMaxTotalTokens = fallbackOverhead + retrievedContext.matchedChunks().get(0).chunk().tokenCount();
+        // Task 11 budgets the rendered chunk context (reference ids + headings), not the raw chunk text.
+        var renderedChunkCost = new HeuristicTokenCounter().countTokens(
+            new ContextAssembler().assemble(new QueryContext(List.of(), List.of(), retrievedContext.matchedChunks(), "")));
+        var targetMaxTotalTokens = fallbackOverhead + renderedChunkCost;
 
         var result = engine.query(QueryRequest.builder()
             .query("Atlas 通过谁影响知识图谱组？")

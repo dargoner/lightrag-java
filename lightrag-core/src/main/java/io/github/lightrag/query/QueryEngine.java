@@ -131,6 +131,8 @@ public final class QueryEngine {
     private final String failResponse;
     private final String userPromptPrefix;
     private final QueryBudgeting budgeting;
+    private final ChunkBudgetTruncator chunkBudgetTruncator;
+    private final TokenCounter tokenCounter;
 
     public QueryEngine(
         ChatModel chatModel,
@@ -371,7 +373,9 @@ public final class QueryEngine {
         this.pathAwareAnswerSynthesizer = Objects.requireNonNull(pathAwareAnswerSynthesizer, "pathAwareAnswerSynthesizer");
         this.failResponse = Objects.requireNonNull(failResponse, "failResponse");
         this.userPromptPrefix = Objects.requireNonNull(userPromptPrefix, "userPromptPrefix");
-        this.budgeting = new QueryBudgeting(tokenCounter);
+        this.tokenCounter = Objects.requireNonNull(tokenCounter, "tokenCounter");
+        this.budgeting = new QueryBudgeting(this.tokenCounter);
+        this.chunkBudgetTruncator = new ChunkBudgetTruncator(this.tokenCounter);
     }
 
     public QueryResult query(QueryRequest request) {
@@ -580,7 +584,7 @@ public final class QueryEngine {
         var reusableMultiHopContext = useMultiHop
             && !retrievedContext.assembledContext().isBlank()
             && sameChunkIds(retrievedContext.matchedChunks(), filteredChunks);
-        var finalChunks = budgeting.limitChunks(
+        var finalChunks = truncateChunks(
             filteredChunks,
             remainingChunkBudget(
                 resolvedQuery,
@@ -590,7 +594,7 @@ public final class QueryEngine {
         );
         var recalculatedWithoutReasoningContext = false;
         if (reusableMultiHopContext && !sameChunkIds(filteredChunks, finalChunks)) {
-            finalChunks = budgeting.limitChunks(
+            finalChunks = truncateChunks(
                 filteredChunks,
                 remainingChunkBudget(resolvedQuery, retrievedContext, null)
             );
@@ -784,6 +788,19 @@ public final class QueryEngine {
         var queryTokens = budgeting.approximateTokenCount(request.query());
         long remaining = (long) request.maxTotalTokens() - systemPromptTokens - queryTokens - REFERENCE_LIST_BUDGET_BUFFER_TOKENS;
         return (int) Math.max(0L, remaining);
+    }
+
+    private List<ScoredChunk> truncateChunks(List<ScoredChunk> chunks, int budget) {
+        return chunkBudgetTruncator.truncate(
+            chunks,
+            budget,
+            candidates -> contextAssembler.assemble(contextWithChunks(candidates)),
+            chunk -> ContextAssembler.approxChunkProjection(chunk, ChunkHeadings.resolve(chunk, tokenCounter))
+        );
+    }
+
+    private static QueryContext contextWithChunks(List<ScoredChunk> chunks) {
+        return new QueryContext(List.of(), List.of(), chunks, "");
     }
 
     private List<ScoredChunk> rerankChunks(QueryRequest request, List<ScoredChunk> matchedChunks) {
