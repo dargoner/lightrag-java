@@ -1382,6 +1382,144 @@ class QueryEngineTest {
             .contains("Step 2: GraphStore is owned by KnowledgeGraphTeam.");
     }
 
+    @Test
+    void returnsFailResponseWithoutCallingTheModelWhenNothingIsRetrieved() {
+        var model = new RecordingChatModel();
+        var engine = new QueryEngine(
+            model,
+            new ContextAssembler(),
+            strategiesReturning(retrievalReturnsNothing()),
+            null,
+            false,
+            2
+        );
+
+        var result = engine.query(QueryRequest.builder().query("unknown topic entirely").mode(QueryMode.LOCAL).build());
+
+        assertThat(result.answer()).isEqualTo(QueryEngine.DEFAULT_FAIL_RESPONSE);
+        assertThat(result.contexts()).isEmpty();
+        assertThat(result.references()).isEmpty();
+        assertThat(model.callCount()).isZero();
+        assertThat(model.streamCallCount()).isZero();
+    }
+
+    @Test
+    void failResponseIsStreamedAsASingleChunkWhenStreamingIsRequested() {
+        var engine = new QueryEngine(new RecordingChatModel(), new ContextAssembler(),
+            strategiesReturning(retrievalReturnsNothing()), null, false, 2);
+        var result = engine.query(QueryRequest.builder().query("unknown topic entirely")
+            .mode(QueryMode.LOCAL).stream(true).build());
+        assertThat(result.streaming()).isTrue();
+        assertThat(readAll(result.answerStream())).containsExactly(QueryEngine.DEFAULT_FAIL_RESPONSE);
+    }
+
+    @Test
+    void contextOnlyAndPromptOnlyRequestsStillGetTheFailResponse() {
+        // upstream returns None on empty context before the only_need_* branches (operate.py:4786-4791),
+        // so both preview switches receive the canned text rather than an empty preview
+        for (var request : List.of(
+            QueryRequest.builder().query("unknown topic entirely").mode(QueryMode.LOCAL).onlyNeedContext(true).build(),
+            QueryRequest.builder().query("unknown topic entirely").mode(QueryMode.LOCAL).onlyNeedPrompt(true).build())) {
+            var result = new QueryEngine(new RecordingChatModel(), new ContextAssembler(),
+                strategiesReturning(retrievalReturnsNothing()), null, false, 2).query(request);
+            assertThat(result.answer()).isEqualTo(QueryEngine.DEFAULT_FAIL_RESPONSE);
+        }
+        var structured = new QueryEngine(new RecordingChatModel(), new ContextAssembler(),
+            strategiesReturning(retrievalReturnsNothing()), null, false, 2)
+            .queryStructured(QueryRequest.builder().query("unknown topic entirely").mode(QueryMode.LOCAL).build());
+        assertThat(structured.answer()).isEqualTo(QueryEngine.DEFAULT_FAIL_RESPONSE);
+    }
+
+    @Test
+    void failResponseMatrixCoversEveryKgMode() {
+        // the retrievalEmpty rule is mode-dependent (operate.py:6116-6118 kg modes, :6901-6905 naive);
+        // an empty strategy output must fail in every mode, and structured queries take the same path.
+        for (var mode : List.of(QueryMode.NAIVE, QueryMode.LOCAL, QueryMode.GLOBAL, QueryMode.HYBRID, QueryMode.MIX)) {
+            var model = new RecordingChatModel();
+            var result = new QueryEngine(model, new ContextAssembler(),
+                strategiesReturningAllModes(retrievalReturnsNothing()), null, false, 2)
+                .query(QueryRequest.builder().query("unknown topic entirely").mode(mode).build());
+            assertThat(result.answer()).isEqualTo(QueryEngine.DEFAULT_FAIL_RESPONSE);
+            assertThat(model.callCount()).isZero();
+
+            var structuredModel = new RecordingChatModel();
+            var structured = new QueryEngine(structuredModel, new ContextAssembler(),
+                strategiesReturningAllModes(retrievalReturnsNothing()), null, false, 2)
+                .queryStructured(QueryRequest.builder().query("unknown topic entirely").mode(mode).build());
+            assertThat(structured.answer()).isEqualTo(QueryEngine.DEFAULT_FAIL_RESPONSE);
+            assertThat(structured.contexts()).isEmpty();
+            assertThat(structured.references()).isEmpty();
+            assertThat(structured.entities()).isEmpty();
+            assertThat(structured.relations()).isEmpty();
+            assertThat(structured.chunks()).isEmpty();
+            assertThat(structuredModel.callCount()).isZero();
+        }
+    }
+
+    @Test
+    void emptyRetrievalUnderTheMultiHopRouteFailsToo() {
+        // multi-hop is a SEPARATE route, not a mode: executeStandardQuery picks multiHopStrategy before
+        // the mode map, so the five-mode matrix above cannot catch a regression here.
+        var model = new RecordingChatModel();
+        var result = new QueryEngine(model, new ContextAssembler(),
+            strategiesReturningAllModes(retrievalReturnsNothing()),
+            null, false, 2,
+            request -> QueryIntent.MULTI_HOP,
+            new RecordingQueryStrategy(retrievalReturnsNothing()),
+            new io.github.lightrag.synthesis.PathAwareAnswerSynthesizer())
+            .query(QueryRequest.builder().query("multi hop question").mode(QueryMode.LOCAL).build());
+        assertThat(result.answer()).isEqualTo(QueryEngine.DEFAULT_FAIL_RESPONSE);
+        assertThat(model.callCount()).isZero();
+    }
+
+    @Test
+    void budgetExhaustionKeepsTheEmptyContextInsteadOfTheFailResponse() {
+        // upstream distinguishes "no context could be built" (search stage empty -> None) from
+        // "context truncated/rendered empty" (("", failure raw data), operate.py:6015-6027); the
+        // latter is still what the only_need_context branch returns -- it is NOT a fail_response
+        var engine = new QueryEngine(
+            new RecordingChatModel(),
+            new ContextAssembler(),
+            strategiesReturning(baseContext()),
+            null,
+            false,
+            2
+        );
+
+        var result = engine.query(QueryRequest.builder()
+            .query("which chunk?")
+            .mode(QueryMode.LOCAL)
+            .maxTotalTokens(1)
+            .onlyNeedContext(true)
+            .build());
+
+        assertThat(result.answer()).isNotEqualTo(QueryEngine.DEFAULT_FAIL_RESPONSE);
+        assertThat(result.answer()).contains("Chunks:");
+        assertThat(result.contexts()).isEmpty();
+        assertThat(result.references()).isEmpty();
+    }
+
+    @Test
+    void budgetExhaustionKeepsTheEmptyContextInNaiveAndStructuredToo() {
+        // NAIVE's retrievalEmpty looks at the chunk result only (operate.py:6901-6905) and structured
+        // queries run the same executeStandardQuery budgeting path, so neither may convert a
+        // budget-emptied context into a fail_response.
+        var engine = new QueryEngine(new RecordingChatModel(), new ContextAssembler(),
+            strategiesReturningAllModes(baseContext()), null, false, 2);
+
+        var naive = engine.query(QueryRequest.builder().query("which chunk?").mode(QueryMode.NAIVE)
+            .maxTotalTokens(1).onlyNeedContext(true).build());
+        assertThat(naive.answer()).isNotEqualTo(QueryEngine.DEFAULT_FAIL_RESPONSE).contains("Chunks:");
+        assertThat(naive.contexts()).isEmpty();
+
+        var structured = new QueryEngine(new RecordingChatModel(), new ContextAssembler(),
+            strategiesReturningAllModes(baseContext()), null, false, 2)
+            .queryStructured(QueryRequest.builder().query("which chunk?").mode(QueryMode.LOCAL)
+                .maxTotalTokens(1).build());
+        assertThat(structured.answer()).isNotEqualTo(QueryEngine.DEFAULT_FAIL_RESPONSE);
+        assertThat(structured.contexts()).isEmpty();
+    }
+
     private static QueryRequest baseRequest() {
         return QueryRequest.builder()
             .query("which chunk?")
@@ -1417,6 +1555,21 @@ class QueryEngineTest {
 
     private static EnumMap<QueryMode, QueryStrategy> strategiesReturning(QueryContext context) {
         return strategiesReturning(new RecordingQueryStrategy(context));
+    }
+
+    private static QueryContext retrievalReturnsNothing() {
+        return new QueryContext(List.of(), List.of(), List.of(), "");
+    }
+
+    /** Registers the same recording strategy for every mode the engine can route to (BYPASS short-circuits
+     *  before the map); the matrix test cannot use the LOCAL-only strategiesReturning(...) helper. */
+    private static EnumMap<QueryMode, QueryStrategy> strategiesReturningAllModes(QueryContext context) {
+        var strategy = new RecordingQueryStrategy(context);
+        var strategies = new EnumMap<QueryMode, QueryStrategy>(QueryMode.class);
+        for (var mode : List.of(QueryMode.NAIVE, QueryMode.LOCAL, QueryMode.GLOBAL, QueryMode.HYBRID, QueryMode.MIX)) {
+            strategies.put(mode, strategy);
+        }
+        return strategies;
     }
 
     private static final class FailingQueryStrategy implements QueryStrategy {

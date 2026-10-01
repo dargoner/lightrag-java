@@ -13,6 +13,7 @@ import io.github.lightrag.model.RerankModel;
 import io.github.lightrag.model.openai.ModelRetrySupport;
 import io.github.lightrag.model.openai.OpenAiCompatibleChatModel;
 import io.github.lightrag.model.openai.OpenAiCompatibleEmbeddingModel;
+import io.github.lightrag.query.QueryEngine;
 import io.github.lightrag.storage.AtomicStorageProvider;
 import io.github.lightrag.storage.ChunkStore;
 import io.github.lightrag.storage.DocumentGraphJournalStore;
@@ -58,6 +59,7 @@ public final class LightRagBuilder {
     private boolean automaticQueryKeywordExtraction = true;
     private int rerankCandidateMultiplier = 2;
     private double minRerankScore = 0.0d;
+    private String failResponse = QueryEngine.DEFAULT_FAIL_RESPONSE;
     private int forceLlmSummaryOnMerge = io.github.lightrag.indexing.DescriptionSummarizer.DEFAULT_FORCE_LLM_SUMMARY_ON_MERGE;
     private int summaryMaxTokens = io.github.lightrag.indexing.DescriptionSummarizer.DEFAULT_SUMMARY_MAX_TOKENS;
     private int summaryContextSize = io.github.lightrag.indexing.DescriptionSummarizer.DEFAULT_SUMMARY_CONTEXT_SIZE;
@@ -268,6 +270,15 @@ public final class LightRagBuilder {
             throw new IllegalArgumentException("minRerankScore must be non-negative");
         }
         this.minRerankScore = minRerankScore;
+        return this;
+    }
+
+    /**
+     * Canned answer returned without a model call when retrieval finds no context, mirroring the
+     * upstream {@code fail_response}. Defaults to {@link QueryEngine#DEFAULT_FAIL_RESPONSE}.
+     */
+    public LightRagBuilder failResponse(String failResponse) {
+        this.failResponse = Objects.requireNonNull(failResponse, "failResponse");
         return this;
     }
 
@@ -611,7 +622,7 @@ public final class LightRagBuilder {
             entityExtractMaxGleaning, maxExtractInputTokens, entityExtractionLanguage, entityTypes,
             graphExtractionEnabled, relationTypes, graphExtractionExamples,
             embeddingSemanticMergeEnabled, embeddingSemanticMergeThreshold, extractionRefinementOptions,
-            graphExtractionOptionsProvider, taskEventListeners);
+            graphExtractionOptionsProvider, taskEventListeners, failResponse);
     }
 
     private ChatModel withRequestOptions(ChatModel model) {

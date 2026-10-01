@@ -2251,8 +2251,26 @@ class E2ELightRagTest {
     }
 
     @Test
-    void querySupportsUserPromptAndConversationHistory() {
-        var storage = InMemoryStorageProvider.create();
+    void customFailResponseIsUsedWhenRetrievalComesBackEmpty() {
+        var rag = LightRag.builder()
+            .chatModel(new DefaultChatModel("default-answer"))
+            .embeddingModel(new FakeEmbeddingModel())
+            .storage(InMemoryStorageProvider.create())
+            .automaticQueryKeywordExtraction(false)
+            .failResponse("No data found.")
+            .build();
+
+        var result = rag.query(WORKSPACE, QueryRequest.builder()
+            .query("unknown topic entirely")
+            .mode(QueryMode.LOCAL)
+            .build());
+
+        assertThat(result.answer()).isEqualTo("No data found.");
+        assertThat(result.contexts()).isEmpty();
+    }
+
+    @Test
+    void querySupportsUserPromptAndConversationHistory() {        var storage = InMemoryStorageProvider.create();
         var chatModel = new FakeChatModel();
         var rag = LightRag.builder()
             .chatModel(chatModel)

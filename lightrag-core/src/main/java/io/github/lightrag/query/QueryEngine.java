@@ -8,6 +8,7 @@ import io.github.lightrag.api.StructuredQueryEntity;
 import io.github.lightrag.api.StructuredQueryRelation;
 import io.github.lightrag.api.StructuredQueryResult;
 import io.github.lightrag.model.ChatModel;
+import io.github.lightrag.model.CloseableIterator;
 import io.github.lightrag.model.RerankModel;
 import io.github.lightrag.synthesis.PathAwareAnswerSynthesizer;
 import io.github.lightrag.types.QueryContext;
@@ -26,6 +27,9 @@ import java.util.Objects;
 public final class QueryEngine {
     private static final Logger log = LoggerFactory.getLogger(QueryEngine.class);
     private static final int CHUNK_BUDGET_BUFFER_TOKENS = 16;
+
+    public static final String DEFAULT_FAIL_RESPONSE =
+        "Sorry, I'm not able to provide an answer to that question.[no-context]";
 
     private static final String GRAPH_SYSTEM_PROMPT_TEMPLATE = """
         ---Role---
@@ -118,6 +122,7 @@ public final class QueryEngine {
     private final QueryIntentClassifier queryIntentClassifier;
     private final QueryStrategy multiHopStrategy;
     private final PathAwareAnswerSynthesizer pathAwareAnswerSynthesizer;
+    private final String failResponse;
 
     public QueryEngine(
         ChatModel chatModel,
@@ -256,6 +261,25 @@ public final class QueryEngine {
         QueryStrategy multiHopStrategy,
         PathAwareAnswerSynthesizer pathAwareAnswerSynthesizer
     ) {
+        this(chatModel, keywordModel, contextAssembler, strategies, rerankModel, automaticKeywordExtractionEnabled,
+            rerankCandidateMultiplier, minRerankScore, queryIntentClassifier, multiHopStrategy,
+            pathAwareAnswerSynthesizer, DEFAULT_FAIL_RESPONSE);
+    }
+
+    public QueryEngine(
+        ChatModel chatModel,
+        ChatModel keywordModel,
+        ContextAssembler contextAssembler,
+        Map<QueryMode, QueryStrategy> strategies,
+        RerankModel rerankModel,
+        boolean automaticKeywordExtractionEnabled,
+        int rerankCandidateMultiplier,
+        double minRerankScore,
+        QueryIntentClassifier queryIntentClassifier,
+        QueryStrategy multiHopStrategy,
+        PathAwareAnswerSynthesizer pathAwareAnswerSynthesizer,
+        String failResponse
+    ) {
         this.chatModel = Objects.requireNonNull(chatModel, "chatModel");
         this.keywordModel = keywordModel == null ? chatModel : keywordModel;
         this.contextAssembler = Objects.requireNonNull(contextAssembler, "contextAssembler");
@@ -273,6 +297,7 @@ public final class QueryEngine {
         this.queryIntentClassifier = queryIntentClassifier;
         this.multiHopStrategy = multiHopStrategy;
         this.pathAwareAnswerSynthesizer = Objects.requireNonNull(pathAwareAnswerSynthesizer, "pathAwareAnswerSynthesizer");
+        this.failResponse = Objects.requireNonNull(failResponse, "failResponse");
     }
 
     public QueryResult query(QueryRequest request) {
@@ -283,6 +308,9 @@ public final class QueryEngine {
         }
         QueryValidation.validateRagQuery(query.query());
         var execution = executeStandardQuery(query);
+        if (execution.retrievalEmpty()) {
+            return failResponseResult(execution.resolvedQuery(), execution.references());
+        }
         if (execution.resolvedQuery().onlyNeedContext() && !execution.resolvedQuery().onlyNeedPrompt()) {
             return new QueryResult(
                 execution.queryContext().assembledContext(),
@@ -322,6 +350,9 @@ public final class QueryEngine {
         }
         QueryValidation.validateRagQuery(query.query());
         var execution = executeStandardQuery(query);
+        if (execution.retrievalEmpty()) {
+            return failStructuredResult(execution.references());
+        }
         return new StructuredQueryResult(
             resolveStructuredAnswer(execution),
             execution.references().contexts(),
@@ -338,8 +369,33 @@ public final class QueryEngine {
         );
     }
 
-    private String generateTwoStageAnswer(ChatModel responseModel, ChatModel.ChatRequest baseRequest) {
-        var reasoningDraft = responseModel.generate(new ChatModel.ChatRequest(
+    private QueryResult failResponseResult(QueryRequest request, QueryReferences.Result references) {
+        if (request.stream()) {
+            // Task 13: add the llmGenerated argument here and pass false — the canned response is not
+            // LLM-generated (upstream lightrag.py:5235-5241).
+            return QueryResult.streaming(
+                CloseableIterator.of(List.of(failResponse)),
+                references.contexts(),
+                references.references()
+            );
+        }
+        return new QueryResult(failResponse, references.contexts(), references.references());
+    }
+
+    private StructuredQueryResult failStructuredResult(QueryReferences.Result references) {
+        // Task 13: add the llmGenerated argument here and pass false — the canned response is not
+        // LLM-generated (upstream lightrag.py:5235-5241).
+        return new StructuredQueryResult(
+            failResponse,
+            references.contexts(),
+            references.references(),
+            List.of(),
+            List.of(),
+            List.of()
+        );
+    }
+
+    private String generateTwoStageAnswer(ChatModel responseModel, ChatModel.ChatRequest baseRequest) {        var reasoningDraft = responseModel.generate(new ChatModel.ChatRequest(
             pathAwareAnswerSynthesizer.buildReasoningStagePrompt(baseRequest.systemPrompt()),
             baseRequest.userPrompt(),
             baseRequest.conversationHistory()
@@ -425,6 +481,16 @@ public final class QueryEngine {
             : resolvedQuery;
         var retrieveStartedAt = System.nanoTime();
         var retrievedContext = strategy.retrieve(retrievalRequest);
+        var retrievalEmpty = switch (resolvedQuery.mode()) {
+            // Upstream naive_query bails out on an empty vector-chunk result (operate.py:6901-6905).
+            case NAIVE -> retrievedContext.matchedChunks().isEmpty();
+            // Upstream kg_query bails out when entities and relations are both empty (operate.py:6113-6118).
+            // Java additionally requires empty chunks: its strategies can return chunk-only contexts, and
+            // a canned no-answer while usable chunks exist would be a regression (narrower than upstream).
+            default -> retrievedContext.matchedEntities().isEmpty()
+                && retrievedContext.matchedRelations().isEmpty()
+                && retrievedContext.matchedChunks().isEmpty();
+        };
         var retrieveMs = elapsedMillis(retrieveStartedAt);
         var rerankStartedAt = System.nanoTime();
         var rerankedChunks = rerankActive
@@ -495,7 +561,7 @@ public final class QueryEngine {
             resolvedQuery.query(),
             resolvedQuery.conversationHistory()
         );
-        return new QueryExecution(responseModel, resolvedQuery, assembledQueryContext, references, chatRequest);
+        return new QueryExecution(responseModel, resolvedQuery, assembledQueryContext, references, chatRequest, retrievalEmpty);
     }
 
     private QueryResult bypassQuery(QueryRequest query) {
@@ -726,7 +792,8 @@ public final class QueryEngine {
         QueryRequest resolvedQuery,
         QueryContext queryContext,
         QueryReferences.Result references,
-        ChatModel.ChatRequest chatRequest
+        ChatModel.ChatRequest chatRequest,
+        boolean retrievalEmpty
     ) {
     }
 }
