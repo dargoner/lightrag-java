@@ -9,7 +9,8 @@ public record StructuredQueryResult(
     List<QueryResult.Reference> references,
     List<StructuredQueryEntity> entities,
     List<StructuredQueryRelation> relations,
-    List<StructuredQueryChunk> chunks
+    List<StructuredQueryChunk> chunks,
+    boolean llmGenerated
 ) {
     public StructuredQueryResult {
         answer = Objects.requireNonNull(answer, "answer");
@@ -18,5 +19,16 @@ public record StructuredQueryResult(
         entities = List.copyOf(Objects.requireNonNull(entities, "entities"));
         relations = List.copyOf(Objects.requireNonNull(relations, "relations"));
         chunks = List.copyOf(Objects.requireNonNull(chunks, "chunks"));
+    }
+
+    public StructuredQueryResult(
+        String answer,
+        List<QueryResult.Context> contexts,
+        List<QueryResult.Reference> references,
+        List<StructuredQueryEntity> entities,
+        List<StructuredQueryRelation> relations,
+        List<StructuredQueryChunk> chunks
+    ) {
+        this(answer, contexts, references, entities, relations, chunks, false);
     }
 }

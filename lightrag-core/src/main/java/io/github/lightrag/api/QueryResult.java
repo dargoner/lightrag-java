@@ -10,13 +10,18 @@ public record QueryResult(
     List<Context> contexts,
     List<Reference> references,
     CloseableIterator<String> answerStream,
-    boolean streaming
+    boolean streaming,
+    double responseTime,
+    boolean llmGenerated
 ) implements AutoCloseable {
     public QueryResult {
         answer = Objects.requireNonNull(answer, "answer");
         contexts = List.copyOf(Objects.requireNonNull(contexts, "contexts"));
         references = List.copyOf(Objects.requireNonNull(references, "references"));
         answerStream = Objects.requireNonNull(answerStream, "answerStream");
+        if (!Double.isFinite(responseTime) || responseTime < 0.0d) {
+            throw new IllegalArgumentException("responseTime must be a finite non-negative number of seconds");
+        }
     }
 
     public QueryResult(String answer, List<Context> contexts) {
@@ -24,7 +29,17 @@ public record QueryResult(
     }
 
     public QueryResult(String answer, List<Context> contexts, List<Reference> references) {
-        this(answer, contexts, references, CloseableIterator.empty(), false);
+        this(answer, contexts, references, 0.0d, false);
+    }
+
+    public QueryResult(
+        String answer,
+        List<Context> contexts,
+        List<Reference> references,
+        double responseTime,
+        boolean llmGenerated
+    ) {
+        this(answer, contexts, references, CloseableIterator.empty(), false, responseTime, llmGenerated);
     }
 
     public static QueryResult streaming(
@@ -32,7 +47,16 @@ public record QueryResult(
         List<Context> contexts,
         List<Reference> references
     ) {
-        return new QueryResult("", contexts, references, answerStream, true);
+        return streaming(answerStream, contexts, references, true);
+    }
+
+    public static QueryResult streaming(
+        CloseableIterator<String> answerStream,
+        List<Context> contexts,
+        List<Reference> references,
+        boolean llmGenerated
+    ) {
+        return new QueryResult("", contexts, references, answerStream, true, 0.0d, llmGenerated);
     }
 
     @Override
@@ -49,6 +73,8 @@ public record QueryResult(
             return false;
         }
         return streaming == other.streaming
+            && Double.compare(responseTime, other.responseTime) == 0
+            && llmGenerated == other.llmGenerated
             && answer.equals(other.answer)
             && contexts.equals(other.contexts)
             && references.equals(other.references);
@@ -56,7 +82,7 @@ public record QueryResult(
 
     @Override
     public int hashCode() {
-        return Objects.hash(answer, contexts, references, streaming);
+        return Objects.hash(answer, contexts, references, streaming, responseTime, llmGenerated);
     }
 
     public record Context(String sourceId, String text, String referenceId, String source) {

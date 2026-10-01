@@ -379,6 +379,7 @@ public final class QueryEngine {
     }
 
     public QueryResult query(QueryRequest request) {
+        var startNanos = System.nanoTime();
         var query = Objects.requireNonNull(request, "request");
         if (query.mode() == QueryMode.BYPASS) {
             QueryValidation.validateNotEmpty(query.query());
@@ -387,20 +388,24 @@ public final class QueryEngine {
         QueryValidation.validateRagQuery(query.query());
         var execution = executeStandardQuery(query);
         if (execution.retrievalEmpty()) {
-            return failResponseResult(execution.resolvedQuery(), execution.references());
+            return failResponseResult(execution.resolvedQuery(), execution.references(), startNanos);
         }
         if (execution.resolvedQuery().onlyNeedContext() && !execution.resolvedQuery().onlyNeedPrompt()) {
             return new QueryResult(
                 execution.queryContext().assembledContext(),
                 execution.references().contexts(),
-                execution.references().references()
+                execution.references().references(),
+                elapsedMillis(startNanos) / 1000.0d,
+                false
             );
         }
         if (execution.resolvedQuery().onlyNeedPrompt()) {
             return new QueryResult(
                 renderStandardPrompt(execution.chatRequest()),
                 execution.references().contexts(),
-                execution.references().references()
+                execution.references().references(),
+                elapsedMillis(startNanos) / 1000.0d,
+                false
             );
         }
         if (execution.resolvedQuery().stream()) {
@@ -413,7 +418,9 @@ public final class QueryEngine {
         return new QueryResult(
             generateStandardAnswer(execution),
             execution.references().contexts(),
-            execution.references().references()
+            execution.references().references(),
+            elapsedMillis(startNanos) / 1000.0d,
+            true
         );
     }
 
@@ -431,6 +438,8 @@ public final class QueryEngine {
         if (execution.retrievalEmpty()) {
             return failStructuredResult(execution.references());
         }
+        var llmGenerated = !execution.resolvedQuery().onlyNeedContext()
+            && !execution.resolvedQuery().onlyNeedPrompt();
         return new StructuredQueryResult(
             resolveStructuredAnswer(execution),
             execution.references().contexts(),
@@ -443,33 +452,39 @@ public final class QueryEngine {
                 .toList(),
             execution.queryContext().matchedChunks().stream()
                 .map(QueryEngine::toStructuredChunk)
-                .toList()
+                .toList(),
+            llmGenerated
         );
     }
 
-    private QueryResult failResponseResult(QueryRequest request, QueryReferences.Result references) {
+    private QueryResult failResponseResult(QueryRequest request, QueryReferences.Result references, long startNanos) {
         if (request.stream()) {
-            // Task 13: add the llmGenerated argument here and pass false — the canned response is not
-            // LLM-generated (upstream lightrag.py:5235-5241).
+            // the canned response is not LLM-generated (upstream lightrag.py:5235-5241)
             return QueryResult.streaming(
                 CloseableIterator.of(List.of(failResponse)),
                 references.contexts(),
-                references.references()
+                references.references(),
+                false
             );
         }
-        return new QueryResult(failResponse, references.contexts(), references.references());
+        return new QueryResult(
+            failResponse,
+            references.contexts(),
+            references.references(),
+            elapsedMillis(startNanos) / 1000.0d,
+            false
+        );
     }
 
     private StructuredQueryResult failStructuredResult(QueryReferences.Result references) {
-        // Task 13: add the llmGenerated argument here and pass false — the canned response is not
-        // LLM-generated (upstream lightrag.py:5235-5241).
         return new StructuredQueryResult(
             failResponse,
             references.contexts(),
             references.references(),
             List.of(),
             List.of(),
-            List.of()
+            List.of(),
+            false
         );
     }
 
@@ -647,6 +662,7 @@ public final class QueryEngine {
     }
 
     private QueryResult bypassQuery(QueryRequest query) {
+        var startNanos = System.nanoTime();
         var chatRequest = new ChatModel.ChatRequest(
             "",
             buildBypassUserPrompt(query),
@@ -654,15 +670,27 @@ public final class QueryEngine {
         );
         var responseModel = selectChatModel(query);
         if (query.onlyNeedContext()) {
-            return new QueryResult("", List.of(), List.of());
+            return new QueryResult("", List.of(), List.of(), elapsedMillis(startNanos) / 1000.0d, false);
         }
         if (query.onlyNeedPrompt()) {
-            return new QueryResult(renderBypassPrompt(chatRequest), List.of(), List.of());
+            return new QueryResult(
+                renderBypassPrompt(chatRequest),
+                List.of(),
+                List.of(),
+                elapsedMillis(startNanos) / 1000.0d,
+                false
+            );
         }
         if (query.stream()) {
             return QueryResult.streaming(responseModel.stream(chatRequest), List.of(), List.of());
         }
-        return new QueryResult(responseModel.generate(chatRequest), List.of(), List.of());
+        return new QueryResult(
+            responseModel.generate(chatRequest),
+            List.of(),
+            List.of(),
+            elapsedMillis(startNanos) / 1000.0d,
+            true
+        );
     }
 
     private StructuredQueryResult bypassStructuredQuery(QueryRequest query) {
@@ -672,12 +700,21 @@ public final class QueryEngine {
             query.conversationHistory()
         );
         var responseModel = selectChatModel(query);
+        var llmGenerated = !query.onlyNeedContext() && !query.onlyNeedPrompt();
         var answer = query.onlyNeedContext() && !query.onlyNeedPrompt()
             ? ""
             : query.onlyNeedPrompt()
                 ? renderBypassPrompt(chatRequest)
                 : responseModel.generate(chatRequest);
-        return new StructuredQueryResult(answer, List.of(), List.of(), List.of(), List.of(), List.of());
+        return new StructuredQueryResult(
+            answer,
+            List.of(),
+            List.of(),
+            List.of(),
+            List.of(),
+            List.of(),
+            llmGenerated
+        );
     }
 
     private String resolveStructuredAnswer(QueryExecution execution) {

@@ -1485,6 +1485,7 @@ class QueryEngineTest {
             .mode(QueryMode.LOCAL).stream(true).build());
         assertThat(result.streaming()).isTrue();
         assertThat(readAll(result.answerStream())).containsExactly(QueryEngine.DEFAULT_FAIL_RESPONSE);
+        assertThat(result.llmGenerated()).isFalse();
     }
 
     @Test
@@ -1528,6 +1529,49 @@ class QueryEngineTest {
             assertThat(structured.chunks()).isEmpty();
             assertThat(structuredModel.callCount()).isZero();
         }
+    }
+
+    @Test
+    void marksContextOnlyAndPreviewResultsAsNotLlmGenerated() {
+        var engine = new QueryEngine(new RecordingChatModel(), new ContextAssembler(),
+            strategiesReturning(baseContext()), null, false, 2);
+        var failEngine = new QueryEngine(new RecordingChatModel(), new ContextAssembler(),
+            strategiesReturning(retrievalReturnsNothing()), null, false, 2);
+
+        var contextOnly = engine.query(QueryRequest.builder().query("tariff schedule").mode(QueryMode.LOCAL)
+            .onlyNeedContext(true).build());
+        var preview = engine.query(QueryRequest.builder().query("tariff schedule").mode(QueryMode.LOCAL)
+            .onlyNeedPrompt(true).build());
+        var fail = failEngine.query(QueryRequest.builder().query("nothing matches this").mode(QueryMode.LOCAL).build());
+        var answer = engine.query(QueryRequest.builder().query("tariff schedule").mode(QueryMode.LOCAL).build());
+
+        assertThat(contextOnly.llmGenerated()).isFalse();
+        assertThat(preview.llmGenerated()).isFalse();
+        assertThat(fail.answer()).isEqualTo(QueryEngine.DEFAULT_FAIL_RESPONSE);
+        assertThat(fail.llmGenerated()).isFalse();
+        assertThat(answer.llmGenerated()).isTrue();
+    }
+
+    @Test
+    void reportsNonNegativeResponseTime() {
+        var engine = new QueryEngine(new RecordingChatModel(), new ContextAssembler(),
+            strategiesReturning(baseContext()), null, false, 2);
+
+        var result = engine.query(QueryRequest.builder().query("tariff schedule").mode(QueryMode.LOCAL).build());
+
+        assertThat(result.responseTime()).isGreaterThanOrEqualTo(0.0d);
+    }
+
+    @Test
+    void structuredFailResponseIsNotLlmGenerated() {
+        var failEngine = new QueryEngine(new RecordingChatModel(), new ContextAssembler(),
+            strategiesReturning(retrievalReturnsNothing()), null, false, 2);
+
+        var fail = failEngine.queryStructured(QueryRequest.builder().query("nothing matches this")
+            .mode(QueryMode.LOCAL).build());
+
+        assertThat(fail.answer()).isEqualTo(QueryEngine.DEFAULT_FAIL_RESPONSE);
+        assertThat(fail.llmGenerated()).isFalse();
     }
 
     @Test
