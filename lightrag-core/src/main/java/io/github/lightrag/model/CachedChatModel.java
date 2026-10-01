@@ -74,7 +74,11 @@ public final class CachedChatModel implements ChatModel {
                 .append("history.role=").append(message.role()).append('\n')
                 .append("history.content=").append(message.content()).append('\n');
         }
-        return CACHE_POLICY_VERSION + ":" + role.toLowerCase(java.util.Locale.ROOT) + ":" + identity + ":" + sha256(canonical.toString());
+        // The identity is hashed so the key stays bounded no matter how long the base URL or the
+        // defaults suffix grows: llm_cache.cache_id is VARCHAR(191) on MySQL, and an oversized key
+        // fails the INSERT instead of merely missing the cache.
+        return CACHE_POLICY_VERSION + ":" + role.toLowerCase(java.util.Locale.ROOT) + ":"
+            + sha256(requireNonBlank(identity, "identity")) + ":" + sha256(canonical.toString());
     }
 
     private static String sha256(String value) {

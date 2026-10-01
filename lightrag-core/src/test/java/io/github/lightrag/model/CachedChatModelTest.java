@@ -65,10 +65,23 @@ class CachedChatModelTest {
     }
 
     @Test
-    void cacheKeyIncludesPolicyVersionAndModelIdentity() {
-        var key = CachedChatModel.cacheId("query", "openai-compatible:gpt-4o-mini@https://api.example/v1",
+    void cacheKeyIncludesPolicyVersionAndHashesTheModelIdentity() {
+        var identity = "openai-compatible:gpt-4o-mini@https://api.example/v1";
+        var key = CachedChatModel.cacheId("query", identity,
             new ChatModel.ChatRequest("system", "user"));
-        assertThat(key).startsWith("v2:query:openai-compatible:gpt-4o-mini@https://api.example/v1:");
+        assertThat(key).startsWith("v2:query:").doesNotContain(identity);
+    }
+
+    @Test
+    void cacheKeyStaysWithinTheMysqlColumnLimitForLongIdentities() {
+        // The identity is hashed so cache_id (VARCHAR(191) on MySQL) never overflows: an oversized key
+        // fails the INSERT instead of merely missing the cache (review round 2, should-fix).
+        var identity = "openai-compatible:gpt-4o-mini@https://example.internal/"
+            + "very/long/deployment/base/path/".repeat(6) + "v1";
+        var key = CachedChatModel.cacheId("query", identity, new ChatModel.ChatRequest("system", "user"));
+
+        assertThat(identity.length()).isGreaterThan(191);
+        assertThat(key.length()).isLessThan(191);
     }
 
     @Test

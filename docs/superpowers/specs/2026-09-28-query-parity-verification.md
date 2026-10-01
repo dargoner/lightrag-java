@@ -146,7 +146,7 @@ the automated check that pins the behavior.
 | 12 | Chunk budget counting | sum of stored per-chunk `tokenCount()` (rendered line overhead uncounted) | two-stage render-verified count over the exact context projection; whole chunks only, boundary chunk dropped | `ChunkBudgetTruncatorTest` (7 cases incl. `dropsTheBoundaryChunkWholeInsteadOfTrimmingItsText`, `stageTwoShrinksWhatStageOneOverAdmitted`); `QueryEngineTest#trimsFinalChunksToRemainingMaxTotalTokensAfterRetrieval`, `#rerankStillAppliesOriginalMaxTotalTokensAfterExpandedRetrieval`, `#recalculatesMultiHopChunkBudgetWithoutReasoningContextWhenTrimmedChunksPreventReuse` |
 | 13 | Context chunk lines | `- id \| score \| text` | `- [n] id \| score \| headings \| text` + `Reference Document List` | `ContextAssemblerTest#rendersReferenceIdsHeadingsAndReferenceList`, `#referenceIdsMatchQueryReferencesOrdering`, `#approxProjectionOmitsReferenceIdSoStageOneNeverUndercountsTheRenderer`; `ChunkHeadingsTest` (6 cases) |
 | 14 | `QueryResult` | answer/contexts/references | + `responseTime`, `llmGenerated` | `QueryEngineTest#reportsNonNegativeResponseTime`, `#marksContextOnlyAndPreviewResultsAsNotLlmGenerated`, `#structuredFailResponseIsNotLlmGenerated`, `#failResponseIsStreamedAsASingleChunkWhenStreamingIsRequested` |
-| 15 | LLM cache key | `default:{role}:{hash}` | `v2:{role}:{identity}:{sha256(request+options)}`, history bypass | `CachedChatModelTest` (`cacheKeyIncludesPolicyVersionAndModelIdentity`, `modelIdentityChangeInvalidatesCachedAnswers`, `requestOptionsChangeTheCacheKeyWithoutChangingThePrompt`, `historyCarryingRequestsBypassTheCache`, `extractionHistoryIsKeyedInsteadOfBypassed`, `cachesCompleteResponsesAndReplaysThemWithoutCallingTheDelegateAgain`, `doesNotCacheTruncatedResponses`, `staticCacheIdMatchesTheKeyTheWrappedModelUses`) |
+| 15 | LLM cache key | `default:{role}:{hash}` | `v2:{role}:{sha256(identity)}:{sha256(request+options)}`, identity folds merge defaults, history bypass | `CachedChatModelTest` (`cacheKeyIncludesPolicyVersionAndHashesTheModelIdentity`, `cacheKeyStaysWithinTheMysqlColumnLimitForLongIdentities`, `modelIdentityChangeInvalidatesCachedAnswers`, `requestOptionsChangeTheCacheKeyWithoutChangingThePrompt`, `historyCarryingRequestsBypassTheCache`, `extractionHistoryIsKeyedInsteadOfBypassed`, `cachesCompleteResponsesAndReplaysThemWithoutCallingTheDelegateAgain`, `doesNotCacheTruncatedResponses`, `staticCacheIdMatchesTheKeyTheWrappedModelUses`); `OpenAiCompatibleChatModelTest#cacheIdentityIncludesConstructorDefaultsButNotTimeouts` |
 
 ## 6. Divergences that remain open
 
@@ -220,8 +220,11 @@ Every deviation below is a deliberate, test-backed adjustment; the plan's requir
   `0.0d` (the duration is unknown at stream creation); the duration reuses the existing long-typed
   `elapsedMillis` (`QueryEngine.java:744`) with `/ 1000.0d`.
 - **Task 14**: the cache key is `v2:`-prefixed with a per-model identity from
-  `ChatModel.cacheIdentity()` (default: model class name; `OpenAiCompatibleChatModel` overrides it at
-  `:93`); the history bypass is role-scoped to the answer role (`CachedChatModel.java:34-41`, upstream
+  `ChatModel.cacheIdentity()` (default: model class name; `OpenAiCompatibleChatModel` overrides it and
+  folds its constructor defaults in via `ChatRequestOptions.cacheIdentitySuffix()`, as does
+  `ConfiguredChatModel` `:33`); the identity is hashed into the key, which bounds `cache_id` well
+  under the MySQL `VARCHAR(191)` primary key even for long base URLs or defaults suffixes; the history
+  bypass is role-scoped to the answer role (`CachedChatModel.java:34-41`, upstream
   `operate.py:4683-4690`) while the extraction role folds the history into the key (upstream
   `utils.py:5645-5662`) so recorded cache ids stay reachable; wrapper identity propagation was fixed in
   follow-up commits `97f3139` + `d9f44f4`.
