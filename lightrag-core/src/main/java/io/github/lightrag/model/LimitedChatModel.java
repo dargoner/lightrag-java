@@ -38,6 +38,11 @@ final class LimitedChatModel implements ChatModel {
     }
 
     @Override
+    public String cacheIdentity() {
+        return delegate.cacheIdentity();
+    }
+
+    @Override
     public CloseableIterator<String> stream(ChatRequest request) {
         return delegate.stream(request);
     }

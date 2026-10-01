@@ -31,6 +31,11 @@ final class RetryingChatModel implements ChatModel {
     }
 
     @Override
+    public String cacheIdentity() {
+        return delegate.cacheIdentity();
+    }
+
+    @Override
     public CloseableIterator<String> stream(ChatRequest request) {
         return ModelRetrySupport.call(() -> delegate.stream(request), maxAttempts, initialBackoff);
     }

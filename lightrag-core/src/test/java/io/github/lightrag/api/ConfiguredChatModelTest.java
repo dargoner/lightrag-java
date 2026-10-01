@@ -2,6 +2,7 @@ package io.github.lightrag.api;
 
 import io.github.lightrag.model.ChatModel;
 import io.github.lightrag.model.ChatRequestOptions;
+import io.github.lightrag.model.ChatResponse;
 import io.github.lightrag.model.CloseableIterator;
 import org.junit.jupiter.api.Test;
 
@@ -54,6 +55,21 @@ class ConfiguredChatModelTest {
             .isEqualTo(new ChatRequestOptions(null, null, null, "json_object"));
     }
 
+    @Test
+    void responseMetadataAndCacheIdentityFlowThroughTheWrapper() {
+        var delegate = new RecordingChatModel();
+        var model = new ConfiguredChatModel(delegate, new ChatRequestOptions(null, 512, null, null));
+
+        var response = model.generateResponse(new ChatModel.ChatRequest("system", "user"));
+
+        assertThat(response.content()).isEqualTo("partial");
+        assertThat(response.truncated()).isTrue();
+        assertThat(response.usage().completionTokens()).isEqualTo(3);
+        assertThat(delegate.requests().get(0).options())
+            .isEqualTo(new ChatRequestOptions(null, 512, null, null));
+        assertThat(model.cacheIdentity()).isEqualTo("recording:metadata");
+    }
+
     private static final class RecordingChatModel implements ChatModel {
         private final List<ChatRequest> requests = new ArrayList<>();
         private int streamCalls;
@@ -62,6 +78,17 @@ class ConfiguredChatModelTest {
         public String generate(ChatRequest request) {
             requests.add(request);
             return "ok";
+        }
+
+        @Override
+        public ChatResponse generateResponse(ChatRequest request) {
+            requests.add(request);
+            return new ChatResponse("partial", "length", new ChatResponse.Usage(10, 3));
+        }
+
+        @Override
+        public String cacheIdentity() {
+            return "recording:metadata";
         }
 
         @Override

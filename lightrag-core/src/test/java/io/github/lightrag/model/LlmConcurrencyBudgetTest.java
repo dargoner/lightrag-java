@@ -42,6 +42,24 @@ class LlmConcurrencyBudgetTest {
     }
 
     @Test
+    void limitChatForwardsTheDelegateCacheIdentity() {
+        var budget = new LlmConcurrencyBudget(2, 8);
+        var model = budget.limitChat("query", new ChatModel() {
+            @Override
+            public String generate(ChatModel.ChatRequest request) {
+                return "answered";
+            }
+
+            @Override
+            public String cacheIdentity() {
+                return "openai-compatible:gpt-4o-mini@https://api.example/v1";
+            }
+        });
+
+        assertThat(model.cacheIdentity()).isEqualTo("openai-compatible:gpt-4o-mini@https://api.example/v1");
+    }
+
+    @Test
     void distinctRolesDoNotShareLlmSlots() throws Exception {
         var budget = new LlmConcurrencyBudget(1, 8);
         var extractEntered = new CountDownLatch(1);

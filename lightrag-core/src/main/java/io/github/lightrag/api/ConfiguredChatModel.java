@@ -2,6 +2,7 @@ package io.github.lightrag.api;
 
 import io.github.lightrag.model.ChatModel;
 import io.github.lightrag.model.ChatRequestOptions;
+import io.github.lightrag.model.ChatResponse;
 import io.github.lightrag.model.CloseableIterator;
 
 import java.util.Objects;
@@ -21,6 +22,16 @@ final class ConfiguredChatModel implements ChatModel {
     @Override
     public String generate(ChatRequest request) {
         return delegate.generate(withDefaults(request));
+    }
+
+    @Override
+    public ChatResponse generateResponse(ChatRequest request) {
+        return delegate.generateResponse(withDefaults(request));
+    }
+
+    @Override
+    public String cacheIdentity() {
+        return delegate.cacheIdentity();
     }
 
     @Override
