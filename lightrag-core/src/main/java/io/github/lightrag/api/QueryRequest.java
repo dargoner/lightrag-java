@@ -41,11 +41,15 @@ public record QueryRequest(
     List<ChatModel.ChatRequest.ConversationMessage> conversationHistory,
     Map<String, List<String>> metadataFilters,
     List<MetadataCondition> metadataConditions,
-    boolean disableUserPromptPrefix
+    boolean disableUserPromptPrefix,
+    int relatedChunkNumber,
+    KgChunkPickMethod chunkPickMethod
 ) {
     public static final QueryMode DEFAULT_MODE = QueryMode.MIX;
     public static final int DEFAULT_TOP_K = 40;
     public static final int DEFAULT_CHUNK_TOP_K = 20;
+    public static final int DEFAULT_RELATED_CHUNK_NUMBER = 5;
+    public static final KgChunkPickMethod DEFAULT_KG_CHUNK_PICK_METHOD = KgChunkPickMethod.VECTOR;
     public static final int DEFAULT_MAX_ENTITY_TOKENS = 6_000;
     public static final int DEFAULT_MAX_RELATION_TOKENS = 8_000;
     public static final int DEFAULT_MAX_TOTAL_TOKENS = 30_000;
@@ -64,6 +68,10 @@ public record QueryRequest(
         conversationHistory = List.copyOf(Objects.requireNonNull(conversationHistory, "conversationHistory"));
         metadataFilters = normalizeMetadataFilters(metadataFilters);
         metadataConditions = normalizeMetadataConditions(metadataConditions);
+        chunkPickMethod = Objects.requireNonNull(chunkPickMethod, "chunkPickMethod");
+        if (relatedChunkNumber < 0) {
+            throw new IllegalArgumentException("relatedChunkNumber must not be negative");
+        }
         if (topK <= 0) {
             throw new IllegalArgumentException("topK must be positive");
         }
@@ -90,7 +98,7 @@ public record QueryRequest(
     /**
      * Pre-{@code disableUserPromptPrefix} canonical arity, kept for positional callers
      * (the platform constructs requests through this signature). Delegates with the
-     * per-request prefix opt-out disabled.
+     * per-request prefix opt-out disabled and the KG chunk-picking defaults.
      */
     public QueryRequest(
         String query,
@@ -141,7 +149,9 @@ public record QueryRequest(
             conversationHistory,
             metadataFilters,
             metadataConditions,
-            false
+            false,
+            DEFAULT_RELATED_CHUNK_NUMBER,
+            DEFAULT_KG_CHUNK_PICK_METHOD
         );
     }
 
@@ -296,6 +306,8 @@ public record QueryRequest(
         private Map<String, List<String>> metadataFilters = Map.of();
         private List<MetadataCondition> metadataConditions = List.of();
         private boolean disableUserPromptPrefix;
+        private int relatedChunkNumber = DEFAULT_RELATED_CHUNK_NUMBER;
+        private KgChunkPickMethod chunkPickMethod = DEFAULT_KG_CHUNK_PICK_METHOD;
 
         public Builder query(String query) {
             this.query = query;
@@ -418,6 +430,18 @@ public record QueryRequest(
             return this;
         }
 
+        /** Max KG-related chunks per entity/relation selection (upstream {@code related_chunk_number}); 0 disables KG chunk retrieval. */
+        public Builder relatedChunkNumber(int relatedChunkNumber) {
+            this.relatedChunkNumber = relatedChunkNumber;
+            return this;
+        }
+
+        /** How KG-related chunks are picked (upstream {@code kg_chunk_pick_method}). */
+        public Builder chunkPickMethod(KgChunkPickMethod chunkPickMethod) {
+            this.chunkPickMethod = chunkPickMethod;
+            return this;
+        }
+
         public QueryRequest build() {
             return new QueryRequest(
                 query,
@@ -443,7 +467,9 @@ public record QueryRequest(
                 conversationHistory,
                 metadataFilters,
                 metadataConditions,
-                disableUserPromptPrefix
+                disableUserPromptPrefix,
+                relatedChunkNumber,
+                chunkPickMethod
             );
         }
     }

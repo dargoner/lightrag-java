@@ -375,7 +375,9 @@ final class QueryKeywordExtractor {
             request.conversationHistory(),
             request.metadataFilters(),
             request.metadataConditions(),
-            request.disableUserPromptPrefix()
+            request.disableUserPromptPrefix(),
+            request.relatedChunkNumber(),
+            request.chunkPickMethod()
         );
     }
 
