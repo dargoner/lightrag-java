@@ -633,7 +633,7 @@ Notes:
 - `NAIVE` also participates in rerank through the shared `QueryEngine`; rerank is not specific to graph-aware modes
 - rerank is especially useful with `MIX` queries because the engine expands the internal candidate window before reranking
 - rerank changes chunk order only; exposed context IDs/texts still come from the original retrieval records
-- `minRerankScore(...)` defaults to `0.0`, matching upstream `MIN_RERANK_SCORE`; when set above `0.0`, chunks below the reranker score threshold are filtered out
+- `minRerankScore(...)` defaults to `0.0`, matching upstream `MIN_RERANK_SCORE`; when set above `0.0`, chunks below the reranker score threshold are filtered out, and if every candidate falls below the threshold the chunk context becomes empty
 - if `enableRerank(true)` is used without configuring a rerank model, rerank is inactive for that query
 - if the configured rerank model fails, Java propagates the reranker error instead of falling back to the original retrieved chunk order
 
@@ -1103,7 +1103,7 @@ var rag = LightRag.builder()
 - `graphExtractionExamples(...)`: supplies WeKnora-style `text/nodes/relations` few-shot examples for graph extraction
 - `automaticQueryKeywordExtraction(...)`: turns graph-mode keyword extraction on or off
 - `rerankCandidateMultiplier(...)`: controls how far `QueryEngine` expands `chunkTopK` before reranking
-- `minRerankScore(...)`: filters reranked chunks below the configured score threshold; default `0.0` keeps all reranked candidates
+- `minRerankScore(...)`: filters reranked chunks below the configured score threshold; default `0.0` keeps all reranked candidates, and a threshold that filters out every candidate leaves the chunk context empty
 
 ### Token counting (0.24.0)
 

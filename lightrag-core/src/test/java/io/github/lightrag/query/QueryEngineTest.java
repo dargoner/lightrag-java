@@ -17,6 +17,8 @@ import io.github.lightrag.types.QueryContext;
 import io.github.lightrag.types.ScoredChunk;
 import org.junit.jupiter.api.Test;
 
+import java.util.AbstractList;
+import java.util.Arrays;
 import java.util.EnumMap;
 import java.util.List;
 import java.util.Map;
@@ -1014,6 +1016,108 @@ class QueryEngineTest {
     }
 
     @Test
+    void dropsEveryChunkWhenAllRerankScoresFallBelowTheThreshold() {
+        var engine = new QueryEngine(
+            new RecordingChatModel(),
+            new ContextAssembler(),
+            strategiesReturning(baseContext()),
+            new StubRerankModel(List.of(
+                new RerankModel.RerankResult("chunk-2", 0.50d),
+                new RerankModel.RerankResult("chunk-1", 0.40d)
+            )),
+            true,
+            2,
+            0.80d
+        );
+
+        // Upstream returns the empty list once a configured threshold drops every usable row
+        // (utils.py:7110-7124); only "no usable provider output" restores the retrieval order.
+        var result = engine.query(baseRequest());
+
+        assertThat(result.contexts()).isEmpty();
+    }
+
+    @Test
+    void keepsNegativeScoresWhenNoMinimumScoreIsConfigured() {
+        var engine = engineWithRerank(new StubRerankModel(List.of(
+            new RerankModel.RerankResult("chunk-2", 0.90d),
+            new RerankModel.RerankResult("chunk-1", -3.0d)
+        )));
+
+        // The threshold only engages above 0.0 (upstream utils.py:7110-7124).
+        var result = engine.query(baseRequest());
+
+        assertThat(result.contexts())
+            .extracting(context -> context.sourceId())
+            .containsExactly("chunk-2", "chunk-1");
+    }
+
+    @Test
+    void fallsBackToOriginalOrderWhenTheProviderReturnsNoResults() {
+        var engine = engineWithRerank(new StubRerankModel(List.of()));
+
+        var result = engine.query(baseRequest());
+
+        assertThat(result.contexts())
+            .extracting(context -> context.sourceId())
+            .containsExactly("chunk-1", "chunk-2", "chunk-3");
+    }
+
+    @Test
+    void treatsANullResultSetAsNoOpinion() {
+        var engine = engineWithRerank(request -> null);
+
+        var result = engine.query(baseRequest());
+
+        assertThat(result.contexts())
+            .extracting(context -> context.sourceId())
+            .containsExactly("chunk-1", "chunk-2", "chunk-3");
+    }
+
+    @Test
+    void skipsNullRerankRowsButKeepsTheValidOnes() {
+        var engine = engineWithRerank(new StubRerankModel(Arrays.asList(
+            new RerankModel.RerankResult("chunk-2", 0.90d),
+            null,
+            new RerankModel.RerankResult("chunk-1", 0.70d)
+        )));
+
+        var result = engine.query(baseRequest());
+
+        assertThat(result.contexts())
+            .extracting(context -> context.sourceId())
+            .containsExactly("chunk-2", "chunk-1");
+    }
+
+    @Test
+    void fallsBackToOriginalOrderWhenNormalizationFailsAndFallbackIsConfigured() {
+        var engine = engineWithRerankAndMode(
+            request -> throwingRerankResults(),
+            RerankFailureMode.FALLBACK_TO_ORIGINAL
+        );
+
+        var result = engine.queryStructured(QueryRequest.builder()
+            .query("tariff schedule")
+            .mode(QueryMode.LOCAL)
+            .chunkTopK(2)
+            .enableRerank(true)
+            .build());
+
+        assertThat(result.chunks())
+            .extracting(StructuredQueryChunk::id)
+            .containsExactly("chunk-1", "chunk-2");
+    }
+
+    @Test
+    void defaultFailureModeFailsFastWhenNormalizationFails() {
+        var engine = engineWithRerank(request -> throwingRerankResults());
+
+        assertThatThrownBy(() -> engine.query(baseRequest()))
+            .isInstanceOf(IllegalStateException.class)
+            .hasMessageContaining("malformed rerank results");
+    }
+
+    @Test
     void propagatesRerankFailure() {
         var engine = new QueryEngine(
             new RecordingChatModel(),
@@ -1797,6 +1901,20 @@ class QueryEngineTest {
         public List<RerankResult> rerank(RerankRequest request) {
             return results;
         }
+    }
+
+    private static List<RerankModel.RerankResult> throwingRerankResults() {
+        return new AbstractList<>() {
+            @Override
+            public RerankModel.RerankResult get(int index) {
+                throw new IllegalStateException("malformed rerank results");
+            }
+
+            @Override
+            public int size() {
+                return 1;
+            }
+        };
     }
 
     private static final class RecordingRerankModel implements RerankModel {

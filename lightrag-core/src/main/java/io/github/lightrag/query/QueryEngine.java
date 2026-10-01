@@ -856,30 +856,53 @@ public final class QueryEngine {
                 request.chunkTopK()
             ));
         } catch (RuntimeException exception) {
-            if (rerankFailureMode == RerankFailureMode.FALLBACK_TO_ORIGINAL) {
-                log.warn("LightRAG rerank failed, using original retrieval order: {}", exception.toString());
-                return originalOrder.stream().limit(request.chunkTopK()).toList();
-            }
-            throw exception;
+            return handleRerankFailure(request, originalOrder, exception);
+        }
+        // A missing result set is "no opinion": upstream normalization degrades the same way and
+        // falls back to the original chunks (utils.py:6999-7005, :7026-7052).
+        if (results == null) {
+            return originalOrder.stream().limit(request.chunkTopK()).toList();
         }
 
         var ordered = new ArrayList<ScoredChunk>(matchedChunks.size());
-        for (var result : results) {
-            if (!Double.isFinite(result.score()) || result.score() < minRerankScore) {
-                continue;
+        var anyUsable = false;
+        try {
+            for (var result : results) {
+                if (result == null || !Double.isFinite(result.score())) {
+                    continue;
+                }
+                var chunk = byId.remove(result.id());
+                if (chunk == null) {
+                    log.warn("LightRAG rerank returned unknown chunk id, ignoring: {}", result.id());
+                    continue;
+                }
+                anyUsable = true;
+                if (minRerankScore > 0.0d && result.score() < minRerankScore) {
+                    continue;
+                }
+                ordered.add(chunk);
             }
-            var chunk = byId.remove(result.id());
-            if (chunk == null) {
-                log.warn("LightRAG rerank returned unknown chunk id, ignoring: {}", result.id());
-                continue;
-            }
-            ordered.add(chunk);
+        } catch (RuntimeException exception) {
+            return handleRerankFailure(request, originalOrder, exception);
         }
-        // Empty provider output means "no opinion": keep the retrieval order (upstream utils.py:7019-7021).
-        if (ordered.isEmpty()) {
+        // No usable provider rows means "no opinion": keep the retrieval order. Rows that were
+        // usable but all dropped by the threshold return the empty list instead (utils.py:7110-7124).
+        if (!anyUsable) {
             return originalOrder.stream().limit(request.chunkTopK()).toList();
         }
         return ordered.stream().limit(request.chunkTopK()).toList();
+    }
+
+    private List<ScoredChunk> handleRerankFailure(
+        QueryRequest request,
+        List<ScoredChunk> originalOrder,
+        RuntimeException exception
+    ) {
+        if (rerankFailureMode == RerankFailureMode.FALLBACK_TO_ORIGINAL) {
+            log.warn("LightRAG rerank failed, using original retrieval order: {}", exception.toString());
+            return originalOrder.stream().limit(request.chunkTopK()).toList();
+        }
+        throw exception;
     }
 
     private static boolean sameChunkIds(List<ScoredChunk> left, List<ScoredChunk> right) {
