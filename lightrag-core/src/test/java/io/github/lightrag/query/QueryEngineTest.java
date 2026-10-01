@@ -66,9 +66,9 @@ class QueryEngineTest {
             .contains("### References")
             .contains("The response should be presented in Bullet Points.")
             .containsSubsequence("chunk-3", "chunk-2", "chunk-1")
-            .contains("- chunk-3 | 0.700 | Gamma chunk")
-            .contains("- chunk-2 | 0.800 | Beta chunk")
-            .contains("- chunk-1 | 0.900 | Alpha chunk");
+            .contains("- [1] chunk-3 | 0.700 | Gamma chunk")
+            .contains("- [1] chunk-2 | 0.800 | Beta chunk")
+            .contains("- [1] chunk-1 | 0.900 | Alpha chunk");
         assertThat(chatModel.lastRequest().userPrompt()).isEqualTo("which chunk?");
         assertThat(result.references()).isEmpty();
         assertThat(strategy.lastRequest().maxHop()).isEqualTo(4);

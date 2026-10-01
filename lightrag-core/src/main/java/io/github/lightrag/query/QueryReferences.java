@@ -23,10 +23,31 @@ final class QueryReferences {
             );
         }
 
+        var sourceToReferenceId = assignReferenceIds(chunks);
+
+        var contexts = new ArrayList<QueryResult.Context>(chunks.size());
+        for (var chunk : chunks) {
+            var source = sourceOf(chunk);
+            contexts.add(new QueryResult.Context(
+                chunk.chunkId(),
+                chunk.chunk().text(),
+                sourceToReferenceId.getOrDefault(source, ""),
+                source
+            ));
+        }
+
+        var references = sourceToReferenceId.entrySet().stream()
+            .map(entry -> new QueryResult.Reference(entry.getValue(), entry.getKey()))
+            .toList();
+
+        return new Result(List.copyOf(contexts), references);
+    }
+
+    static Map<String, String> assignReferenceIds(List<ScoredChunk> chunks) {
         var counts = new LinkedHashMap<String, Integer>();
         var firstIndex = new LinkedHashMap<String, Integer>();
         for (int i = 0; i < chunks.size(); i++) {
-            var source = resolveSource(chunks.get(i));
+            var source = sourceOf(chunks.get(i));
             counts.merge(source, 1, Integer::sum);
             firstIndex.putIfAbsent(source, i);
         }
@@ -42,26 +63,10 @@ final class QueryReferences {
         for (int i = 0; i < sortedSources.size(); i++) {
             sourceToReferenceId.put(sortedSources.get(i), Integer.toString(i + 1));
         }
-
-        var contexts = new ArrayList<QueryResult.Context>(chunks.size());
-        for (var chunk : chunks) {
-            var source = resolveSource(chunk);
-            contexts.add(new QueryResult.Context(
-                chunk.chunkId(),
-                chunk.chunk().text(),
-                sourceToReferenceId.getOrDefault(source, ""),
-                source
-            ));
-        }
-
-        var references = sortedSources.stream()
-            .map(source -> new QueryResult.Reference(sourceToReferenceId.get(source), source))
-            .toList();
-
-        return new Result(List.copyOf(contexts), references);
+        return sourceToReferenceId;
     }
 
-    private static String resolveSource(ScoredChunk chunk) {
+    static String sourceOf(ScoredChunk chunk) {
         var metadata = chunk.chunk().metadata();
         var filePath = metadata.get("file_path");
         if (filePath != null && !filePath.isBlank()) {

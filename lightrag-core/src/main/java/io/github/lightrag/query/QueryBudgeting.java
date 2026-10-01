@@ -8,6 +8,7 @@ import io.github.lightrag.types.ScoredRelation;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Objects;
+import java.util.Optional;
 import java.util.function.Function;
 
 final class QueryBudgeting {
@@ -41,8 +42,18 @@ final class QueryBudgeting {
         );
     }
 
-    static String formatChunk(ScoredChunk chunk) {
-        return "- %s | %.3f | %s".formatted(chunk.chunkId(), chunk.score(), chunk.chunk().text());
+    static String formatChunk(ScoredChunk chunk, String referenceId, Optional<String> headings) {
+        var identifier = referenceId == null || referenceId.isBlank() ? "" : "[%s] ".formatted(referenceId);
+        var headingsSegment = headings == null || headings.isEmpty()
+            ? ""
+            : "headings: %s | ".formatted(headings.get());
+        return "- %s%s | %.3f | %s%s".formatted(
+            identifier,
+            chunk.chunkId(),
+            chunk.score(),
+            headingsSegment,
+            chunk.chunk().text()
+        );
     }
 
     List<ScoredEntity> limitEntities(List<ScoredEntity> entities, int maxTokens) {

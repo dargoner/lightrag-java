@@ -1,14 +1,31 @@
 package io.github.lightrag.query;
 
 import io.github.lightrag.api.QueryResult;
+import io.github.lightrag.model.HeuristicTokenCounter;
+import io.github.lightrag.model.TokenCounter;
 import io.github.lightrag.types.QueryContext;
+import io.github.lightrag.types.ScoredChunk;
 
 import java.util.List;
+import java.util.Map;
 import java.util.Objects;
+import java.util.Optional;
+import java.util.stream.Collectors;
 
 public final class ContextAssembler {
+    private final TokenCounter tokenCounter;
+
+    public ContextAssembler(TokenCounter tokenCounter) {
+        this.tokenCounter = Objects.requireNonNull(tokenCounter, "tokenCounter");
+    }
+
+    public ContextAssembler() {
+        this(new HeuristicTokenCounter());
+    }
+
     public String assemble(QueryContext context) {
         var source = Objects.requireNonNull(context, "context");
+        var referenceIds = QueryReferences.assignReferenceIds(source.matchedChunks());
         return """
             Entities:
             %s
@@ -18,10 +35,14 @@ public final class ContextAssembler {
 
             Chunks:
             %s
+
+            Reference Document List:
+            %s
             """.formatted(
             formatEntities(source),
             formatRelations(source),
-            formatChunks(source)
+            formatChunks(source, referenceIds),
+            formatReferences(referenceIds)
         );
     }
 
@@ -31,13 +52,17 @@ public final class ContextAssembler {
             .toList();
     }
 
+    static String approxChunkProjection(ScoredChunk chunk, Optional<String> headings) {
+        return QueryBudgeting.formatChunk(chunk, "", headings);
+    }
+
     private static String formatEntities(QueryContext context) {
         if (context.matchedEntities().isEmpty()) {
             return "(none)";
         }
         return context.matchedEntities().stream()
             .map(QueryBudgeting::formatEntity)
-            .collect(java.util.stream.Collectors.joining("\n"));
+            .collect(Collectors.joining("\n"));
     }
 
     private static String formatRelations(QueryContext context) {
@@ -46,15 +71,28 @@ public final class ContextAssembler {
         }
         return context.matchedRelations().stream()
             .map(QueryBudgeting::formatRelation)
-            .collect(java.util.stream.Collectors.joining("\n"));
+            .collect(Collectors.joining("\n"));
     }
 
-    private static String formatChunks(QueryContext context) {
+    private String formatChunks(QueryContext context, Map<String, String> referenceIds) {
         if (context.matchedChunks().isEmpty()) {
             return "(none)";
         }
         return context.matchedChunks().stream()
-            .map(QueryBudgeting::formatChunk)
-            .collect(java.util.stream.Collectors.joining("\n"));
+            .map(chunk -> QueryBudgeting.formatChunk(
+                chunk,
+                referenceIds.getOrDefault(QueryReferences.sourceOf(chunk), ""),
+                ChunkHeadings.resolve(chunk, tokenCounter)
+            ))
+            .collect(Collectors.joining("\n"));
+    }
+
+    private static String formatReferences(Map<String, String> referenceIds) {
+        if (referenceIds.isEmpty()) {
+            return "(none)";
+        }
+        return referenceIds.entrySet().stream()
+            .map(entry -> "- [%s] %s".formatted(entry.getValue(), entry.getKey()))
+            .collect(Collectors.joining("\n"));
     }
 }

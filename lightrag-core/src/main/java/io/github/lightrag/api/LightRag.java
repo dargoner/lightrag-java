@@ -1190,7 +1190,7 @@ public final class LightRag implements AutoCloseable {
 
     private QueryEngine newQueryEngine(AtomicStorageProvider storageProvider) {
         var llmCacheStore = storageProvider.llmCacheStore();
-        var contextAssembler = new ContextAssembler();
+        var contextAssembler = new ContextAssembler(tokenCounter);
         var naive = new NaiveQueryStrategy(limitedEmbeddingModel(), storageProvider, contextAssembler, tokenCounter);
         var local = new LocalQueryStrategy(limitedEmbeddingModel(), storageProvider, contextAssembler, tokenCounter);
         var global = new GlobalQueryStrategy(limitedEmbeddingModel(), storageProvider, contextAssembler, tokenCounter);
