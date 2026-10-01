@@ -49,6 +49,11 @@ public final class OpenAiCompatibleChatModel implements ChatModel {
     }
 
     @Override
+    public String cacheIdentity() {
+        return "openai-compatible:" + modelName + "@" + baseUrl;
+    }
+
+    @Override
     public String generate(ChatRequest request) {
         Objects.requireNonNull(request, "request");
         try (var response = execute(buildHttpRequest(request, false))) {

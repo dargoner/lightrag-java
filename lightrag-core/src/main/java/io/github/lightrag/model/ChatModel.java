@@ -14,19 +14,34 @@ public interface ChatModel {
         return CloseableIterator.of(List.of(response));
     }
 
+    /** Identity of the backing model+endpoint, folded into answer-cache keys. */
+    default String cacheIdentity() {
+        return "unknown";
+    }
+
     record ChatRequest(
         String systemPrompt,
         String userPrompt,
-        List<ConversationMessage> conversationHistory
+        List<ConversationMessage> conversationHistory,
+        ChatRequestOptions options
     ) {
         public ChatRequest {
             systemPrompt = Objects.requireNonNull(systemPrompt, "systemPrompt");
             userPrompt = Objects.requireNonNull(userPrompt, "userPrompt");
             conversationHistory = List.copyOf(Objects.requireNonNull(conversationHistory, "conversationHistory"));
+            options = options == null ? ChatRequestOptions.NONE : options;
         }
 
         public ChatRequest(String systemPrompt, String userPrompt) {
-            this(systemPrompt, userPrompt, List.of());
+            this(systemPrompt, userPrompt, List.of(), ChatRequestOptions.NONE);
+        }
+
+        public ChatRequest(String systemPrompt, String userPrompt, List<ConversationMessage> conversationHistory) {
+            this(systemPrompt, userPrompt, conversationHistory, ChatRequestOptions.NONE);
+        }
+
+        public ChatRequest(String systemPrompt, String userPrompt, ChatRequestOptions options) {
+            this(systemPrompt, userPrompt, List.of(), options);
         }
 
         public record ConversationMessage(String role, String content) {
