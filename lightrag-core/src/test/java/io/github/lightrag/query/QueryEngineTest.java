@@ -1520,6 +1520,33 @@ class QueryEngineTest {
         assertThat(structured.contexts()).isEmpty();
     }
 
+    @Test
+    void prependsConfiguredUserPromptPrefixToTheSystemPromptSlot() {
+        var engine = engineWithPrefix("Always answer as a tabular summary.");
+        var result = engine.queryStructured(QueryRequest.builder().query("tariff schedule").build());
+        assertThat(result.answer()).contains("\n\nAlways answer as a tabular summary.");
+    }
+
+    @Test
+    void prefixAloneIsUsedWhenTheRequestHasNoUserPrompt() {
+        var engine = engineWithPrefix("Be terse.");
+        var result = engine.queryStructured(QueryRequest.builder().query("tariff schedule").build());
+        assertThat(result.answer()).contains("Be terse.");
+    }
+
+    @Test
+    void disableUserPromptPrefixSuppressesThePrefix() {
+        var request = QueryRequest.builder().query("tariff schedule").disableUserPromptPrefix(true).build();
+        var result = engineWithPrefix("Be terse.").queryStructured(request);
+        assertThat(result.answer()).doesNotContain("Be terse.");
+    }
+
+    @Test
+    void noPrefixAndNoUserPromptRenderNa() {
+        var result = engineWithPrefix("").queryStructured(QueryRequest.builder().query("tariff schedule").build());
+        assertThat(result.answer()).contains("n/a");
+    }
+
     private static QueryRequest baseRequest() {
         return QueryRequest.builder()
             .query("which chunk?")
@@ -1570,6 +1597,25 @@ class QueryEngineTest {
             strategies.put(mode, strategy);
         }
         return strategies;
+    }
+
+    /** Echoes the system prompt so the rendered user-prompt slot is visible in the answer. */
+    private static QueryEngine engineWithPrefix(String userPromptPrefix) {
+        return new QueryEngine(
+            request -> request.systemPrompt(),
+            null,
+            new ContextAssembler(),
+            strategiesReturningAllModes(baseContext()),
+            null,
+            false,
+            2,
+            0.0d,
+            null,
+            null,
+            new io.github.lightrag.synthesis.PathAwareAnswerSynthesizer(),
+            QueryEngine.DEFAULT_FAIL_RESPONSE,
+            userPromptPrefix
+        );
     }
 
     private static final class FailingQueryStrategy implements QueryStrategy {

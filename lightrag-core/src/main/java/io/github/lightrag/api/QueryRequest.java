@@ -40,7 +40,8 @@ public record QueryRequest(
     List<String> llKeywords,
     List<ChatModel.ChatRequest.ConversationMessage> conversationHistory,
     Map<String, List<String>> metadataFilters,
-    List<MetadataCondition> metadataConditions
+    List<MetadataCondition> metadataConditions,
+    boolean disableUserPromptPrefix
 ) {
     public static final QueryMode DEFAULT_MODE = QueryMode.MIX;
     public static final int DEFAULT_TOP_K = 40;
@@ -84,6 +85,64 @@ public record QueryRequest(
         if (pathTopK <= 0) {
             throw new IllegalArgumentException("pathTopK must be positive");
         }
+    }
+
+    /**
+     * Pre-{@code disableUserPromptPrefix} canonical arity, kept for positional callers
+     * (the platform constructs requests through this signature). Delegates with the
+     * per-request prefix opt-out disabled.
+     */
+    public QueryRequest(
+        String query,
+        QueryMode mode,
+        int topK,
+        int chunkTopK,
+        int maxEntityTokens,
+        int maxRelationTokens,
+        int maxTotalTokens,
+        int maxHop,
+        int pathTopK,
+        boolean multiHopEnabled,
+        String responseType,
+        boolean enableRerank,
+        boolean onlyNeedContext,
+        boolean onlyNeedPrompt,
+        boolean includeReferences,
+        boolean stream,
+        ChatModel modelFunc,
+        String userPrompt,
+        List<String> hlKeywords,
+        List<String> llKeywords,
+        List<ChatModel.ChatRequest.ConversationMessage> conversationHistory,
+        Map<String, List<String>> metadataFilters,
+        List<MetadataCondition> metadataConditions
+    ) {
+        this(
+            query,
+            mode,
+            topK,
+            chunkTopK,
+            maxEntityTokens,
+            maxRelationTokens,
+            maxTotalTokens,
+            maxHop,
+            pathTopK,
+            multiHopEnabled,
+            responseType,
+            enableRerank,
+            onlyNeedContext,
+            onlyNeedPrompt,
+            includeReferences,
+            stream,
+            modelFunc,
+            userPrompt,
+            hlKeywords,
+            llKeywords,
+            conversationHistory,
+            metadataFilters,
+            metadataConditions,
+            false
+        );
     }
 
     public QueryRequest(
@@ -236,6 +295,7 @@ public record QueryRequest(
         private List<ChatModel.ChatRequest.ConversationMessage> conversationHistory = List.of();
         private Map<String, List<String>> metadataFilters = Map.of();
         private List<MetadataCondition> metadataConditions = List.of();
+        private boolean disableUserPromptPrefix;
 
         public Builder query(String query) {
             this.query = query;
@@ -352,6 +412,12 @@ public record QueryRequest(
             return this;
         }
 
+        /** Opts this request out of the server-configured {@code user_prompt_prefix} (upstream {@code disable_user_prompt_prefix}). */
+        public Builder disableUserPromptPrefix(boolean disableUserPromptPrefix) {
+            this.disableUserPromptPrefix = disableUserPromptPrefix;
+            return this;
+        }
+
         public QueryRequest build() {
             return new QueryRequest(
                 query,
@@ -376,7 +442,8 @@ public record QueryRequest(
                 llKeywords,
                 conversationHistory,
                 metadataFilters,
-                metadataConditions
+                metadataConditions,
+                disableUserPromptPrefix
             );
         }
     }

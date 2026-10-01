@@ -123,6 +123,7 @@ public final class QueryEngine {
     private final QueryStrategy multiHopStrategy;
     private final PathAwareAnswerSynthesizer pathAwareAnswerSynthesizer;
     private final String failResponse;
+    private final String userPromptPrefix;
 
     public QueryEngine(
         ChatModel chatModel,
@@ -280,6 +281,26 @@ public final class QueryEngine {
         PathAwareAnswerSynthesizer pathAwareAnswerSynthesizer,
         String failResponse
     ) {
+        this(chatModel, keywordModel, contextAssembler, strategies, rerankModel, automaticKeywordExtractionEnabled,
+            rerankCandidateMultiplier, minRerankScore, queryIntentClassifier, multiHopStrategy,
+            pathAwareAnswerSynthesizer, failResponse, "");
+    }
+
+    public QueryEngine(
+        ChatModel chatModel,
+        ChatModel keywordModel,
+        ContextAssembler contextAssembler,
+        Map<QueryMode, QueryStrategy> strategies,
+        RerankModel rerankModel,
+        boolean automaticKeywordExtractionEnabled,
+        int rerankCandidateMultiplier,
+        double minRerankScore,
+        QueryIntentClassifier queryIntentClassifier,
+        QueryStrategy multiHopStrategy,
+        PathAwareAnswerSynthesizer pathAwareAnswerSynthesizer,
+        String failResponse,
+        String userPromptPrefix
+    ) {
         this.chatModel = Objects.requireNonNull(chatModel, "chatModel");
         this.keywordModel = keywordModel == null ? chatModel : keywordModel;
         this.contextAssembler = Objects.requireNonNull(contextAssembler, "contextAssembler");
@@ -298,6 +319,7 @@ public final class QueryEngine {
         this.multiHopStrategy = multiHopStrategy;
         this.pathAwareAnswerSynthesizer = Objects.requireNonNull(pathAwareAnswerSynthesizer, "pathAwareAnswerSynthesizer");
         this.failResponse = Objects.requireNonNull(failResponse, "failResponse");
+        this.userPromptPrefix = Objects.requireNonNull(userPromptPrefix, "userPromptPrefix");
     }
 
     public QueryResult query(QueryRequest request) {
@@ -436,7 +458,8 @@ public final class QueryEngine {
             request.llKeywords(),
             request.conversationHistory(),
             request.metadataFilters(),
-            request.metadataConditions()
+            request.metadataConditions(),
+            request.disableUserPromptPrefix()
         );
     }
 
@@ -629,7 +652,7 @@ public final class QueryEngine {
     private String buildSystemPrompt(QueryRequest query, String assembledContext) {
         var prompt = systemPromptTemplate(query.mode()).formatted(
             effectiveResponseType(query.responseType()),
-            effectiveUserPrompt(query.userPrompt()),
+            effectiveUserPrompt(query).slot(),
             assembledContext
         );
         return pathAwareAnswerSynthesizer.injectContext("%s", query, prompt);
@@ -685,8 +708,10 @@ public final class QueryEngine {
         return responseType == null || responseType.isBlank() ? QueryRequest.DEFAULT_RESPONSE_TYPE : responseType;
     }
 
-    private static String effectiveUserPrompt(String userPrompt) {
-        return userPrompt == null || userPrompt.isBlank() ? "n/a" : userPrompt;
+    private EffectiveUserPrompt effectiveUserPrompt(QueryRequest query) {
+        var prefix = query.disableUserPromptPrefix() ? "" : userPromptPrefix;
+        var text = prefix + query.userPrompt();
+        return new EffectiveUserPrompt(text, text.isEmpty() ? "n/a" : "\n\n" + text);
     }
 
     private int remainingChunkBudget(QueryRequest request, QueryContext context, String assembledContextOverride) {
@@ -795,5 +820,8 @@ public final class QueryEngine {
         ChatModel.ChatRequest chatRequest,
         boolean retrievalEmpty
     ) {
+    }
+
+    private record EffectiveUserPrompt(String text, String slot) {
     }
 }

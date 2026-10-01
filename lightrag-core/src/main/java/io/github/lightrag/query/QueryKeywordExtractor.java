@@ -374,7 +374,8 @@ final class QueryKeywordExtractor {
             llKeywords,
             request.conversationHistory(),
             request.metadataFilters(),
-            request.metadataConditions()
+            request.metadataConditions(),
+            request.disableUserPromptPrefix()
         );
     }
 

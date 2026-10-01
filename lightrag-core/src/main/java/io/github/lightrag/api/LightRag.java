@@ -76,6 +76,7 @@ public final class LightRag implements AutoCloseable {
     private final DocumentParsingOrchestrator documentParsingOrchestrator;
     private final List<TaskEventListener> taskEventListeners;
     private final String failResponse;
+    private final String userPromptPrefix;
     private final TaskExecutionService taskExecutionService;
     private final LlmConcurrencyBudget llmConcurrencyBudget;
     private final AtomicBoolean closed = new AtomicBoolean();
@@ -96,7 +97,8 @@ public final class LightRag implements AutoCloseable {
             ExtractionRefinementOptions.disabled(),
             GraphExtractionOptionsProvider.none(),
             List.of(),
-            QueryEngine.DEFAULT_FAIL_RESPONSE);
+            QueryEngine.DEFAULT_FAIL_RESPONSE,
+            "");
     }
 
     LightRag(LightRagConfig config, Chunker chunker) {
@@ -115,7 +117,8 @@ public final class LightRag implements AutoCloseable {
             ExtractionRefinementOptions.disabled(),
             GraphExtractionOptionsProvider.none(),
             List.of(),
-            QueryEngine.DEFAULT_FAIL_RESPONSE);
+            QueryEngine.DEFAULT_FAIL_RESPONSE,
+            "");
     }
 
     LightRag(
@@ -141,7 +144,8 @@ public final class LightRag implements AutoCloseable {
         ExtractionRefinementOptions extractionRefinementOptions,
         GraphExtractionOptionsProvider graphExtractionOptionsProvider,
         List<TaskEventListener> taskEventListeners,
-        String failResponse
+        String failResponse,
+        String userPromptPrefix
     ) {
         this.config = config;
         this.llmConcurrencyBudget = new LlmConcurrencyBudget(config.maxAsyncLlm(), config.embeddingMaxAsync());
@@ -182,6 +186,7 @@ public final class LightRag implements AutoCloseable {
         this.documentParsingOrchestrator = documentParsingOrchestrator;
         this.taskEventListeners = List.copyOf(Objects.requireNonNull(taskEventListeners, "taskEventListeners"));
         this.failResponse = Objects.requireNonNull(failResponse, "failResponse");
+        this.userPromptPrefix = Objects.requireNonNull(userPromptPrefix, "userPromptPrefix");
         this.taskExecutionService = new TaskExecutionService(
             workspaceId -> resolveProvider(resolveScope(workspaceId)),
             this.taskEventListeners,
@@ -803,6 +808,10 @@ public final class LightRag implements AutoCloseable {
         return failResponse;
     }
 
+    String userPromptPrefix() {
+        return userPromptPrefix;
+    }
+
     int embeddingBatchSize() {
         return embeddingBatchSize;
     }
@@ -1194,7 +1203,8 @@ public final class LightRag implements AutoCloseable {
             new RuleBasedQueryIntentClassifier(),
             multiHop,
             new PathAwareAnswerSynthesizer(),
-            failResponse
+            failResponse,
+            userPromptPrefix
         );
     }
 

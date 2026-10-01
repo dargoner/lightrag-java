@@ -60,6 +60,7 @@ public final class LightRagBuilder {
     private int rerankCandidateMultiplier = 2;
     private double minRerankScore = 0.0d;
     private String failResponse = QueryEngine.DEFAULT_FAIL_RESPONSE;
+    private String userPromptPrefix = "";
     private int forceLlmSummaryOnMerge = io.github.lightrag.indexing.DescriptionSummarizer.DEFAULT_FORCE_LLM_SUMMARY_ON_MERGE;
     private int summaryMaxTokens = io.github.lightrag.indexing.DescriptionSummarizer.DEFAULT_SUMMARY_MAX_TOKENS;
     private int summaryContextSize = io.github.lightrag.indexing.DescriptionSummarizer.DEFAULT_SUMMARY_CONTEXT_SIZE;
@@ -279,6 +280,16 @@ public final class LightRagBuilder {
      */
     public LightRagBuilder failResponse(String failResponse) {
         this.failResponse = Objects.requireNonNull(failResponse, "failResponse");
+        return this;
+    }
+
+    /**
+     * Server-side instructions prepended to every request's {@code user_prompt} (upstream
+     * {@code user_prompt_prefix}). Empty means no prefix; a request can opt out per call with
+     * {@code disableUserPromptPrefix}.
+     */
+    public LightRagBuilder userPromptPrefix(String userPromptPrefix) {
+        this.userPromptPrefix = Objects.requireNonNull(userPromptPrefix, "userPromptPrefix");
         return this;
     }
 
@@ -622,7 +633,7 @@ public final class LightRagBuilder {
             entityExtractMaxGleaning, maxExtractInputTokens, entityExtractionLanguage, entityTypes,
             graphExtractionEnabled, relationTypes, graphExtractionExamples,
             embeddingSemanticMergeEnabled, embeddingSemanticMergeThreshold, extractionRefinementOptions,
-            graphExtractionOptionsProvider, taskEventListeners, failResponse);
+            graphExtractionOptionsProvider, taskEventListeners, failResponse, userPromptPrefix);
     }
 
     private ChatModel withRequestOptions(ChatModel model) {
