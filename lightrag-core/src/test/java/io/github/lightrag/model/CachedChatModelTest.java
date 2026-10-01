@@ -124,6 +124,23 @@ class CachedChatModelTest {
     }
 
     @Test
+    void unsetRequestFieldsDoNotCollideWithLiteralNullStrings() {
+        // responseFormat=null omits response_format from the payload while the literal "null" is
+        // sent; the canonical form tags presence so the two cannot share a cache key
+        // (review round 3, should-fix)
+        var identity = "openai-compatible:gpt-4o-mini@https://api.example/v1";
+        var unset = CachedChatModel.cacheId("query", identity,
+            new ChatModel.ChatRequest("system", "user", List.of(), ChatRequestOptions.NONE));
+
+        assertThat(CachedChatModel.cacheId("query", identity,
+            new ChatModel.ChatRequest("system", "user", List.of(),
+                new ChatRequestOptions(null, null, null, "null")))).isNotEqualTo(unset);
+        assertThat(CachedChatModel.cacheId("query", identity,
+            new ChatModel.ChatRequest("system", "user", List.of(),
+                new ChatRequestOptions(null, null, null, "n")))).isNotEqualTo(unset);
+    }
+
+    @Test
     void historyCarryingRequestsBypassTheCache() {
         var delegate = new RecordingChatModel("answer");
         var model = new CachedChatModel("query", delegate, recordingStore);

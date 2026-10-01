@@ -490,6 +490,19 @@ class OpenAiCompatibleChatModelTest {
         assertThat(plain.cacheIdentity()).doesNotContain("|defaults:");
     }
 
+    @Test
+    void cacheIdentityDistinguishesUnsetFieldsFromTheLiteralNullString() {
+        var baseUrl = "https://api.example/v1";
+        var unsetFormat = new OpenAiCompatibleChatModel(
+            baseUrl, "gpt-test", "secret", Duration.ofSeconds(30),
+            new ChatRequestOptions(0.2d, 512, 0.9d, null), 3, Duration.ofMillis(1));
+        var literalNull = new OpenAiCompatibleChatModel(
+            baseUrl, "gpt-test", "secret", Duration.ofSeconds(30),
+            new ChatRequestOptions(0.2d, 512, 0.9d, "null"), 3, Duration.ofMillis(1));
+
+        assertThat(literalNull.cacheIdentity()).isNotEqualTo(unsetFormat.cacheIdentity());
+    }
+
     private static OpenAiCompatibleChatModel singleAttemptChatModel(MockWebServer server, Duration timeout) {
         return new OpenAiCompatibleChatModel(
             server.url("/v1/").toString(),

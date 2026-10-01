@@ -41,10 +41,19 @@ public record ChatRequestOptions(Double temperature, Integer maxTokens, Double t
         if (equals(NONE)) {
             return "";
         }
-        return "|defaults:t=" + temperature
-            + ",max_tokens=" + maxTokens
-            + ",top_p=" + topP
-            + ",format=" + responseFormat;
+        return "|defaults:t=" + encodeForCacheKey(temperature)
+            + ",max_tokens=" + encodeForCacheKey(maxTokens)
+            + ",top_p=" + encodeForCacheKey(topP)
+            + ",format=" + encodeForCacheKey(responseFormat);
+    }
+
+    /**
+     * Presence-tagged encoding for cache keys: an unset field and a literal {@code "null"} string
+     * would both stringify to {@code null} and collide, although one field is omitted from the
+     * provider payload and the other is sent.
+     */
+    static String encodeForCacheKey(Object value) {
+        return value == null ? "n" : "v:" + value;
     }
 
     /**

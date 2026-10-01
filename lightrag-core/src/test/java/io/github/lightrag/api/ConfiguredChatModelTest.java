@@ -71,7 +71,7 @@ class ConfiguredChatModelTest {
         assertThat(delegate.requests().get(0).options())
             .isEqualTo(new ChatRequestOptions(null, 512, null, null));
         assertThat(model.cacheIdentity())
-            .isEqualTo("recording:metadata|defaults:t=null,max_tokens=512,top_p=null,format=null");
+            .isEqualTo("recording:metadata|defaults:t=n,max_tokens=v:512,top_p=n,format=n");
     }
 
     @Test

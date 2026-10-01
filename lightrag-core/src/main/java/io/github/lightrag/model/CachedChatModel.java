@@ -65,10 +65,10 @@ public final class CachedChatModel implements ChatModel {
             .append("role=").append(requireNonBlank(role, "role")).append('\n')
             .append("system=").append(request.systemPrompt()).append('\n')
             .append("user=").append(request.userPrompt()).append('\n')
-            .append("options.temperature=").append(request.options().temperature()).append('\n')
-            .append("options.maxTokens=").append(request.options().maxTokens()).append('\n')
-            .append("options.topP=").append(request.options().topP()).append('\n')
-            .append("options.responseFormat=").append(request.options().responseFormat()).append('\n');
+            .append("options.temperature=").append(ChatRequestOptions.encodeForCacheKey(request.options().temperature())).append('\n')
+            .append("options.maxTokens=").append(ChatRequestOptions.encodeForCacheKey(request.options().maxTokens())).append('\n')
+            .append("options.topP=").append(ChatRequestOptions.encodeForCacheKey(request.options().topP())).append('\n')
+            .append("options.responseFormat=").append(ChatRequestOptions.encodeForCacheKey(request.options().responseFormat())).append('\n');
         for (var message : request.conversationHistory()) {
             canonical
                 .append("history.role=").append(message.role()).append('\n')

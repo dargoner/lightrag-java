@@ -222,7 +222,9 @@ Every deviation below is a deliberate, test-backed adjustment; the plan's requir
 - **Task 14**: the cache key is `v2:`-prefixed with a per-model identity from
   `ChatModel.cacheIdentity()` (default: model class name; `OpenAiCompatibleChatModel` overrides it and
   folds its constructor defaults in via `ChatRequestOptions.cacheIdentitySuffix()`, as does
-  `ConfiguredChatModel` `:33`); the identity is hashed into the key, which bounds `cache_id` well
+  `ConfiguredChatModel` `:33`; option fields are presence-tagged — unset encodes as `n`, set as
+  `v:<value>` — so an unset field cannot collide with a literal `"null"` string in either the
+  identity or the canonical request digest); the identity is hashed into the key, which bounds `cache_id` well
   under the MySQL `VARCHAR(191)` primary key even for long base URLs or defaults suffixes; the history
   bypass is role-scoped to the answer role (`CachedChatModel.java:34-41`, upstream
   `operate.py:4683-4690`) while the extraction role folds the history into the key (upstream
