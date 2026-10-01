@@ -151,6 +151,84 @@ class LlmConcurrencyBudgetTest {
     }
 
     @Test
+    void exhaustedStreamsCloseTheDelegateIteratorExactlyOnce() {
+        var budget = new LlmConcurrencyBudget(1, 8);
+        var closed = new AtomicInteger();
+        var model = budget.limitChat("query", new ChatModel() {
+            @Override
+            public String generate(ChatRequest request) {
+                return "unused";
+            }
+
+            @Override
+            public CloseableIterator<String> stream(ChatRequest request) {
+                return new CloseableIterator<>() {
+                    private boolean consumed;
+
+                    @Override
+                    public boolean hasNext() {
+                        return !consumed;
+                    }
+
+                    @Override
+                    public String next() {
+                        consumed = true;
+                        return "chunk";
+                    }
+
+                    @Override
+                    public void close() {
+                        closed.incrementAndGet();
+                    }
+                };
+            }
+        });
+
+        var stream = model.stream(request("stream"));
+        assertThat(stream.next()).isEqualTo("chunk");
+        assertThat(stream.hasNext()).isFalse();
+        assertThat(closed).hasValue(1);
+
+        stream.close();
+        assertThat(closed).hasValue(1);
+    }
+
+    @Test
+    void failingCloseAfterExhaustionDoesNotTurnTheCompletedReadIntoAnError() {
+        var budget = new LlmConcurrencyBudget(1, 8);
+        var model = budget.limitChat("query", new ChatModel() {
+            @Override
+            public String generate(ChatRequest request) {
+                return "unused";
+            }
+
+            @Override
+            public CloseableIterator<String> stream(ChatRequest request) {
+                return new CloseableIterator<>() {
+                    @Override
+                    public boolean hasNext() {
+                        return false;
+                    }
+
+                    @Override
+                    public String next() {
+                        throw new NoSuchElementException();
+                    }
+
+                    @Override
+                    public void close() {
+                        throw new IllegalStateException("provider close failed");
+                    }
+                };
+            }
+        });
+
+        try (var stream = model.stream(request("stream"))) {
+            assertThat(stream.hasNext()).isFalse();
+        }
+    }
+
+    @Test
     void streamCreationFailuresReleaseTheSlotImmediately() throws Exception {
         var budget = new LlmConcurrencyBudget(1, 8);
         var failing = budget.limitChat("query", (ChatModel) request -> {

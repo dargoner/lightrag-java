@@ -59,6 +59,7 @@ final class LimitedChatModel implements ChatModel {
     private final class SlotReleasingIterator implements CloseableIterator<String> {
         private final CloseableIterator<String> iterator;
         private final AtomicBoolean released = new AtomicBoolean();
+        private final AtomicBoolean delegateClosed = new AtomicBoolean();
 
         private SlotReleasingIterator(CloseableIterator<String> iterator) {
             this.iterator = iterator;
@@ -70,6 +71,7 @@ final class LimitedChatModel implements ChatModel {
                 var hasNext = iterator.hasNext();
                 if (!hasNext) {
                     release();
+                    closeDelegateAfterExhaustion();
                 }
                 return hasNext;
             } catch (RuntimeException exception) {
@@ -91,9 +93,23 @@ final class LimitedChatModel implements ChatModel {
         @Override
         public void close() {
             try {
-                iterator.close();
+                if (delegateClosed.compareAndSet(false, true)) {
+                    iterator.close();
+                }
             } finally {
                 release();
+            }
+        }
+
+        private void closeDelegateAfterExhaustion() {
+            // An exhausted stream already reported completion, so a failing close must not turn the
+            // successful read into an error; an explicit close() still propagates such failures.
+            if (delegateClosed.compareAndSet(false, true)) {
+                try {
+                    iterator.close();
+                } catch (RuntimeException ignored) {
+                    // best effort after exhaustion
+                }
             }
         }
 
