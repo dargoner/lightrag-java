@@ -72,7 +72,10 @@ class IndexingPipelineBatchGraphPersistenceTest {
     }
 
     @Test
-    void keepsTheStoredEntityTypeWhenTheIncomingBatchTies() {
+    void letsTheIncomingBatchTypeWinTiesAgainstTheStoredType() {
+        // Upstream counts the batch rows first and appends the stored type last, so its stable sort
+        // keeps the batch type on a tie while the stored type still counts exactly once
+        // (operate.py:2576-2583).
         var storage = InMemoryStorageProvider.create();
         var pipeline = new IndexingPipeline(
             new TypeVotingChatModel(),
@@ -82,11 +85,14 @@ class IndexingPipelineBatchGraphPersistenceTest {
         );
 
         pipeline.ingest(List.of(new Document("doc-1", "Title", "ORG Alice works with Bob", Map.of())));
-        pipeline.ingest(List.of(new Document("doc-2", "Title", "PERSON Alice works with Bob", Map.of())));
-
         assertThat(storage.graphStore().loadEntity(entityKey("Alice"))).get()
             .extracting(GraphStore.EntityRecord::type)
             .isEqualTo("organization");
+
+        pipeline.ingest(List.of(new Document("doc-2", "Title", "PERSON Alice works with Bob", Map.of())));
+        assertThat(storage.graphStore().loadEntity(entityKey("Alice"))).get()
+            .extracting(GraphStore.EntityRecord::type)
+            .isEqualTo("person");
     }
 
     @Test
@@ -108,6 +114,24 @@ class IndexingPipelineBatchGraphPersistenceTest {
         assertThat(storage.graphStore().loadEntity(entityKey("Alice"))).get()
             .extracting(GraphStore.EntityRecord::type)
             .isEqualTo("person");
+    }
+
+    @Test
+    void treatsAnEmptyIncomingEntityTypeAsNoVote() {
+        var storage = InMemoryStorageProvider.create();
+        var pipeline = new IndexingPipeline(
+            new TypeVotingChatModel(),
+            new FakeEmbeddingModel(),
+            storage,
+            null
+        );
+
+        pipeline.ingest(List.of(new Document("doc-1", "Title", "ORG Alice works with Bob", Map.of())));
+        pipeline.ingest(List.of(new Document("doc-2", "Title", "RELATION_ONLY Alice works with Bob", Map.of())));
+
+        assertThat(storage.graphStore().loadEntity(entityKey("Alice"))).get()
+            .extracting(GraphStore.EntityRecord::type)
+            .isEqualTo("organization");
     }
 
     private static String entityKey(String name) {

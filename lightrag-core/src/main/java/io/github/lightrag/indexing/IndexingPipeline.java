@@ -1857,27 +1857,30 @@ public final class IndexingPipeline {
         return new GraphStore.EntityRecord(
             existing.id(),
             existing.name(),
-            voteEntityType(existing.type(), incoming.type()),
+            voteEntityType(List.of(incoming.type()), existing.type()),
             summary.description(),
             union(existing.aliases(), incoming.aliases()),
             sourceChunkIds
         );
     }
 
-    // Upstream votes the stored type (counted once, operate.py:2471) against the batch rows (:2576-2583).
-    // The assembler already collapsed the batch into one aggregate vote, so each side contributes once
-    // and ties keep the stored type.
-    private static String voteEntityType(String storedType, String incomingType) {
+    // Upstream counts every batch row first and appends the stored type last (operate.py:2576-2583,
+    // :2471); its stable sort lets the first-seen type win ties, so the batch type beats the stored
+    // type on a tie. The assembler already collapsed the batch into one aggregate vote per side here.
+    static String voteEntityType(List<String> incomingTypes, String storedType) {
         var counts = new LinkedHashMap<String, Integer>();
-        for (var type : List.of(storedType, incomingType)) {
+        for (var type : incomingTypes) {
             if (!type.isEmpty()) {
                 counts.merge(type, 1, Integer::sum);
             }
         }
+        if (storedType != null && !storedType.isEmpty()) {
+            counts.merge(storedType, 1, Integer::sum);
+        }
         return counts.entrySet().stream()
             .max(Map.Entry.comparingByValue())
             .map(Map.Entry::getKey)
-            .orElse(storedType);
+            .orElse(storedType == null ? "" : storedType);
     }
 
     private GraphStore.EntityRecord mergeEntityGroup(
@@ -1891,7 +1894,14 @@ public final class IndexingPipeline {
         for (int index = 1; index < incoming.size(); index++) {
             merged = mergeEntity(merged, incoming.get(index));
         }
-        return merged;
+        var votedType = voteEntityType(
+            incoming.stream().map(Entity::type).toList(),
+            existing == null ? null : existing.type()
+        );
+        return votedType.equals(merged.type())
+            ? merged
+            : new GraphStore.EntityRecord(merged.id(), merged.name(), votedType, merged.description(),
+                merged.aliases(), merged.sourceChunkIds());
     }
 
     private GraphStore.RelationRecord mergeRelation(GraphStore.RelationRecord existing, Relation incoming) {

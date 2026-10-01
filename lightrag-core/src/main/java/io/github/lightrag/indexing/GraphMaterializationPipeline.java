@@ -1143,16 +1143,16 @@ public final class GraphMaterializationPipeline {
                 existingEntitiesById.put(entity.id(), entity);
             }
             long entityLoadedAt = System.nanoTime();
-            var mergedEntities = new LinkedHashMap<String, GraphStore.EntityRecord>();
+            var entitiesById = new LinkedHashMap<String, List<Entity>>();
             for (var entity : entities) {
-                var current = mergedEntities.get(entity.id());
-                var mergedEntity = current != null
-                    ? mergeEntity(current, entity)
-                    : existingEntitiesById.containsKey(entity.id())
-                        ? mergeEntity(existingEntitiesById.get(entity.id()), entity)
-                        : mergeNewEntity(entity);
-                mergedEntities.remove(entity.id());
-                mergedEntities.put(entity.id(), mergedEntity);
+                entitiesById.computeIfAbsent(entity.id(), ignored -> new ArrayList<>()).add(entity);
+            }
+            var mergedEntities = new LinkedHashMap<String, GraphStore.EntityRecord>();
+            for (var group : entitiesById.values()) {
+                mergedEntities.put(
+                    group.get(0).id(),
+                    mergeEntityBatch(existingEntitiesById.get(group.get(0).id()), group)
+                );
             }
             long entityMergedAt = System.nanoTime();
             graphStore.saveEntities(List.copyOf(mergedEntities.values()));
@@ -1471,27 +1471,26 @@ public final class GraphMaterializationPipeline {
         return new GraphStore.EntityRecord(
             existing.id(),
             existing.name(),
-            voteEntityType(existing.type(), incoming.type()),
+            IndexingPipeline.voteEntityType(List.of(incoming.type()), existing.type()),
             summary.description(),
             union(existing.aliases(), incoming.aliases()),
             sourceChunkIds
         );
     }
 
-    // Upstream votes the stored type (counted once, operate.py:2471) against the batch rows (:2576-2583).
-    // The assembler already collapsed the batch into one aggregate vote, so each side contributes once
-    // and ties keep the stored type.
-    private static String voteEntityType(String storedType, String incomingType) {
-        var counts = new LinkedHashMap<String, Integer>();
-        for (var type : List.of(storedType, incomingType)) {
-            if (!type.isEmpty()) {
-                counts.merge(type, 1, Integer::sum);
-            }
+    private GraphStore.EntityRecord mergeEntityBatch(GraphStore.EntityRecord existing, List<Entity> incoming) {
+        var merged = existing == null ? mergeNewEntity(incoming.get(0)) : mergeEntity(existing, incoming.get(0));
+        for (int index = 1; index < incoming.size(); index++) {
+            merged = mergeEntity(merged, incoming.get(index));
         }
-        return counts.entrySet().stream()
-            .max(Map.Entry.comparingByValue())
-            .map(Map.Entry::getKey)
-            .orElse(storedType);
+        var votedType = IndexingPipeline.voteEntityType(
+            incoming.stream().map(Entity::type).toList(),
+            existing == null ? null : existing.type()
+        );
+        return votedType.equals(merged.type())
+            ? merged
+            : new GraphStore.EntityRecord(merged.id(), merged.name(), votedType, merged.description(),
+                merged.aliases(), merged.sourceChunkIds());
     }
 
     private GraphStore.RelationRecord mergeRelation(GraphStore.RelationRecord existing, Relation incoming) {
