@@ -789,6 +789,10 @@ class LightRagBuilderTest {
                 new Document("doc-slow", "Doc slow", "steady", Map.of())
             )));
             assertThat(chunker.awaitBlockedDocument()).isTrue();
+            // Releasing the sibling here would race its commit against the abort: the coordinator
+            // cancels the still-blocked sibling right before it marks the failing document, so wait
+            // for that marker before letting the sibling finish.
+            awaitDocumentStatus(rag, "doc-fail", DocumentStatus.FAILED);
             chunker.release();
             assertThatThrownBy(() -> future.get(2, TimeUnit.SECONDS))
                 .isInstanceOf(java.util.concurrent.ExecutionException.class)
@@ -1479,6 +1483,18 @@ class LightRagBuilderTest {
             .embeddingModel(new FakeEmbeddingModel())
             .storage(new FakeStorageProvider())
             .build();
+    }
+
+    private static void awaitDocumentStatus(LightRag rag, String documentId, DocumentStatus expected)
+        throws InterruptedException {
+        var deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(2);
+        while (System.nanoTime() < deadline
+            && rag.getDocumentStatus(WORKSPACE, documentId).status() != expected) {
+            Thread.sleep(5);
+        }
+        assertThat(rag.getDocumentStatus(WORKSPACE, documentId).status())
+            .as("timed out waiting for %s to reach %s", documentId, expected)
+            .isEqualTo(expected);
     }
 
     private static List<String> chunkTexts(LightRag rag) {
