@@ -278,8 +278,10 @@ public final class QueryEngine {
     public QueryResult query(QueryRequest request) {
         var query = Objects.requireNonNull(request, "request");
         if (query.mode() == QueryMode.BYPASS) {
+            QueryValidation.validateNotEmpty(query.query());
             return bypassQuery(query);
         }
+        QueryValidation.validateRagQuery(query.query());
         var execution = executeStandardQuery(query);
         if (execution.resolvedQuery().onlyNeedContext() && !execution.resolvedQuery().onlyNeedPrompt()) {
             return new QueryResult(
@@ -315,8 +317,10 @@ public final class QueryEngine {
             throw new IllegalArgumentException("queryStructured does not support stream=true");
         }
         if (query.mode() == QueryMode.BYPASS) {
+            QueryValidation.validateNotEmpty(query.query());
             return bypassStructuredQuery(query);
         }
+        QueryValidation.validateRagQuery(query.query());
         var execution = executeStandardQuery(query);
         return new StructuredQueryResult(
             resolveStructuredAnswer(execution),
