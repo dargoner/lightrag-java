@@ -6,6 +6,7 @@ import io.github.lightrag.api.ChunkGraphStatus;
 import io.github.lightrag.api.ChunkMergeStatus;
 import io.github.lightrag.api.FailureStage;
 import io.github.lightrag.api.GraphExtractionExample;
+import io.github.lightrag.api.KgExtractionValidator;
 import io.github.lightrag.api.GraphMaterializationMode;
 import io.github.lightrag.api.GraphMaterializationStatus;
 import io.github.lightrag.api.PreChunkedIngestRequest;
@@ -26,7 +27,7 @@ import io.github.lightrag.storage.DocumentGraphJournalStore;
 import io.github.lightrag.storage.DocumentGraphSnapshotStore;
 import io.github.lightrag.storage.DocumentStatusStore;
 import io.github.lightrag.storage.GraphStore;
-import io.github.lightrag.storage.HybridVectorStore;
+import io.github.lightrag.storage.NoopVectorStore;
 import io.github.lightrag.storage.VectorStore;
 import io.github.lightrag.types.Document;
 import io.github.lightrag.types.PreChunkedChunk;
@@ -59,8 +60,8 @@ public final class IndexingPipeline {
     private final AtomicStorageProvider storageProvider;
     private final DocumentIngestor documentIngestor;
     private final KnowledgeExtractor knowledgeExtractor;
-    // Reserved for upcoming summarization stages so capability routing stays centralized.
     private final ChatModel summaryModel;
+    private final DescriptionSummarizer descriptionSummarizer;
     private final GraphAssembler graphAssembler;
     private final EmbeddingBatcher embeddingBatcher;
     private final ExtractionRefinementPipeline extractionRefinementPipeline;
@@ -70,6 +71,8 @@ public final class IndexingPipeline {
     private final int chunkExtractParallelism;
     private final int entityExtractMaxGleaning;
     private final int maxExtractInputTokens;
+    private final int entityExtractMaxRecords;
+    private final int entityExtractMaxEntities;
     private final String entityExtractionLanguage;
     private final List<String> entityTypes;
     private final boolean graphExtractionEnabled;
@@ -77,6 +80,13 @@ public final class IndexingPipeline {
     private final List<GraphExtractionExample> graphExtractionExamples;
     private final ExtractionRefinementOptions extractionRefinementOptions;
     private final IndexingProgressListener progressListener;
+    private final int maxSourceIdsPerEntity;
+    private final int maxSourceIdsPerRelation;
+    private final SourceIdLimits.Method sourceIdsLimitMethod;
+    private final boolean sourceIdsCapsEnabled;
+    private final int maxFilePaths;
+    private final KgExtractionValidator kgExtractionValidator;
+    private final boolean sectionContextEnabled;
     private final Object storageMutationMonitor = new Object();
 
     public IndexingPipeline(
@@ -366,6 +376,252 @@ public final class IndexingPipeline {
         ExtractionRefinementOptions extractionRefinementOptions,
         IndexingProgressListener progressListener
     ) {
+        this(
+            extractionModel,
+            summaryModel,
+            embeddingModel,
+            storageProvider,
+            snapshotPath,
+            chunker,
+            documentParsingOrchestrator,
+            embeddingBatchSize,
+            maxParallelInsert,
+            chunkExtractParallelism,
+            entityExtractMaxGleaning,
+            maxExtractInputTokens,
+            entityExtractionLanguage,
+            entityTypes,
+            graphExtractionEnabled,
+            relationTypes,
+            graphExtractionExamples,
+            embeddingSemanticMergeEnabled,
+            embeddingSemanticMergeThreshold,
+            extractionRefinementOptions,
+            progressListener,
+            null
+        );
+    }
+
+    public IndexingPipeline(
+        ChatModel extractionModel,
+        ChatModel summaryModel,
+        EmbeddingModel embeddingModel,
+        AtomicStorageProvider storageProvider,
+        Path snapshotPath,
+        Chunker chunker,
+        DocumentParsingOrchestrator documentParsingOrchestrator,
+        int embeddingBatchSize,
+        int maxParallelInsert,
+        int chunkExtractParallelism,
+        int entityExtractMaxGleaning,
+        int maxExtractInputTokens,
+        String entityExtractionLanguage,
+        List<String> entityTypes,
+        boolean graphExtractionEnabled,
+        List<String> relationTypes,
+        List<GraphExtractionExample> graphExtractionExamples,
+        boolean embeddingSemanticMergeEnabled,
+        double embeddingSemanticMergeThreshold,
+        ExtractionRefinementOptions extractionRefinementOptions,
+        IndexingProgressListener progressListener,
+        DescriptionSummarizer descriptionSummarizer
+    ) {
+        this(
+            extractionModel,
+            summaryModel,
+            embeddingModel,
+            storageProvider,
+            snapshotPath,
+            chunker,
+            documentParsingOrchestrator,
+            embeddingBatchSize,
+            maxParallelInsert,
+            chunkExtractParallelism,
+            entityExtractMaxGleaning,
+            maxExtractInputTokens,
+            entityExtractionLanguage,
+            entityTypes,
+            graphExtractionEnabled,
+            relationTypes,
+            graphExtractionExamples,
+            embeddingSemanticMergeEnabled,
+            embeddingSemanticMergeThreshold,
+            extractionRefinementOptions,
+            progressListener,
+            descriptionSummarizer,
+            SourceIdLimits.DEFAULT_MAX_SOURCE_IDS,
+            SourceIdLimits.DEFAULT_MAX_SOURCE_IDS,
+            SourceIdLimits.Method.KEEP
+        );
+    }
+
+    public IndexingPipeline(
+        ChatModel extractionModel,
+        ChatModel summaryModel,
+        EmbeddingModel embeddingModel,
+        AtomicStorageProvider storageProvider,
+        Path snapshotPath,
+        Chunker chunker,
+        DocumentParsingOrchestrator documentParsingOrchestrator,
+        int embeddingBatchSize,
+        int maxParallelInsert,
+        int chunkExtractParallelism,
+        int entityExtractMaxGleaning,
+        int maxExtractInputTokens,
+        String entityExtractionLanguage,
+        List<String> entityTypes,
+        boolean graphExtractionEnabled,
+        List<String> relationTypes,
+        List<GraphExtractionExample> graphExtractionExamples,
+        boolean embeddingSemanticMergeEnabled,
+        double embeddingSemanticMergeThreshold,
+        ExtractionRefinementOptions extractionRefinementOptions,
+        IndexingProgressListener progressListener,
+        DescriptionSummarizer descriptionSummarizer,
+        int maxSourceIdsPerEntity,
+        int maxSourceIdsPerRelation,
+        SourceIdLimits.Method sourceIdsLimitMethod
+    ) {
+        this(
+            extractionModel,
+            summaryModel,
+            embeddingModel,
+            storageProvider,
+            snapshotPath,
+            chunker,
+            documentParsingOrchestrator,
+            embeddingBatchSize,
+            maxParallelInsert,
+            chunkExtractParallelism,
+            entityExtractMaxGleaning,
+            maxExtractInputTokens,
+            entityExtractionLanguage,
+            entityTypes,
+            graphExtractionEnabled,
+            relationTypes,
+            graphExtractionExamples,
+            embeddingSemanticMergeEnabled,
+            embeddingSemanticMergeThreshold,
+            extractionRefinementOptions,
+            progressListener,
+            descriptionSummarizer,
+            maxSourceIdsPerEntity,
+            maxSourceIdsPerRelation,
+            sourceIdsLimitMethod,
+            FilePathLimits.DEFAULT_MAX_FILE_PATHS
+        );
+    }
+
+    public IndexingPipeline(
+        ChatModel extractionModel,
+        ChatModel summaryModel,
+        EmbeddingModel embeddingModel,
+        AtomicStorageProvider storageProvider,
+        Path snapshotPath,
+        Chunker chunker,
+        DocumentParsingOrchestrator documentParsingOrchestrator,
+        int embeddingBatchSize,
+        int maxParallelInsert,
+        int chunkExtractParallelism,
+        int entityExtractMaxGleaning,
+        int maxExtractInputTokens,
+        String entityExtractionLanguage,
+        List<String> entityTypes,
+        boolean graphExtractionEnabled,
+        List<String> relationTypes,
+        List<GraphExtractionExample> graphExtractionExamples,
+        boolean embeddingSemanticMergeEnabled,
+        double embeddingSemanticMergeThreshold,
+        ExtractionRefinementOptions extractionRefinementOptions,
+        IndexingProgressListener progressListener,
+        DescriptionSummarizer descriptionSummarizer,
+        int maxSourceIdsPerEntity,
+        int maxSourceIdsPerRelation,
+        SourceIdLimits.Method sourceIdsLimitMethod,
+        int maxFilePaths
+    ) {
+        this(
+            extractionModel,
+            summaryModel,
+            embeddingModel,
+            storageProvider,
+            snapshotPath,
+            chunker,
+            documentParsingOrchestrator,
+            embeddingBatchSize,
+            maxParallelInsert,
+            chunkExtractParallelism,
+            entityExtractMaxGleaning,
+            maxExtractInputTokens,
+            entityExtractionLanguage,
+            entityTypes,
+            graphExtractionEnabled,
+            relationTypes,
+            graphExtractionExamples,
+            embeddingSemanticMergeEnabled,
+            embeddingSemanticMergeThreshold,
+            extractionRefinementOptions,
+            progressListener,
+            descriptionSummarizer,
+            maxSourceIdsPerEntity,
+            maxSourceIdsPerRelation,
+            sourceIdsLimitMethod,
+            maxFilePaths,
+            KnowledgeExtractor.DEFAULT_MAX_EXTRACTION_RECORDS,
+            KnowledgeExtractor.DEFAULT_MAX_EXTRACTION_ENTITIES,
+            null,
+            true
+        );
+    }
+
+    public IndexingPipeline(
+        ChatModel extractionModel,
+        ChatModel summaryModel,
+        EmbeddingModel embeddingModel,
+        AtomicStorageProvider storageProvider,
+        Path snapshotPath,
+        Chunker chunker,
+        DocumentParsingOrchestrator documentParsingOrchestrator,
+        int embeddingBatchSize,
+        int maxParallelInsert,
+        int chunkExtractParallelism,
+        int entityExtractMaxGleaning,
+        int maxExtractInputTokens,
+        String entityExtractionLanguage,
+        List<String> entityTypes,
+        boolean graphExtractionEnabled,
+        List<String> relationTypes,
+        List<GraphExtractionExample> graphExtractionExamples,
+        boolean embeddingSemanticMergeEnabled,
+        double embeddingSemanticMergeThreshold,
+        ExtractionRefinementOptions extractionRefinementOptions,
+        IndexingProgressListener progressListener,
+        DescriptionSummarizer descriptionSummarizer,
+        int maxSourceIdsPerEntity,
+        int maxSourceIdsPerRelation,
+        SourceIdLimits.Method sourceIdsLimitMethod,
+        int maxFilePaths,
+        int entityExtractMaxRecords,
+        int entityExtractMaxEntities,
+        KgExtractionValidator kgExtractionValidator,
+        boolean sectionContextEnabled
+    ) {
+        this.kgExtractionValidator = kgExtractionValidator;
+        this.sectionContextEnabled = sectionContextEnabled;
+        this.entityExtractMaxRecords = entityExtractMaxRecords >= 1
+            ? entityExtractMaxRecords
+            : KnowledgeExtractor.DEFAULT_MAX_EXTRACTION_RECORDS;
+        this.entityExtractMaxEntities = entityExtractMaxEntities >= 1
+            ? entityExtractMaxEntities
+            : KnowledgeExtractor.DEFAULT_MAX_EXTRACTION_ENTITIES;
+        this.maxFilePaths = maxFilePaths > 0 ? maxFilePaths : FilePathLimits.DEFAULT_MAX_FILE_PATHS;
+        this.maxSourceIdsPerEntity = maxSourceIdsPerEntity > 0
+            ? maxSourceIdsPerEntity
+            : SourceIdLimits.DEFAULT_MAX_SOURCE_IDS;
+        this.maxSourceIdsPerRelation = maxSourceIdsPerRelation > 0
+            ? maxSourceIdsPerRelation
+            : SourceIdLimits.DEFAULT_MAX_SOURCE_IDS;
+        this.sourceIdsLimitMethod = sourceIdsLimitMethod == null ? SourceIdLimits.Method.KEEP : sourceIdsLimitMethod;
         this.storageProvider = Objects.requireNonNull(storageProvider, "storageProvider");
         this.snapshotPath = snapshotPath;
         var effectiveEmbeddingBatchSize = embeddingBatchSize <= 0 ? Integer.MAX_VALUE : embeddingBatchSize;
@@ -398,6 +654,9 @@ public final class IndexingPipeline {
             new ChunkingOrchestrator(embeddingModel, effectiveEmbeddingBatchSize)
         );
         this.summaryModel = Objects.requireNonNull(summaryModel, "summaryModel");
+        this.descriptionSummarizer = descriptionSummarizer != null
+            ? descriptionSummarizer
+            : DescriptionSummarizer.forModel(this.summaryModel, this.entityExtractionLanguage);
         this.knowledgeExtractor = new KnowledgeExtractor(
             Objects.requireNonNull(extractionModel, "extractionModel"),
             this.entityExtractMaxGleaning,
@@ -406,7 +665,11 @@ public final class IndexingPipeline {
             this.entityTypes,
             this.relationTypes,
             this.graphExtractionExamples,
-            this.extractionRefinementOptions.allowDeterministicAttributionFallback()
+            this.extractionRefinementOptions.allowDeterministicAttributionFallback(),
+            this.entityExtractMaxRecords,
+            this.entityExtractMaxEntities,
+            this.kgExtractionValidator,
+            this.sectionContextEnabled
         );
         this.graphAssembler = new GraphAssembler();
         this.extractionRefinementPipeline = new ExtractionRefinementPipeline(
@@ -421,6 +684,16 @@ public final class IndexingPipeline {
             ? new DocumentParsingOrchestrator(new PlainTextParsingProvider())
             : documentParsingOrchestrator;
         this.progressListener = progressListener == null ? IndexingProgressListener.noop() : progressListener;
+        this.sourceIdsCapsEnabled = GraphSnapshotCapabilities.resolveCapsEnabled(
+            this.storageProvider,
+            this.maxSourceIdsPerEntity,
+            this.maxSourceIdsPerRelation
+        );
+    }
+
+    /** The caps flag resolved from the storage provider; the deletion pipeline mirrors it. */
+    boolean sourceIdsCapsEnabled() {
+        return sourceIdsCapsEnabled;
     }
 
     public IndexingPipeline(
@@ -583,13 +856,19 @@ public final class IndexingPipeline {
                 } catch (ExecutionException exception) {
                     cancelPending(pendingTasks.keySet());
                     markDocumentFailed(source.id(), exception.getCause());
-                    markPendingDocumentsFailed(pendingTasks.values(), "ingest aborted because another document failed");
+                    drainWorkersThen(executor, () -> markPendingDocumentsFailed(
+                        pendingTasks.values(),
+                        "ingest aborted because another document failed"
+                    ));
                     persistSnapshotIfConfigured();
                     rethrowTaskFailure(exception.getCause());
                 } catch (RuntimeException | Error failure) {
                     cancelPending(pendingTasks.keySet());
                     markDocumentFailed(source.id(), failure);
-                    markPendingDocumentsFailed(pendingTasks.values(), "ingest aborted because another document failed");
+                    drainWorkersThen(executor, () -> markPendingDocumentsFailed(
+                        pendingTasks.values(),
+                        "ingest aborted because another document failed"
+                    ));
                     persistSnapshotIfConfigured();
                     throw failure;
                 }
@@ -626,13 +905,19 @@ public final class IndexingPipeline {
                 } catch (ExecutionException exception) {
                     cancelPending(pendingTasks.keySet());
                     markDocumentFailed(source.documentId(), exception.getCause());
-                    markPendingParsedDocumentsFailed(pendingTasks.values(), "ingest aborted because another document failed");
+                    drainWorkersThen(executor, () -> markPendingParsedDocumentsFailed(
+                        pendingTasks.values(),
+                        "ingest aborted because another document failed"
+                    ));
                     persistSnapshotIfConfigured();
                     rethrowTaskFailure(exception.getCause());
                 } catch (RuntimeException | Error failure) {
                     cancelPending(pendingTasks.keySet());
                     markDocumentFailed(source.documentId(), failure);
-                    markPendingParsedDocumentsFailed(pendingTasks.values(), "ingest aborted because another document failed");
+                    drainWorkersThen(executor, () -> markPendingParsedDocumentsFailed(
+                        pendingTasks.values(),
+                        "ingest aborted because another document failed"
+                    ));
                     persistSnapshotIfConfigured();
                     throw failure;
                 }
@@ -666,19 +951,19 @@ public final class IndexingPipeline {
                 } catch (ExecutionException exception) {
                     cancelPending(pendingTasks.keySet());
                     markPreChunkedDocumentFailed(source, exception.getCause());
-                    markPendingPreChunkedDocumentsFailed(
+                    drainWorkersThen(executor, () -> markPendingPreChunkedDocumentsFailed(
                         pendingTasks.values(),
                         "ingest aborted because another document failed"
-                    );
+                    ));
                     persistSnapshotIfConfigured();
                     rethrowTaskFailure(exception.getCause());
                 } catch (RuntimeException | Error failure) {
                     cancelPending(pendingTasks.keySet());
                     markPreChunkedDocumentFailed(source, failure);
-                    markPendingPreChunkedDocumentsFailed(
+                    drainWorkersThen(executor, () -> markPendingPreChunkedDocumentsFailed(
                         pendingTasks.values(),
                         "ingest aborted because another document failed"
-                    );
+                    ));
                     persistSnapshotIfConfigured();
                     throw failure;
                 }
@@ -1088,6 +1373,13 @@ public final class IndexingPipeline {
         }
     }
 
+    // Cancelled workers may still persist progress after an abort, so terminal statuses are only
+    // written once the pool drained; otherwise a sibling can end up stuck in PROCESSING.
+    private static void drainWorkersThen(ExecutorService executor, Runnable afterDrain) {
+        shutdownExecutor(executor);
+        afterDrain.run();
+    }
+
     private static void shutdownExecutor(ExecutorService executor) {
         executor.shutdownNow();
         try {
@@ -1143,8 +1435,10 @@ public final class IndexingPipeline {
             storageProvider.writeAtomically(storage -> {
                 saveChunkLlmCacheMetadata(computed.prepared().chunks(), computed.extractions(), storage.chunkStore());
                 saveGraph(computed.graph().entities(), computed.graph().relations(), storage);
-                saveEntityVectors(computed.graph().entities(), computed.entityVectors(), storage.vectorStore());
-                saveRelationVectors(computed.graph().relations(), computed.relationVectors(), storage.vectorStore());
+                var spaceSample = computed.entityVectors().isEmpty() ? computed.relationVectors() : computed.entityVectors();
+                EmbeddingSpaceGuard.verifyOrRecord(storage, embeddingBatcher.cacheIdentity(), spaceSample);
+                GraphVectorIndexer.saveEntityVectors(computed.graph().entities(), computed.entityVectors(), storage.vectorStore());
+                GraphVectorIndexer.saveRelationVectors(computed.graph().relations(), computed.relationVectors(), storage.vectorStore());
                 finalizeDocumentGraphState(computed, storage);
                 storage.documentStatusStore().save(processedStatus(computed));
                 return null;
@@ -1214,10 +1508,15 @@ public final class IndexingPipeline {
     ) {
         synchronized (storageMutationMonitor) {
             storageProvider.writeAtomically(storage -> {
-                saveChunkVectors(chunks, chunkVectors, storage.vectorStore());
+                EmbeddingSpaceGuard.verifyOrRecord(storage, embeddingBatcher.cacheIdentity(), chunkVectors);
+                GraphVectorIndexer.saveChunkVectors(chunks, chunkVectors, storage.vectorStore());
                 return null;
             });
         }
+    }
+
+    private boolean vectorWritesDisabled() {
+        return storageProvider.vectorStore() instanceof NoopVectorStore;
     }
 
     private void saveGraph(List<Entity> entities, List<Relation> relations, AtomicStorageProvider.AtomicStorageView storage) {
@@ -1341,31 +1640,6 @@ public final class IndexingPipeline {
         return new java.util.ArrayList<>(new LinkedHashSet<>(ids));
     }
 
-    private void saveVectors(String namespace, List<VectorStore.VectorRecord> vectors, VectorStore vectorStore) {
-        if (vectors.isEmpty()) {
-            return;
-        }
-        vectorStore.saveAll(namespace, vectors);
-    }
-
-    private void saveChunkVectors(
-        List<io.github.lightrag.types.Chunk> chunks,
-        List<VectorStore.VectorRecord> vectors,
-        VectorStore vectorStore
-    ) {
-        if (vectors.isEmpty()) {
-            return;
-        }
-        if (vectorStore instanceof HybridVectorStore hybridVectorStore) {
-            hybridVectorStore.saveAllEnriched(
-                StorageSnapshots.CHUNK_NAMESPACE,
-                HybridVectorPayloads.chunkPayloads(chunks, vectors)
-            );
-            return;
-        }
-        saveVectors(StorageSnapshots.CHUNK_NAMESPACE, vectors, vectorStore);
-    }
-
     private static void saveChunkLlmCacheMetadata(
         List<io.github.lightrag.types.Chunk> chunks,
         List<GraphAssembler.ChunkExtraction> extractions,
@@ -1396,38 +1670,6 @@ public final class IndexingPipeline {
                 metadata
             ));
         }
-    }
-
-    private void saveEntityVectors(List<Entity> entities, List<VectorStore.VectorRecord> vectors, VectorStore vectorStore) {
-        if (vectors.isEmpty()) {
-            return;
-        }
-        if (vectorStore instanceof HybridVectorStore hybridVectorStore) {
-            hybridVectorStore.saveAllEnriched(
-                StorageSnapshots.ENTITY_NAMESPACE,
-                HybridVectorPayloads.entityPayloads(entities, vectors)
-            );
-            return;
-        }
-        saveVectors(StorageSnapshots.ENTITY_NAMESPACE, vectors, vectorStore);
-    }
-
-    private void saveRelationVectors(
-        List<Relation> relations,
-        List<VectorStore.VectorRecord> vectors,
-        VectorStore vectorStore
-    ) {
-        if (vectors.isEmpty()) {
-            return;
-        }
-        if (vectorStore instanceof HybridVectorStore hybridVectorStore) {
-            hybridVectorStore.saveAllEnriched(
-                StorageSnapshots.RELATION_NAMESPACE,
-                HybridVectorPayloads.relationPayloads(relations, vectors)
-            );
-            return;
-        }
-        saveVectors(StorageSnapshots.RELATION_NAMESPACE, vectors, vectorStore);
     }
 
     private void persistSnapshotIfConfigured() {
@@ -1528,36 +1770,31 @@ public final class IndexingPipeline {
     }
 
     private List<VectorStore.VectorRecord> chunkVectors(List<io.github.lightrag.types.Chunk> chunks) {
-        if (chunks.isEmpty()) {
+        if (chunks.isEmpty() || vectorWritesDisabled()) {
             return List.of();
         }
-        var embeddings = embeddingBatcher.embedAll(chunks.stream().map(IndexingPipeline::chunkEmbeddingText).toList());
+        var embeddings = embeddingBatcher.embedAll(chunks.stream().map(GraphVectorIndexer::chunkEmbeddingText).toList());
         return toVectorRecords(chunks.stream().map(io.github.lightrag.types.Chunk::id).toList(), embeddings);
     }
 
-    private static String chunkEmbeddingText(io.github.lightrag.types.Chunk chunk) {
-        var summary = chunk.metadata().getOrDefault(ParentChildChunkBuilder.METADATA_PARENT_SUMMARY, "").strip();
-        var level = chunk.metadata().getOrDefault(ParentChildChunkBuilder.METADATA_CHUNK_LEVEL, "");
-        if (!summary.isBlank() && ParentChildChunkBuilder.CHUNK_LEVEL_CHILD.equals(level)) {
-            return summary + "\n" + chunk.text();
-        }
-        return chunk.text();
-    }
-
     List<VectorStore.VectorRecord> entityVectors(List<Entity> entities) {
-        if (entities.isEmpty()) {
+        if (entities.isEmpty() || vectorWritesDisabled()) {
             return List.of();
         }
-        var embeddings = embeddingBatcher.embedAll(entities.stream().map(IndexingPipeline::entitySummary).toList());
-        return toVectorRecords(entities.stream().map(Entity::id).toList(), embeddings);
+        var embeddings = embeddingBatcher.embedAll(entities.stream().map(GraphVectorIndexer::entityEmbeddingText).toList());
+        var vectors = toVectorRecords(entities.stream().map(Entity::id).toList(), embeddings);
+        EmbeddingSpaceGuard.verifyOrRecord(storageProvider, embeddingBatcher.cacheIdentity(), vectors);
+        return vectors;
     }
 
     List<VectorStore.VectorRecord> relationVectors(List<Relation> relations) {
-        if (relations.isEmpty()) {
+        if (relations.isEmpty() || vectorWritesDisabled()) {
             return List.of();
         }
-        var embeddings = embeddingBatcher.embedAll(relations.stream().map(IndexingPipeline::relationSummary).toList());
-        return toVectorRecords(relations.stream().map(Relation::id).toList(), embeddings);
+        var embeddings = embeddingBatcher.embedAll(relations.stream().map(GraphVectorIndexer::relationEmbeddingText).toList());
+        var vectors = toVectorRecords(relations.stream().map(Relation::id).toList(), embeddings);
+        EmbeddingSpaceGuard.verifyOrRecord(storageProvider, embeddingBatcher.cacheIdentity(), vectors);
+        return vectors;
     }
 
     private GraphVectors graphVectors(GraphAssembler.Graph graph) {
@@ -1566,12 +1803,15 @@ public final class IndexingPipeline {
         if (entities.isEmpty() && relations.isEmpty()) {
             return new GraphVectors(List.of(), List.of());
         }
+        if (vectorWritesDisabled()) {
+            return new GraphVectors(List.of(), List.of());
+        }
         var texts = new ArrayList<String>(entities.size() + relations.size());
         for (var entity : entities) {
-            texts.add(entitySummary(entity));
+            texts.add(GraphVectorIndexer.entityEmbeddingText(entity));
         }
         for (var relation : relations) {
-            texts.add(relationSummary(relation));
+            texts.add(GraphVectorIndexer.relationEmbeddingText(relation));
         }
         var embeddings = embeddingBatcher.embedAll(texts);
         var entityVectors = new ArrayList<VectorStore.VectorRecord>(entities.size());
@@ -1604,95 +1844,221 @@ public final class IndexingPipeline {
         );
     }
 
-    private static GraphStore.EntityRecord mergeEntity(GraphStore.EntityRecord existing, Entity incoming) {
+    private GraphStore.EntityRecord mergeEntity(GraphStore.EntityRecord existing, Entity incoming) {
+        var fragments = DescriptionFragments.combine(
+            DescriptionFragments.split(existing.description()),
+            DescriptionFragments.split(incoming.description())
+        );
+        var summary = descriptionSummarizer.summarize("Entity", existing.name(), fragments);
+        var mergedChunkIds = union(existing.sourceChunkIds(), incoming.sourceChunkIds());
+        var sourceChunkIds = sourceIdsCapsEnabled
+            ? SourceIdLimits.apply(mergedChunkIds, maxSourceIdsPerEntity, sourceIdsLimitMethod)
+            : mergedChunkIds;
         return new GraphStore.EntityRecord(
             existing.id(),
             existing.name(),
-            existing.type().isEmpty() ? incoming.type() : existing.type(),
-            existing.description().isEmpty() ? incoming.description() : existing.description(),
+            voteEntityType(existing.type(), incoming.type()),
+            summary.description(),
             union(existing.aliases(), incoming.aliases()),
-            union(existing.sourceChunkIds(), incoming.sourceChunkIds())
+            sourceChunkIds
         );
     }
 
-    private static GraphStore.EntityRecord mergeEntityGroup(
+    // Upstream votes the stored type (counted once, operate.py:2471) against the batch rows (:2576-2583).
+    // The assembler already collapsed the batch into one aggregate vote, so each side contributes once
+    // and ties keep the stored type.
+    private static String voteEntityType(String storedType, String incomingType) {
+        var counts = new LinkedHashMap<String, Integer>();
+        for (var type : List.of(storedType, incomingType)) {
+            if (!type.isEmpty()) {
+                counts.merge(type, 1, Integer::sum);
+            }
+        }
+        return counts.entrySet().stream()
+            .max(Map.Entry.comparingByValue())
+            .map(Map.Entry::getKey)
+            .orElse(storedType);
+    }
+
+    private GraphStore.EntityRecord mergeEntityGroup(
         GraphStore.EntityRecord existing,
         List<Entity> incoming
     ) {
         if (incoming.isEmpty()) {
             return Objects.requireNonNull(existing, "existing");
         }
-        var merged = existing == null ? toEntityRecord(incoming.get(0)) : mergeEntity(existing, incoming.get(0));
+        var merged = existing == null ? mergeNewEntity(incoming.get(0)) : mergeEntity(existing, incoming.get(0));
         for (int index = 1; index < incoming.size(); index++) {
             merged = mergeEntity(merged, incoming.get(index));
         }
         return merged;
     }
 
-    private static GraphStore.RelationRecord mergeRelation(GraphStore.RelationRecord existing, Relation incoming) {
+    private GraphStore.RelationRecord mergeRelation(GraphStore.RelationRecord existing, Relation incoming) {
+        return mergeRelationWithCaps(
+            existing,
+            incoming,
+            sourceIdsCapsEnabled,
+            maxSourceIdsPerRelation,
+            sourceIdsLimitMethod,
+            maxFilePaths,
+            descriptionSummarizer
+        );
+    }
+
+    /**
+     * The complete storage-level relation merge: source-id cap, upstream's KEEP weight-base filter, the
+     * weight sum with its evidence floor, the file-path accumulation, and the description summary.
+     * Shared by both graph pipelines so the merge has one implementation.
+     *
+     * <p>Upstream returns the stored edge verbatim when the filter leaves no surviving row
+     * ({@code operate.py:2932-2951}): the batch then adds no description, keyword, weight or file path.
+     * The stored scalar stands in for upstream's {@code existing_full_source_ids} slot — upstream's own
+     * no-tracking fallback; the tracking-store fork is documented on
+     * {@link SourceIdLimits#retainIncomingEvidence}.</p>
+     */
+    static GraphStore.RelationRecord mergeRelationWithCaps(
+        GraphStore.RelationRecord existing,
+        Relation incoming,
+        boolean capsEnabled,
+        int limit,
+        SourceIdLimits.Method method,
+        int maxFilePaths,
+        DescriptionSummarizer summarizer
+    ) {
+        var mergedChunkIds = union(existing.sourceChunkIds(), incoming.sourceChunkIds());
+        // The cap runs on the merged list before the evidence floor, so the floor counts the capped
+        // list exactly like upstream (apply_source_ids_limit -> join -> evidence_count, operate.py:2904-3000).
+        var chunkIds = capsEnabled ? SourceIdLimits.apply(mergedChunkIds, limit, method) : mergedChunkIds;
+        // Weight base: the KEEP cap's evicted rows are dropped before the sum, FIFO keeps them
+        // (operate.py:2916-2929); 250 brand-new sources under a 200 cap add 200, never 250.
+        var retainedIncoming = capsEnabled
+            ? SourceIdLimits.retainIncomingEvidence(incoming.sourceChunkIds(), existing.sourceChunkIds(), chunkIds, method)
+            : incoming.sourceChunkIds();
+        if (retainedIncoming.isEmpty()) {
+            return existing;
+        }
+        var fragments = DescriptionFragments.combine(
+            DescriptionFragments.split(existing.description()),
+            DescriptionFragments.split(incoming.description())
+        );
+        var summary = summarizer.summarize("Relation", relationName(existing), fragments);
+        // incoming.weight() is deliberately unused: it is this batch's own sum over contributing chunks
+        // and would double-count chunks already reflected in the stored scalar; the added weight is
+        // re-derived from the surviving source ids.
+        var weight = RelationEvidence.merge(existing.weight(), retainedIncoming, existing.sourceChunkIds(), chunkIds);
+        // File paths accumulate after the KEEP filter and before the record: the early return above
+        // already left them untouched (operate.py:3065-3120).
+        var filePaths = FilePathLimits.apply(
+            union(existing.filePaths(), incoming.filePaths()),
+            maxFilePaths,
+            method
+        );
         return new GraphStore.RelationRecord(
             existing.id(),
             existing.srcId(),
             existing.tgtId(),
             existing.keywords(),
-            existing.description().isEmpty() ? incoming.description() : existing.description(),
-            Math.max(existing.weight(), incoming.weight()),
-            union(existing.sourceChunkIds(), incoming.sourceChunkIds())
+            summary.description(),
+            weight,
+            RelationCanonicalizer.joinValues(chunkIds),
+            RelationCanonicalizer.joinValues(filePaths)
         );
     }
 
-    private static GraphStore.RelationRecord mergeRelationGroup(
+    /**
+     * The stored shape of a first-seen relation: the same cap, KEEP filter and weight derivation the
+     * merge applies to a stored edge ({@code operate.py:2916-2929}, {@code :2980-3000}) — one batch of
+     * 250 chunks under the 200 KEEP cap stores 200 ids and weighs 200, never 250.
+     */
+    static GraphStore.RelationRecord newRelationRecord(
+        Relation relation,
+        boolean capsEnabled,
+        int limit,
+        SourceIdLimits.Method method,
+        int maxFilePaths,
+        DescriptionSummarizer summarizer
+    ) {
+        var summary = summarizer.summarize(
+            "Relation",
+            relation.srcId() + "->" + relation.tgtId(),
+            DescriptionFragments.split(relation.description())
+        );
+        var sourceChunkIds = capsEnabled
+            ? SourceIdLimits.apply(relation.sourceChunkIds(), limit, method)
+            : relation.sourceChunkIds();
+        var retained = capsEnabled
+            ? SourceIdLimits.retainIncomingEvidence(relation.sourceChunkIds(), List.of(), sourceChunkIds, method)
+            : relation.sourceChunkIds();
+        var weight = RelationEvidence.merge(0d, retained, List.of(), sourceChunkIds);
+        var filePaths = FilePathLimits.apply(relation.filePaths(), maxFilePaths, method);
+        return new GraphStore.RelationRecord(
+            relation.id(),
+            relation.srcId(),
+            relation.tgtId(),
+            relation.keywords(),
+            summary.description(),
+            weight,
+            RelationCanonicalizer.joinValues(sourceChunkIds),
+            RelationCanonicalizer.joinValues(filePaths)
+        );
+    }
+
+    static GraphStore.EntityRecord newEntityRecord(
+        Entity entity,
+        boolean capsEnabled,
+        int limit,
+        SourceIdLimits.Method method,
+        DescriptionSummarizer summarizer
+    ) {
+        var summary = summarizer.summarize(
+            "Entity",
+            entity.name(),
+            DescriptionFragments.split(entity.description())
+        );
+        var sourceChunkIds = capsEnabled
+            ? SourceIdLimits.apply(entity.sourceChunkIds(), limit, method)
+            : entity.sourceChunkIds();
+        return new GraphStore.EntityRecord(
+            entity.id(),
+            entity.name(),
+            entity.type(),
+            summary.description(),
+            entity.aliases(),
+            sourceChunkIds
+        );
+    }
+
+    private static String relationName(GraphStore.RelationRecord existing) {
+        return existing.srcId() + "->" + existing.tgtId();
+    }
+
+    private GraphStore.RelationRecord mergeRelationGroup(
         GraphStore.RelationRecord existing,
         List<Relation> incoming
     ) {
         if (incoming.isEmpty()) {
             return Objects.requireNonNull(existing, "existing");
         }
-        var merged = existing == null ? toRelationRecord(incoming.get(0)) : mergeRelation(existing, incoming.get(0));
+        var merged = existing == null ? mergeNewRelation(incoming.get(0)) : mergeRelation(existing, incoming.get(0));
         for (int index = 1; index < incoming.size(); index++) {
             merged = mergeRelation(merged, incoming.get(index));
         }
         return merged;
     }
 
-    private static GraphStore.EntityRecord toEntityRecord(Entity entity) {
-        return new GraphStore.EntityRecord(
-            entity.id(),
-            entity.name(),
-            entity.type(),
-            entity.description(),
-            entity.aliases(),
-            entity.sourceChunkIds()
-        );
+    private GraphStore.EntityRecord mergeNewEntity(Entity entity) {
+        return newEntityRecord(entity, sourceIdsCapsEnabled, maxSourceIdsPerEntity, sourceIdsLimitMethod, descriptionSummarizer);
     }
 
-    private static GraphStore.RelationRecord toRelationRecord(Relation relation) {
-        return new GraphStore.RelationRecord(
-            relation.id(),
-            relation.srcId(),
-            relation.tgtId(),
-            relation.keywords(),
-            relation.description(),
-            relation.weight(),
-            relation.sourceChunkIds()
-        );
-    }
-
-    private static String entitySummary(Entity entity) {
-        return "%s\n%s\n%s\n%s".formatted(
-            entity.name(),
-            entity.type(),
-            entity.description(),
-            String.join(", ", entity.aliases())
-        );
-    }
-
-    private static String relationSummary(Relation relation) {
-        return "%s\n%s\n%s\n%s".formatted(
-            relation.srcId(),
-            relation.keywords(),
-            relation.tgtId(),
-            relation.description()
+    private GraphStore.RelationRecord mergeNewRelation(Relation relation) {
+        return newRelationRecord(
+            relation,
+            sourceIdsCapsEnabled,
+            maxSourceIdsPerRelation,
+            sourceIdsLimitMethod,
+            maxFilePaths,
+            descriptionSummarizer
         );
     }
 

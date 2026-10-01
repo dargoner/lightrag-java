@@ -27,16 +27,38 @@ public final class OpenAiCompatibleEmbeddingModel implements EmbeddingModel {
     private final String baseUrl;
     private final String modelName;
     private final String apiKey;
+    private final int maxAttempts;
+    private final Duration initialBackoff;
 
     public OpenAiCompatibleEmbeddingModel(String baseUrl, String modelName, String apiKey) {
         this(baseUrl, modelName, apiKey, Duration.ofSeconds(30));
     }
 
     public OpenAiCompatibleEmbeddingModel(String baseUrl, String modelName, String apiKey, Duration timeout) {
+        this(
+            baseUrl,
+            modelName,
+            apiKey,
+            timeout,
+            ModelRetrySupport.DEFAULT_MAX_ATTEMPTS,
+            ModelRetrySupport.DEFAULT_INITIAL_BACKOFF
+        );
+    }
+
+    public OpenAiCompatibleEmbeddingModel(
+        String baseUrl,
+        String modelName,
+        String apiKey,
+        Duration timeout,
+        int maxAttempts,
+        Duration initialBackoff
+    ) {
         this.baseUrl = normalizeBaseUrl(baseUrl);
         this.modelName = requireNonBlank(modelName, "modelName");
         this.apiKey = requireNonBlank(apiKey, "apiKey");
         var effectiveTimeout = Objects.requireNonNull(timeout, "timeout");
+        this.maxAttempts = requireValidMaxAttempts(maxAttempts);
+        this.initialBackoff = requireNonNegative(initialBackoff, "initialBackoff");
         this.httpClient = new OkHttpClient.Builder()
             .callTimeout(effectiveTimeout)
             .connectTimeout(effectiveTimeout)
@@ -46,17 +68,25 @@ public final class OpenAiCompatibleEmbeddingModel implements EmbeddingModel {
     }
 
     @Override
+    public String cacheIdentity() {
+        return "openai-compatible:" + modelName + "@" + baseUrl;
+    }
+
+    @Override
     public List<List<Double>> embedAll(List<String> texts) {
         var inputs = List.copyOf(Objects.requireNonNull(texts, "texts"));
         if (inputs.isEmpty()) {
             return List.of();
         }
 
-        var payload = Map.of(
+        Map<String, Object> payload = Map.of(
             "model", modelName,
             "input", inputs
         );
+        return ModelRetrySupport.call(() -> embedOnce(payload), maxAttempts, initialBackoff);
+    }
 
+    private List<List<Double>> embedOnce(Map<String, Object> payload) {
         try {
             var httpRequest = new Request.Builder()
                 .url(baseUrl + "embeddings")
@@ -152,5 +182,20 @@ public final class OpenAiCompatibleEmbeddingModel implements EmbeddingModel {
             throw new IllegalArgumentException(fieldName + " must not be blank");
         }
         return normalized;
+    }
+
+    private static int requireValidMaxAttempts(int maxAttempts) {
+        if (maxAttempts < 0) {
+            throw new IllegalArgumentException("maxAttempts must not be negative");
+        }
+        return maxAttempts;
+    }
+
+    private static Duration requireNonNegative(Duration value, String fieldName) {
+        Objects.requireNonNull(value, fieldName);
+        if (value.isNegative()) {
+            throw new IllegalArgumentException(fieldName + " must not be negative");
+        }
+        return value;
     }
 }

@@ -5,6 +5,7 @@ import io.github.lightrag.storage.memory.InMemoryDocumentGraphJournalStore;
 import io.github.lightrag.storage.memory.InMemoryDocumentGraphSnapshotStore;
 import io.github.lightrag.storage.memory.InMemoryDocumentStore;
 import io.github.lightrag.storage.memory.InMemoryDocumentStatusStore;
+import io.github.lightrag.storage.memory.InMemoryEmbeddingSpaceStore;
 import io.github.lightrag.storage.memory.InMemoryGraphStore;
 import io.github.lightrag.storage.memory.InMemoryLlmCacheStore;
 import io.github.lightrag.storage.memory.InMemoryTaskStageStore;
@@ -35,6 +36,7 @@ public final class InMemoryStorageProvider implements AtomicStorageProvider {
     private final InMemoryTaskStageStore taskStageStore;
     private final InMemoryTaskDocumentStore taskDocumentStore;
     private final InMemoryLlmCacheStore llmCacheStore;
+    private final InMemoryEmbeddingSpaceStore embeddingSpaceStore;
     private final DocumentGraphSnapshotStore documentGraphSnapshotStore;
     private final DocumentGraphJournalStore documentGraphJournalStore;
     private final java.util.Set<String> trackedDocumentGraphIds;
@@ -54,7 +56,11 @@ public final class InMemoryStorageProvider implements AtomicStorageProvider {
         this.taskStore = new InMemoryTaskStore(lock);
         this.taskStageStore = new InMemoryTaskStageStore(lock);
         this.taskDocumentStore = new InMemoryTaskDocumentStore(lock);
-        this.llmCacheStore = new InMemoryLlmCacheStore(lock);
+        // The cache is content-addressed and outside the atomic snapshot, so it must not share the
+        // provider lock: merge-time summary calls run on worker threads while writeAtomically holds
+        // the exclusive lock, and sharing it deadlocks those workers against the committing thread.
+        this.llmCacheStore = new InMemoryLlmCacheStore(new ReentrantReadWriteLock(true));
+        this.embeddingSpaceStore = new InMemoryEmbeddingSpaceStore(lock);
         this.trackedDocumentGraphIds = new ConcurrentSkipListSet<>();
         this.documentGraphSnapshotStore = DocumentGraphStateSupport.trackedSnapshotStore(
             new InMemoryDocumentGraphSnapshotStore(lock),
@@ -121,6 +127,11 @@ public final class InMemoryStorageProvider implements AtomicStorageProvider {
     }
 
     @Override
+    public EmbeddingSpaceStore embeddingSpaceStore() {
+        return embeddingSpaceStore;
+    }
+
+    @Override
     public SnapshotStore snapshotStore() {
         return snapshotStore;
     }
@@ -140,6 +151,7 @@ public final class InMemoryStorageProvider implements AtomicStorageProvider {
         var writeLock = lock.writeLock();
         writeLock.lock();
         var snapshot = snapshot();
+        var markerSnapshot = embeddingSpaceStore.snapshot();
         try {
             return Objects.requireNonNull(operation, "operation").execute(new AtomicView(
                 documentStore,
@@ -148,9 +160,11 @@ public final class InMemoryStorageProvider implements AtomicStorageProvider {
                 documentGraphJournalStore,
                 graphStore,
                 vectorStore,
-                documentStatusStore
+                documentStatusStore,
+                embeddingSpaceStore
             ));
         } catch (RuntimeException failure) {
+            embeddingSpaceStore.restore(markerSnapshot);
             restore(snapshot, failure);
             throw failure;
         } finally {
@@ -283,7 +297,8 @@ public final class InMemoryStorageProvider implements AtomicStorageProvider {
         DocumentGraphJournalStore documentGraphJournalStore,
         GraphStore graphStore,
         VectorStore vectorStore,
-        DocumentStatusStore documentStatusStore
+        DocumentStatusStore documentStatusStore,
+        EmbeddingSpaceStore embeddingSpaceStore
     ) implements AtomicStorageView {
     }
 

@@ -10,6 +10,7 @@ import org.junit.jupiter.api.Test;
 import java.util.List;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.tuple;
 import static io.github.lightrag.support.RelationIds.relationId;
 
 class GraphAssemblerTest {
@@ -23,9 +24,24 @@ class GraphAssemblerTest {
         ));
 
         assertThat(graph.entities()).containsExactly(
-            new Entity("alice", "Alice", "person", "Researcher", List.of(), List.of("chunk-1", "chunk-2"))
+            new Entity("alice", "Alice", "person", "Researcher<SEP>Scientist", List.of(), List.of("chunk-1", "chunk-2"))
         );
         assertThat(graph.relations()).isEmpty();
+    }
+
+    @Test
+    void accumulatesDescriptionFragmentsAcrossChunksForTheSameEntity() {
+        var assembler = new GraphAssembler();
+
+        var graph = assembler.assemble(List.of(
+            extraction("chunk-1", List.of(new ExtractedEntity("Alice", "person", "desc-a", List.of())), List.of()),
+            extraction("chunk-2", List.of(new ExtractedEntity("alice", "person", "desc-b", List.of())), List.of()),
+            extraction("chunk-3", List.of(new ExtractedEntity("ALICE", "person", "desc-a", List.of())), List.of())
+        ));
+
+        assertThat(graph.entities()).containsExactly(
+            new Entity("alice", "Alice", "person", "desc-a<SEP>desc-b", List.of(), List.of("chunk-1", "chunk-2", "chunk-3"))
+        );
     }
 
     @Test
@@ -38,7 +54,7 @@ class GraphAssemblerTest {
         ));
 
         assertThat(graph.entities()).containsExactly(
-            new Entity("robert", "Robert", "person", "Lead", List.of("Bob", "Bobby"), List.of("chunk-1", "chunk-2"))
+            new Entity("robert", "Robert", "person", "Lead<SEP>Engineer", List.of("Bob", "Bobby"), List.of("chunk-1", "chunk-2"))
         );
     }
 
@@ -75,8 +91,8 @@ class GraphAssemblerTest {
                 "alice",
                 "bob",
                 "works_with",
-                "collaboration",
-                1.0d,
+                "collaboration<SEP>duplicate",
+                1.8d,
                 List.of("chunk-1", "chunk-2")
             )
         );
@@ -108,8 +124,8 @@ class GraphAssemblerTest {
                 "alice",
                 "bob",
                 "works_with",
-                "first",
-                0.9d,
+                "first<SEP>second",
+                1.6d,
                 List.of("chunk-1", "chunk-2")
             )
         );
@@ -141,8 +157,8 @@ class GraphAssemblerTest {
                 "alice",
                 "bob",
                 "related_to",
-                "forward",
-                0.8d,
+                "forward<SEP>reverse",
+                1.4d,
                 List.of("chunk-1", "chunk-2")
             )
         );
@@ -174,8 +190,8 @@ class GraphAssemblerTest {
                 "alice",
                 "bob",
                 "reports_to",
-                "forward",
-                0.8d,
+                "forward<SEP>reverse",
+                1.4d,
                 List.of("chunk-1", "chunk-2")
             )
         );
@@ -248,11 +264,143 @@ class GraphAssemblerTest {
         );
     }
 
+    @Test
+    void picksTheMajorityEntityTypeAcrossTheBatch() {
+        var assembler = new GraphAssembler();
+
+        var graph = assembler.assemble(List.of(
+            extraction("chunk-1", List.of(new ExtractedEntity("Alice", "organization", "Founder", List.of())), List.of()),
+            extraction("chunk-2", List.of(new ExtractedEntity("Alice", "person", "Researcher", List.of())), List.of()),
+            extraction("chunk-3", List.of(new ExtractedEntity("Alice", "person", "Scientist", List.of())), List.of())
+        ));
+
+        assertThat(graph.entities()).containsExactly(
+            new Entity(
+                "alice",
+                "Alice",
+                "person",
+                "Founder<SEP>Researcher<SEP>Scientist",
+                List.of(),
+                List.of("chunk-1", "chunk-2", "chunk-3")
+            )
+        );
+    }
+
+    @Test
+    void breaksEntityTypeTiesByFirstSeenOrder() {
+        var assembler = new GraphAssembler();
+
+        var graph = assembler.assemble(List.of(
+            extraction(
+                "chunk-1",
+                List.of(
+                    new ExtractedEntity("Alice", "person", "Researcher", List.of()),
+                    new ExtractedEntity("Bob", "organization", "Employer", List.of())
+                ),
+                List.of()
+            ),
+            extraction(
+                "chunk-2",
+                List.of(
+                    new ExtractedEntity("Alice", "organization", "Founder", List.of()),
+                    new ExtractedEntity("Bob", "person", "Engineer", List.of())
+                ),
+                List.of()
+            )
+        ));
+
+        assertThat(graph.entities()).extracting(Entity::id, Entity::type)
+            .containsExactly(
+                tuple("alice", "person"),
+                tuple("bob", "organization")
+            );
+    }
+
+    @Test
+    void countsTypeVotesFromAliasMergedEntities() {
+        var assembler = new GraphAssembler();
+
+        var graph = assembler.assemble(List.of(
+            extraction("chunk-1", List.of(new ExtractedEntity("Robert", "person", "Lead", List.of("Bob"))), List.of()),
+            extraction("chunk-2", List.of(new ExtractedEntity("Bobby", "organization", "Agency", List.of())), List.of()),
+            extraction("chunk-3", List.of(new ExtractedEntity("Bob", "person", "Engineer", List.of("Bobby"))), List.of())
+        ));
+
+        assertThat(graph.entities()).extracting(Entity::id, Entity::type)
+            .containsExactly(tuple("robert", "person"));
+    }
+
+    @Test
+    void accumulatesRelationWeightAcrossContributingChunks() {
+        var assembler = new GraphAssembler();
+
+        var graph = assembler.assemble(List.of(
+            extraction(
+                "chunk-1",
+                List.of(
+                    new ExtractedEntity("Alice", "person", "Researcher", List.of()),
+                    new ExtractedEntity("Bob", "person", "Engineer", List.of())
+                ),
+                List.of(new ExtractedRelation("Alice", "Bob", "works_with", "first", 1.0d))
+            ),
+            extraction(
+                "chunk-2",
+                List.of(),
+                List.of(new ExtractedRelation("Alice", "Bob", "works_with", "second", 1.0d))
+            ),
+            extraction(
+                "chunk-3",
+                List.of(),
+                List.of(new ExtractedRelation("Alice", "Bob", "works_with", "third", 1.0d))
+            )
+        ));
+
+        assertThat(graph.relations()).containsExactly(
+            new Relation(
+                relationId("alice", "bob"),
+                "alice",
+                "bob",
+                "works_with",
+                "first<SEP>second<SEP>third",
+                3.0d,
+                List.of("chunk-1", "chunk-2", "chunk-3")
+            )
+        );
+    }
+
+    @Test
+    void accumulatesDedupedFilePathsForRelations() {
+        var assembler = new GraphAssembler();
+
+        var graph = assembler.assemble(List.of(
+            extractionWithFilePath("chunk-1", "/a.md", new ExtractedRelation("Alice", "Bob", "works_with", "first", 1.0d)),
+            extractionWithFilePath("chunk-2", "/b.md", new ExtractedRelation("Alice", "Bob", "works_with", "second", 1.0d)),
+            extractionWithFilePath("chunk-3", "/a.md", new ExtractedRelation("Alice", "Bob", "works_with", "third", 1.0d))
+        ));
+
+        assertThat(graph.relations()).singleElement()
+            .extracting(Relation::filePath)
+            .isEqualTo("/a.md<SEP>/b.md");
+    }
+
     private static GraphAssembler.ChunkExtraction extraction(
         String chunkId,
         List<ExtractedEntity> entities,
         List<ExtractedRelation> relations
     ) {
         return new GraphAssembler.ChunkExtraction(chunkId, new ExtractionResult(entities, relations, List.of()));
+    }
+
+    private static GraphAssembler.ChunkExtraction extractionWithFilePath(
+        String chunkId,
+        String filePath,
+        ExtractedRelation relation
+    ) {
+        return new GraphAssembler.ChunkExtraction(
+            chunkId,
+            new ExtractionResult(List.of(), List.of(relation), List.of()),
+            List.of(),
+            filePath
+        );
     }
 }

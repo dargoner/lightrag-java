@@ -11,6 +11,7 @@ import io.github.lightrag.storage.DocumentStore;
 import io.github.lightrag.storage.GraphStorageAdapter;
 import io.github.lightrag.storage.GraphStore;
 import io.github.lightrag.storage.HybridVectorStore;
+import io.github.lightrag.storage.IndependentlyLockedLlmCacheStore;
 import io.github.lightrag.storage.LlmCacheStore;
 import io.github.lightrag.storage.SnapshotStore;
 import io.github.lightrag.storage.StorageCoordinator;
@@ -155,7 +156,7 @@ public final class MySqlMilvusNeo4jStorageProvider implements AtomicStorageProvi
         this.lockedTaskStore = new LockedTaskStore(coordinator.taskStore());
         this.lockedTaskStageStore = new LockedTaskStageStore(coordinator.taskStageStore());
         this.lockedTaskDocumentStore = new LockedTaskDocumentStore(coordinator.taskDocumentStore());
-        this.lockedLlmCacheStore = new LockedLlmCacheStore(coordinator.llmCacheStore());
+        this.lockedLlmCacheStore = new IndependentlyLockedLlmCacheStore(coordinator.llmCacheStore());
         this.lockedGraphStore = new LockedGraphStore(coordinator.graphStore());
         this.lockedVectorStore = new LockedVectorStore(coordinator.vectorStore());
         this.documentGraphSnapshotStore = coordinator.documentGraphSnapshotStore();
@@ -614,39 +615,6 @@ public final class MySqlMilvusNeo4jStorageProvider implements AtomicStorageProvi
         @Override
         public void deleteByTask(String taskId) {
             withWriteLock(() -> delegate.deleteByTask(taskId));
-        }
-    }
-
-    private final class LockedLlmCacheStore implements LlmCacheStore {
-        private final LlmCacheStore delegate;
-
-        private LockedLlmCacheStore(LlmCacheStore delegate) {
-            this.delegate = Objects.requireNonNull(delegate, "delegate");
-        }
-
-        @Override
-        public void save(CacheRecord record) {
-            withWriteLock(() -> delegate.save(record));
-        }
-
-        @Override
-        public Optional<CacheRecord> load(String cacheId) {
-            return withReadLock(() -> delegate.load(cacheId));
-        }
-
-        @Override
-        public boolean contains(String cacheId) {
-            return withReadLock(() -> delegate.contains(cacheId));
-        }
-
-        @Override
-        public void delete(List<String> cacheIds) {
-            withWriteLock(() -> delegate.delete(cacheIds));
-        }
-
-        @Override
-        public void drop() {
-            withWriteLock(delegate::drop);
         }
     }
 

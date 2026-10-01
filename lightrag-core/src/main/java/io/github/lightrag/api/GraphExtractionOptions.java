@@ -13,7 +13,9 @@ public record GraphExtractionOptions(
     String language,
     List<String> entityTypes,
     List<String> relationTypes,
-    List<GraphExtractionExample> examples
+    List<GraphExtractionExample> examples,
+    Integer entityExtractMaxRecords,
+    Integer entityExtractMaxEntities
 ) {
     public GraphExtractionOptions {
         if (chunkExtractParallelism != null && chunkExtractParallelism <= 0) {
@@ -24,6 +26,12 @@ public record GraphExtractionOptions(
         }
         if (maxExtractInputTokens != null && maxExtractInputTokens <= 0) {
             throw new IllegalArgumentException("maxExtractInputTokens must be positive");
+        }
+        if (entityExtractMaxRecords != null && entityExtractMaxRecords < 1) {
+            throw new IllegalArgumentException("entityExtractMaxRecords must be positive");
+        }
+        if (entityExtractMaxEntities != null && entityExtractMaxEntities < 1) {
+            throw new IllegalArgumentException("entityExtractMaxEntities must be positive");
         }
         if (language != null) {
             language = requireNonBlank(language, "language");
@@ -56,6 +64,8 @@ public record GraphExtractionOptions(
             .entityTypes(KnowledgeExtractor.DEFAULT_ENTITY_TYPES)
             .relationTypes(List.of())
             .examples(List.of())
+            .entityExtractMaxRecords(KnowledgeExtractor.DEFAULT_MAX_EXTRACTION_RECORDS)
+            .entityExtractMaxEntities(KnowledgeExtractor.DEFAULT_MAX_EXTRACTION_ENTITIES)
             .build();
     }
 
@@ -73,7 +83,9 @@ public record GraphExtractionOptions(
             language != null ? language : fallback.language(),
             entityTypes != null ? entityTypes : fallback.entityTypes(),
             relationTypes != null ? relationTypes : fallback.relationTypes(),
-            examples != null ? examples : fallback.examples()
+            examples != null ? examples : fallback.examples(),
+            entityExtractMaxRecords != null ? entityExtractMaxRecords : fallback.entityExtractMaxRecords(),
+            entityExtractMaxEntities != null ? entityExtractMaxEntities : fallback.entityExtractMaxEntities()
         );
     }
 
@@ -113,6 +125,18 @@ public record GraphExtractionOptions(
         return examples == null ? List.of() : examples;
     }
 
+    int resolvedEntityExtractMaxRecords() {
+        return entityExtractMaxRecords == null
+            ? KnowledgeExtractor.DEFAULT_MAX_EXTRACTION_RECORDS
+            : entityExtractMaxRecords;
+    }
+
+    int resolvedEntityExtractMaxEntities() {
+        return entityExtractMaxEntities == null
+            ? KnowledgeExtractor.DEFAULT_MAX_EXTRACTION_ENTITIES
+            : entityExtractMaxEntities;
+    }
+
     private static String requireNonBlank(String value, String fieldName) {
         Objects.requireNonNull(value, fieldName);
         var normalized = value.strip();
@@ -131,6 +155,8 @@ public record GraphExtractionOptions(
         private List<String> entityTypes;
         private List<String> relationTypes;
         private List<GraphExtractionExample> examples;
+        private Integer entityExtractMaxRecords;
+        private Integer entityExtractMaxEntities;
 
         public Builder enabled(Boolean enabled) {
             this.enabled = enabled;
@@ -172,6 +198,16 @@ public record GraphExtractionOptions(
             return this;
         }
 
+        public Builder entityExtractMaxRecords(Integer entityExtractMaxRecords) {
+            this.entityExtractMaxRecords = entityExtractMaxRecords;
+            return this;
+        }
+
+        public Builder entityExtractMaxEntities(Integer entityExtractMaxEntities) {
+            this.entityExtractMaxEntities = entityExtractMaxEntities;
+            return this;
+        }
+
         public GraphExtractionOptions build() {
             return new GraphExtractionOptions(
                 enabled,
@@ -181,7 +217,9 @@ public record GraphExtractionOptions(
                 language,
                 entityTypes,
                 relationTypes,
-                examples
+                examples,
+                entityExtractMaxRecords,
+                entityExtractMaxEntities
             );
         }
     }

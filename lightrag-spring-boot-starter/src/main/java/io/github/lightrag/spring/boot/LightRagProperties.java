@@ -20,12 +20,15 @@ public class LightRagProperties {
     private final ModelProperties keywordModel = new ModelProperties();
     private final ModelProperties extractionModel = new ModelProperties();
     private final ModelProperties embedding = new ModelProperties();
+    private final ModelProperties rerank = new ModelProperties();
     private final StorageProperties storage = new StorageProperties();
     private final IndexingProperties indexing = new IndexingProperties();
     private final QueryProperties query = new QueryProperties();
     private final DemoProperties demo = new DemoProperties();
     private final WorkspaceProperties workspace = new WorkspaceProperties();
     private String snapshotPath;
+    private int maxAsyncLlm = io.github.lightrag.model.LlmConcurrencyBudget.DEFAULT_MAX_ASYNC_LLM;
+    private int embeddingMaxAsync = io.github.lightrag.model.LlmConcurrencyBudget.DEFAULT_EMBEDDING_MAX_ASYNC;
 
     public ModelProperties getChat() {
         return chat;
@@ -33,6 +36,10 @@ public class LightRagProperties {
 
     public ModelProperties getEmbedding() {
         return embedding;
+    }
+
+    public ModelProperties getRerank() {
+        return rerank;
     }
 
     public ModelProperties getQueryModel() {
@@ -75,11 +82,38 @@ public class LightRagProperties {
         this.snapshotPath = snapshotPath;
     }
 
+    public int getMaxAsyncLlm() {
+        return maxAsyncLlm;
+    }
+
+    public void setMaxAsyncLlm(int maxAsyncLlm) {
+        if (maxAsyncLlm <= 0) {
+            throw new IllegalArgumentException("maxAsyncLlm must be positive");
+        }
+        this.maxAsyncLlm = maxAsyncLlm;
+    }
+
+    public int getEmbeddingMaxAsync() {
+        return embeddingMaxAsync;
+    }
+
+    public void setEmbeddingMaxAsync(int embeddingMaxAsync) {
+        if (embeddingMaxAsync <= 0) {
+            throw new IllegalArgumentException("embeddingMaxAsync must be positive");
+        }
+        this.embeddingMaxAsync = embeddingMaxAsync;
+    }
+
     public static class ModelProperties {
         private String baseUrl;
         private String model;
         private String apiKey;
         private Duration timeout = Duration.ofSeconds(30);
+        private Double temperature;
+        private Integer maxTokens;
+        private Double topP;
+        private String responseFormat;
+        private int maxAttempts = io.github.lightrag.model.openai.ModelRetrySupport.DEFAULT_MAX_ATTEMPTS;
 
         public String getBaseUrl() {
             return baseUrl;
@@ -111,6 +145,57 @@ public class LightRagProperties {
 
         public void setTimeout(Duration timeout) {
             this.timeout = timeout;
+        }
+
+        public Double getTemperature() {
+            return temperature;
+        }
+
+        public void setTemperature(Double temperature) {
+            this.temperature = temperature;
+        }
+
+        public Integer getMaxTokens() {
+            return maxTokens;
+        }
+
+        public void setMaxTokens(Integer maxTokens) {
+            this.maxTokens = maxTokens;
+        }
+
+        public Double getTopP() {
+            return topP;
+        }
+
+        public void setTopP(Double topP) {
+            this.topP = topP;
+        }
+
+        public String getResponseFormat() {
+            return responseFormat;
+        }
+
+        public void setResponseFormat(String responseFormat) {
+            this.responseFormat = responseFormat;
+        }
+
+        public int getMaxAttempts() {
+            return maxAttempts;
+        }
+
+        /** Retry attempts for the model call; {@code 0} or {@code 1} disables retry. */
+        public void setMaxAttempts(int maxAttempts) {
+            if (maxAttempts < 0) {
+                throw new IllegalArgumentException("maxAttempts must not be negative");
+            }
+            this.maxAttempts = maxAttempts;
+        }
+
+        public io.github.lightrag.model.ChatRequestOptions toChatRequestOptions() {
+            if (temperature == null && maxTokens == null && topP == null && responseFormat == null) {
+                return io.github.lightrag.model.ChatRequestOptions.NONE;
+            }
+            return new io.github.lightrag.model.ChatRequestOptions(temperature, maxTokens, topP, responseFormat);
         }
     }
 
@@ -156,7 +241,7 @@ public class LightRagProperties {
         private final IngestProperties ingest = new IngestProperties();
         private final ParsingProperties parsing = new ParsingProperties();
         private int embeddingBatchSize;
-        private int maxParallelInsert = 2;
+        private int maxParallelInsert = 3;
         private int chunkExtractParallelism = 2;
         private int entityExtractMaxGleaning = io.github.lightrag.indexing.KnowledgeExtractor.DEFAULT_ENTITY_EXTRACT_MAX_GLEANING;
         private int maxExtractInputTokens = io.github.lightrag.indexing.KnowledgeExtractor.DEFAULT_MAX_EXTRACT_INPUT_TOKENS;

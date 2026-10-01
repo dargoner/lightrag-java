@@ -36,6 +36,7 @@ public final class DeletionPipeline {
     private final AtomicStorageProvider storageProvider;
     private final IndexingPipeline indexingPipeline;
     private final Path snapshotPath;
+    private final boolean sourceIdsCapsEnabled;
 
     public DeletionPipeline(
         AtomicStorageProvider storageProvider,
@@ -45,6 +46,8 @@ public final class DeletionPipeline {
         this.storageProvider = Objects.requireNonNull(storageProvider, "storageProvider");
         this.indexingPipeline = Objects.requireNonNull(indexingPipeline, "indexingPipeline");
         this.snapshotPath = snapshotPath;
+        // Survival must mirror the writer's cap configuration; LightRag builds both from one config.
+        this.sourceIdsCapsEnabled = indexingPipeline.sourceIdsCapsEnabled();
     }
 
     public DeletionResult deleteByEntity(String entityName) {
@@ -212,7 +215,8 @@ public final class DeletionPipeline {
                 beforeSnapshot,
                 targetId,
                 targetChunkIds,
-                targetStatusRecord
+                targetStatusRecord,
+                sourceIdsCapsEnabled
             );
             long rewriteBuiltAt = System.nanoTime();
             storageProvider.restore(retainedSnapshot);
@@ -303,19 +307,29 @@ public final class DeletionPipeline {
         SnapshotStore.Snapshot snapshot,
         String documentId,
         Set<String> targetChunkIds,
-        io.github.lightrag.storage.DocumentStatusStore.StatusRecord retainedStatusRecord
+        io.github.lightrag.storage.DocumentStatusStore.StatusRecord retainedStatusRecord,
+        boolean sourceIdsCapsEnabled
     ) {
         var chunkIds = Set.copyOf(Objects.requireNonNull(targetChunkIds, "targetChunkIds"));
+        // With caps active a record's own sourceChunkIds is a truncated view, so survival is decided by
+        // the remaining documents' per-chunk snapshots (upstream's entity_chunks/relation_chunks
+        // authority, utils.py:7292-7306). Uncapped, the record's list is already authoritative and the
+        // index build is skipped.
+        var attribution = sourceIdsCapsEnabled
+            ? GraphChunkAttribution.from(snapshot.entities(), snapshot.chunkGraphSnapshots(), documentId)
+            : null;
         var entities = snapshot.entities().stream()
             .map(entity -> removeEntityChunkReferences(entity, chunkIds))
-            .filter(entity -> !entity.sourceChunkIds().isEmpty())
+            .filter(entity -> !entity.sourceChunkIds().isEmpty()
+                || (attribution != null && attribution.entityHasAttribution(entity)))
             .toList();
         var entityIds = entities.stream()
             .map(GraphStore.EntityRecord::id)
             .collect(java.util.stream.Collectors.toCollection(LinkedHashSet::new));
         var relations = snapshot.relations().stream()
             .map(relation -> removeRelationChunkReferences(relation, chunkIds))
-            .filter(relation -> !relation.sourceChunkIds().isEmpty())
+            .filter(relation -> !relation.sourceChunkIds().isEmpty()
+                || (attribution != null && attribution.relationHasAttribution(relation)))
             .filter(relation -> entityIds.contains(relation.srcId()) && entityIds.contains(relation.tgtId()))
             .toList();
         var relationIds = relations.stream()
@@ -398,7 +412,12 @@ public final class DeletionPipeline {
             relation.keywords(),
             relation.description(),
             relation.weight(),
-            relation.sourceChunkIds().stream().filter(chunkId -> !targetChunkIds.contains(chunkId)).toList()
+            RelationCanonicalizer.joinValues(
+                relation.sourceChunkIds().stream().filter(chunkId -> !targetChunkIds.contains(chunkId)).toList()
+            ),
+            // The rewrite must not drop the accumulated file paths (upstream keeps file_path when a
+            // delete trims source ids).
+            relation.filePath()
         );
     }
 

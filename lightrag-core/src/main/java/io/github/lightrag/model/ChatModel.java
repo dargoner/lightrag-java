@@ -6,6 +6,11 @@ import java.util.Objects;
 public interface ChatModel {
     String generate(ChatRequest request);
 
+    /** Providers that expose response metadata override this; the default adapts the plain-content contract. */
+    default ChatResponse generateResponse(ChatRequest request) {
+        return ChatResponse.of(generate(request));
+    }
+
     default CloseableIterator<String> stream(ChatRequest request) {
         var response = generate(request);
         if (response.isEmpty()) {
@@ -17,16 +22,26 @@ public interface ChatModel {
     record ChatRequest(
         String systemPrompt,
         String userPrompt,
-        List<ConversationMessage> conversationHistory
+        List<ConversationMessage> conversationHistory,
+        ChatRequestOptions options
     ) {
         public ChatRequest {
             systemPrompt = Objects.requireNonNull(systemPrompt, "systemPrompt");
             userPrompt = Objects.requireNonNull(userPrompt, "userPrompt");
             conversationHistory = List.copyOf(Objects.requireNonNull(conversationHistory, "conversationHistory"));
+            options = options == null ? ChatRequestOptions.NONE : options;
         }
 
         public ChatRequest(String systemPrompt, String userPrompt) {
-            this(systemPrompt, userPrompt, List.of());
+            this(systemPrompt, userPrompt, List.of(), ChatRequestOptions.NONE);
+        }
+
+        public ChatRequest(String systemPrompt, String userPrompt, List<ConversationMessage> conversationHistory) {
+            this(systemPrompt, userPrompt, conversationHistory, ChatRequestOptions.NONE);
+        }
+
+        public ChatRequest(String systemPrompt, String userPrompt, ChatRequestOptions options) {
+            this(systemPrompt, userPrompt, List.of(), options);
         }
 
         public record ConversationMessage(String role, String content) {

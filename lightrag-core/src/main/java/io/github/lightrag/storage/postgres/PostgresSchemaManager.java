@@ -104,7 +104,8 @@ public final class PostgresSchemaManager {
             new Migration(3, versionThreeStatements()),
             new Migration(4, versionFourStatements()),
             new Migration(5, versionFiveStatements()),
-            new Migration(6, versionSixStatements())
+            new Migration(6, versionSixStatements()),
+            new Migration(7, versionSevenStatements())
         );
     }
 
@@ -354,6 +355,20 @@ public final class PostgresSchemaManager {
         );
     }
 
+    private List<String> versionSevenStatements() {
+        return List.of(
+            """
+                CREATE TABLE IF NOT EXISTS %s (
+                    workspace_id TEXT NOT NULL,
+                    model_identity TEXT NOT NULL,
+                    dimensions INTEGER NOT NULL,
+                    recorded_at TEXT NOT NULL,
+                    PRIMARY KEY (workspace_id)
+                )
+                """.formatted(config.qualifiedTableName("embedding_space"))
+        );
+    }
+
     private void ensureSchemaVersionTable(Statement statement) throws SQLException {
         statement.execute(
             """
@@ -438,6 +453,7 @@ public final class PostgresSchemaManager {
             "vectors",
             "document_status",
             "llm_cache",
+            "embedding_space",
             "document_graph_snapshots",
             "chunk_graph_snapshots",
             "document_graph_journals",

@@ -1,6 +1,7 @@
 package io.github.lightrag.api;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
+import io.github.lightrag.exception.ModelException;
 import io.github.lightrag.indexing.Chunker;
 import io.github.lightrag.indexing.FixedWindowChunker;
 import io.github.lightrag.indexing.StorageSnapshots;
@@ -8,6 +9,7 @@ import io.github.lightrag.indexing.SmartChunker;
 import io.github.lightrag.indexing.SmartChunkerConfig;
 import io.github.lightrag.indexing.DocumentTypeHint;
 import io.github.lightrag.model.ChatModel;
+import io.github.lightrag.model.ChatRequestOptions;
 import io.github.lightrag.model.EmbeddingModel;
 import io.github.lightrag.model.RerankModel;
 import io.github.lightrag.storage.AtomicStorageProvider;
@@ -76,6 +78,75 @@ class LightRagBuilderTest {
         assertThat(rag.config().embeddingModel()).isSameAs(embeddingModel);
         assertThat(rag.config().storageProvider()).isSameAs(storageProvider);
         assertThat(rag.config().workspaceStorageProvider()).isInstanceOf(FixedWorkspaceStorageProvider.class);
+    }
+
+    @Test
+    void chatRequestOptionsActAsMergeDefaultsForRoleRequests() {
+        var requests = new ArrayList<ChatModel.ChatRequest>();
+        var chatModel = new ChatModel() {
+            @Override
+            public String generate(ChatRequest request) {
+                requests.add(request);
+                return "ok";
+            }
+        };
+
+        var rag = LightRag.builder()
+            .chatModel(chatModel)
+            .embeddingModel(new FakeEmbeddingModel())
+            .storage(new FakeStorageProvider())
+            .chatRequestOptions(new ChatRequestOptions(0.2d, 512, null, null))
+            .build();
+
+        rag.config().chatModel().generate(new ChatModel.ChatRequest("system", "user",
+            new ChatRequestOptions(null, 64, null, null)));
+
+        assertThat(requests).hasSize(1);
+        assertThat(requests.get(0).options()).isEqualTo(new ChatRequestOptions(0.2d, 64, null, null));
+        assertThat(rag.config().chatModel()).isNotSameAs(chatModel);
+    }
+
+    @Test
+    void modelMaxAttemptsRetriesInjectedChatModelsOnTransientFailures() {
+        var attempts = new AtomicInteger();
+        var chatModel = new ChatModel() {
+            @Override
+            public String generate(ChatRequest request) {
+                if (attempts.incrementAndGet() < 3) {
+                    throw new ModelException("down", 503, null, null, null);
+                }
+                return "ok";
+            }
+        };
+
+        var rag = LightRag.builder()
+            .chatModel(chatModel)
+            .embeddingModel(new FakeEmbeddingModel())
+            .storage(new FakeStorageProvider())
+            .modelMaxAttempts(3)
+            .build();
+
+        assertThat(rag.config().chatModel().generate(new ChatModel.ChatRequest("system", "user")))
+            .isEqualTo("ok");
+        assertThat(attempts).hasValue(3);
+    }
+
+    @Test
+    void modelMaxAttemptsLeavesSelfRetryingModelsUnwrapped() {
+        var openAiModel = new io.github.lightrag.model.openai.OpenAiCompatibleChatModel(
+            "http://localhost:1/v1",
+            "model",
+            "key"
+        );
+
+        var rag = LightRag.builder()
+            .chatModel(openAiModel)
+            .embeddingModel(new FakeEmbeddingModel())
+            .storage(new FakeStorageProvider())
+            .modelMaxAttempts(5)
+            .build();
+
+        assertThat(rag.config().chatModel()).isSameAs(openAiModel);
     }
 
     @Test
@@ -372,6 +443,8 @@ class LightRagBuilderTest {
             .chunkExtractParallelism(4)
             .entityExtractMaxGleaning(2)
             .maxExtractInputTokens(4_096)
+            .entityExtractMaxRecords(60)
+            .entityExtractMaxEntities(20)
             .entityExtractionLanguage("Chinese")
             .entityTypes(List.of("Person", "Organization"))
             .relationTypes(List.of("Author", "Alias"))
@@ -394,6 +467,8 @@ class LightRagBuilderTest {
         assertThat(rag.chunkExtractParallelism()).isEqualTo(4);
         assertThat(rag.entityExtractMaxGleaning()).isEqualTo(2);
         assertThat(rag.maxExtractInputTokens()).isEqualTo(4_096);
+        assertThat(rag.entityExtractMaxRecords()).isEqualTo(60);
+        assertThat(rag.entityExtractMaxEntities()).isEqualTo(20);
         assertThat(rag.entityExtractionLanguage()).isEqualTo("Chinese");
         assertThat(rag.entityTypes()).containsExactly("Person", "Organization");
         assertThat(rag.graphExtractionEnabled()).isTrue();
@@ -959,15 +1034,17 @@ class LightRagBuilderTest {
     }
 
     @Test
-    void defaultsToTwoWayIngestAndChunkExtractionParallelism() {
+    void defaultsToThreeWayIngestAndChunkExtractionParallelism() {
         var rag = LightRag.builder()
             .chatModel(new FakeChatModel())
             .embeddingModel(new FakeEmbeddingModel())
             .storage(new FakeStorageProvider())
             .build();
 
-        assertThat(rag.maxParallelInsert()).isEqualTo(2);
+        assertThat(rag.maxParallelInsert()).isEqualTo(3);
         assertThat(rag.chunkExtractParallelism()).isEqualTo(2);
+        assertThat(rag.config().maxAsyncLlm()).isEqualTo(4);
+        assertThat(rag.config().embeddingMaxAsync()).isEqualTo(8);
         assertThat(GraphExtractionOptions.defaults().resolvedChunkExtractParallelism()).isEqualTo(2);
         assertThat(GraphExtractionOptions.builder().build().resolvedChunkExtractParallelism()).isEqualTo(2);
     }
@@ -1002,6 +1079,16 @@ class LightRagBuilderTest {
         assertThatThrownBy(() -> LightRag.builder().maxExtractInputTokens(0))
             .isInstanceOf(IllegalArgumentException.class)
             .hasMessage("maxExtractInputTokens must be positive");
+    }
+
+    @Test
+    void rejectsNonPositiveEntityExtractRecordCaps() {
+        assertThatThrownBy(() -> LightRag.builder().entityExtractMaxRecords(0))
+            .isInstanceOf(IllegalArgumentException.class)
+            .hasMessage("entityExtractMaxRecords must be positive");
+        assertThatThrownBy(() -> LightRag.builder().entityExtractMaxEntities(0))
+            .isInstanceOf(IllegalArgumentException.class)
+            .hasMessage("entityExtractMaxEntities must be positive");
     }
 
     @Test

@@ -21,13 +21,20 @@ public final class CachedChatModel implements ChatModel {
 
     @Override
     public String generate(ChatRequest request) {
+        return generateResponse(request).content();
+    }
+
+    @Override
+    public ChatResponse generateResponse(ChatRequest request) {
         var cacheId = cacheId(role, request);
         var cached = cacheStore.load(cacheId);
         if (cached.isPresent()) {
-            return cached.get().value();
+            return ChatResponse.of(cached.get().value());
         }
-        var response = delegate.generate(request);
-        cacheStore.save(new LlmCacheStore.CacheRecord(cacheId, response));
+        var response = delegate.generateResponse(request);
+        if (!response.truncated()) {
+            cacheStore.save(new LlmCacheStore.CacheRecord(cacheId, response.content()));
+        }
         return response;
     }
 

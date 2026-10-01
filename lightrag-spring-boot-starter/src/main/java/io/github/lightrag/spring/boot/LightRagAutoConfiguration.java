@@ -14,8 +14,10 @@ import io.github.lightrag.indexing.PlainTextParsingProvider;
 import io.github.lightrag.model.ChatModel;
 import io.github.lightrag.model.EmbeddingModel;
 import io.github.lightrag.model.RerankModel;
+import io.github.lightrag.model.openai.ModelRetrySupport;
 import io.github.lightrag.model.openai.OpenAiCompatibleChatModel;
 import io.github.lightrag.model.openai.OpenAiCompatibleEmbeddingModel;
+import io.github.lightrag.model.openai.OpenAiCompatibleRerankModel;
 import io.github.lightrag.persistence.FileSnapshotStore;
 import io.github.lightrag.storage.InMemoryStorageProvider;
 import io.github.lightrag.storage.SnapshotStore;
@@ -64,7 +66,10 @@ public class LightRagAutoConfiguration {
             requireValue(chat.getBaseUrl(), "lightrag.chat.base-url"),
             requireValue(chat.getModel(), "lightrag.chat.model"),
             requireValue(chat.getApiKey(), "lightrag.chat.api-key"),
-            chat.getTimeout()
+            chat.getTimeout(),
+            chat.toChatRequestOptions(),
+            chat.getMaxAttempts(),
+            ModelRetrySupport.DEFAULT_INITIAL_BACKOFF
         );
     }
 
@@ -77,7 +82,10 @@ public class LightRagAutoConfiguration {
             requireValue(queryModel.getBaseUrl(), "lightrag.query-model.base-url"),
             requireValue(queryModel.getModel(), "lightrag.query-model.model"),
             requireValue(queryModel.getApiKey(), "lightrag.query-model.api-key"),
-            queryModel.getTimeout()
+            queryModel.getTimeout(),
+            queryModel.toChatRequestOptions(),
+            queryModel.getMaxAttempts(),
+            ModelRetrySupport.DEFAULT_INITIAL_BACKOFF
         );
     }
 
@@ -90,7 +98,10 @@ public class LightRagAutoConfiguration {
             requireValue(keywordModel.getBaseUrl(), "lightrag.keyword-model.base-url"),
             requireValue(keywordModel.getModel(), "lightrag.keyword-model.model"),
             requireValue(keywordModel.getApiKey(), "lightrag.keyword-model.api-key"),
-            keywordModel.getTimeout()
+            keywordModel.getTimeout(),
+            keywordModel.toChatRequestOptions(),
+            keywordModel.getMaxAttempts(),
+            ModelRetrySupport.DEFAULT_INITIAL_BACKOFF
         );
     }
 
@@ -103,7 +114,10 @@ public class LightRagAutoConfiguration {
             requireValue(extractionModel.getBaseUrl(), "lightrag.extraction-model.base-url"),
             requireValue(extractionModel.getModel(), "lightrag.extraction-model.model"),
             requireValue(extractionModel.getApiKey(), "lightrag.extraction-model.api-key"),
-            extractionModel.getTimeout()
+            extractionModel.getTimeout(),
+            extractionModel.toChatRequestOptions(),
+            extractionModel.getMaxAttempts(),
+            ModelRetrySupport.DEFAULT_INITIAL_BACKOFF
         );
     }
 
@@ -115,7 +129,24 @@ public class LightRagAutoConfiguration {
             requireValue(embedding.getBaseUrl(), "lightrag.embedding.base-url"),
             requireValue(embedding.getModel(), "lightrag.embedding.model"),
             requireValue(embedding.getApiKey(), "lightrag.embedding.api-key"),
-            embedding.getTimeout()
+            embedding.getTimeout(),
+            embedding.getMaxAttempts(),
+            ModelRetrySupport.DEFAULT_INITIAL_BACKOFF
+        );
+    }
+
+    @Bean
+    @ConditionalOnProperty(prefix = "lightrag.rerank", name = "base-url")
+    @ConditionalOnMissingBean(RerankModel.class)
+    RerankModel rerankModel(LightRagProperties properties) {
+        var rerank = properties.getRerank();
+        return new OpenAiCompatibleRerankModel(
+            requireValue(rerank.getBaseUrl(), "lightrag.rerank.base-url"),
+            requireValue(rerank.getModel(), "lightrag.rerank.model"),
+            requireValue(rerank.getApiKey(), "lightrag.rerank.api-key"),
+            rerank.getTimeout(),
+            rerank.getMaxAttempts(),
+            ModelRetrySupport.DEFAULT_INITIAL_BACKOFF
         );
     }
 
@@ -315,6 +346,8 @@ public class LightRagAutoConfiguration {
             builder.embeddingBatchSize(properties.getIndexing().getEmbeddingBatchSize());
         }
         builder.maxParallelInsert(properties.getIndexing().getMaxParallelInsert());
+        builder.maxAsyncLlm(properties.getMaxAsyncLlm());
+        builder.embeddingMaxAsync(properties.getEmbeddingMaxAsync());
         builder.chunkExtractParallelism(properties.getIndexing().getChunkExtractParallelism());
         builder.entityExtractMaxGleaning(properties.getIndexing().getEntityExtractMaxGleaning());
         builder.maxExtractInputTokens(properties.getIndexing().getMaxExtractInputTokens());

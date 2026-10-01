@@ -11,7 +11,9 @@ import io.github.lightrag.storage.DocumentGraphSnapshotStore;
 import io.github.lightrag.storage.DocumentGraphStateSupport;
 import io.github.lightrag.storage.DocumentStore;
 import io.github.lightrag.storage.DocumentStatusStore;
+import io.github.lightrag.storage.EmbeddingSpaceStore;
 import io.github.lightrag.storage.GraphStore;
+import io.github.lightrag.storage.IndependentlyLockedLlmCacheStore;
 import io.github.lightrag.storage.LlmCacheStore;
 import io.github.lightrag.storage.SnapshotStore;
 import io.github.lightrag.storage.TaskDocumentStore;
@@ -51,6 +53,7 @@ public final class PostgresStorageProvider implements AtomicStorageProvider, Aut
     private final TaskStageStore taskStageStore;
     private final TaskDocumentStore taskDocumentStore;
     private final LlmCacheStore llmCacheStore;
+    private final PostgresEmbeddingSpaceStore embeddingSpaceStore;
     private final PostgresDocumentStore documentStore;
     private final PostgresChunkStore chunkStore;
     private final PostgresGraphStore graphStore;
@@ -60,6 +63,7 @@ public final class PostgresStorageProvider implements AtomicStorageProvider, Aut
     private final TaskStageStore lockedTaskStageStore;
     private final TaskDocumentStore lockedTaskDocumentStore;
     private final LlmCacheStore lockedLlmCacheStore;
+    private final EmbeddingSpaceStore lockedEmbeddingSpaceStore;
     private final DocumentStore lockedDocumentStore;
     private final ChunkStore lockedChunkStore;
     private final GraphStore lockedGraphStore;
@@ -143,6 +147,7 @@ public final class PostgresStorageProvider implements AtomicStorageProvider, Aut
             this.taskStageStore = new PostgresTaskStageStore(jdbcDataSource, resolvedConfig, this.workspaceId);
             this.taskDocumentStore = new PostgresTaskDocumentStore(jdbcDataSource, resolvedConfig, this.workspaceId);
             this.llmCacheStore = new PostgresLlmCacheStore(jdbcDataSource, resolvedConfig, this.workspaceId);
+            this.embeddingSpaceStore = new PostgresEmbeddingSpaceStore(jdbcDataSource, resolvedConfig, this.workspaceId);
             this.documentGraphSnapshotStore = DocumentGraphStateSupport.trackedSnapshotStore(
                 new PostgresDocumentGraphSnapshotStore(jdbcDataSource, resolvedConfig, this.workspaceId),
                 trackedDocumentGraphIds
@@ -155,7 +160,8 @@ public final class PostgresStorageProvider implements AtomicStorageProvider, Aut
             this.lockedTaskStore = new LockedTaskStore(taskStore);
             this.lockedTaskStageStore = new LockedTaskStageStore(taskStageStore);
             this.lockedTaskDocumentStore = new LockedTaskDocumentStore(taskDocumentStore);
-            this.lockedLlmCacheStore = new LockedLlmCacheStore(llmCacheStore);
+            this.lockedLlmCacheStore = new IndependentlyLockedLlmCacheStore(llmCacheStore);
+            this.lockedEmbeddingSpaceStore = new LockedEmbeddingSpaceStore(embeddingSpaceStore);
             this.lockedDocumentStore = new LockedDocumentStore(documentStore);
             this.lockedChunkStore = new LockedChunkStore(chunkStore);
             this.lockedGraphStore = new LockedGraphStore(graphStore);
@@ -209,6 +215,11 @@ public final class PostgresStorageProvider implements AtomicStorageProvider, Aut
     @Override
     public LlmCacheStore llmCacheStore() {
         return lockedLlmCacheStore;
+    }
+
+    @Override
+    public EmbeddingSpaceStore embeddingSpaceStore() {
+        return lockedEmbeddingSpaceStore;
     }
 
     @Override
@@ -320,7 +331,8 @@ public final class PostgresStorageProvider implements AtomicStorageProvider, Aut
             new PostgresDocumentGraphJournalStore(connectionAccess, config, workspaceId),
             new PostgresGraphStore(connectionAccess, config, workspaceId),
             new PostgresVectorStore(connectionAccess, config, workspaceId),
-            new PostgresDocumentStatusStore(connectionAccess, config, workspaceId)
+            new PostgresDocumentStatusStore(connectionAccess, config, workspaceId),
+            new PostgresEmbeddingSpaceStore(connectionAccess, config, workspaceId)
         );
     }
 
@@ -469,7 +481,8 @@ public final class PostgresStorageProvider implements AtomicStorageProvider, Aut
         DocumentGraphJournalStore documentGraphJournalStore,
         GraphStore graphStore,
         VectorStore vectorStore,
-        DocumentStatusStore documentStatusStore
+        DocumentStatusStore documentStatusStore,
+        EmbeddingSpaceStore embeddingSpaceStore
     ) implements AtomicStorageView {
     }
 
@@ -712,36 +725,26 @@ public final class PostgresStorageProvider implements AtomicStorageProvider, Aut
         }
     }
 
-    private final class LockedLlmCacheStore implements LlmCacheStore {
-        private final LlmCacheStore delegate;
+    private final class LockedEmbeddingSpaceStore implements EmbeddingSpaceStore {
+        private final EmbeddingSpaceStore delegate;
 
-        private LockedLlmCacheStore(LlmCacheStore delegate) {
+        private LockedEmbeddingSpaceStore(EmbeddingSpaceStore delegate) {
             this.delegate = Objects.requireNonNull(delegate, "delegate");
         }
 
         @Override
-        public void save(CacheRecord record) {
-            withWriteLock(() -> delegate.save(record));
+        public void save(Marker marker) {
+            withWriteLock(() -> delegate.save(marker));
         }
 
         @Override
-        public Optional<CacheRecord> load(String cacheId) {
-            return withReadLock(() -> delegate.load(cacheId));
+        public Optional<Marker> load() {
+            return withReadLock(delegate::load);
         }
 
         @Override
-        public boolean contains(String cacheId) {
-            return withReadLock(() -> delegate.contains(cacheId));
-        }
-
-        @Override
-        public void delete(List<String> cacheIds) {
-            withWriteLock(() -> delegate.delete(cacheIds));
-        }
-
-        @Override
-        public void drop() {
-            withWriteLock(delegate::drop);
+        public void delete() {
+            withWriteLock(delegate::delete);
         }
     }
 

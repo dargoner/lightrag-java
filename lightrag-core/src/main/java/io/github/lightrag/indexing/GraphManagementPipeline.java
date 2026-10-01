@@ -181,6 +181,7 @@ public final class GraphManagementPipeline {
             editRequest.sourceId() == null ? existing.sourceId() : editRequest.sourceId(),
             editRequest.filePath() == null ? existing.filePath() : editRequest.filePath()
         );
+        RelationEvidence.validateManualWeight(updatedRelation.weight(), updatedRelation.sourceChunkIds());
 
         var updatedVectors = new LinkedHashMap<>(snapshot.vectors());
         updatedVectors.put(
@@ -307,6 +308,7 @@ public final class GraphManagementPipeline {
         if (relations.stream().anyMatch(existing -> existing.id().equals(relationRecord.id()))) {
             throw new IllegalArgumentException("relation already exists: " + relationRecord.id());
         }
+        RelationEvidence.validateManualWeight(relationRecord.weight(), relationRecord.sourceChunkIds());
     }
 
     private static void validateRelationIdsUnique(List<GraphStore.RelationRecord> relations) {
@@ -530,14 +532,21 @@ public final class GraphManagementPipeline {
         GraphStore.RelationRecord current,
         GraphStore.RelationRecord incoming
     ) {
+        var mergedSourceChunkIds = mergeSourceChunkIds(current.sourceChunkIds(), incoming.sourceChunkIds());
+        // Upstream floors the collapsed weight at its merged distinct evidence sources
+        // (apply_relation_weight_floor, utils_graph.py:220-229; entity-merge collapse :2886-2917).
+        var weight = Math.max(
+            Math.max(current.weight(), incoming.weight()),
+            (double) RelationEvidence.distinctEvidence(mergedSourceChunkIds)
+        );
         return new GraphStore.RelationRecord(
             current.relationId(),
             current.srcId(),
             current.tgtId(),
             RelationCanonicalizer.mergeCsv(current.keywords(), incoming.keywords()),
             mergeDescriptions(List.of(current.description(), incoming.description())),
-            Math.max(current.weight(), incoming.weight()),
-            RelationCanonicalizer.joinValues(mergeSourceChunkIds(current.sourceChunkIds(), incoming.sourceChunkIds())),
+            weight,
+            RelationCanonicalizer.joinValues(mergedSourceChunkIds),
             RelationCanonicalizer.joinValues(mergeSourceChunkIds(current.filePaths(), incoming.filePaths()))
         );
     }

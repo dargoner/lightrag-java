@@ -5,12 +5,16 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import io.github.lightrag.exception.ModelException;
 import io.github.lightrag.exception.ModelTimeoutException;
 import io.github.lightrag.model.ChatModel;
+import io.github.lightrag.model.ChatRequestOptions;
+import io.github.lightrag.model.ChatResponse;
 import io.github.lightrag.model.CloseableIterator;
 import okhttp3.MediaType;
 import okhttp3.OkHttpClient;
 import okhttp3.Request;
 import okhttp3.RequestBody;
 import okhttp3.Response;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 import java.io.IOException;
 import java.io.InterruptedIOException;
@@ -23,6 +27,7 @@ import java.util.NoSuchElementException;
 import java.util.Objects;
 
 public final class OpenAiCompatibleChatModel implements ChatModel {
+    private static final Logger log = LoggerFactory.getLogger(OpenAiCompatibleChatModel.class);
     private static final ObjectMapper OBJECT_MAPPER = new ObjectMapper();
     private static final MediaType JSON = MediaType.get("application/json");
 
@@ -30,16 +35,52 @@ public final class OpenAiCompatibleChatModel implements ChatModel {
     private final String baseUrl;
     private final String modelName;
     private final String apiKey;
+    private final ChatRequestOptions defaults;
+    private final int maxAttempts;
+    private final Duration initialBackoff;
 
     public OpenAiCompatibleChatModel(String baseUrl, String modelName, String apiKey) {
-        this(baseUrl, modelName, apiKey, Duration.ofSeconds(30));
+        this(baseUrl, modelName, apiKey, Duration.ofSeconds(30), ChatRequestOptions.NONE);
     }
 
     public OpenAiCompatibleChatModel(String baseUrl, String modelName, String apiKey, Duration timeout) {
+        this(baseUrl, modelName, apiKey, timeout, ChatRequestOptions.NONE);
+    }
+
+    public OpenAiCompatibleChatModel(
+        String baseUrl,
+        String modelName,
+        String apiKey,
+        Duration timeout,
+        ChatRequestOptions defaults
+    ) {
+        this(
+            baseUrl,
+            modelName,
+            apiKey,
+            timeout,
+            defaults,
+            ModelRetrySupport.DEFAULT_MAX_ATTEMPTS,
+            ModelRetrySupport.DEFAULT_INITIAL_BACKOFF
+        );
+    }
+
+    public OpenAiCompatibleChatModel(
+        String baseUrl,
+        String modelName,
+        String apiKey,
+        Duration timeout,
+        ChatRequestOptions defaults,
+        int maxAttempts,
+        Duration initialBackoff
+    ) {
         this.baseUrl = normalizeBaseUrl(baseUrl);
         this.modelName = requireNonBlank(modelName, "modelName");
         this.apiKey = requireNonBlank(apiKey, "apiKey");
         var effectiveTimeout = Objects.requireNonNull(timeout, "timeout");
+        this.defaults = Objects.requireNonNull(defaults, "defaults");
+        this.maxAttempts = requireValidMaxAttempts(maxAttempts);
+        this.initialBackoff = requireNonNegative(initialBackoff, "initialBackoff");
         this.httpClient = new OkHttpClient.Builder()
             .callTimeout(effectiveTimeout)
             .connectTimeout(effectiveTimeout)
@@ -50,13 +91,22 @@ public final class OpenAiCompatibleChatModel implements ChatModel {
 
     @Override
     public String generate(ChatRequest request) {
+        return generateResponse(request).content();
+    }
+
+    @Override
+    public ChatResponse generateResponse(ChatRequest request) {
         Objects.requireNonNull(request, "request");
+        return ModelRetrySupport.call(() -> generateOnce(request), maxAttempts, initialBackoff);
+    }
+
+    private ChatResponse generateOnce(ChatRequest request) {
         try (var response = execute(buildHttpRequest(request, false))) {
             var body = response.body();
             if (body == null) {
                 throw new ModelException("Chat completion response body is missing");
             }
-            return extractContent(OBJECT_MAPPER.readTree(body.byteStream()));
+            return toChatResponse(OBJECT_MAPPER.readTree(body.byteStream()));
         } catch (IOException exception) {
             throw toModelException("Chat completion request", baseUrl + "chat/completions", exception);
         }
@@ -65,6 +115,10 @@ public final class OpenAiCompatibleChatModel implements ChatModel {
     @Override
     public CloseableIterator<String> stream(ChatRequest request) {
         Objects.requireNonNull(request, "request");
+        return ModelRetrySupport.call(() -> openStream(request), maxAttempts, initialBackoff);
+    }
+
+    private CloseableIterator<String> openStream(ChatRequest request) {
         try {
             var response = execute(buildHttpRequest(request, true));
             var body = response.body();
@@ -78,12 +132,27 @@ public final class OpenAiCompatibleChatModel implements ChatModel {
         }
     }
 
-    private static String extractContent(JsonNode root) {
-        var content = root.path("choices").path(0).path("message").path("content");
+    private static ChatResponse toChatResponse(JsonNode root) {
+        var choice = root.path("choices").path(0);
+        var content = choice.path("message").path("content");
         if (!content.isTextual()) {
             throw new ModelException("Chat completion response is missing choices[0].message.content");
         }
-        return content.asText();
+        var finishReason = choice.path("finish_reason");
+        var usage = root.path("usage");
+        return new ChatResponse(
+            content.asText(),
+            finishReason.isTextual() ? finishReason.asText() : null,
+            usage.isObject()
+                ? new ChatResponse.Usage(
+                    intOrNull(usage.path("prompt_tokens")),
+                    intOrNull(usage.path("completion_tokens")))
+                : null
+        );
+    }
+
+    private static Integer intOrNull(JsonNode node) {
+        return node.isNumber() ? node.asInt() : null;
     }
 
     private Request buildHttpRequest(ChatRequest request, boolean stream) throws IOException {
@@ -107,6 +176,19 @@ public final class OpenAiCompatibleChatModel implements ChatModel {
         var payload = new LinkedHashMap<String, Object>();
         payload.put("model", modelName);
         payload.put("messages", List.copyOf(messages));
+        var options = defaults.merge(request.options());
+        if (options.temperature() != null) {
+            payload.put("temperature", options.temperature());
+        }
+        if (options.maxTokens() != null) {
+            payload.put("max_tokens", options.maxTokens());
+        }
+        if (options.topP() != null) {
+            payload.put("top_p", options.topP());
+        }
+        if (options.responseFormat() != null) {
+            payload.put("response_format", Map.of("type", options.responseFormat()));
+        }
         if (stream) {
             payload.put("stream", true);
         }
@@ -174,6 +256,21 @@ public final class OpenAiCompatibleChatModel implements ChatModel {
         return normalized;
     }
 
+    private static int requireValidMaxAttempts(int maxAttempts) {
+        if (maxAttempts < 0) {
+            throw new IllegalArgumentException("maxAttempts must not be negative");
+        }
+        return maxAttempts;
+    }
+
+    private static Duration requireNonNegative(Duration value, String fieldName) {
+        Objects.requireNonNull(value, fieldName);
+        if (value.isNegative()) {
+            throw new IllegalArgumentException(fieldName + " must not be negative");
+        }
+        return value;
+    }
+
     private static final class OpenAiSseIterator implements CloseableIterator<String> {
         private final Response response;
         private final okio.BufferedSource source;
@@ -233,7 +330,13 @@ public final class OpenAiCompatibleChatModel implements ChatModel {
                         close();
                         return;
                     }
-                    var chunk = extractDeltaContent(OBJECT_MAPPER.readTree(data));
+                    var root = OBJECT_MAPPER.readTree(data);
+                    var finishReason = extractFinishReason(root);
+                    if (finishReason != null && finishReason.equalsIgnoreCase("length")) {
+                        log.warn("Chat completion stream ended at the output token limit"
+                            + " (finish_reason=length), returning partial content");
+                    }
+                    var chunk = extractDeltaContent(root);
                     if (chunk != null && !chunk.isEmpty()) {
                         nextChunk = chunk;
                         return;
@@ -274,6 +377,11 @@ public final class OpenAiCompatibleChatModel implements ChatModel {
         private static String extractDeltaContent(JsonNode root) {
             var content = root.path("choices").path(0).path("delta").path("content");
             return content.isTextual() ? content.asText() : null;
+        }
+
+        private static String extractFinishReason(JsonNode root) {
+            var finishReason = root.path("choices").path(0).path("finish_reason");
+            return finishReason.isTextual() ? finishReason.asText() : null;
         }
     }
 }

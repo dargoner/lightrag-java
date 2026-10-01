@@ -4,6 +4,7 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import io.github.lightrag.exception.ModelException;
 import io.github.lightrag.exception.ModelTimeoutException;
 import io.github.lightrag.model.ChatModel;
+import io.github.lightrag.model.ChatRequestOptions;
 import okhttp3.mockwebserver.MockResponse;
 import okhttp3.mockwebserver.MockWebServer;
 import org.junit.jupiter.api.Test;
@@ -250,7 +251,7 @@ class OpenAiCompatibleChatModelTest {
                 }
                 """));
             server.start();
-            var model = new OpenAiCompatibleChatModel(server.url("/v1/").toString(), "gpt-test", "secret");
+            var model = singleAttemptChatModel(server, Duration.ofSeconds(30));
 
             assertThatThrownBy(() -> model.generate(new ChatModel.ChatRequest("System prompt", "User prompt")))
                 .isInstanceOf(ModelException.class);
@@ -305,18 +306,181 @@ class OpenAiCompatibleChatModelTest {
                     """)
                 .setBodyDelay(1000, java.util.concurrent.TimeUnit.MILLISECONDS));
             server.start();
-            var model = new OpenAiCompatibleChatModel(
-                server.url("/v1/").toString(),
-                "gpt-test",
-                "secret",
-                Duration.ofMillis(200)
-            );
+            var model = singleAttemptChatModel(server, Duration.ofMillis(200));
 
             assertThatThrownBy(() -> model.generate(new ChatModel.ChatRequest("System prompt", "User prompt")))
                 .isInstanceOf(ModelTimeoutException.class)
                 .hasMessageContaining("timed out")
                 .hasMessageContaining("/v1/chat/completions");
         }
+    }
+
+    @Test
+    void mapsFinishReasonLengthAndUsageIntoTheChatResponse() throws Exception {
+        try (var server = new MockWebServer()) {
+            var body = """
+                {
+                  "choices": [
+                    {
+                      "message": {
+                        "content": "Partial answer"
+                      },
+                      "finish_reason": "length"
+                    }
+                  ],
+                  "usage": {
+                    "prompt_tokens": 12,
+                    "completion_tokens": 3
+                  }
+                }
+                """;
+            server.enqueue(new MockResponse().setBody(body));
+            server.enqueue(new MockResponse().setBody(body));
+            server.start();
+            var model = new OpenAiCompatibleChatModel(server.url("/v1/").toString(), "gpt-test", "secret");
+
+            var response = model.generateResponse(new ChatModel.ChatRequest("System prompt", "User prompt"));
+
+            assertThat(response.content()).isEqualTo("Partial answer");
+            assertThat(response.truncated()).isTrue();
+            assertThat(response.usage().promptTokens()).isEqualTo(12);
+            assertThat(response.usage().completionTokens()).isEqualTo(3);
+            assertThat(model.generate(new ChatModel.ChatRequest("System prompt", "User prompt")))
+                .isEqualTo("Partial answer");
+        }
+    }
+
+    @Test
+    void responsesWithoutMetadataCarryNoFinishReasonOrUsage() throws Exception {
+        try (var server = new MockWebServer()) {
+            server.enqueue(new MockResponse().setBody("""
+                {
+                  "choices": [
+                    {
+                      "message": {
+                        "content": "Answer"
+                      }
+                    }
+                  ]
+                }
+                """));
+            server.start();
+            var model = new OpenAiCompatibleChatModel(server.url("/v1/").toString(), "gpt-test", "secret");
+
+            var response = model.generateResponse(new ChatModel.ChatRequest("System prompt", "User prompt"));
+
+            assertThat(response.content()).isEqualTo("Answer");
+            assertThat(response.finishReason()).isNull();
+            assertThat(response.usage()).isNull();
+            assertThat(response.truncated()).isFalse();
+        }
+    }
+
+    @Test
+    void streamingKeepsContentWhenTheTerminalChunkReportsLengthTruncation() throws Exception {
+        try (var server = new MockWebServer()) {
+            server.enqueue(new MockResponse()
+                .setHeader("Content-Type", "text/event-stream")
+                .setBody("""
+                    data: {"choices":[{"delta":{"content":"Hello "}}]}
+
+                    data: {"choices":[{"delta":{"content":"world"}}]}
+
+                    data: {"choices":[{"delta":{},"finish_reason":"length"}]}
+
+                    data: [DONE]
+
+                    """));
+            server.start();
+            var model = new OpenAiCompatibleChatModel(server.url("/v1/").toString(), "gpt-test", "secret");
+
+            try (var stream = model.stream(new ChatModel.ChatRequest("System prompt", "User prompt"))) {
+                assertThat(readAll(stream)).containsExactly("Hello ", "world");
+            }
+        }
+    }
+
+    @Test
+    void retriesTransientServerErrorsUntilSuccess() throws Exception {
+        try (var server = new MockWebServer()) {
+            server.enqueue(new MockResponse().setResponseCode(503).setBody("{\"error\":\"unavailable\"}"));
+            server.enqueue(new MockResponse().setResponseCode(503).setBody("{\"error\":\"unavailable\"}"));
+            server.enqueue(new MockResponse().setBody("""
+                {
+                  "choices": [
+                    {
+                      "message": {
+                        "content": "Recovered"
+                      }
+                    }
+                  ]
+                }
+                """));
+            server.start();
+            var model = new OpenAiCompatibleChatModel(
+                server.url("/v1/").toString(),
+                "gpt-test",
+                "secret",
+                Duration.ofSeconds(30),
+                ChatRequestOptions.NONE,
+                3,
+                Duration.ofMillis(1)
+            );
+
+            assertThat(model.generate(new ChatModel.ChatRequest("System prompt", "User prompt")))
+                .isEqualTo("Recovered");
+            assertThat(server.getRequestCount()).isEqualTo(3);
+        }
+    }
+
+    @Test
+    void doesNotRetryPermanentRateLimitFailures() throws Exception {
+        try (var server = new MockWebServer()) {
+            server.enqueue(new MockResponse()
+                .setResponseCode(429)
+                .setBody("{\"error\":{\"type\":\"insufficient_quota\"}}"));
+            server.start();
+            var model = new OpenAiCompatibleChatModel(
+                server.url("/v1/").toString(),
+                "gpt-test",
+                "secret",
+                Duration.ofSeconds(30),
+                ChatRequestOptions.NONE,
+                3,
+                Duration.ofMillis(1)
+            );
+
+            assertThatThrownBy(() -> model.generate(new ChatModel.ChatRequest("System prompt", "User prompt")))
+                .isInstanceOf(ModelException.class)
+                .hasMessageContaining("insufficient_quota");
+            assertThat(server.getRequestCount()).isEqualTo(1);
+        }
+    }
+
+    @Test
+    void retryBudgetCanBeDisabled() throws Exception {
+        try (var server = new MockWebServer()) {
+            server.enqueue(new MockResponse().setResponseCode(500).setBody("{\"error\":\"boom\"}"));
+            server.start();
+            var model = singleAttemptChatModel(server, Duration.ofSeconds(30));
+
+            assertThatThrownBy(() -> model.generate(new ChatModel.ChatRequest("System prompt", "User prompt")))
+                .isInstanceOf(ModelException.class)
+                .hasMessageContaining("500");
+            assertThat(server.getRequestCount()).isEqualTo(1);
+        }
+    }
+
+    private static OpenAiCompatibleChatModel singleAttemptChatModel(MockWebServer server, Duration timeout) {
+        return new OpenAiCompatibleChatModel(
+            server.url("/v1/").toString(),
+            "gpt-test",
+            "secret",
+            timeout,
+            ChatRequestOptions.NONE,
+            1,
+            Duration.ofMillis(1)
+        );
     }
 
     private static List<String> readAll(java.util.Iterator<String> iterator) {

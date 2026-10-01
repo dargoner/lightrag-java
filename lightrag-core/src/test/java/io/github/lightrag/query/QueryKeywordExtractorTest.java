@@ -284,10 +284,27 @@ class QueryKeywordExtractorTest {
         assertThat(resolved.metadataConditions()).containsExactlyElementsOf(metadataConditions);
     }
 
+    @Test
+    void keywordExtractionRequestsAskForJsonObjectResponses() {
+        var model = new CountingKeywordChatModel("""
+            {"high_level_keywords":["organization"],"low_level_keywords":["alice","bob"]}
+            """);
+        var extractor = new QueryKeywordExtractor();
+
+        extractor.resolve(QueryRequest.builder()
+            .query("Who works with Bob?")
+            .mode(QueryMode.HYBRID)
+            .build(), model);
+
+        assertThat(model.keywordExtractionCallCount()).isEqualTo(1);
+        assertThat(model.lastRequest().options().responseFormat()).isEqualTo("json_object");
+    }
+
     private static final class CountingKeywordChatModel implements ChatModel {
         private final String keywordResponse;
         private int keywordExtractionCallCount;
         private String lastUserPrompt;
+        private ChatRequest lastRequest;
 
         private CountingKeywordChatModel(String keywordResponse) {
             this.keywordResponse = keywordResponse;
@@ -297,6 +314,7 @@ class QueryKeywordExtractorTest {
         public String generate(ChatRequest request) {
             keywordExtractionCallCount++;
             lastUserPrompt = request.userPrompt();
+            lastRequest = request;
             return keywordResponse;
         }
 
@@ -306,6 +324,10 @@ class QueryKeywordExtractorTest {
 
         String lastUserPrompt() {
             return lastUserPrompt;
+        }
+
+        ChatRequest lastRequest() {
+            return lastRequest;
         }
     }
 }

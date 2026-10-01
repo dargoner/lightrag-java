@@ -15,6 +15,10 @@ final class EmbeddingBatcher {
         this.embeddingBatchSize = embeddingBatchSize <= 0 ? Integer.MAX_VALUE : embeddingBatchSize;
     }
 
+    String cacheIdentity() {
+        return embeddingModel.cacheIdentity();
+    }
+
     List<List<Double>> embedAll(List<String> texts) {
         var sources = List.copyOf(Objects.requireNonNull(texts, "texts"));
         if (sources.isEmpty()) {

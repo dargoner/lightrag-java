@@ -12,6 +12,7 @@ import io.github.lightrag.indexing.MineruClient;
 import io.github.lightrag.indexing.MineruParsingProvider;
 import io.github.lightrag.model.ChatModel;
 import io.github.lightrag.model.EmbeddingModel;
+import io.github.lightrag.model.RerankModel;
 import io.github.lightrag.model.openai.OpenAiCompatibleChatModel;
 import io.github.lightrag.model.openai.OpenAiCompatibleEmbeddingModel;
 import io.github.lightrag.storage.AtomicStorageProvider;
@@ -535,6 +536,56 @@ class LightRagAutoConfigurationTest {
     }
 
     @Test
+    void wiresConfiguredModelConcurrencyBudgets() {
+        contextRunner
+            .withPropertyValues(
+                "lightrag.max-async-llm=16",
+                "lightrag.embedding-max-async=32"
+            )
+            .run(context -> {
+                var config = (io.github.lightrag.config.LightRagConfig)
+                    extractField(context.getBean(LightRag.class), "config");
+
+                assertThat(config.maxAsyncLlm()).isEqualTo(16);
+                assertThat(config.embeddingMaxAsync()).isEqualTo(32);
+            });
+    }
+
+    @Test
+    void defaultsModelConcurrencyBudgetsToUpstreamValues() {
+        contextRunner.run(context -> {
+            var config = (io.github.lightrag.config.LightRagConfig)
+                extractField(context.getBean(LightRag.class), "config");
+
+            assertThat(config.maxAsyncLlm()).isEqualTo(4);
+            assertThat(config.embeddingMaxAsync()).isEqualTo(8);
+        });
+    }
+
+    @Test
+    void createsNoRerankModelBeanUnlessRerankBaseUrlIsConfigured() {
+        contextRunner.run(context -> assertThat(context).doesNotHaveBean(RerankModel.class));
+    }
+
+    @Test
+    void wiresConfiguredRerankModelIntoTheLightRagConfig() {
+        contextRunner
+            .withPropertyValues(
+                "lightrag.rerank.base-url=http://localhost:11434/v1/",
+                "lightrag.rerank.model=bge-reranker-v2",
+                "lightrag.rerank.api-key=dummy",
+                "lightrag.rerank.timeout=PT20S"
+            )
+            .run(context -> {
+                assertThat(context).hasSingleBean(RerankModel.class);
+                var config = (io.github.lightrag.config.LightRagConfig)
+                    extractField(context.getBean(LightRag.class), "config");
+
+                assertThat(config.rerankModel()).isSameAs(context.getBean(RerankModel.class));
+            });
+    }
+
+    @Test
     void wiresConfiguredTimeoutsIntoDefaultOpenAiModels() {
         contextRunner.run(context -> {
             var chatModel = (OpenAiCompatibleChatModel) context.getBean(ChatModel.class);
@@ -543,6 +594,66 @@ class LightRagAutoConfigurationTest {
             assertThat(extractTimeout(chatModel)).isEqualTo(Duration.ofSeconds(45));
             assertThat(extractTimeout(embeddingModel)).isEqualTo(Duration.ofSeconds(12));
         });
+    }
+
+    @Test
+    void wiresConfiguredChatRequestOptionsIntoTheDefaultChatModel() {
+        contextRunner
+            .withPropertyValues(
+                "lightrag.chat.temperature=0.2",
+                "lightrag.chat.max-tokens=512",
+                "lightrag.chat.top-p=0.9",
+                "lightrag.chat.response-format=json_object"
+            )
+            .run(context -> {
+                var chatModel = (OpenAiCompatibleChatModel) context.getBean("chatModel", ChatModel.class);
+
+                assertThat(readField(chatModel, "defaults")).isEqualTo(
+                    new io.github.lightrag.model.ChatRequestOptions(0.2d, 512, 0.9d, "json_object"));
+            });
+    }
+
+    @Test
+    void wiresConfiguredMaxAttemptsIntoTheModels() {
+        contextRunner
+            .withPropertyValues(
+                "lightrag.chat.max-attempts=1",
+                "lightrag.embedding.max-attempts=0"
+            )
+            .run(context -> {
+                var chatModel = (OpenAiCompatibleChatModel) context.getBean("chatModel", ChatModel.class);
+                var embeddingModel = (OpenAiCompatibleEmbeddingModel) context.getBean(EmbeddingModel.class);
+
+                assertThat(readField(chatModel, "maxAttempts")).isEqualTo(1);
+                assertThat(readField(embeddingModel, "maxAttempts")).isEqualTo(0);
+            });
+    }
+
+    @Test
+    void roleModelsCarryTheirOwnChatRequestOptions() {
+        contextRunner
+            .withPropertyValues(
+                "lightrag.query-model.base-url=http://localhost:11435/v1/",
+                "lightrag.query-model.model=qwen-query",
+                "lightrag.query-model.api-key=query-key",
+                "lightrag.query-model.temperature=0.1",
+                "lightrag.keyword-model.base-url=http://localhost:11436/v1/",
+                "lightrag.keyword-model.model=qwen-keyword",
+                "lightrag.keyword-model.api-key=keyword-key",
+                "lightrag.keyword-model.response-format=json_object"
+            )
+            .run(context -> {
+                var queryModel = (OpenAiCompatibleChatModel) context.getBean("queryModel", ChatModel.class);
+                var keywordModel = (OpenAiCompatibleChatModel) context.getBean("keywordModel", ChatModel.class);
+                var chatModel = (OpenAiCompatibleChatModel) context.getBean("chatModel", ChatModel.class);
+
+                assertThat(readField(queryModel, "defaults")).isEqualTo(
+                    new io.github.lightrag.model.ChatRequestOptions(0.1d, null, null, null));
+                assertThat(readField(keywordModel, "defaults")).isEqualTo(
+                    new io.github.lightrag.model.ChatRequestOptions(null, null, null, "json_object"));
+                assertThat(readField(chatModel, "defaults"))
+                    .isEqualTo(io.github.lightrag.model.ChatRequestOptions.NONE);
+            });
     }
 
     @Test
@@ -566,7 +677,7 @@ class LightRagAutoConfigurationTest {
                 assertThat(properties.getIndexing().getChunking().getWindowSize()).isEqualTo(1_000);
                 assertThat(properties.getIndexing().getChunking().getOverlap()).isEqualTo(100);
                 assertThat(properties.getIndexing().getEmbeddingBatchSize()).isZero();
-                assertThat(properties.getIndexing().getMaxParallelInsert()).isEqualTo(2);
+                assertThat(properties.getIndexing().getMaxParallelInsert()).isEqualTo(3);
                 assertThat(properties.getIndexing().getChunkExtractParallelism()).isEqualTo(2);
                 assertThat(properties.getIndexing().getEntityExtractMaxGleaning()).isEqualTo(1);
                 assertThat(properties.getIndexing().getMaxExtractInputTokens()).isEqualTo(20_480);

@@ -9,6 +9,8 @@ public interface StorageProvider {
         "taskDocumentStore is not supported by this provider";
     String LLM_CACHE_STORE_UNSUPPORTED_MESSAGE =
         "llmCacheStore is not supported by this provider";
+    String EMBEDDING_SPACE_STORE_UNSUPPORTED_MESSAGE =
+        "embeddingSpaceStore is not supported by this provider";
 
     DocumentStore documentStore();
 
@@ -40,5 +42,9 @@ public interface StorageProvider {
 
     default DocumentGraphJournalStore documentGraphJournalStore() {
         throw new UnsupportedOperationException(DOCUMENT_GRAPH_JOURNAL_STORE_UNSUPPORTED_MESSAGE);
+    }
+
+    default EmbeddingSpaceStore embeddingSpaceStore() {
+        throw new UnsupportedOperationException(EMBEDDING_SPACE_STORE_UNSUPPORTED_MESSAGE);
     }
 }

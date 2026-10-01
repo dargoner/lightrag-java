@@ -3,6 +3,7 @@ package io.github.lightrag.api;
 import io.github.lightrag.config.LightRagConfig;
 import io.github.lightrag.indexing.Chunker;
 import io.github.lightrag.indexing.DeletionPipeline;
+import io.github.lightrag.indexing.DescriptionSummarizer;
 import io.github.lightrag.indexing.DocumentParsingOrchestrator;
 import io.github.lightrag.indexing.GraphMaterializationPipeline;
 import io.github.lightrag.indexing.GraphManagementPipeline;
@@ -12,6 +13,8 @@ import io.github.lightrag.indexing.StorageSnapshots;
 import io.github.lightrag.indexing.refinement.ExtractionRefinementOptions;
 import io.github.lightrag.model.CachedChatModel;
 import io.github.lightrag.model.ChatModel;
+import io.github.lightrag.model.EmbeddingModel;
+import io.github.lightrag.model.LlmConcurrencyBudget;
 import io.github.lightrag.query.ContextAssembler;
 import io.github.lightrag.query.DefaultPathRetriever;
 import io.github.lightrag.query.DefaultPathScorer;
@@ -26,6 +29,7 @@ import io.github.lightrag.query.ReasoningContextAssembler;
 import io.github.lightrag.query.RuleBasedQueryIntentClassifier;
 import io.github.lightrag.synthesis.PathAwareAnswerSynthesizer;
 import io.github.lightrag.storage.AtomicStorageProvider;
+import io.github.lightrag.storage.DocumentStatusStore;
 import io.github.lightrag.storage.TaskDocumentStore;
 import io.github.lightrag.task.TaskExecutionService;
 import io.github.lightrag.task.TaskMetadataReporter;
@@ -35,12 +39,15 @@ import io.github.lightrag.types.PreChunkedChunk;
 import io.github.lightrag.types.RawDocumentSource;
 
 import java.nio.file.Path;
+import java.util.Comparator;
 import java.util.EnumMap;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.NoSuchElementException;
 import java.util.Objects;
+import java.util.Optional;
+import java.util.Set;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.function.Function;
 
@@ -69,6 +76,7 @@ public final class LightRag implements AutoCloseable {
     private final DocumentParsingOrchestrator documentParsingOrchestrator;
     private final List<TaskEventListener> taskEventListeners;
     private final TaskExecutionService taskExecutionService;
+    private final LlmConcurrencyBudget llmConcurrencyBudget;
     private final AtomicBoolean closed = new AtomicBoolean();
 
     LightRag(LightRagConfig config) {
@@ -132,6 +140,7 @@ public final class LightRag implements AutoCloseable {
         List<TaskEventListener> taskEventListeners
     ) {
         this.config = config;
+        this.llmConcurrencyBudget = new LlmConcurrencyBudget(config.maxAsyncLlm(), config.embeddingMaxAsync());
         this.chunker = chunker;
         this.automaticQueryKeywordExtraction = automaticQueryKeywordExtraction;
         this.rerankCandidateMultiplier = rerankCandidateMultiplier;
@@ -158,7 +167,9 @@ public final class LightRag implements AutoCloseable {
             entityExtractionLanguage,
             entityTypes,
             relationTypes,
-            graphExtractionExamples
+            graphExtractionExamples,
+            config.entityExtractMaxRecords(),
+            config.entityExtractMaxEntities()
         );
         this.graphExtractionOptionsProvider = Objects.requireNonNull(
             graphExtractionOptionsProvider,
@@ -435,6 +446,37 @@ public final class LightRag implements AutoCloseable {
         return runInWorkspace(scope, provider -> newGraphManagementPipeline(scope, provider).mergeEntities(request));
     }
 
+    /** All entity ids in the workspace graph, sorted by code point. */
+    public List<String> getGraphLabels(String workspaceId) {
+        var scope = resolveScope(workspaceId);
+        return runInWorkspace(scope, provider -> provider.graphStore().labels());
+    }
+
+    /**
+     * Entity ids whose id or name contains {@code query}, case-insensitive, cut to {@code limit};
+     * case-insensitive exact matches come first.
+     */
+    public List<String> searchGraphLabels(String workspaceId, String query, int limit) {
+        var scope = resolveScope(workspaceId);
+        return runInWorkspace(scope, provider -> provider.graphStore().searchLabels(query, limit));
+    }
+
+    /**
+     * Bounded subgraph around {@code nodeLabel} ({@code "*"} ranks the whole graph by degree), with the
+     * node budget clamped to the configured {@code maxGraphNodes} so a caller can ask for fewer nodes
+     * but never more.
+     */
+    public KnowledgeGraphView getKnowledgeGraph(String workspaceId, String nodeLabel, int maxDepth, int maxNodes) {
+        var scope = resolveScope(workspaceId);
+        var budget = maxNodes <= 0
+            ? config.maxGraphNodes()
+            : Math.min(maxNodes, config.maxGraphNodes());
+        return runInWorkspace(
+            scope,
+            provider -> provider.graphStore().getKnowledgeGraph(nodeLabel, maxDepth, budget)
+        );
+    }
+
     /**
      * Deletes the resolved entity from graph and vector storage while preserving source documents and chunks.
      * Use {@link #deleteByDocumentId(String, String)} to remove the originating text itself.
@@ -533,6 +575,50 @@ public final class LightRag implements AutoCloseable {
     public List<DocumentProcessingStatus> listDocumentStatuses(String workspaceId) {
         var scope = resolveScope(workspaceId);
         return resolveProvider(scope).documentStatusStore().list().stream()
+            .map(LightRag::toDocumentProcessingStatus)
+            .toList();
+    }
+
+    /**
+     * Returns document statuses filtered by {@code statuses} with offset/limit paging and a deterministic
+     * order by document id; {@code total} counts all matches before paging. A null or empty filter means
+     * "all statuses". Filtering happens in memory over {@code documentStatusStore().list()}; store-side
+     * pushdown is a follow-up.
+     */
+    public DocumentStatusPage queryDocumentStatuses(
+        String workspaceId,
+        Set<DocumentStatus> statuses,
+        int offset,
+        int limit
+    ) {
+        if (offset < 0) {
+            throw new IllegalArgumentException("offset must not be negative");
+        }
+        if (limit < 0) {
+            throw new IllegalArgumentException("limit must not be negative");
+        }
+        var scope = resolveScope(workspaceId);
+        var filter = statuses == null ? Set.<DocumentStatus>of() : Set.copyOf(statuses);
+        var matches = resolveProvider(scope).documentStatusStore().list().stream()
+            .filter(record -> filter.isEmpty() || filter.contains(record.status()))
+            .sorted(Comparator.comparing(DocumentStatusStore.StatusRecord::documentId))
+            .toList();
+        var items = matches.stream()
+            .skip(offset)
+            .limit(limit)
+            .map(LightRag::toDocumentProcessingStatus)
+            .toList();
+        return new DocumentStatusPage(items, matches.size(), offset, limit);
+    }
+
+    /** Looks up several document statuses by id; unknown ids are omitted from the result. */
+    public List<DocumentProcessingStatus> getDocumentStatuses(String workspaceId, List<String> documentIds) {
+        var scope = resolveScope(workspaceId);
+        var ids = List.copyOf(Objects.requireNonNull(documentIds, "documentIds"));
+        var statusStore = resolveProvider(scope).documentStatusStore();
+        return ids.stream()
+            .map(statusStore::load)
+            .flatMap(Optional::stream)
             .map(LightRag::toDocumentProcessingStatus)
             .toList();
     }
@@ -732,6 +818,14 @@ public final class LightRag implements AutoCloseable {
         return maxExtractInputTokens;
     }
 
+    int entityExtractMaxRecords() {
+        return globalGraphExtractionOptions.resolvedEntityExtractMaxRecords();
+    }
+
+    int entityExtractMaxEntities() {
+        return globalGraphExtractionOptions.resolvedEntityExtractMaxEntities();
+    }
+
     String entityExtractionLanguage() {
         return entityExtractionLanguage;
     }
@@ -835,7 +929,7 @@ public final class LightRag implements AutoCloseable {
         return new IndexingPipeline(
             cachedModel("extract", config.extractionModel(), llmCacheStore),
             cachedModel("summary", config.summaryModel(), llmCacheStore),
-            config.embeddingModel(),
+            limitedEmbeddingModel(),
             storageProvider,
             config.snapshotPath(),
             chunker,
@@ -853,7 +947,16 @@ public final class LightRag implements AutoCloseable {
             embeddingSemanticMergeEnabled,
             embeddingSemanticMergeThreshold,
             extractionRefinementOptions,
-            progressListener
+            progressListener,
+            descriptionSummarizer(llmCacheStore, graphExtractionOptions.resolvedLanguage()),
+            config.maxSourceIdsPerEntity(),
+            config.maxSourceIdsPerRelation(),
+            config.sourceIdsLimitMethod(),
+            config.maxFilePaths(),
+            graphExtractionOptions.resolvedEntityExtractMaxRecords(),
+            graphExtractionOptions.resolvedEntityExtractMaxEntities(),
+            config.kgExtractionValidator(),
+            config.sectionContextEnabled()
         );
     }
 
@@ -914,7 +1017,7 @@ public final class LightRag implements AutoCloseable {
         }
         return new GraphMaterializationPipeline(
             cachedModel("extract", config.extractionModel(), llmCacheStore),
-            config.embeddingModel(),
+            limitedEmbeddingModel(),
             storageProvider,
             extractionRefinementOptions,
             config.snapshotPath(),
@@ -927,7 +1030,16 @@ public final class LightRag implements AutoCloseable {
             graphExtractionOptions.resolvedEntityTypes(),
             graphExtractionOptions.resolvedRelationTypes(),
             graphExtractionOptions.resolvedExamples(),
-            cancellationCheckpoint
+            cancellationCheckpoint,
+            descriptionSummarizer(llmCacheStore, graphExtractionOptions.resolvedLanguage()),
+            config.maxSourceIdsPerEntity(),
+            config.maxSourceIdsPerRelation(),
+            config.sourceIdsLimitMethod(),
+            config.maxFilePaths(),
+            graphExtractionOptions.resolvedEntityExtractMaxRecords(),
+            graphExtractionOptions.resolvedEntityExtractMaxEntities(),
+            config.kgExtractionValidator(),
+            config.sectionContextEnabled()
         );
     }
 
@@ -1031,6 +1143,8 @@ public final class LightRag implements AutoCloseable {
         metadata.put("chunkExtractParallelism", Integer.toString(graphOptions.resolvedChunkExtractParallelism()));
         metadata.put("entityExtractMaxGleaning", Integer.toString(graphOptions.resolvedEntityExtractMaxGleaning()));
         metadata.put("maxExtractInputTokens", Integer.toString(graphOptions.resolvedMaxExtractInputTokens()));
+        metadata.put("entityExtractMaxRecords", Integer.toString(graphOptions.resolvedEntityExtractMaxRecords()));
+        metadata.put("entityExtractMaxEntities", Integer.toString(graphOptions.resolvedEntityExtractMaxEntities()));
         metadata.put("graphExtractionEnabled", Boolean.toString(graphOptions.resolvedEnabled()));
         metadata.put("entityTypeCount", Integer.toString(graphOptions.resolvedEntityTypes().size()));
         metadata.put("relationTypeCount", Integer.toString(graphOptions.resolvedRelationTypes().size()));
@@ -1042,11 +1156,11 @@ public final class LightRag implements AutoCloseable {
     private QueryEngine newQueryEngine(AtomicStorageProvider storageProvider) {
         var llmCacheStore = storageProvider.llmCacheStore();
         var contextAssembler = new ContextAssembler();
-        var naive = new NaiveQueryStrategy(config.embeddingModel(), storageProvider, contextAssembler);
-        var local = new LocalQueryStrategy(config.embeddingModel(), storageProvider, contextAssembler);
-        var global = new GlobalQueryStrategy(config.embeddingModel(), storageProvider, contextAssembler);
+        var naive = new NaiveQueryStrategy(limitedEmbeddingModel(), storageProvider, contextAssembler);
+        var local = new LocalQueryStrategy(limitedEmbeddingModel(), storageProvider, contextAssembler);
+        var global = new GlobalQueryStrategy(limitedEmbeddingModel(), storageProvider, contextAssembler);
         var hybrid = new HybridQueryStrategy(local, global, contextAssembler);
-        var mix = new MixQueryStrategy(config.embeddingModel(), storageProvider, hybrid, contextAssembler);
+        var mix = new MixQueryStrategy(limitedEmbeddingModel(), storageProvider, hybrid, contextAssembler);
         var multiHop = new MultiHopQueryStrategy(
             mix::retrieve,
             new DefaultPathRetriever(storageProvider.graphStore(), 5),
@@ -1074,8 +1188,26 @@ public final class LightRag implements AutoCloseable {
         );
     }
 
-    private static ChatModel cachedModel(String role, ChatModel delegate, io.github.lightrag.storage.LlmCacheStore cacheStore) {
-        return new CachedChatModel(role, delegate, cacheStore);
+    private DescriptionSummarizer descriptionSummarizer(io.github.lightrag.storage.LlmCacheStore llmCacheStore, String language) {
+        return new DescriptionSummarizer(
+            cachedModel("summary", config.summaryModel(), llmCacheStore),
+            new io.github.lightrag.model.HeuristicTokenCounter(),
+            config.forceLlmSummaryOnMerge(),
+            config.summaryMaxTokens(),
+            config.summaryContextSize(),
+            config.summaryLengthRecommended(),
+            language
+        );
+    }
+
+    private ChatModel cachedModel(String role, ChatModel delegate, io.github.lightrag.storage.LlmCacheStore cacheStore) {
+        // The cache sits outside the concurrency limiter so cache hits never consume a slot,
+        // matching upstream (use_llm_func_with_cache checks the cache before the limited role func).
+        return new CachedChatModel(role, llmConcurrencyBudget.limitChat(role, delegate), cacheStore);
+    }
+
+    private EmbeddingModel limitedEmbeddingModel() {
+        return llmConcurrencyBudget.limitEmbedding(config.embeddingModel());
     }
 
     @FunctionalInterface
@@ -1090,7 +1222,8 @@ public final class LightRag implements AutoCloseable {
             statusRecord.documentId(),
             statusRecord.status(),
             statusRecord.summary(),
-            statusRecord.errorMessage()
+            statusRecord.errorMessage(),
+            statusRecord.metadata()
         );
     }
 

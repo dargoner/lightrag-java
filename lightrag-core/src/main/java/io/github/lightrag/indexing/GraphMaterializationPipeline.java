@@ -12,6 +12,7 @@ import io.github.lightrag.api.DocumentStatus;
 import io.github.lightrag.api.FailureStage;
 import io.github.lightrag.api.GraphChunkAction;
 import io.github.lightrag.api.GraphExtractionExample;
+import io.github.lightrag.api.KgExtractionValidator;
 import io.github.lightrag.api.GraphMaterializationMode;
 import io.github.lightrag.api.GraphMaterializationStatus;
 import io.github.lightrag.api.SnapshotSource;
@@ -30,7 +31,9 @@ import io.github.lightrag.storage.DocumentGraphJournalStore;
 import io.github.lightrag.storage.DocumentGraphSnapshotStore;
 import io.github.lightrag.storage.DocumentStatusStore;
 import io.github.lightrag.storage.GraphStore;
+import io.github.lightrag.storage.AtomicStorageProvider.AtomicStorageView;
 import io.github.lightrag.storage.HybridVectorStore;
+import io.github.lightrag.storage.NoopVectorStore;
 import io.github.lightrag.storage.VectorStore;
 import io.github.lightrag.task.TaskMetadataReporter;
 import io.github.lightrag.types.Chunk;
@@ -101,12 +104,22 @@ public final class GraphMaterializationPipeline {
     private final ExtractionRefinementPipeline extractionRefinementPipeline;
     private final EmbeddingBatcher embeddingBatcher;
     private final GraphAssembler graphAssembler;
+    private final DescriptionSummarizer descriptionSummarizer;
     private final ExtractionRefinementOptions extractionRefinementOptions;
     private final Path snapshotPath;
     private final TaskMetadataReporter metadataReporter;
     private final IndexingProgressListener progressListener;
     private final int chunkExtractParallelism;
     private final CancellationCheckpoint cancellationCheckpoint;
+    private final int maxSourceIdsPerEntity;
+    private final int maxSourceIdsPerRelation;
+    private final SourceIdLimits.Method sourceIdsLimitMethod;
+    private final boolean sourceIdsCapsEnabled;
+    private final int maxFilePaths;
+    private final int entityExtractMaxRecords;
+    private final int entityExtractMaxEntities;
+    private final KgExtractionValidator kgExtractionValidator;
+    private final boolean sectionContextEnabled;
 
     public GraphMaterializationPipeline(
         ChatModel extractionModel,
@@ -194,6 +207,204 @@ public final class GraphMaterializationPipeline {
         List<GraphExtractionExample> graphExtractionExamples,
         CancellationCheckpoint cancellationCheckpoint
     ) {
+        this(
+            extractionModel,
+            embeddingModel,
+            storageProvider,
+            extractionRefinementOptions,
+            snapshotPath,
+            metadataReporter,
+            progressListener,
+            chunkExtractParallelism,
+            entityExtractMaxGleaning,
+            maxExtractInputTokens,
+            entityExtractionLanguage,
+            entityTypes,
+            relationTypes,
+            graphExtractionExamples,
+            cancellationCheckpoint,
+            null
+        );
+    }
+
+    public GraphMaterializationPipeline(
+        ChatModel extractionModel,
+        EmbeddingModel embeddingModel,
+        AtomicStorageProvider storageProvider,
+        ExtractionRefinementOptions extractionRefinementOptions,
+        Path snapshotPath,
+        TaskMetadataReporter metadataReporter,
+        IndexingProgressListener progressListener,
+        int chunkExtractParallelism,
+        int entityExtractMaxGleaning,
+        int maxExtractInputTokens,
+        String entityExtractionLanguage,
+        List<String> entityTypes,
+        List<String> relationTypes,
+        List<GraphExtractionExample> graphExtractionExamples,
+        CancellationCheckpoint cancellationCheckpoint,
+        DescriptionSummarizer descriptionSummarizer
+    ) {
+        this(
+            extractionModel,
+            embeddingModel,
+            storageProvider,
+            extractionRefinementOptions,
+            snapshotPath,
+            metadataReporter,
+            progressListener,
+            chunkExtractParallelism,
+            entityExtractMaxGleaning,
+            maxExtractInputTokens,
+            entityExtractionLanguage,
+            entityTypes,
+            relationTypes,
+            graphExtractionExamples,
+            cancellationCheckpoint,
+            descriptionSummarizer,
+            SourceIdLimits.DEFAULT_MAX_SOURCE_IDS,
+            SourceIdLimits.DEFAULT_MAX_SOURCE_IDS,
+            SourceIdLimits.Method.KEEP
+        );
+    }
+
+    public GraphMaterializationPipeline(
+        ChatModel extractionModel,
+        EmbeddingModel embeddingModel,
+        AtomicStorageProvider storageProvider,
+        ExtractionRefinementOptions extractionRefinementOptions,
+        Path snapshotPath,
+        TaskMetadataReporter metadataReporter,
+        IndexingProgressListener progressListener,
+        int chunkExtractParallelism,
+        int entityExtractMaxGleaning,
+        int maxExtractInputTokens,
+        String entityExtractionLanguage,
+        List<String> entityTypes,
+        List<String> relationTypes,
+        List<GraphExtractionExample> graphExtractionExamples,
+        CancellationCheckpoint cancellationCheckpoint,
+        DescriptionSummarizer descriptionSummarizer,
+        int maxSourceIdsPerEntity,
+        int maxSourceIdsPerRelation,
+        SourceIdLimits.Method sourceIdsLimitMethod
+    ) {
+        this(
+            extractionModel,
+            embeddingModel,
+            storageProvider,
+            extractionRefinementOptions,
+            snapshotPath,
+            metadataReporter,
+            progressListener,
+            chunkExtractParallelism,
+            entityExtractMaxGleaning,
+            maxExtractInputTokens,
+            entityExtractionLanguage,
+            entityTypes,
+            relationTypes,
+            graphExtractionExamples,
+            cancellationCheckpoint,
+            descriptionSummarizer,
+            maxSourceIdsPerEntity,
+            maxSourceIdsPerRelation,
+            sourceIdsLimitMethod,
+            FilePathLimits.DEFAULT_MAX_FILE_PATHS
+        );
+    }
+
+    public GraphMaterializationPipeline(
+        ChatModel extractionModel,
+        EmbeddingModel embeddingModel,
+        AtomicStorageProvider storageProvider,
+        ExtractionRefinementOptions extractionRefinementOptions,
+        Path snapshotPath,
+        TaskMetadataReporter metadataReporter,
+        IndexingProgressListener progressListener,
+        int chunkExtractParallelism,
+        int entityExtractMaxGleaning,
+        int maxExtractInputTokens,
+        String entityExtractionLanguage,
+        List<String> entityTypes,
+        List<String> relationTypes,
+        List<GraphExtractionExample> graphExtractionExamples,
+        CancellationCheckpoint cancellationCheckpoint,
+        DescriptionSummarizer descriptionSummarizer,
+        int maxSourceIdsPerEntity,
+        int maxSourceIdsPerRelation,
+        SourceIdLimits.Method sourceIdsLimitMethod,
+        int maxFilePaths
+    ) {
+        this(
+            extractionModel,
+            embeddingModel,
+            storageProvider,
+            extractionRefinementOptions,
+            snapshotPath,
+            metadataReporter,
+            progressListener,
+            chunkExtractParallelism,
+            entityExtractMaxGleaning,
+            maxExtractInputTokens,
+            entityExtractionLanguage,
+            entityTypes,
+            relationTypes,
+            graphExtractionExamples,
+            cancellationCheckpoint,
+            descriptionSummarizer,
+            maxSourceIdsPerEntity,
+            maxSourceIdsPerRelation,
+            sourceIdsLimitMethod,
+            maxFilePaths,
+            KnowledgeExtractor.DEFAULT_MAX_EXTRACTION_RECORDS,
+            KnowledgeExtractor.DEFAULT_MAX_EXTRACTION_ENTITIES,
+            null,
+            true
+        );
+    }
+
+    public GraphMaterializationPipeline(
+        ChatModel extractionModel,
+        EmbeddingModel embeddingModel,
+        AtomicStorageProvider storageProvider,
+        ExtractionRefinementOptions extractionRefinementOptions,
+        Path snapshotPath,
+        TaskMetadataReporter metadataReporter,
+        IndexingProgressListener progressListener,
+        int chunkExtractParallelism,
+        int entityExtractMaxGleaning,
+        int maxExtractInputTokens,
+        String entityExtractionLanguage,
+        List<String> entityTypes,
+        List<String> relationTypes,
+        List<GraphExtractionExample> graphExtractionExamples,
+        CancellationCheckpoint cancellationCheckpoint,
+        DescriptionSummarizer descriptionSummarizer,
+        int maxSourceIdsPerEntity,
+        int maxSourceIdsPerRelation,
+        SourceIdLimits.Method sourceIdsLimitMethod,
+        int maxFilePaths,
+        int entityExtractMaxRecords,
+        int entityExtractMaxEntities,
+        KgExtractionValidator kgExtractionValidator,
+        boolean sectionContextEnabled
+    ) {
+        this.kgExtractionValidator = kgExtractionValidator;
+        this.sectionContextEnabled = sectionContextEnabled;
+        this.entityExtractMaxRecords = entityExtractMaxRecords >= 1
+            ? entityExtractMaxRecords
+            : KnowledgeExtractor.DEFAULT_MAX_EXTRACTION_RECORDS;
+        this.entityExtractMaxEntities = entityExtractMaxEntities >= 1
+            ? entityExtractMaxEntities
+            : KnowledgeExtractor.DEFAULT_MAX_EXTRACTION_ENTITIES;
+        this.maxFilePaths = maxFilePaths > 0 ? maxFilePaths : FilePathLimits.DEFAULT_MAX_FILE_PATHS;
+        this.maxSourceIdsPerEntity = maxSourceIdsPerEntity > 0
+            ? maxSourceIdsPerEntity
+            : SourceIdLimits.DEFAULT_MAX_SOURCE_IDS;
+        this.maxSourceIdsPerRelation = maxSourceIdsPerRelation > 0
+            ? maxSourceIdsPerRelation
+            : SourceIdLimits.DEFAULT_MAX_SOURCE_IDS;
+        this.sourceIdsLimitMethod = sourceIdsLimitMethod == null ? SourceIdLimits.Method.KEEP : sourceIdsLimitMethod;
         this.chunkExtractParallelism = Math.max(1, chunkExtractParallelism);
         this.cancellationCheckpoint = cancellationCheckpoint == null ? CancellationCheckpoint.NONE : cancellationCheckpoint;
         this.storageProvider = Objects.requireNonNull(storageProvider, "storageProvider");
@@ -201,6 +412,9 @@ public final class GraphMaterializationPipeline {
             ? ExtractionRefinementOptions.disabled()
             : extractionRefinementOptions;
         this.snapshotPath = snapshotPath;
+        this.descriptionSummarizer = descriptionSummarizer != null
+            ? descriptionSummarizer
+            : DescriptionSummarizer.forModel(Objects.requireNonNull(extractionModel, "extractionModel"), entityExtractionLanguage);
         this.metadataReporter = metadataReporter == null ? TaskMetadataReporter.noop() : metadataReporter;
         this.progressListener = progressListener == null ? IndexingProgressListener.noop() : progressListener;
         this.knowledgeExtractor = new KnowledgeExtractor(
@@ -211,7 +425,11 @@ public final class GraphMaterializationPipeline {
             entityTypes,
             relationTypes,
             graphExtractionExamples,
-            this.extractionRefinementOptions.allowDeterministicAttributionFallback()
+            this.extractionRefinementOptions.allowDeterministicAttributionFallback(),
+            this.entityExtractMaxRecords,
+            this.entityExtractMaxEntities,
+            this.kgExtractionValidator,
+            this.sectionContextEnabled
         );
         this.embeddingBatcher = new EmbeddingBatcher(Objects.requireNonNull(embeddingModel, "embeddingModel"), Integer.MAX_VALUE);
         this.graphAssembler = new GraphAssembler();
@@ -225,6 +443,11 @@ public final class GraphMaterializationPipeline {
             },
             new DefaultAttributionResolver(this.extractionRefinementOptions.allowDeterministicAttributionFallback()),
             new DefaultExtractionMergePolicy()
+        );
+        this.sourceIdsCapsEnabled = GraphSnapshotCapabilities.resolveCapsEnabled(
+            this.storageProvider,
+            this.maxSourceIdsPerEntity,
+            this.maxSourceIdsPerRelation
         );
     }
 
@@ -392,9 +615,9 @@ public final class GraphMaterializationPipeline {
             long saveGraphStarted = System.nanoTime();
             saveGraph(state.expectedGraph().entities(), state.expectedGraph().relations(), storage);
             long saveGraphAt = System.nanoTime();
-            saveEntityVectors(state.expectedGraph().entities(), storage.vectorStore());
+            saveEntityVectors(state.expectedGraph().entities(), storage);
             long entityVectorsAt = System.nanoTime();
-            saveRelationVectors(state.expectedGraph().relations(), storage.vectorStore());
+            saveRelationVectors(state.expectedGraph().relations(), storage);
             long relationVectorsAt = System.nanoTime();
             storage.documentStatusStore().save(new DocumentStatusStore.StatusRecord(
                 state.documentId(),
@@ -496,8 +719,8 @@ public final class GraphMaterializationPipeline {
         cancellationCheckpoint.check();
         storageProvider.writeAtomically(storage -> {
             saveGraph(chunkGraph.entities(), chunkGraph.relations(), storage);
-            saveEntityVectors(chunkGraph.entities(), storage.vectorStore());
-            saveRelationVectors(chunkGraph.relations(), storage.vectorStore());
+            saveEntityVectors(chunkGraph.entities(), storage);
+            saveRelationVectors(chunkGraph.relations(), storage);
             storage.documentStatusStore().save(new DocumentStatusStore.StatusRecord(
                 state.documentId(),
                 DocumentStatus.PROCESSED,
@@ -879,7 +1102,7 @@ public final class GraphMaterializationPipeline {
             .toList();
     }
 
-    private List<GraphAssembler.ChunkExtraction> toChunkExtractions(List<DocumentGraphSnapshotStore.ChunkGraphSnapshot> chunkSnapshots) {
+    static List<GraphAssembler.ChunkExtraction> toChunkExtractions(List<DocumentGraphSnapshotStore.ChunkGraphSnapshot> chunkSnapshots) {
         return chunkSnapshots.stream()
             .map(snapshot -> new GraphAssembler.ChunkExtraction(
                 snapshot.chunkId(),
@@ -927,7 +1150,7 @@ public final class GraphMaterializationPipeline {
                     ? mergeEntity(current, entity)
                     : existingEntitiesById.containsKey(entity.id())
                         ? mergeEntity(existingEntitiesById.get(entity.id()), entity)
-                        : toEntityRecord(entity);
+                        : mergeNewEntity(entity);
                 mergedEntities.remove(entity.id());
                 mergedEntities.put(entity.id(), mergedEntity);
             }
@@ -959,7 +1182,7 @@ public final class GraphMaterializationPipeline {
                     ? mergeRelation(current, relation)
                     : existingRelationsById.containsKey(relation.id())
                         ? mergeRelation(existingRelationsById.get(relation.id()), relation)
-                        : toRelationRecord(relation);
+                        : mergeNewRelation(relation);
                 mergedRelations.remove(relation.id());
                 mergedRelations.put(relation.id(), mergedRelation);
             }
@@ -983,14 +1206,16 @@ public final class GraphMaterializationPipeline {
         return new ArrayList<>(new LinkedHashSet<>(ids));
     }
 
-    private void saveEntityVectors(List<Entity> entities, VectorStore vectorStore) {
-        if (entities.isEmpty()) {
+    private void saveEntityVectors(List<Entity> entities, AtomicStorageView storage) {
+        if (entities.isEmpty() || storage.vectorStore() instanceof NoopVectorStore) {
             return;
         }
         long started = System.nanoTime();
         var vectors = toVectorRecords(entities.stream().map(Entity::id).toList(), embeddingBatcher.embedAll(
             entities.stream().map(GraphMaterializationPipeline::entitySummary).toList()
         ));
+        EmbeddingSpaceGuard.verifyOrRecord(storage, embeddingBatcher.cacheIdentity(), vectors);
+        var vectorStore = storage.vectorStore();
         long embeddedAt = System.nanoTime();
         if (vectorStore instanceof HybridVectorStore hybridVectorStore) {
             hybridVectorStore.saveAllEnriched(StorageSnapshots.ENTITY_NAMESPACE, HybridVectorPayloads.entityPayloads(entities, vectors));
@@ -1015,14 +1240,16 @@ public final class GraphMaterializationPipeline {
         );
     }
 
-    private void saveRelationVectors(List<Relation> relations, VectorStore vectorStore) {
-        if (relations.isEmpty()) {
+    private void saveRelationVectors(List<Relation> relations, AtomicStorageView storage) {
+        if (relations.isEmpty() || storage.vectorStore() instanceof NoopVectorStore) {
             return;
         }
         long started = System.nanoTime();
         var vectors = toVectorRecords(relations.stream().map(Relation::id).toList(), embeddingBatcher.embedAll(
             relations.stream().map(GraphMaterializationPipeline::relationSummary).toList()
         ));
+        EmbeddingSpaceGuard.verifyOrRecord(storage, embeddingBatcher.cacheIdentity(), vectors);
+        var vectorStore = storage.vectorStore();
         long embeddedAt = System.nanoTime();
         if (vectorStore instanceof HybridVectorStore hybridVectorStore) {
             hybridVectorStore.saveAllEnriched(StorageSnapshots.RELATION_NAMESPACE, HybridVectorPayloads.relationPayloads(relations, vectors));
@@ -1231,49 +1458,72 @@ public final class GraphMaterializationPipeline {
         return Math.max(0L, (endedNanos - startedNanos) / 1_000_000L);
     }
 
-    private static GraphStore.EntityRecord mergeEntity(GraphStore.EntityRecord existing, Entity incoming) {
+    private GraphStore.EntityRecord mergeEntity(GraphStore.EntityRecord existing, Entity incoming) {
+        var fragments = DescriptionFragments.combine(
+            DescriptionFragments.split(existing.description()),
+            DescriptionFragments.split(incoming.description())
+        );
+        var summary = descriptionSummarizer.summarize("Entity", existing.name(), fragments);
+        var mergedChunkIds = union(existing.sourceChunkIds(), incoming.sourceChunkIds());
+        var sourceChunkIds = sourceIdsCapsEnabled
+            ? SourceIdLimits.apply(mergedChunkIds, maxSourceIdsPerEntity, sourceIdsLimitMethod)
+            : mergedChunkIds;
         return new GraphStore.EntityRecord(
             existing.id(),
             existing.name(),
-            existing.type().isEmpty() ? incoming.type() : existing.type(),
-            existing.description().isEmpty() ? incoming.description() : existing.description(),
+            voteEntityType(existing.type(), incoming.type()),
+            summary.description(),
             union(existing.aliases(), incoming.aliases()),
-            union(existing.sourceChunkIds(), incoming.sourceChunkIds())
+            sourceChunkIds
         );
     }
 
-    private static GraphStore.RelationRecord mergeRelation(GraphStore.RelationRecord existing, Relation incoming) {
-        return new GraphStore.RelationRecord(
-            existing.id(),
-            existing.srcId(),
-            existing.tgtId(),
-            existing.keywords(),
-            existing.description().isEmpty() ? incoming.description() : existing.description(),
-            Math.max(existing.weight(), incoming.weight()),
-            union(existing.sourceChunkIds(), incoming.sourceChunkIds())
+    // Upstream votes the stored type (counted once, operate.py:2471) against the batch rows (:2576-2583).
+    // The assembler already collapsed the batch into one aggregate vote, so each side contributes once
+    // and ties keep the stored type.
+    private static String voteEntityType(String storedType, String incomingType) {
+        var counts = new LinkedHashMap<String, Integer>();
+        for (var type : List.of(storedType, incomingType)) {
+            if (!type.isEmpty()) {
+                counts.merge(type, 1, Integer::sum);
+            }
+        }
+        return counts.entrySet().stream()
+            .max(Map.Entry.comparingByValue())
+            .map(Map.Entry::getKey)
+            .orElse(storedType);
+    }
+
+    private GraphStore.RelationRecord mergeRelation(GraphStore.RelationRecord existing, Relation incoming) {
+        return IndexingPipeline.mergeRelationWithCaps(
+            existing,
+            incoming,
+            sourceIdsCapsEnabled,
+            maxSourceIdsPerRelation,
+            sourceIdsLimitMethod,
+            maxFilePaths,
+            descriptionSummarizer
         );
     }
 
-    private static GraphStore.EntityRecord toEntityRecord(Entity entity) {
-        return new GraphStore.EntityRecord(
-            entity.id(),
-            entity.name(),
-            entity.type(),
-            entity.description(),
-            entity.aliases(),
-            entity.sourceChunkIds()
+    private GraphStore.EntityRecord mergeNewEntity(Entity entity) {
+        return IndexingPipeline.newEntityRecord(
+            entity,
+            sourceIdsCapsEnabled,
+            maxSourceIdsPerEntity,
+            sourceIdsLimitMethod,
+            descriptionSummarizer
         );
     }
 
-    private static GraphStore.RelationRecord toRelationRecord(Relation relation) {
-        return new GraphStore.RelationRecord(
-            relation.id(),
-            relation.srcId(),
-            relation.tgtId(),
-            relation.keywords(),
-            relation.description(),
-            relation.weight(),
-            relation.sourceChunkIds()
+    private GraphStore.RelationRecord mergeNewRelation(Relation relation) {
+        return IndexingPipeline.newRelationRecord(
+            relation,
+            sourceIdsCapsEnabled,
+            maxSourceIdsPerRelation,
+            sourceIdsLimitMethod,
+            maxFilePaths,
+            descriptionSummarizer
         );
     }
 

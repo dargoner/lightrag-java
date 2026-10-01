@@ -5,6 +5,7 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import io.github.lightrag.api.QueryMode;
 import io.github.lightrag.api.QueryRequest;
 import io.github.lightrag.model.ChatModel;
+import io.github.lightrag.model.ChatRequestOptions;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -99,7 +100,7 @@ final class QueryKeywordExtractor {
 
         var startedAt = System.nanoTime();
         var prompt = KEYWORD_EXTRACTION_PROMPT_TEMPLATE.formatted(KEYWORD_EXTRACTION_EXAMPLES, request.query());
-        var response = chatModel.generate(new ChatModel.ChatRequest("", prompt));
+        var response = chatModel.generate(new ChatModel.ChatRequest("", prompt, ChatRequestOptions.JSON_OBJECT));
         var extracted = normalizeKeywordsForQueryLanguage(request, parseKeywords(response));
         var resolved = completeKeywordsForMode(request, extracted);
         var elapsedMs = elapsedMillis(startedAt);

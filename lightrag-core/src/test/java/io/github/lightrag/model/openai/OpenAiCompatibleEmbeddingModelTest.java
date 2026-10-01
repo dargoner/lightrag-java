@@ -75,7 +75,7 @@ class OpenAiCompatibleEmbeddingModelTest {
                 .setHeader("x-request-id", "req-embed-500")
                 .setBody("{\"error\":\"server\"}"));
             server.start();
-            var model = new OpenAiCompatibleEmbeddingModel(server.url("/v1/").toString(), "text-embedding-test", "secret");
+            var model = singleAttemptEmbeddingModel(server, Duration.ofSeconds(30));
 
             assertThatThrownBy(() -> model.embedAll(List.of("hello")))
                 .isInstanceOf(ModelException.class)
@@ -83,6 +83,7 @@ class OpenAiCompatibleEmbeddingModelTest {
                 .hasMessageContaining("server")
                 .hasMessageContaining("/v1/embeddings")
                 .hasMessageContaining("req-embed-500");
+            assertThat(server.getRequestCount()).isEqualTo(1);
         }
     }
 
@@ -98,7 +99,7 @@ class OpenAiCompatibleEmbeddingModelTest {
                 }
                 """));
             server.start();
-            var model = new OpenAiCompatibleEmbeddingModel(server.url("/v1/").toString(), "text-embedding-test", "secret");
+            var model = singleAttemptEmbeddingModel(server, Duration.ofSeconds(30));
 
             assertThatThrownBy(() -> model.embedAll(List.of("hello")))
                 .isInstanceOf(ModelException.class);
@@ -149,17 +150,77 @@ class OpenAiCompatibleEmbeddingModelTest {
                     """)
                 .setBodyDelay(1000, java.util.concurrent.TimeUnit.MILLISECONDS));
             server.start();
-            var model = new OpenAiCompatibleEmbeddingModel(
-                server.url("/v1/").toString(),
-                "text-embedding-test",
-                "secret",
-                Duration.ofMillis(200)
-            );
+            var model = singleAttemptEmbeddingModel(server, Duration.ofMillis(200));
 
             assertThatThrownBy(() -> model.embedAll(List.of("hello")))
                 .isInstanceOf(ModelTimeoutException.class)
                 .hasMessageContaining("timed out")
                 .hasMessageContaining("/v1/embeddings");
         }
+    }
+
+    @Test
+    void retriesTransientServerErrorsUntilSuccess() throws Exception {
+        try (var server = new MockWebServer()) {
+            server.enqueue(new MockResponse().setResponseCode(500).setBody("{\"error\":\"server\"}"));
+            server.enqueue(new MockResponse().setBody("""
+                {
+                  "data": [
+                    {
+                      "embedding": [1.0, 0.0]
+                    }
+                  ]
+                }
+                """));
+            server.start();
+            var model = new OpenAiCompatibleEmbeddingModel(
+                server.url("/v1/").toString(),
+                "text-embedding-test",
+                "secret",
+                Duration.ofSeconds(30),
+                3,
+                Duration.ofMillis(1)
+            );
+
+            assertThat(model.embedAll(List.of("hello"))).containsExactly(List.of(1.0d, 0.0d));
+            assertThat(server.getRequestCount()).isEqualTo(2);
+        }
+    }
+
+    @Test
+    void doesNotRetryPermanentRateLimitFailures() throws Exception {
+        try (var server = new MockWebServer()) {
+            server.enqueue(new MockResponse()
+                .setResponseCode(429)
+                .setBody("{\"error\":{\"type\":\"budget_exceeded\"}}"));
+            server.start();
+            var model = new OpenAiCompatibleEmbeddingModel(
+                server.url("/v1/").toString(),
+                "text-embedding-test",
+                "secret",
+                Duration.ofSeconds(30),
+                3,
+                Duration.ofMillis(1)
+            );
+
+            assertThatThrownBy(() -> model.embedAll(List.of("hello")))
+                .isInstanceOf(ModelException.class)
+                .hasMessageContaining("budget_exceeded");
+            assertThat(server.getRequestCount()).isEqualTo(1);
+        }
+    }
+
+    private static OpenAiCompatibleEmbeddingModel singleAttemptEmbeddingModel(
+        MockWebServer server,
+        Duration timeout
+    ) {
+        return new OpenAiCompatibleEmbeddingModel(
+            server.url("/v1/").toString(),
+            "text-embedding-test",
+            "secret",
+            timeout,
+            1,
+            Duration.ofMillis(1)
+        );
     }
 }

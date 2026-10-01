@@ -38,7 +38,12 @@ class ExtractionRefinementPipelineTest {
         var result = pipeline.refine(primary);
 
         assertThat(result).containsExactly(
-            new GraphAssembler.ChunkExtraction("chunk-1", primary.get(0).extraction())
+            new GraphAssembler.ChunkExtraction(
+                "chunk-1",
+                primary.get(0).extraction(),
+                List.of(),
+                io.github.lightrag.indexing.MetadataKeys.DEFAULT_FILE_PATH
+            )
         );
     }
 
@@ -108,7 +113,12 @@ class ExtractionRefinementPipelineTest {
         var result = pipeline.refine(primary);
 
         assertThat(result).containsExactly(
-            new GraphAssembler.ChunkExtraction("chunk-1", primary.get(0).extraction())
+            new GraphAssembler.ChunkExtraction(
+                "chunk-1",
+                primary.get(0).extraction(),
+                List.of(),
+                io.github.lightrag.indexing.MetadataKeys.DEFAULT_FILE_PATH
+            )
         );
     }
 

@@ -19,6 +19,10 @@ public interface AtomicStorageProvider extends StorageProvider {
         VectorStore vectorStore();
 
         DocumentStatusStore documentStatusStore();
+
+        default EmbeddingSpaceStore embeddingSpaceStore() {
+            throw new UnsupportedOperationException(StorageProvider.EMBEDDING_SPACE_STORE_UNSUPPORTED_MESSAGE);
+        }
     }
 
     @FunctionalInterface

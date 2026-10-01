@@ -3,8 +3,12 @@ package io.github.lightrag.indexing;
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.fasterxml.jackson.databind.node.ArrayNode;
+import com.fasterxml.jackson.databind.node.ObjectNode;
+import com.fasterxml.jackson.databind.node.TextNode;
 import io.github.lightrag.exception.ExtractionException;
 import io.github.lightrag.api.GraphExtractionExample;
+import io.github.lightrag.api.KgExtractionValidator;
 import io.github.lightrag.indexing.refinement.RefinedEntityPatch;
 import io.github.lightrag.indexing.refinement.RefinedRelationPatch;
 import io.github.lightrag.indexing.refinement.RefinedWindowExtraction;
@@ -15,6 +19,9 @@ import io.github.lightrag.indexing.refinement.WindowRelationCandidate;
 import io.github.lightrag.model.CachedChatModel;
 import io.github.lightrag.model.ChatModel;
 import io.github.lightrag.model.ChatModel.ChatRequest;
+import io.github.lightrag.model.ChatRequestOptions;
+import io.github.lightrag.model.HeuristicTokenCounter;
+import io.github.lightrag.model.TokenCounter;
 import io.github.lightrag.types.Chunk;
 import io.github.lightrag.types.ExtractedEntity;
 import io.github.lightrag.types.ExtractedRelation;
@@ -25,6 +32,7 @@ import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Locale;
+import java.util.Map;
 import java.util.Objects;
 import java.util.Optional;
 
@@ -32,6 +40,10 @@ public final class KnowledgeExtractor {
     private static final ObjectMapper OBJECT_MAPPER = new ObjectMapper();
     public static final int DEFAULT_ENTITY_EXTRACT_MAX_GLEANING = 1;
     public static final int DEFAULT_MAX_EXTRACT_INPUT_TOKENS = 20_480;
+    // Per-response output limits for the extraction prompts, matching upstream constants.py:26-27.
+    public static final int DEFAULT_MAX_EXTRACTION_RECORDS = 100;
+    public static final int DEFAULT_MAX_EXTRACTION_ENTITIES = 40;
+    private static final TokenCounter SECTION_CONTEXT_TOKEN_COUNTER = new HeuristicTokenCounter();
     public static final String DEFAULT_LANGUAGE = "English";
     public static final List<String> DEFAULT_ENTITY_TYPES = List.of(
         "Person", "Creature", "Organization", "Location", "Event",
@@ -47,7 +59,7 @@ public final class KnowledgeExtractor {
            - Identify clearly defined and meaningful entities in the input text.
            - For each entity, return:
              - "name": entity name
-             - "type": one of these entity types whenever possible: %s
+             - "type": one of these entity types whenever possible: %1$s
              - "description": concise but informative description based only on the input text
              - "aliases": optional list of aliases, abbreviations, or alternate names only when explicitly supported by the text
            - Only include aliases when they are strict synonyms for the same entity, such as abbreviations, acronyms, full-name variants, or alternate spellings.
@@ -66,9 +78,8 @@ public final class KnowledgeExtractor {
              - "target_entity": target entity name
              - "relationship_keywords": one or more high-level relationship keywords, separated by comma and space
              - "relationship_description": concise explanation of the relationship
-             - "weight": optional confidence or importance score; omit it if uncertain
            - The "relationship_keywords" field must act like high-level relationship keywords, not a database-specific edge label.
-%s
+%2$s
 
         3. Output Rules:
            - Return JSON only.
@@ -87,13 +98,14 @@ public final class KnowledgeExtractor {
                    "source_entity": "Source entity",
                    "target_entity": "Target entity",
                    "relationship_keywords": "keyword1, keyword2",
-                   "relationship_description": "Relationship description",
-                   "weight": 1.0
+                   "relationship_description": "Relationship description"
                  }
                ]
              }
            - Use empty arrays when nothing is found.
-           - Output all entity and relation text in %s.
+           - Output at most %4$d total records across entities and relations in this response.
+           - Output at most %5$d entity objects in this response.
+           - Output all entity and relation text in %3$s.
            - Proper nouns should remain in their original language when translation would be ambiguous or unnatural.
            - Write descriptions in the third person.
            - Avoid vague pronouns such as "this article", "this paper", "it", "they", "he", or "she" when the concrete entity can be named explicitly.
@@ -112,15 +124,16 @@ public final class KnowledgeExtractor {
         - If an entity or relationship was missed, output it now.
         - If an entity or relationship was malformed, incomplete, or inconsistent, output the corrected full JSON item.
         - Return only incremental JSON using the same schema as before.
+        - Output at most %5$d total records and at most %6$d entity rows in this response; a relationship row may reference entities already extracted correctly in the previous response.
         - Keep entity naming consistent with the previous extraction.
         - Preserve the same language and JSON-only output rules.
 
         ---Data to be Processed---
-        Chunk ID: %s
-        Document ID: %s
+        Chunk ID: %1$s
+        Document ID: %2$s
 
-        <Input Text>
-        %s
+        %3$s<Input Text>
+        %4$s
 
         <Output JSON>
         """;
@@ -140,6 +153,10 @@ public final class KnowledgeExtractor {
     private final ChatModel chatModel;
     private final int entityExtractMaxGleaning;
     private final int maxExtractInputTokens;
+    private final int entityExtractMaxRecords;
+    private final int entityExtractMaxEntities;
+    private final KgExtractionValidator kgExtractionValidator;
+    private final boolean sectionContextEnabled;
     private final String language;
     private final List<String> entityTypes;
     private final List<String> relationTypes;
@@ -201,6 +218,62 @@ public final class KnowledgeExtractor {
         List<GraphExtractionExample> examples,
         boolean allowDeterministicAttributionFallback
     ) {
+        this(
+            chatModel,
+            entityExtractMaxGleaning,
+            maxExtractInputTokens,
+            language,
+            entityTypes,
+            relationTypes,
+            examples,
+            allowDeterministicAttributionFallback,
+            DEFAULT_MAX_EXTRACTION_RECORDS,
+            DEFAULT_MAX_EXTRACTION_ENTITIES
+        );
+    }
+
+    public KnowledgeExtractor(
+        ChatModel chatModel,
+        int entityExtractMaxGleaning,
+        int maxExtractInputTokens,
+        String language,
+        List<String> entityTypes,
+        List<String> relationTypes,
+        List<GraphExtractionExample> examples,
+        boolean allowDeterministicAttributionFallback,
+        int entityExtractMaxRecords,
+        int entityExtractMaxEntities
+    ) {
+        this(
+            chatModel,
+            entityExtractMaxGleaning,
+            maxExtractInputTokens,
+            language,
+            entityTypes,
+            relationTypes,
+            examples,
+            allowDeterministicAttributionFallback,
+            entityExtractMaxRecords,
+            entityExtractMaxEntities,
+            null,
+            true
+        );
+    }
+
+    public KnowledgeExtractor(
+        ChatModel chatModel,
+        int entityExtractMaxGleaning,
+        int maxExtractInputTokens,
+        String language,
+        List<String> entityTypes,
+        List<String> relationTypes,
+        List<GraphExtractionExample> examples,
+        boolean allowDeterministicAttributionFallback,
+        int entityExtractMaxRecords,
+        int entityExtractMaxEntities,
+        KgExtractionValidator kgExtractionValidator,
+        boolean sectionContextEnabled
+    ) {
         this.chatModel = Objects.requireNonNull(chatModel, "chatModel");
         if (entityExtractMaxGleaning < 0) {
             throw new IllegalArgumentException("entityExtractMaxGleaning must not be negative");
@@ -208,8 +281,18 @@ public final class KnowledgeExtractor {
         if (maxExtractInputTokens <= 0) {
             throw new IllegalArgumentException("maxExtractInputTokens must be positive");
         }
+        if (entityExtractMaxRecords < 1) {
+            throw new IllegalArgumentException("entityExtractMaxRecords must be positive");
+        }
+        if (entityExtractMaxEntities < 1) {
+            throw new IllegalArgumentException("entityExtractMaxEntities must be positive");
+        }
         this.entityExtractMaxGleaning = entityExtractMaxGleaning;
         this.maxExtractInputTokens = maxExtractInputTokens;
+        this.entityExtractMaxRecords = entityExtractMaxRecords;
+        this.entityExtractMaxEntities = entityExtractMaxEntities;
+        this.kgExtractionValidator = kgExtractionValidator;
+        this.sectionContextEnabled = sectionContextEnabled;
         this.language = requireNonBlank(language, "language");
         var normalizedEntityTypes = List.copyOf(Objects.requireNonNull(entityTypes, "entityTypes")).stream()
             .map(type -> requireNonBlank(type, "entityTypes entry"))
@@ -238,10 +321,10 @@ public final class KnowledgeExtractor {
         var cacheIds = new ArrayList<String>();
         var userPrompt = buildUserPrompt(chunk);
         var systemPrompt = buildSystemPrompt();
-        var request = new ChatRequest(systemPrompt, userPrompt);
+        var request = new ChatRequest(systemPrompt, userPrompt, ChatRequestOptions.JSON_OBJECT);
         cacheIds.add(CachedChatModel.cacheId("extract", request));
         var response = chatModel.generate(request);
-        var current = sanitizeAliasConflicts(parseExtractionResult(response));
+        var current = sanitizeAliasConflicts(parseExtractionResult(response, chunk.id()));
 
         var history = new ArrayList<ChatRequest.ConversationMessage>();
         history.add(new ChatRequest.ConversationMessage("user", userPrompt));
@@ -253,13 +336,21 @@ public final class KnowledgeExtractor {
                 warnings.add("skipped gleaning because extraction context exceeded maxExtractInputTokens");
                 break;
             }
-            var gleanRequest = new ChatRequest(systemPrompt, continuePrompt, history);
+            var gleanRequest = new ChatRequest(systemPrompt, continuePrompt, history, ChatRequestOptions.JSON_OBJECT);
             cacheIds.add(CachedChatModel.cacheId("extract", gleanRequest));
             var gleanResponse = chatModel.generate(gleanRequest);
-            var gleaned = sanitizeAliasConflicts(parseExtractionResult(gleanResponse));
+            var gleaned = sanitizeAliasConflicts(parseExtractionResult(gleanResponse, chunk.id()));
             current = sanitizeAliasConflicts(merge(current, gleaned));
             history.add(new ChatRequest.ConversationMessage("user", continuePrompt));
             history.add(new ChatRequest.ConversationMessage("assistant", gleanResponse));
+        }
+
+        if (kgExtractionValidator != null) {
+            var validated = kgExtractionValidator.validate(chunk.id(), chunk.text(), current);
+            if (validated == null) {
+                throw new ExtractionException("kgExtractionValidator must return an ExtractionResult");
+            }
+            current = validated;
         }
 
         return new ExtractionRun(
@@ -271,7 +362,8 @@ public final class KnowledgeExtractor {
     public RefinedWindowExtraction extractWindow(RefinementWindow window) {
         Objects.requireNonNull(window, "window");
 
-        var response = chatModel.generate(new ChatRequest(buildWindowSystemPrompt(), buildWindowPrompt(window)));
+        var response = chatModel.generate(new ChatRequest(
+            buildWindowSystemPrompt(), buildWindowPrompt(window), ChatRequestOptions.JSON_OBJECT));
         var parsed = parseWindowExtractionResponse(response);
         var warnings = new ArrayList<String>(parsed.warnings());
         var entityPatches = new ArrayList<RefinedEntityPatch>();
@@ -290,13 +382,48 @@ public final class KnowledgeExtractor {
         );
     }
 
-    private static ExtractionResult parseExtractionResult(String response) {
+    private static ExtractionResult parseExtractionResult(String response, String context) {
         var root = parseResponse(response);
+        // Models quoting LaTeX in descriptions routinely under-escape backslashes ("\frac" is
+        // valid JSON meaning form feed + "rac"); restore the zero-risk cases before field
+        // sanitization would otherwise delete the control characters and leave a maimed formula.
+        // Upstream applies the nested variant to every string leaf of the parsed result
+        // (operate.py:960); covers initial extraction and gleaning, which both parse here.
+        repairLatexEscapeDamage(root, context);
         return new ExtractionResult(
             parseEntities(topLevelArray(root, "entities")),
             parseRelations(topLevelArray(root, "relations")),
             List.of()
         );
+    }
+
+    private static void repairLatexEscapeDamage(JsonNode node, String context) {
+        if (node instanceof ObjectNode objectNode) {
+            var entries = new ArrayList<Map.Entry<String, JsonNode>>();
+            objectNode.fields().forEachRemaining(entries::add);
+            for (var entry : entries) {
+                var childContext = context == null || context.isEmpty()
+                    ? entry.getKey()
+                    : context + "." + entry.getKey();
+                var value = entry.getValue();
+                if (value.isTextual()) {
+                    objectNode.put(entry.getKey(), LatexEscapeRepair.repair(value.textValue(), childContext));
+                } else {
+                    repairLatexEscapeDamage(value, childContext);
+                }
+            }
+            return;
+        }
+        if (node instanceof ArrayNode arrayNode) {
+            for (var index = 0; index < arrayNode.size(); index++) {
+                var value = arrayNode.get(index);
+                if (value.isTextual()) {
+                    arrayNode.set(index, TextNode.valueOf(LatexEscapeRepair.repair(value.textValue(), context)));
+                } else {
+                    repairLatexEscapeDamage(value, context);
+                }
+            }
+        }
     }
 
     private static WindowExtractionResponse parseWindowExtractionResponse(String response) {
@@ -511,7 +638,9 @@ public final class KnowledgeExtractor {
                     targetEntityName,
                     keywords,
                     normalizedText(relationNode.get("relationship_description")),
-                    parseWeightOrConfidence(relationNode)
+                    // Upstream fixes the extraction-path weight at 1.0 (operate.py:1084): a model-supplied
+                    // weight is ignored and the storage merge re-derives growth from the source ids.
+                    1.0d
                 ));
             } catch (IllegalArgumentException ignored) {
                 // Skip malformed relation rows while preserving valid rows.
@@ -563,7 +692,7 @@ public final class KnowledgeExtractor {
                 targetEntityName,
                 keywords,
                 normalizedText(relationNode.get("relationship_description")),
-                parseWeightOrConfidence(relationNode),
+                1.0d,
                 parseSupportingChunkIndexes(relationNode.get("supportingChunkIndexes"))
             ));
         }
@@ -606,38 +735,6 @@ public final class KnowledgeExtractor {
         return List.copyOf(indexes);
     }
 
-    private static Double parseWeightOrConfidence(JsonNode relationNode) {
-        var weight = parseNumericValue(relationNode.get("weight"));
-        if (weight != null) {
-            return clampProbability(weight);
-        }
-        var confidence = parseNumericValue(relationNode.get("confidence"));
-        return confidence == null ? null : clampProbability(confidence);
-    }
-
-    private static Double parseNumericValue(JsonNode node) {
-        if (node == null || node.isNull()) {
-            return null;
-        }
-        if (node.isNumber()) {
-            return node.doubleValue();
-        }
-
-        var weight = node.asText("").strip();
-        if (weight.isEmpty()) {
-            return null;
-        }
-        try {
-            return Double.valueOf(weight);
-        } catch (NumberFormatException exception) {
-            return null;
-        }
-    }
-
-    private static double clampProbability(double value) {
-        return Math.max(0.0d, Math.min(1.0d, value));
-    }
-
     private static String normalizedText(JsonNode node) {
         if (node == null || node.isNull()) {
             return "";
@@ -645,31 +742,47 @@ public final class KnowledgeExtractor {
         return node.asText("").strip();
     }
 
-    private static String buildUserPrompt(Chunk chunk) {
+    private String buildUserPrompt(Chunk chunk) {
         return """
             ---Task---
             Extract entities and relationships from the input text below.
 
             ---Data to be Processed---
-            Chunk ID: %s
-            Document ID: %s
+            Chunk ID: %1$s
+            Document ID: %2$s
 
-            <Input Text>
-            %s
+            %3$s<Input Text>
+            %4$s
 
             <Output JSON>
-            """.formatted(chunk.id(), chunk.documentId(), chunk.text());
+            """.formatted(chunk.id(), chunk.documentId(), sectionContextBlock(chunk), chunk.text());
     }
 
-    private static String buildContinuePrompt(Chunk chunk) {
-        return CONTINUE_USER_PROMPT.formatted(chunk.id(), chunk.documentId(), chunk.text());
+    private String buildContinuePrompt(Chunk chunk) {
+        return CONTINUE_USER_PROMPT.formatted(
+            chunk.id(),
+            chunk.documentId(),
+            sectionContextBlock(chunk),
+            chunk.text(),
+            entityExtractMaxRecords,
+            entityExtractMaxEntities
+        );
+    }
+
+    private String sectionContextBlock(Chunk chunk) {
+        if (!sectionContextEnabled) {
+            return "";
+        }
+        return SectionContextFormatter.block(chunk, SECTION_CONTEXT_TOKEN_COUNTER);
     }
 
     private String buildSystemPrompt() {
         return SYSTEM_PROMPT_TEMPLATE.formatted(
             String.join(", ", entityTypes),
             renderGraphExtractionGuidance(),
-            language
+            language,
+            entityExtractMaxRecords,
+            entityExtractMaxEntities
         );
     }
 
@@ -861,6 +974,8 @@ public final class KnowledgeExtractor {
             canonicalTarget,
             mergeKeywords(left.keywords(), right.keywords()),
             longerText(left.description(), right.description()),
+            // Rows merged here come from the same chunk (gleaning rounds), so both operands are the
+            // fixed 1.0 extraction weight; summing would double-count one chunk's evidence.
             Math.max(left.weight(), right.weight())
         );
     }

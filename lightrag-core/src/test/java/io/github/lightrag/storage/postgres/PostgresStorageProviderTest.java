@@ -94,6 +94,7 @@ class PostgresStorageProviderTest {
                     "lightrag_relations",
                     "lightrag_schema_version",
                     "lightrag_llm_cache",
+                    "lightrag_embedding_space",
                     "lightrag_task",
                     "lightrag_task_document",
                     "lightrag_task_stage",
@@ -107,6 +108,8 @@ class PostgresStorageProviderTest {
                 assertThat(columnNames(connection, config, "vectors")).contains("workspace_id");
                 assertThat(columnNames(connection, config, "document_status")).contains("workspace_id");
                 assertThat(columnNames(connection, config, "llm_cache")).contains("workspace_id", "cache_id", "value");
+                assertThat(columnNames(connection, config, "embedding_space"))
+                    .contains("workspace_id", "model_identity", "dimensions", "recorded_at");
                 assertThat(columnNames(connection, config, "task")).contains("workspace_id");
                 assertThat(columnNames(connection, config, "task_document")).contains("workspace_id", "task_id", "document_id");
                 assertThat(columnNames(connection, config, "task_stage")).contains("workspace_id");
@@ -126,7 +129,7 @@ class PostgresStorageProviderTest {
                     .containsExactly("workspace_id", "task_id", "document_id");
                 assertThat(primaryKeyColumns(connection, config, "task_stage"))
                     .containsExactly("workspace_id", "task_id", "stage");
-                assertThat(schemaVersion(connection, config)).contains(6);
+                assertThat(schemaVersion(connection, config)).contains(7);
             }
         }
     }
@@ -274,7 +277,7 @@ class PostgresStorageProviderTest {
                 .isInstanceOf(IllegalStateException.class)
                 .hasMessageContaining("schema version")
                 .hasMessageContaining("999")
-                .hasMessageContaining("6");
+                .hasMessageContaining("7");
         }
     }
 
@@ -296,7 +299,7 @@ class PostgresStorageProviderTest {
                 )) {
                     connection.createStatement().execute("DROP TABLE " + config.qualifiedTableName("documents"));
                     assertThat(existingTables(connection, config.schema())).doesNotContain("lightrag_documents");
-                    assertThat(schemaVersion(connection, config)).contains(6);
+                    assertThat(schemaVersion(connection, config)).contains(7);
                 }
             }
 
@@ -313,7 +316,7 @@ class PostgresStorageProviderTest {
                 assertThat(existingTables(connection, config.schema())).contains("lightrag_task");
                 assertThat(existingTables(connection, config.schema())).contains("lightrag_task_stage");
                 assertThat(existingTables(connection, config.schema())).contains("lightrag_llm_cache");
-                assertThat(schemaVersion(connection, config)).contains(6);
+                assertThat(schemaVersion(connection, config)).contains(7);
             }
         }
     }

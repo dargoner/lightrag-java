@@ -280,6 +280,95 @@ class LightRagDocumentConcurrencyTest {
             .containsExactlyInAnyOrder("chunk-one", "chunk-two");
     }
 
+    @Test
+    void capsConcurrentExtractionCallsAcrossDocuments() {
+        var storage = InMemoryStorageProvider.create();
+        var chatModel = new ScriptedChatModel(
+            Map.of(
+                ALPHA_MARKER, entityExtraction("Alice"),
+                BETA_MARKER, entityExtraction("Bob"),
+                GAMMA_MARKER, entityExtraction("Carol")
+            ),
+            Map.of(
+                ALPHA_MARKER, () -> sleepQuietly(100L),
+                BETA_MARKER, () -> sleepQuietly(100L),
+                GAMMA_MARKER, () -> sleepQuietly(100L)
+            )
+        );
+        var rag = LightRag.builder()
+            .chatModel(chatModel)
+            .embeddingModel(new FakeEmbeddingModel())
+            .storage(storage)
+            .chunkExtractParallelism(1)
+            .maxParallelInsert(3)
+            .maxAsyncLlm(1)
+            .build();
+
+        var taskId = rag.submitIngestChunks(
+            WORKSPACE,
+            List.of(
+                preChunkedChunk("doc-alpha", "chunk-alpha", ALPHA_MARKER),
+                preChunkedChunk("doc-beta", "chunk-beta", BETA_MARKER),
+                preChunkedChunk("doc-gamma", "chunk-gamma", GAMMA_MARKER)
+            )
+        );
+
+        var task = awaitTerminalTask(rag, taskId);
+
+        assertThat(task.status()).isEqualTo(TaskStatus.SUCCEEDED);
+        assertThat(chatModel.peakConcurrency())
+            .as("maxAsyncLlm(1) must serialize LLM calls across the documents of one ingest batch")
+            .isEqualTo(1);
+    }
+
+    @Test
+    void capsConcurrentEmbeddingCallsAcrossDocuments() {
+        var storage = InMemoryStorageProvider.create();
+        var embeddingModel = new ConcurrencyRecordingEmbeddingModel();
+        var chatModel = new ScriptedChatModel(
+            Map.of(
+                ALPHA_MARKER, entityExtraction("Alice"),
+                BETA_MARKER, entityExtraction("Bob"),
+                GAMMA_MARKER, entityExtraction("Carol")
+            ),
+            Map.of()
+        );
+        var rag = LightRag.builder()
+            .chatModel(chatModel)
+            .embeddingModel(embeddingModel)
+            .storage(storage)
+            .chunkExtractParallelism(1)
+            .maxParallelInsert(3)
+            .embeddingMaxAsync(1)
+            .build();
+
+        var taskId = rag.submitIngestChunks(
+            WORKSPACE,
+            List.of(
+                preChunkedChunk("doc-alpha", "chunk-alpha", ALPHA_MARKER),
+                preChunkedChunk("doc-beta", "chunk-beta", BETA_MARKER),
+                preChunkedChunk("doc-gamma", "chunk-gamma", GAMMA_MARKER)
+            )
+        );
+
+        var task = awaitTerminalTask(rag, taskId);
+
+        assertThat(task.status()).isEqualTo(TaskStatus.SUCCEEDED);
+        assertThat(embeddingModel.calls()).isGreaterThanOrEqualTo(2);
+        assertThat(embeddingModel.peakConcurrency())
+            .as("embeddingMaxAsync(1) must serialize embedding calls across the documents of one ingest batch")
+            .isEqualTo(1);
+    }
+
+    private static void sleepQuietly(long millis) {
+        try {
+            Thread.sleep(millis);
+        } catch (InterruptedException exception) {
+            Thread.currentThread().interrupt();
+            throw new AssertionError("Test interrupted", exception);
+        }
+    }
+
     private static TaskSnapshot awaitTerminalTask(LightRag rag, String taskId) {
         var deadline = Instant.now().plus(java.time.Duration.ofSeconds(20));
         var snapshot = rag.getTask(WORKSPACE, taskId);
@@ -413,6 +502,35 @@ class LightRagDocumentConcurrencyTest {
                 .filter(prompt::contains)
                 .findFirst()
                 .orElse(null);
+        }
+    }
+
+    private static final class ConcurrencyRecordingEmbeddingModel implements EmbeddingModel {
+        private final AtomicInteger active = new AtomicInteger();
+        private final AtomicInteger calls = new AtomicInteger();
+        private final AtomicInteger peak = new AtomicInteger();
+
+        @Override
+        public List<List<Double>> embedAll(List<String> texts) {
+            calls.incrementAndGet();
+            peak.accumulateAndGet(active.incrementAndGet(), Math::max);
+            try {
+                Thread.sleep(100L);
+                return texts.stream().map(text -> List.of(1.0d, 0.0d)).toList();
+            } catch (InterruptedException exception) {
+                Thread.currentThread().interrupt();
+                throw new AssertionError("Test interrupted", exception);
+            } finally {
+                active.decrementAndGet();
+            }
+        }
+
+        private int calls() {
+            return calls.get();
+        }
+
+        private int peakConcurrency() {
+            return peak.get();
         }
     }
 

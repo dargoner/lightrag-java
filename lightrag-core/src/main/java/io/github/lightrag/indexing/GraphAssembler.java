@@ -39,7 +39,7 @@ public final class GraphAssembler {
             var chunkExtraction = Objects.requireNonNull(extraction, "extraction");
             for (var relation : chunkExtraction.extraction().relations()) {
                 if (!mergeRelation(
-                    chunkExtraction.chunkId(),
+                    chunkExtraction,
                     relation,
                     entitiesById,
                     entityIdByMergeKey,
@@ -105,13 +105,14 @@ public final class GraphAssembler {
     }
 
     private static boolean mergeRelation(
-        String chunkId,
+        ChunkExtraction chunkExtraction,
         ExtractedRelation extractedRelation,
         Map<String, MutableEntity> entitiesById,
         Map<String, String> entityIdByMergeKey,
         Map<String, MutableRelation> relationsById,
         Map<String, String> relationIdByMergeKey
     ) {
+        var chunkId = chunkExtraction.chunkId();
         var sourceEntity = ensureEntity(chunkId, extractedRelation.sourceEntityName(), entitiesById, entityIdByMergeKey);
         var targetEntity = ensureEntity(chunkId, extractedRelation.targetEntityName(), entitiesById, entityIdByMergeKey);
         // Drop self-loops after endpoint normalization so one bad extraction does not abort the batch.
@@ -131,14 +132,18 @@ public final class GraphAssembler {
         if (relationId == null) {
             relationId = canonicalRef.relationId();
         }
-        var finalRelationId = relationId;
-        var relation = relationsById.computeIfAbsent(
-            finalRelationId,
-            ignored -> MutableRelation.create(finalRelationId, canonicalRef.srcId(), canonicalRef.tgtId(), extractedRelation)
-        );
-        relation.mergeFrom(extractedRelation);
+        var relation = relationsById.get(relationId);
+        if (relation == null) {
+            relation = MutableRelation.create(relationId, canonicalRef.srcId(), canonicalRef.tgtId(), extractedRelation);
+            relationsById.put(relationId, relation);
+        } else {
+            // A newly created instance already carries this extraction; only later extractions merge in,
+            // otherwise a creating extraction would be added twice now that weights sum per chunk.
+            relation.mergeFrom(extractedRelation);
+        }
         relation.addSourceChunkId(chunkId);
-        relationIdByMergeKey.put(mergeKey, finalRelationId);
+        relation.addFilePath(chunkExtraction.filePath());
+        relationIdByMergeKey.put(mergeKey, relationId);
         return true;
     }
 
@@ -197,9 +202,13 @@ public final class GraphAssembler {
         return sourceEntityId + "\u0000" + targetEntityId;
     }
 
-    public record ChunkExtraction(String chunkId, ExtractionResult extraction, List<String> llmCacheIds) {
+    public record ChunkExtraction(String chunkId, ExtractionResult extraction, List<String> llmCacheIds, String filePath) {
+        public ChunkExtraction(String chunkId, ExtractionResult extraction, List<String> llmCacheIds) {
+            this(chunkId, extraction, llmCacheIds, "");
+        }
+
         public ChunkExtraction(String chunkId, ExtractionResult extraction) {
-            this(chunkId, extraction, List.of());
+            this(chunkId, extraction, List.of(), "");
         }
 
         public ChunkExtraction {
@@ -209,6 +218,7 @@ public final class GraphAssembler {
             }
             extraction = Objects.requireNonNull(extraction, "extraction");
             llmCacheIds = List.copyOf(Objects.requireNonNull(llmCacheIds, "llmCacheIds"));
+            filePath = filePath == null ? "" : filePath.strip();
         }
     }
 
@@ -275,29 +285,23 @@ public final class GraphAssembler {
     private static final class MutableEntity {
         private final String id;
         private final String name;
-        private String type;
-        private String description;
+        private final List<String> descriptionFragments = new ArrayList<>();
         private final LinkedHashMap<String, String> aliasesByKey;
+        private final LinkedHashMap<String, Integer> typeCounts = new LinkedHashMap<>();
         private final LinkedHashSet<String> sourceChunkIds = new LinkedHashSet<>();
         private final LinkedHashSet<String> mergeKeys = new LinkedHashSet<>();
 
-        private MutableEntity(String id, String name, String type, String description, LinkedHashMap<String, String> aliasesByKey) {
+        private MutableEntity(String id, String name, LinkedHashMap<String, String> aliasesByKey) {
             this.id = id;
             this.name = name;
-            this.type = type;
-            this.description = description;
             this.aliasesByKey = aliasesByKey;
         }
 
         private static MutableEntity create(ExtractedEntity entity) {
             var normalizedName = normalizeKey(entity.name());
-            var mutable = new MutableEntity(
-                normalizedName,
-                entity.name(),
-                entity.type(),
-                entity.description(),
-                new LinkedHashMap<>()
-            );
+            var mutable = new MutableEntity(normalizedName, entity.name(), new LinkedHashMap<>());
+            mutable.countType(entity.type());
+            mutable.addDescriptionFragment(entity.description());
             mutable.addAliases(entity.aliases());
             mutable.registerMergeKeys(entityMergeKeys(entity));
             return mutable;
@@ -308,23 +312,17 @@ public final class GraphAssembler {
             if (!normalizedIncomingName.equals(normalizeKey(name))) {
                 addAlias(entity.name());
             }
-            if (type.isEmpty() && !entity.type().isEmpty()) {
-                type = entity.type();
-            }
-            if (description.isEmpty() && !entity.description().isEmpty()) {
-                description = entity.description();
-            }
+            countType(entity.type());
+            addDescriptionFragment(entity.description());
             addAliases(entity.aliases());
             registerMergeKeys(entityMergeKeys(entity));
         }
 
         private void mergeFrom(MutableEntity entity) {
-            if (type.isEmpty() && !entity.type.isEmpty()) {
-                type = entity.type;
+            for (var entry : entity.typeCounts.entrySet()) {
+                typeCounts.merge(entry.getKey(), entry.getValue(), Integer::sum);
             }
-            if (description.isEmpty() && !entity.description.isEmpty()) {
-                description = entity.description;
-            }
+            descriptionFragments.addAll(entity.descriptionFragments);
             for (var alias : entity.aliasesByKey.values()) {
                 addAlias(alias);
             }
@@ -350,8 +348,30 @@ public final class GraphAssembler {
             sourceChunkIds.add(chunkId);
         }
 
+        private void addDescriptionFragment(String description) {
+            var sanitized = TextSanitizer.sanitizeForEncoding(description);
+            if (!sanitized.isEmpty()) {
+                descriptionFragments.add(sanitized);
+            }
+        }
+
         private void registerMergeKeys(Set<String> keys) {
             mergeKeys.addAll(keys);
+        }
+
+        private void countType(String type) {
+            if (!type.isEmpty()) {
+                typeCounts.merge(type, 1, Integer::sum);
+            }
+        }
+
+        // Upstream votes the entity type across the batch rows (operate.py:2576-2583); max() returns the
+        // first maximal entry, so ties keep the first-seen type.
+        private String votedType() {
+            return typeCounts.entrySet().stream()
+                .max(Map.Entry.comparingByValue())
+                .map(Map.Entry::getKey)
+                .orElse("");
         }
 
         private Set<String> mergeKeys() {
@@ -362,8 +382,8 @@ public final class GraphAssembler {
             return new Entity(
                 id,
                 name,
-                type,
-                description,
+                votedType(),
+                joinDescriptionFragments(descriptionFragments),
                 new ArrayList<>(aliasesByKey.values()),
                 new ArrayList<>(sourceChunkIds)
             );
@@ -375,23 +395,16 @@ public final class GraphAssembler {
         private final String srcId;
         private final String tgtId;
         private String keywords;
-        private String description;
+        private final List<String> descriptionFragments = new ArrayList<>();
         private double weight;
         private final LinkedHashSet<String> sourceChunkIds = new LinkedHashSet<>();
+        private final LinkedHashSet<String> filePaths = new LinkedHashSet<>();
 
-        private MutableRelation(
-            String id,
-            String srcId,
-            String tgtId,
-            String keywords,
-            String description,
-            double weight
-        ) {
+        private MutableRelation(String id, String srcId, String tgtId, String keywords, double weight) {
             this.id = id;
             this.srcId = srcId;
             this.tgtId = tgtId;
             this.keywords = keywords;
-            this.description = description;
             this.weight = weight;
         }
 
@@ -401,26 +414,38 @@ public final class GraphAssembler {
             String targetEntityId,
             ExtractedRelation relation
         ) {
-            return new MutableRelation(
+            var created = new MutableRelation(
                 id,
                 sourceEntityId,
                 targetEntityId,
                 canonicalKeywords(relation.keywords()),
-                relation.description(),
                 relation.weight()
             );
+            created.addDescriptionFragment(relation.description());
+            return created;
         }
 
         private void mergeFrom(ExtractedRelation relation) {
             keywords = mergeKeywords(keywords, relation.keywords());
-            if (description.isEmpty() && !relation.description().isEmpty()) {
-                description = relation.description();
+            addDescriptionFragment(relation.description());
+            weight += relation.weight();
+        }
+
+        private void addDescriptionFragment(String description) {
+            var sanitized = TextSanitizer.sanitizeForEncoding(description);
+            if (!sanitized.isEmpty()) {
+                descriptionFragments.add(sanitized);
             }
-            weight = Math.max(weight, relation.weight());
         }
 
         private void addSourceChunkId(String chunkId) {
             sourceChunkIds.add(chunkId);
+        }
+
+        private void addFilePath(String filePath) {
+            if (filePath != null && !filePath.isBlank()) {
+                filePaths.add(filePath.strip());
+            }
         }
 
         private Relation toRelation() {
@@ -429,12 +454,16 @@ public final class GraphAssembler {
                 srcId,
                 tgtId,
                 keywords,
-                description,
+                joinDescriptionFragments(descriptionFragments),
                 weight,
                 RelationCanonicalizer.joinValues(new ArrayList<>(sourceChunkIds)),
-                ""
+                RelationCanonicalizer.joinValues(new ArrayList<>(filePaths))
             );
         }
+    }
+
+    private static String joinDescriptionFragments(List<String> fragments) {
+        return String.join(DescriptionFragments.SEPARATOR, DescriptionFragments.combine(List.of(), fragments));
     }
 
     private static String canonicalKeywords(String value) {

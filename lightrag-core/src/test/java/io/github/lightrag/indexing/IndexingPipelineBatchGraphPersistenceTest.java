@@ -71,12 +71,67 @@ class IndexingPipelineBatchGraphPersistenceTest {
         assertThat(embeddingModel.batchSizes()).containsExactly(1, 3);
     }
 
+    @Test
+    void keepsTheStoredEntityTypeWhenTheIncomingBatchTies() {
+        var storage = InMemoryStorageProvider.create();
+        var pipeline = new IndexingPipeline(
+            new TypeVotingChatModel(),
+            new FakeEmbeddingModel(),
+            storage,
+            null
+        );
+
+        pipeline.ingest(List.of(new Document("doc-1", "Title", "ORG Alice works with Bob", Map.of())));
+        pipeline.ingest(List.of(new Document("doc-2", "Title", "PERSON Alice works with Bob", Map.of())));
+
+        assertThat(storage.graphStore().loadEntity(entityKey("Alice"))).get()
+            .extracting(GraphStore.EntityRecord::type)
+            .isEqualTo("organization");
+    }
+
+    @Test
+    void treatsAnEmptyStoredEntityTypeAsNoVote() {
+        var storage = InMemoryStorageProvider.create();
+        var pipeline = new IndexingPipeline(
+            new TypeVotingChatModel(),
+            new FakeEmbeddingModel(),
+            storage,
+            null
+        );
+
+        pipeline.ingest(List.of(new Document("doc-1", "Title", "RELATION_ONLY Alice works with Bob", Map.of())));
+        assertThat(storage.graphStore().loadEntity(entityKey("Alice"))).get()
+            .extracting(GraphStore.EntityRecord::type)
+            .isEqualTo("");
+
+        pipeline.ingest(List.of(new Document("doc-2", "Title", "PERSON Alice works with Bob", Map.of())));
+        assertThat(storage.graphStore().loadEntity(entityKey("Alice"))).get()
+            .extracting(GraphStore.EntityRecord::type)
+            .isEqualTo("person");
+    }
+
     private static String entityKey(String name) {
         return "" + name.strip().toLowerCase(Locale.ROOT);
     }
 
     private static String relationKey(String source, String type, String target) {
         return RelationIds.relationId(entityKey(source), entityKey(target));
+    }
+
+    private static final class TypeVotingChatModel implements ChatModel {
+        @Override
+        public String generate(ChatRequest request) {
+            var prompt = request.userPrompt();
+            if (prompt.contains("RELATION_ONLY")) {
+                return """
+                    {"entities":[],"relations":[{"source_entity":"Alice","target_entity":"Bob","relationship_keywords":"works_with","relationship_description":"works with","weight":1.0}]}
+                    """;
+            }
+            var type = prompt.contains("ORG ") ? "organization" : "person";
+            return """
+                {"entities":[{"name":"Alice","type":"%s","description":"Alice","aliases":[]},{"name":"Bob","type":"%s","description":"Bob","aliases":[]}],"relations":[{"source_entity":"Alice","target_entity":"Bob","relationship_keywords":"works_with","relationship_description":"works with","weight":1.0}]}
+                """.formatted(type, type);
+        }
     }
 
     private static final class FakeChatModel implements ChatModel {

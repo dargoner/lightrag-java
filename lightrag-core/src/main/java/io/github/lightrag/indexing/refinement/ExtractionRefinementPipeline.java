@@ -39,7 +39,8 @@ public final class ExtractionRefinementPipeline {
                 .map(extraction -> new GraphAssembler.ChunkExtraction(
                     extraction.chunk().id(),
                     extraction.extraction(),
-                    extraction.llmCacheIds()
+                    extraction.llmCacheIds(),
+                    io.github.lightrag.indexing.MetadataKeys.filePathOf(extraction.chunk())
                 ))
                 .toList();
         }

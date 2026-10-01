@@ -43,7 +43,8 @@ public final class DefaultExtractionMergePolicy implements ExtractionMergePolicy
                 List.copyOf(relations.values()),
                 resolvedPrimary.extraction().warnings()
             ),
-            resolvedPrimary.llmCacheIds()
+            resolvedPrimary.llmCacheIds(),
+            io.github.lightrag.indexing.MetadataKeys.filePathOf(resolvedPrimary.chunk())
         );
     }
 
