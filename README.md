@@ -1100,6 +1100,57 @@ var rag = LightRag.builder()
 - `rerankCandidateMultiplier(...)`: controls how far `QueryEngine` expands `chunkTopK` before reranking
 - `minRerankScore(...)`: filters reranked chunks below the configured score threshold; default `0.0` keeps all reranked candidates
 
+### Merge and extraction parity options (0.24.0)
+
+The 2026-09-30 build-side alignment added these builder controls:
+
+```java
+var rag = LightRag.builder()
+    .chatModel(chatModel)
+    .summaryModel(summaryModel)                       // defaults to chatModel
+    .embeddingModel(embeddingModel)
+    .storage(storage)
+    .forceLlmSummaryOnMerge(8)                        // fragments at or above this count are LLM-summarized on merge
+    .summaryMaxTokens(1_200)                          // token count that also triggers summarization
+    .summaryContextSize(12_000)                       // per-map-step fragment budget
+    .summaryLengthRecommended(600)                    // length hint in the summary prompt
+    .maxSourceIdsPerEntity(200)                       // Integer.MAX_VALUE disables capping
+    .maxSourceIdsPerRelation(200)
+    .sourceIdsLimitMethod(SourceIdLimits.Method.KEEP) // KEEP = head (upstream default), FIFO = tail
+    .maxFilePaths(75)                                 // relation file_path cap, display-only
+    .entityExtractMaxRecords(100)                     // extraction prompt: total rows
+    .entityExtractMaxEntities(40)                     // extraction prompt: entity rows
+    .enableSectionContext(true)                       // ---Section Context--- breadcrumb in the extraction prompt
+    .kgExtractionValidator((chunkId, chunkText, extracted) -> extracted)   // per-chunk hook
+    .chatRequestOptions(new ChatRequestOptions(0.2d, 1_024, null, "json_object"))
+    .modelMaxAttempts(3)                              // retry policy for injected models (1 disables)
+    .maxAsyncLlm(4)                                   // per-role chat-call budget
+    .embeddingMaxAsync(8)                             // embedding-call budget
+    .maxGraphNodes(1_000)                             // upper bound for getKnowledgeGraph
+    .noopVectorStore(false)                           // graph-only builds without embedding calls
+    .build();
+```
+
+- `summaryModel(...)`: model used for merge-time description summarization; falls back to `chatModel(...)`
+- `forceLlmSummaryOnMerge(...)`: below this fragment count (and below `summaryMaxTokens`) merged descriptions are stored as a `<SEP>` join without a model call; default `8`
+- `summaryMaxTokens(...)` / `summaryContextSize(...)` / `summaryLengthRecommended(...)`: the token count that also triggers summarization (`1200`), the per-map-step fragment budget (`12000`), and the length hint in the summary prompt (`600`)
+- `maxSourceIdsPerEntity(...)` / `maxSourceIdsPerRelation(...)`: cap the stored source-chunk id lists (default `200`); `sourceIdsLimitMethod(...)` picks `KEEP` (head, upstream default) or `FIFO` (tail). Attribution-aware deletion keeps an entity or relation alive while any surviving chunk still references it
+- `maxFilePaths(...)`: caps relation `filePath` values (default `75`) with the upstream `...truncated...(KEEP Old)` marker; display-only
+- `entityExtractMaxRecords(...)` / `entityExtractMaxEntities(...)`: row caps injected into the extraction prompts (defaults `100` / `40`)
+- `enableSectionContext(...)`: adds the `---Section Context---` heading breadcrumb to extraction prompts; default `true`
+- `kgExtractionValidator(...)`: per-chunk hook (`validate(chunkId, chunkText, extracted)`) that can drop, rewrite, or augment an extraction before graph assembly; a `null` return fails the chunk
+- `chatRequestOptions(...)`: default `temperature` / `maxTokens` / `topP` / `responseFormat` for every chat request; per-request options win. `ChatRequestOptions` is a record, with `NONE` and `JSON_OBJECT` presets
+- `modelMaxAttempts(...)`: retries transient provider failures for injected chat and embedding models with exponential backoff capped at 1 s; `1` disables retry. The built-in OpenAI-compatible models keep their constructor-provided policy
+- `maxAsyncLlm(...)` / `embeddingMaxAsync(...)`: fair per-role concurrency budgets (defaults `4` / `8`); upstream's priority ordering is not implemented
+- `maxGraphNodes(...)`: upper bound for `getKnowledgeGraph` node budgets (default `1000`)
+- `noopVectorStore(...)`: routes all vector operations to a no-op store so ingestion builds only the graph and KV state and never calls the embedding model
+
+Merge and extraction semantics aligned with upstream in the same release:
+- entity and relation descriptions keep deduplicated `<SEP>`-joined fragments and are LLM-summarized once either threshold is crossed (one earlier fragment no longer wins outright)
+- entity types are decided by majority vote across the batch and the stored type (ties: first seen)
+- extracted relation weights are fixed at `1.0`; the merge accumulates the stored weight with the new source count and applies the distinct-evidence floor
+- JSON escape damage (`\f`/`\b` before a letter) and whitespace-class damage inside `$...$` math are repaired before storage
+
 Workspace-specific graph extraction settings can be supplied through `GraphExtractionOptionsProvider`. LightRAG resolves
 settings in this order: provider result for the current `WorkspaceScope`, then global builder/Spring settings, then built-in
 defaults.
@@ -1140,7 +1191,7 @@ Defaults in this phase:
 
 - chunker: `FixedWindowChunker(1000, 100)`
 - embedding batch size: unbounded single batch
-- max parallel insert: `1`
+- max parallel insert: `3`
 - entity extract max gleaning: `1`
 - max extract input tokens: `20480`
 - entity extraction language: `English`
@@ -1150,6 +1201,15 @@ Defaults in this phase:
 - automatic keyword extraction: `true`
 - rerank candidate multiplier: `2`
 - min rerank score: `0.0`
+- merge summarization: `forceLlmSummaryOnMerge=8`, `summaryMaxTokens=1200`, `summaryContextSize=12000`, `summaryLengthRecommended=600`
+- source-id caps: `200` per entity and `200` per relation, method `KEEP`
+- relation file-path cap: `75`
+- extraction record caps: `100` total rows, `40` entity rows
+- section context in extraction prompts: enabled
+- model retries for injected models: `1` (the built-in OpenAI-compatible models default to `3`)
+- concurrency budgets: `maxAsyncLlm=4`, `embeddingMaxAsync=8`
+- graph read node budget: `maxGraphNodes=1000`
+- no-op vector store: disabled
 
 These controls change indexing or retrieval internals only. They do not alter the `QueryRequest` surface or default query semantics unless you opt in through the builder.
 
@@ -1157,6 +1217,14 @@ Spring Boot properties mirror the same knobs:
 
 ```yaml
 lightrag:
+  max-async-llm: 4
+  embedding-max-async: 8
+  chat:
+    max-attempts: 3
+    temperature: 0.2
+    max-tokens: 1024
+    top-p: 0.95
+    response-format: json_object
   indexing:
     chunking:
       window-size: 600
@@ -1280,6 +1348,50 @@ Compatibility note:
 - `RagasEvaluationService.EvaluationResult` and `RagasBatchEvaluationService.Result` now expose structured `QueryResult.Context` entries instead of plain strings
 - if your integration previously consumed `List<String>` contexts, read `context.text()` from each returned context object
 - `evaluation/ragas/eval_rag_quality_java.py` remains compatible with both the legacy list payload and the new batch envelope
+
+## Offline Vector Index Maintenance
+
+`RebuildVectorIndexService` and the `runRebuildVdb` Gradle task check and repair the three vector namespaces
+(chunks, entities, relations) of one workspace from the chunk and graph stores.
+
+> **Stop every writer before running `--mode rebuild`.** The tool replaces whole vector namespaces from a
+> snapshot of the current stores; a concurrent ingest can be overwritten and its vectors lost.
+
+Check for drift (read-only):
+
+```bash
+./gradlew :lightrag-core:runRebuildVdb --args="\
+  --mode check \
+  --workspace default \
+  --storage-profile in-memory \
+  --snapshot-file /tmp/rag-store.json"
+```
+
+Rebuild the drifted namespaces, then persist the repaired store back to the same snapshot file:
+
+```bash
+export LIGHTRAG_JAVA_EVAL_EMBEDDING_BASE_URL=http://localhost:11434/v1/
+export LIGHTRAG_JAVA_EVAL_EMBEDDING_MODEL=nomic-embed-text
+export LIGHTRAG_JAVA_EVAL_EMBEDDING_API_KEY=dummy
+./gradlew :lightrag-core:runRebuildVdb --args="\
+  --mode rebuild \
+  --force \
+  --workspace default \
+  --storage-profile in-memory \
+  --snapshot-file /tmp/rag-store.json"
+```
+
+Options:
+
+- `--mode check|rebuild` (default `check`)
+- `--workspace <id>` (default `default`)
+- `--storage-profile in-memory|postgres-neo4j-testcontainers` (default `in-memory`); the testcontainers profile starts its own PostgreSQL and Neo4j and rejects `--snapshot-file`
+- `--snapshot-file <path>`: load the workspace from a `FileSnapshotStore` snapshot and, in rebuild mode, persist the repaired store back to it
+- `--force`: rebuild even though the stored embedding-space marker is missing, unsupported, or describes a different model; a rebuild always clears the marker so the next startup re-records it
+
+Both modes print a JSON report with `clean`, `missingItems`, `staleItems`, `embeddedItems`, and the per-namespace
+id lists. The embedding model comes from `LIGHTRAG_JAVA_EVAL_EMBEDDING_BASE_URL` / `_MODEL` / `_API_KEY`
+(falling back to the chat variables and `OPENAI_API_KEY`).
 
 ## Current v1 Scope
 

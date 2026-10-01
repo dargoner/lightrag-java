@@ -54,6 +54,7 @@ tasks.register<JavaExec>("runRagasQuery") {
     description = "Runs a single LightRAG query for RAGAS evaluation."
     classpath = sourceSets.main.get().runtimeClasspath
     mainClass.set("io.github.lightrag.evaluation.RagasEvaluationCli")
+    workingDir = rootProject.projectDir
 }
 
 tasks.register<JavaExec>("runRagasBatchEval") {
@@ -61,6 +62,15 @@ tasks.register<JavaExec>("runRagasBatchEval") {
     description = "Runs the full LightRAG evaluation dataset and returns answers plus contexts."
     classpath = sourceSets.main.get().runtimeClasspath
     mainClass.set("io.github.lightrag.evaluation.RagasBatchEvaluationCli")
+    workingDir = rootProject.projectDir
+}
+
+tasks.register<JavaExec>("runRebuildVdb") {
+    group = "ops"
+    description = "Offline rebuild-vdb tool: check or rebuild the vector namespaces of one workspace from the chunk and graph stores. Stop all writers first."
+    classpath = sourceSets.main.get().runtimeClasspath
+    mainClass.set("io.github.lightrag.ops.RebuildVectorIndexCommand")
+    workingDir = rootProject.projectDir
 }
 
 mavenPublishing {

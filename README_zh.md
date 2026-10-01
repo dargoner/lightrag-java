@@ -599,6 +599,17 @@ lightrag:
     timeout: PT15S
 ```
 
+聊天请求的采样参数与响应格式也可以按角色配置（`lightrag.chat.*`、`lightrag.query-model.*`、`lightrag.keyword-model.*`、`lightrag.extraction-model.*`）：
+
+- `temperature`（0 到 2）
+- `max-tokens`（不小于 1）
+- `top-p`（0 到 1）
+- `response-format`（例如 `json_object`）
+
+未设置的字段不会出现在请求体中；角色级配置作为该角色所有请求的默认值，与请求级选项合并时请求级优先。提取与查询关键词抽取的请求会自带 `response-format=json_object`。
+
+OpenAI 兼容模型默认对瞬时失败重试 3 次（指数退避，上限 1 秒），覆盖超时、连接错误、408/409、5xx 与上游同样识别的瞬时 400（"could not parse"）；限流 429（含 `insufficient_quota`/`budget_exceeded`）与其他 4xx 立即失败。可用 `lightrag.chat.max-attempts`、`lightrag.embedding.max-attempts`（其他角色模型同名键）调整，`0` 或 `1` 关闭重试；SDK builder 侧对应 `modelMaxAttempts(int)`，作用于注入的自定义模型（SDK 自带的 OpenAI 兼容模型由其构造器参数控制，避免双重重试）。
+
 ## RAGAS 评测
 
 仓库内已经集成 upstream 风格的 RAGAS 评测：
