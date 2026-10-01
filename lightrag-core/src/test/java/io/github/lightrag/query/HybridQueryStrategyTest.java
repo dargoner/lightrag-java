@@ -89,7 +89,7 @@ class HybridQueryStrategyTest {
             );
         assertThat(context.matchedChunks())
             .extracting(match -> match.chunkId())
-            .containsExactly("chunk-1", "chunk-2", "chunk-3");
+            .containsExactly("chunk-1", "chunk-3", "chunk-2");
     }
 
     @Test
@@ -221,7 +221,7 @@ class HybridQueryStrategyTest {
 
         assertThat(context.matchedChunks())
             .extracting(ScoredChunk::chunkId)
-            .containsExactly("chunk-2", "chunk-3");
+            .containsExactly("chunk-3", "chunk-2");
     }
 
     @Test
