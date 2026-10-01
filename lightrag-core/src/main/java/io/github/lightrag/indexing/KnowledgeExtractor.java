@@ -322,7 +322,7 @@ public final class KnowledgeExtractor {
         var userPrompt = buildUserPrompt(chunk);
         var systemPrompt = buildSystemPrompt();
         var request = new ChatRequest(systemPrompt, userPrompt, ChatRequestOptions.JSON_OBJECT);
-        cacheIds.add(CachedChatModel.cacheId("extract", request));
+        cacheIds.add(CachedChatModel.cacheId("extract", chatModel.cacheIdentity(), request));
         var response = chatModel.generate(request);
         var current = sanitizeAliasConflicts(parseExtractionResult(response, chunk.id()));
 
@@ -337,7 +337,7 @@ public final class KnowledgeExtractor {
                 break;
             }
             var gleanRequest = new ChatRequest(systemPrompt, continuePrompt, history, ChatRequestOptions.JSON_OBJECT);
-            cacheIds.add(CachedChatModel.cacheId("extract", gleanRequest));
+            cacheIds.add(CachedChatModel.cacheId("extract", chatModel.cacheIdentity(), gleanRequest));
             var gleanResponse = chatModel.generate(gleanRequest);
             var gleaned = sanitizeAliasConflicts(parseExtractionResult(gleanResponse, chunk.id()));
             current = sanitizeAliasConflicts(merge(current, gleaned));

@@ -19,6 +19,11 @@ public interface ChatModel {
         return CloseableIterator.of(List.of(response));
     }
 
+    /** Identity of the backing model+endpoint, folded into answer-cache keys. */
+    default String cacheIdentity() {
+        return "unknown";
+    }
+
     record ChatRequest(
         String systemPrompt,
         String userPrompt,
