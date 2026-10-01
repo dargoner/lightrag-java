@@ -408,6 +408,117 @@ class LlmConcurrencyBudgetTest {
     }
 
     @Test
+    void reentrantCloseFromTheDelegateCloseDoesNotReleaseTheSlotEarly() {
+        var wrapperRef = new AtomicReference<CloseableIterator<String>>();
+        var reentrantCloseReturned = new AtomicBoolean();
+        var delegateCloseFinished = new AtomicBoolean();
+        var releasedBeforeCloseFinished = new AtomicBoolean();
+        var closeCount = new AtomicInteger();
+        // release() runs only from the SlotReleasingIterator, so sampling the delegate state here
+        // pins every release to a finished delegate close even when the delegate re-enters the
+        // wrapper's close() from inside its own close (review round 5).
+        var slots = new Semaphore(1) {
+            @Override
+            public void release() {
+                if (!delegateCloseFinished.get()) {
+                    releasedBeforeCloseFinished.set(true);
+                }
+                super.release();
+            }
+        };
+        var model = new LimitedChatModel(slots, new ChatModel() {
+            @Override
+            public String generate(ChatRequest request) {
+                return "unused";
+            }
+
+            @Override
+            public CloseableIterator<String> stream(ChatRequest request) {
+                return new CloseableIterator<>() {
+                    @Override
+                    public boolean hasNext() {
+                        return false;
+                    }
+
+                    @Override
+                    public String next() {
+                        throw new NoSuchElementException();
+                    }
+
+                    @Override
+                    public void close() {
+                        closeCount.incrementAndGet();
+                        wrapperRef.get().close();
+                        reentrantCloseReturned.set(true);
+                        delegateCloseFinished.set(true);
+                    }
+                };
+            }
+        });
+
+        var stream = model.stream(request("stream"));
+        wrapperRef.set(stream);
+        assertThat(stream.hasNext()).isFalse();
+
+        assertThat(reentrantCloseReturned).isTrue();
+        assertThat(closeCount).hasValue(1);
+        assertThat(releasedBeforeCloseFinished).isFalse();
+        assertThat(slots.availablePermits()).isEqualTo(1);
+    }
+
+    @Test
+    void reentrantHasNextFromTheDelegateCloseDoesNotReleaseTheSlotEarly() {
+        var wrapperRef = new AtomicReference<CloseableIterator<String>>();
+        var reentrantHasNextResult = new AtomicReference<Boolean>();
+        var delegateCloseFinished = new AtomicBoolean();
+        var releasedBeforeCloseFinished = new AtomicBoolean();
+        var slots = new Semaphore(1) {
+            @Override
+            public void release() {
+                if (!delegateCloseFinished.get()) {
+                    releasedBeforeCloseFinished.set(true);
+                }
+                super.release();
+            }
+        };
+        var model = new LimitedChatModel(slots, new ChatModel() {
+            @Override
+            public String generate(ChatRequest request) {
+                return "unused";
+            }
+
+            @Override
+            public CloseableIterator<String> stream(ChatRequest request) {
+                return new CloseableIterator<>() {
+                    @Override
+                    public boolean hasNext() {
+                        return false;
+                    }
+
+                    @Override
+                    public String next() {
+                        throw new NoSuchElementException();
+                    }
+
+                    @Override
+                    public void close() {
+                        reentrantHasNextResult.set(wrapperRef.get().hasNext());
+                        delegateCloseFinished.set(true);
+                    }
+                };
+            }
+        });
+
+        var stream = model.stream(request("stream"));
+        wrapperRef.set(stream);
+        stream.close();
+
+        assertThat(reentrantHasNextResult).hasValue(false);
+        assertThat(releasedBeforeCloseFinished).isFalse();
+        assertThat(slots.availablePermits()).isEqualTo(1);
+    }
+
+    @Test
     void delegateHasNextErrorsStillCloseTheDelegateAndReleaseTheSlot() throws Exception {
         var budget = new LlmConcurrencyBudget(1, 8);
         var closed = new AtomicInteger();
