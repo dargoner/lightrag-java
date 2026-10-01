@@ -688,8 +688,8 @@ class LightRagAutoConfigurationTest {
                 );
                 assertThat(properties.getIndexing().getIngest().getPreset()).isEqualTo(IngestPreset.GENERAL);
                 assertThat(properties.getQuery().getDefaultMode()).isEqualTo("MIX");
-                assertThat(properties.getQuery().getDefaultTopK()).isEqualTo(10);
-                assertThat(properties.getQuery().getDefaultChunkTopK()).isEqualTo(10);
+                assertThat(properties.getQuery().getDefaultTopK()).isEqualTo(40);
+                assertThat(properties.getQuery().getDefaultChunkTopK()).isEqualTo(20);
                 assertThat(properties.getQuery().getDefaultResponseType()).isEqualTo("Multiple Paragraphs");
                 assertThat(properties.getQuery().isAutomaticKeywordExtraction()).isTrue();
                 assertThat(properties.getQuery().getRerankCandidateMultiplier()).isEqualTo(2);

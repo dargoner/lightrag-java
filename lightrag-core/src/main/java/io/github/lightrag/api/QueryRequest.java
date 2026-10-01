@@ -43,8 +43,8 @@ public record QueryRequest(
     List<MetadataCondition> metadataConditions
 ) {
     public static final QueryMode DEFAULT_MODE = QueryMode.MIX;
-    public static final int DEFAULT_TOP_K = 10;
-    public static final int DEFAULT_CHUNK_TOP_K = 10;
+    public static final int DEFAULT_TOP_K = 40;
+    public static final int DEFAULT_CHUNK_TOP_K = 20;
     public static final int DEFAULT_MAX_ENTITY_TOKENS = 6_000;
     public static final int DEFAULT_MAX_RELATION_TOKENS = 8_000;
     public static final int DEFAULT_MAX_TOTAL_TOKENS = 30_000;

@@ -716,8 +716,8 @@ public class LightRagProperties {
 
     public static class QueryProperties {
         private String defaultMode = "MIX";
-        private int defaultTopK = 10;
-        private int defaultChunkTopK = 10;
+        private int defaultTopK = 40;
+        private int defaultChunkTopK = 20;
         private String defaultResponseType = "Multiple Paragraphs";
         private boolean automaticKeywordExtraction = true;
         private int rerankCandidateMultiplier = 2;

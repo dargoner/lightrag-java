@@ -1126,6 +1126,15 @@ class LightRagBuilderTest {
     }
 
     @Test
+    void queryRequestDefaultsMatchUpstreamTopKAndChunkTopK() {
+        assertThat(QueryRequest.DEFAULT_TOP_K).isEqualTo(40);
+        assertThat(QueryRequest.DEFAULT_CHUNK_TOP_K).isEqualTo(20);
+        var request = QueryRequest.builder().query("international trade tariffs").build();
+        assertThat(request.topK()).isEqualTo(40);
+        assertThat(request.chunkTopK()).isEqualTo(20);
+    }
+
+    @Test
     void queryRequestDefaultsToMixMode() {
         var request = QueryRequest.builder()
             .query("Where is the evidence?")

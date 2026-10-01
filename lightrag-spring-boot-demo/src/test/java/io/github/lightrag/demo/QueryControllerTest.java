@@ -157,8 +157,8 @@ class QueryControllerTest {
         var request = requestCaptor.getValue();
         assertThat(request.query()).isEqualTo("Who works with Bob?");
         assertThat(request.mode()).isEqualTo(QueryMode.MIX);
-        assertThat(request.topK()).isEqualTo(10);
-        assertThat(request.chunkTopK()).isEqualTo(10);
+        assertThat(request.topK()).isEqualTo(40);
+        assertThat(request.chunkTopK()).isEqualTo(20);
         assertThat(request.maxEntityTokens()).isEqualTo(QueryRequest.DEFAULT_MAX_ENTITY_TOKENS);
         assertThat(request.maxRelationTokens()).isEqualTo(QueryRequest.DEFAULT_MAX_RELATION_TOKENS);
         assertThat(request.maxTotalTokens()).isEqualTo(QueryRequest.DEFAULT_MAX_TOTAL_TOKENS);

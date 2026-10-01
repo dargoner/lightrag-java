@@ -24,8 +24,8 @@ lightrag:
     graph-enabled: ${LIGHTRAG_INDEXING_GRAPH_ENABLED:true}
   query:
     default-mode: ${LIGHTRAG_QUERY_DEFAULT_MODE:MIX}
-    default-top-k: ${LIGHTRAG_QUERY_DEFAULT_TOP_K:10}
-    default-chunk-top-k: ${LIGHTRAG_QUERY_DEFAULT_CHUNK_TOP_K:10}
+    default-top-k: ${LIGHTRAG_QUERY_DEFAULT_TOP_K:40}
+    default-chunk-top-k: ${LIGHTRAG_QUERY_DEFAULT_CHUNK_TOP_K:20}
     default-response-type: ${LIGHTRAG_QUERY_DEFAULT_RESPONSE_TYPE:Multiple Paragraphs}
     automatic-keyword-extraction: ${LIGHTRAG_QUERY_AUTOMATIC_KEYWORD_EXTRACTION:true}
     rerank-candidate-multiplier: ${LIGHTRAG_QUERY_RERANK_CANDIDATE_MULTIPLIER:2}
