@@ -519,6 +519,50 @@ class LlmConcurrencyBudgetTest {
     }
 
     @Test
+    void explicitClosePropagatesTheDelegateErrorAndStillReleasesTheSlot() {
+        var slots = new Semaphore(1);
+        var closed = new AtomicInteger();
+        var model = new LimitedChatModel(slots, new ChatModel() {
+            @Override
+            public String generate(ChatRequest request) {
+                return "unused";
+            }
+
+            @Override
+            public CloseableIterator<String> stream(ChatRequest request) {
+                return new CloseableIterator<>() {
+                    @Override
+                    public boolean hasNext() {
+                        return true;
+                    }
+
+                    @Override
+                    public String next() {
+                        return "chunk";
+                    }
+
+                    @Override
+                    public void close() {
+                        closed.incrementAndGet();
+                        throw new AssertionError("provider close failed");
+                    }
+                };
+            }
+        });
+
+        var stream = model.stream(request("stream"));
+        assertThatThrownBy(stream::close)
+            .isInstanceOf(AssertionError.class)
+            .hasMessageContaining("provider close failed");
+
+        assertThat(closed).hasValue(1);
+        assertThat(slots.availablePermits()).isEqualTo(1);
+
+        stream.close();
+        assertThat(closed).hasValue(1);
+    }
+
+    @Test
     void delegateHasNextErrorsStillCloseTheDelegateAndReleaseTheSlot() throws Exception {
         var budget = new LlmConcurrencyBudget(1, 8);
         var closed = new AtomicInteger();

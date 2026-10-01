@@ -7,7 +7,10 @@ import java.util.concurrent.atomic.AtomicBoolean;
 /**
  * Takes one slot from its role's budget for the duration of each delegate call. A stream keeps its
  * slot until the returned iterator is exhausted, closed or fails, so open provider connections
- * count against the role budget too.
+ * count against the role budget too. Close attempts are serialised and the slot is released only
+ * after the delegate close returns, but the wrapper makes no promise that hasNext/next/close are
+ * safe to call concurrently: a delegate close() must not synchronously wait for another thread
+ * that re-enters the wrapper.
  */
 final class LimitedChatModel implements ChatModel {
     private final Semaphore slots;
