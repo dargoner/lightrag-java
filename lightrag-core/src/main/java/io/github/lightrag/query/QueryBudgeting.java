@@ -1,18 +1,23 @@
 package io.github.lightrag.query;
 
+import io.github.lightrag.model.TokenCounter;
 import io.github.lightrag.types.ScoredChunk;
 import io.github.lightrag.types.ScoredEntity;
 import io.github.lightrag.types.ScoredRelation;
 
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Objects;
 import java.util.function.Function;
 
 final class QueryBudgeting {
-    private QueryBudgeting() {
+    private final TokenCounter tokenCounter;
+
+    QueryBudgeting(TokenCounter tokenCounter) {
+        this.tokenCounter = Objects.requireNonNull(tokenCounter, "tokenCounter");
     }
 
-    static int approximateTokenCount(String text) {
+    int approximateTokenCount(String text) {
         if (text == null) {
             return 0;
         }
@@ -20,7 +25,7 @@ final class QueryBudgeting {
         if (normalized.isEmpty()) {
             return 0;
         }
-        return normalized.split("\\s+").length;
+        return tokenCounter.countTokens(normalized);
     }
 
     static String formatEntity(ScoredEntity entity) {
@@ -40,15 +45,15 @@ final class QueryBudgeting {
         return "- %s | %.3f | %s".formatted(chunk.chunkId(), chunk.score(), chunk.chunk().text());
     }
 
-    static List<ScoredEntity> limitEntities(List<ScoredEntity> entities, int maxTokens) {
+    List<ScoredEntity> limitEntities(List<ScoredEntity> entities, int maxTokens) {
         return limitByTextTokens(entities, maxTokens, QueryBudgeting::formatEntity);
     }
 
-    static List<ScoredRelation> limitRelations(List<ScoredRelation> relations, int maxTokens) {
+    List<ScoredRelation> limitRelations(List<ScoredRelation> relations, int maxTokens) {
         return limitByTextTokens(relations, maxTokens, QueryBudgeting::formatRelation);
     }
 
-    static List<ScoredChunk> limitChunks(List<ScoredChunk> chunks, int maxTokens) {
+    List<ScoredChunk> limitChunks(List<ScoredChunk> chunks, int maxTokens) {
         if (maxTokens <= 0 || chunks.isEmpty()) {
             return List.of();
         }
@@ -67,7 +72,7 @@ final class QueryBudgeting {
         return List.copyOf(limited);
     }
 
-    private static <T> List<T> limitByTextTokens(List<T> items, int maxTokens, Function<T, String> formatter) {
+    private <T> List<T> limitByTextTokens(List<T> items, int maxTokens, Function<T, String> formatter) {
         if (maxTokens <= 0 || items.isEmpty()) {
             return List.of();
         }

@@ -14,8 +14,10 @@ import io.github.lightrag.indexing.refinement.ExtractionRefinementOptions;
 import io.github.lightrag.model.CachedChatModel;
 import io.github.lightrag.model.ChatModel;
 import io.github.lightrag.model.EmbeddingModel;
+import io.github.lightrag.model.HeuristicTokenCounter;
 import io.github.lightrag.model.LlmConcurrencyBudget;
 import io.github.lightrag.model.RerankFailureMode;
+import io.github.lightrag.model.TokenCounter;
 import io.github.lightrag.query.ContextAssembler;
 import io.github.lightrag.query.DefaultPathRetriever;
 import io.github.lightrag.query.DefaultPathScorer;
@@ -59,6 +61,7 @@ public final class LightRag implements AutoCloseable {
     private final int rerankCandidateMultiplier;
     private final double minRerankScore;
     private final RerankFailureMode rerankFailureMode;
+    private final TokenCounter tokenCounter;
     private final int embeddingBatchSize;
     private final int maxParallelInsert;
     private final int chunkExtractParallelism;
@@ -84,7 +87,7 @@ public final class LightRag implements AutoCloseable {
     private final AtomicBoolean closed = new AtomicBoolean();
 
     LightRag(LightRagConfig config) {
-        this(config, null, null, true, 2, 0.0d, RerankFailureMode.FAIL_FAST, Integer.MAX_VALUE, 1,
+        this(config, null, null, true, 2, 0.0d, RerankFailureMode.FAIL_FAST, new HeuristicTokenCounter(), Integer.MAX_VALUE, 1,
             1,
             1,
             io.github.lightrag.indexing.KnowledgeExtractor.DEFAULT_ENTITY_EXTRACT_MAX_GLEANING,
@@ -104,7 +107,7 @@ public final class LightRag implements AutoCloseable {
     }
 
     LightRag(LightRagConfig config, Chunker chunker) {
-        this(config, chunker, null, true, 2, 0.0d, RerankFailureMode.FAIL_FAST, Integer.MAX_VALUE, 1,
+        this(config, chunker, null, true, 2, 0.0d, RerankFailureMode.FAIL_FAST, new HeuristicTokenCounter(), Integer.MAX_VALUE, 1,
             1,
             1,
             io.github.lightrag.indexing.KnowledgeExtractor.DEFAULT_ENTITY_EXTRACT_MAX_GLEANING,
@@ -131,6 +134,7 @@ public final class LightRag implements AutoCloseable {
         int rerankCandidateMultiplier,
         double minRerankScore,
         RerankFailureMode rerankFailureMode,
+        TokenCounter tokenCounter,
         int embeddingBatchSize,
         int maxParallelInsert,
         int chunkExtractParallelism,
@@ -157,6 +161,7 @@ public final class LightRag implements AutoCloseable {
         this.rerankCandidateMultiplier = rerankCandidateMultiplier;
         this.minRerankScore = minRerankScore;
         this.rerankFailureMode = Objects.requireNonNull(rerankFailureMode, "rerankFailureMode");
+        this.tokenCounter = Objects.requireNonNull(tokenCounter, "tokenCounter");
         this.embeddingBatchSize = embeddingBatchSize;
         this.maxParallelInsert = maxParallelInsert;
         this.chunkExtractParallelism = chunkExtractParallelism;
@@ -812,6 +817,10 @@ public final class LightRag implements AutoCloseable {
         return rerankFailureMode;
     }
 
+    TokenCounter tokenCounter() {
+        return tokenCounter;
+    }
+
     String failResponse() {
         return failResponse;
     }
@@ -1182,11 +1191,11 @@ public final class LightRag implements AutoCloseable {
     private QueryEngine newQueryEngine(AtomicStorageProvider storageProvider) {
         var llmCacheStore = storageProvider.llmCacheStore();
         var contextAssembler = new ContextAssembler();
-        var naive = new NaiveQueryStrategy(limitedEmbeddingModel(), storageProvider, contextAssembler);
-        var local = new LocalQueryStrategy(limitedEmbeddingModel(), storageProvider, contextAssembler);
-        var global = new GlobalQueryStrategy(limitedEmbeddingModel(), storageProvider, contextAssembler);
-        var hybrid = new HybridQueryStrategy(local, global, contextAssembler);
-        var mix = new MixQueryStrategy(limitedEmbeddingModel(), storageProvider, hybrid, contextAssembler);
+        var naive = new NaiveQueryStrategy(limitedEmbeddingModel(), storageProvider, contextAssembler, tokenCounter);
+        var local = new LocalQueryStrategy(limitedEmbeddingModel(), storageProvider, contextAssembler, tokenCounter);
+        var global = new GlobalQueryStrategy(limitedEmbeddingModel(), storageProvider, contextAssembler, tokenCounter);
+        var hybrid = new HybridQueryStrategy(local, global, contextAssembler, tokenCounter);
+        var mix = new MixQueryStrategy(limitedEmbeddingModel(), storageProvider, hybrid, contextAssembler, tokenCounter);
         var multiHop = new MultiHopQueryStrategy(
             mix::retrieve,
             new DefaultPathRetriever(storageProvider.graphStore(), 5),
@@ -1213,7 +1222,8 @@ public final class LightRag implements AutoCloseable {
             new PathAwareAnswerSynthesizer(),
             failResponse,
             userPromptPrefix,
-            rerankFailureMode
+            rerankFailureMode,
+            tokenCounter
         );
     }
 

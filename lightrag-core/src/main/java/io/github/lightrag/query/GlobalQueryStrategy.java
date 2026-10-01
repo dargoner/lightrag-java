@@ -2,6 +2,7 @@ package io.github.lightrag.query;
 
 import io.github.lightrag.api.QueryRequest;
 import io.github.lightrag.model.EmbeddingModel;
+import io.github.lightrag.model.TokenCounter;
 import io.github.lightrag.storage.ChunkStore;
 import io.github.lightrag.storage.GraphStore;
 import io.github.lightrag.storage.OneShotRetrievalStore;
@@ -31,12 +32,19 @@ public final class GlobalQueryStrategy implements QueryStrategy {
     private final StorageProvider storageProvider;
     private final ContextAssembler contextAssembler;
     private final ParentChunkExpander parentChunkExpander;
+    private final QueryBudgeting budgeting;
 
-    public GlobalQueryStrategy(EmbeddingModel embeddingModel, StorageProvider storageProvider, ContextAssembler contextAssembler) {
+    public GlobalQueryStrategy(
+        EmbeddingModel embeddingModel,
+        StorageProvider storageProvider,
+        ContextAssembler contextAssembler,
+        TokenCounter tokenCounter
+    ) {
         this.embeddingModel = Objects.requireNonNull(embeddingModel, "embeddingModel");
         this.storageProvider = Objects.requireNonNull(storageProvider, "storageProvider");
         this.contextAssembler = Objects.requireNonNull(contextAssembler, "contextAssembler");
         this.parentChunkExpander = new ParentChunkExpander(storageProvider.chunkStore());
+        this.budgeting = new QueryBudgeting(tokenCounter);
     }
 
     @Override
@@ -69,8 +77,8 @@ public final class GlobalQueryStrategy implements QueryStrategy {
 
         var graphStartedAt = System.nanoTime();
         var retrieval = retrieveGlobal(relationMatches, relationScores);
-        var matchedRelations = QueryBudgeting.limitRelations(retrieval.result().relations(), query.maxRelationTokens());
-        var matchedEntities = QueryBudgeting.limitEntities(retrieval.result().entities(), query.maxEntityTokens());
+        var matchedRelations = budgeting.limitRelations(retrieval.result().relations(), query.maxRelationTokens());
+        var matchedEntities = budgeting.limitEntities(retrieval.result().entities(), query.maxEntityTokens());
         var graphMs = elapsedMillis(graphStartedAt);
         var chunkStartedAt = System.nanoTime();
         var matchedChunks = QueryMetadataFilterSupport.expandAndFilter(metadataPlan,

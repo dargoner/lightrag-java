@@ -8,9 +8,11 @@ import io.github.lightrag.indexing.SmartChunker;
 import io.github.lightrag.indexing.refinement.ExtractionRefinementOptions;
 import io.github.lightrag.model.ChatModel;
 import io.github.lightrag.model.EmbeddingModel;
+import io.github.lightrag.model.HeuristicTokenCounter;
 import io.github.lightrag.model.LlmConcurrencyBudget;
 import io.github.lightrag.model.RerankFailureMode;
 import io.github.lightrag.model.RerankModel;
+import io.github.lightrag.model.TokenCounter;
 import io.github.lightrag.model.openai.ModelRetrySupport;
 import io.github.lightrag.model.openai.OpenAiCompatibleChatModel;
 import io.github.lightrag.model.openai.OpenAiCompatibleEmbeddingModel;
@@ -61,6 +63,7 @@ public final class LightRagBuilder {
     private int rerankCandidateMultiplier = 2;
     private double minRerankScore = 0.0d;
     private RerankFailureMode rerankFailureMode = RerankFailureMode.FAIL_FAST;
+    private TokenCounter tokenCounter = new HeuristicTokenCounter();
     private String failResponse = QueryEngine.DEFAULT_FAIL_RESPONSE;
     private String userPromptPrefix = "";
     private int forceLlmSummaryOnMerge = io.github.lightrag.indexing.DescriptionSummarizer.DEFAULT_FORCE_LLM_SUMMARY_ON_MERGE;
@@ -284,6 +287,17 @@ public final class LightRagBuilder {
      */
     public LightRagBuilder rerankFailureMode(RerankFailureMode rerankFailureMode) {
         this.rerankFailureMode = Objects.requireNonNull(rerankFailureMode, "rerankFailureMode");
+        return this;
+    }
+
+    /**
+     * Token counter shared by every query budget check. Defaults to {@link HeuristicTokenCounter}
+     * (each CJK/Kana/Hangul code point counts as one token, other text at ~4 characters per token);
+     * supply a provider-accurate counter to line budgets up with the real tokenizer, as upstream
+     * does with {@code Tokenizer.encode}.
+     */
+    public LightRagBuilder tokenCounter(TokenCounter tokenCounter) {
+        this.tokenCounter = Objects.requireNonNull(tokenCounter, "tokenCounter");
         return this;
     }
 
@@ -640,7 +654,7 @@ public final class LightRagBuilder {
             embeddingMaxAsync,
             maxGraphNodes
         ), chunker, documentParsingOrchestrator, automaticQueryKeywordExtraction, rerankCandidateMultiplier, minRerankScore,
-            rerankFailureMode, embeddingBatchSize, maxParallelInsert,
+            rerankFailureMode, tokenCounter, embeddingBatchSize, maxParallelInsert,
             chunkExtractParallelism,
             maxConcurrentDocumentTasks,
             entityExtractMaxGleaning, maxExtractInputTokens, entityExtractionLanguage, entityTypes,

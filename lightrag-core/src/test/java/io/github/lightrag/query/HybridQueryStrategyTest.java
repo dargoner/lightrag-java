@@ -3,6 +3,8 @@ package io.github.lightrag.query;
 import io.github.lightrag.api.QueryMode;
 import io.github.lightrag.api.QueryRequest;
 import io.github.lightrag.model.EmbeddingModel;
+import io.github.lightrag.model.HeuristicTokenCounter;
+import io.github.lightrag.model.TokenCounter;
 import io.github.lightrag.storage.InMemoryStorageProvider;
 import io.github.lightrag.types.QueryContext;
 import io.github.lightrag.types.ScoredChunk;
@@ -21,6 +23,8 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static io.github.lightrag.support.RelationIds.relationId;
 
 class HybridQueryStrategyTest {
+    private static final TokenCounter TOKEN_COUNTER = new HeuristicTokenCounter();
+
     @Test
     void hybridMergesLocalAndGlobalByIdWithMaxScoreRetention() {
         var storage = InMemoryStorageProvider.create();
@@ -29,9 +33,9 @@ class HybridQueryStrategyTest {
         var embeddings = new FakeEmbeddingModel(Map.of("hybrid question", List.of(1.0d, 0.0d)));
         var contextAssembler = new ContextAssembler();
         var strategy = new HybridQueryStrategy(
-            new LocalQueryStrategy(embeddings, storage, contextAssembler),
-            new GlobalQueryStrategy(embeddings, storage, contextAssembler),
-            contextAssembler
+            new LocalQueryStrategy(embeddings, storage, contextAssembler, TOKEN_COUNTER),
+            new GlobalQueryStrategy(embeddings, storage, contextAssembler, TOKEN_COUNTER),
+            contextAssembler, TOKEN_COUNTER
         );
 
         var context = strategy.retrieve(QueryRequest.builder()
@@ -64,9 +68,9 @@ class HybridQueryStrategyTest {
         ));
         var contextAssembler = new ContextAssembler();
         var strategy = new HybridQueryStrategy(
-            new LocalQueryStrategy(embeddings, storage, contextAssembler),
-            new GlobalQueryStrategy(embeddings, storage, contextAssembler),
-            contextAssembler
+            new LocalQueryStrategy(embeddings, storage, contextAssembler, TOKEN_COUNTER),
+            new GlobalQueryStrategy(embeddings, storage, contextAssembler, TOKEN_COUNTER),
+            contextAssembler, TOKEN_COUNTER
         );
 
         var context = strategy.retrieve(QueryRequest.builder()
@@ -103,9 +107,9 @@ class HybridQueryStrategyTest {
         ));
         var contextAssembler = new ContextAssembler();
         var strategy = new HybridQueryStrategy(
-            new LocalQueryStrategy(embeddings, storage, contextAssembler),
-            new GlobalQueryStrategy(embeddings, storage, contextAssembler),
-            contextAssembler
+            new LocalQueryStrategy(embeddings, storage, contextAssembler, TOKEN_COUNTER),
+            new GlobalQueryStrategy(embeddings, storage, contextAssembler, TOKEN_COUNTER),
+            contextAssembler, TOKEN_COUNTER
         );
 
         var context = strategy.retrieve(QueryRequest.builder()
@@ -136,9 +140,9 @@ class HybridQueryStrategyTest {
         ));
         var contextAssembler = new ContextAssembler();
         var strategy = new HybridQueryStrategy(
-            new LocalQueryStrategy(embeddings, storage, contextAssembler),
-            new GlobalQueryStrategy(embeddings, storage, contextAssembler),
-            contextAssembler
+            new LocalQueryStrategy(embeddings, storage, contextAssembler, TOKEN_COUNTER),
+            new GlobalQueryStrategy(embeddings, storage, contextAssembler, TOKEN_COUNTER),
+            contextAssembler, TOKEN_COUNTER
         );
 
         var context = strategy.retrieve(QueryRequest.builder()
@@ -175,7 +179,7 @@ class HybridQueryStrategyTest {
                 ),
                 ""
             ),
-            contextAssembler
+            contextAssembler, TOKEN_COUNTER
         );
 
         var context = strategy.retrieve(QueryRequest.builder()
@@ -209,7 +213,7 @@ class HybridQueryStrategyTest {
                 List.of(scoredChunk("chunk-3", "Allowed lower score", 0.90d, Map.of("region", "shanghai"))),
                 ""
             ),
-            contextAssembler
+            contextAssembler, TOKEN_COUNTER
         );
 
         var context = strategy.retrieve(QueryRequest.builder()
@@ -233,7 +237,7 @@ class HybridQueryStrategyTest {
         var strategy = new HybridQueryStrategy(
             request -> awaitParallelBranch(barrier, localObservedParallelism),
             request -> awaitParallelBranch(barrier, globalObservedParallelism),
-            contextAssembler
+            contextAssembler, TOKEN_COUNTER
         );
 
         strategy.retrieve(QueryRequest.builder()
@@ -254,7 +258,7 @@ class HybridQueryStrategyTest {
                 throw new IllegalStateException("local branch failed");
             },
             request -> new QueryContext(List.of(), List.of(), List.of(), ""),
-            contextAssembler
+            contextAssembler, TOKEN_COUNTER
         );
 
         assertThatThrownBy(() -> strategy.retrieve(QueryRequest.builder()

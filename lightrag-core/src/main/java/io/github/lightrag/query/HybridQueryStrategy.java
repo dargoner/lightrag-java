@@ -1,6 +1,7 @@
 package io.github.lightrag.query;
 
 import io.github.lightrag.api.QueryRequest;
+import io.github.lightrag.model.TokenCounter;
 import io.github.lightrag.types.QueryContext;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -15,11 +16,18 @@ public final class HybridQueryStrategy implements QueryStrategy {
     private final QueryStrategy localStrategy;
     private final QueryStrategy globalStrategy;
     private final ContextAssembler contextAssembler;
+    private final QueryBudgeting budgeting;
 
-    public HybridQueryStrategy(QueryStrategy localStrategy, QueryStrategy globalStrategy, ContextAssembler contextAssembler) {
+    public HybridQueryStrategy(
+        QueryStrategy localStrategy,
+        QueryStrategy globalStrategy,
+        ContextAssembler contextAssembler,
+        TokenCounter tokenCounter
+    ) {
         this.localStrategy = Objects.requireNonNull(localStrategy, "localStrategy");
         this.globalStrategy = Objects.requireNonNull(globalStrategy, "globalStrategy");
         this.contextAssembler = Objects.requireNonNull(contextAssembler, "contextAssembler");
+        this.budgeting = new QueryBudgeting(tokenCounter);
     }
 
     @Override
@@ -46,8 +54,8 @@ public final class HybridQueryStrategy implements QueryStrategy {
             .limit(query.chunkTopK())
             .toList();
         var context = new QueryContext(
-            QueryBudgeting.limitEntities(mergedEntities, query.maxEntityTokens()),
-            QueryBudgeting.limitRelations(mergedRelations, query.maxRelationTokens()),
+            budgeting.limitEntities(mergedEntities, query.maxEntityTokens()),
+            budgeting.limitRelations(mergedRelations, query.maxRelationTokens()),
             matchedChunks,
             ""
         );

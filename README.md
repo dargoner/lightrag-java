@@ -1100,6 +1100,19 @@ var rag = LightRag.builder()
 - `rerankCandidateMultiplier(...)`: controls how far `QueryEngine` expands `chunkTopK` before reranking
 - `minRerankScore(...)`: filters reranked chunks below the configured score threshold; default `0.0` keeps all reranked candidates
 
+### Token counting (0.24.0)
+
+Query-time budgets (`maxEntityTokens`, `maxRelationTokens`, `maxTotalTokens`) are checked through a single pluggable `TokenCounter`. The default `HeuristicTokenCounter` counts each CJK/Kana/Hangul code point as one token and other text at roughly four characters per token — a documented Java-only divergence from upstream, which budgets with the provider's real tokenizer. Plug in a provider-accurate counter when exact counts matter:
+
+```java
+var rag = LightRag.builder()
+    .chatModel(chatModel)
+    .embeddingModel(embeddingModel)
+    .storage(storage)
+    .tokenCounter(text -> tokenizer.encode(text).size())
+    .build();
+```
+
 ### Merge and extraction parity options (0.24.0)
 
 The 2026-09-30 build-side alignment added these builder controls:

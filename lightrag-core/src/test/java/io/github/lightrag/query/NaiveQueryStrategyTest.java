@@ -4,6 +4,8 @@ import io.github.lightrag.api.QueryMode;
 import io.github.lightrag.api.QueryRequest;
 import io.github.lightrag.indexing.ParentChildChunkBuilder;
 import io.github.lightrag.model.EmbeddingModel;
+import io.github.lightrag.model.HeuristicTokenCounter;
+import io.github.lightrag.model.TokenCounter;
 import io.github.lightrag.storage.InMemoryStorageProvider;
 import org.junit.jupiter.api.Test;
 
@@ -13,6 +15,8 @@ import java.util.Map;
 import static org.assertj.core.api.Assertions.assertThat;
 
 class NaiveQueryStrategyTest {
+    private static final TokenCounter TOKEN_COUNTER = new HeuristicTokenCounter();
+
     @Test
     void naiveUsesDirectChunkSimilarityWithoutGraphMatches() {
         var storage = InMemoryStorageProvider.create();
@@ -21,7 +25,7 @@ class NaiveQueryStrategyTest {
         var strategy = new NaiveQueryStrategy(
             new FakeEmbeddingModel(Map.of("naive question", List.of(1.0d, 0.0d))),
             storage,
-            new ContextAssembler()
+            new ContextAssembler(), TOKEN_COUNTER
         );
 
         var context = strategy.retrieve(QueryRequest.builder()
@@ -49,7 +53,7 @@ class NaiveQueryStrategyTest {
         var strategy = new NaiveQueryStrategy(
             new FakeEmbeddingModel(Map.of("naive question", List.of(1.0d, 0.0d))),
             storage,
-            new ContextAssembler()
+            new ContextAssembler(), TOKEN_COUNTER
         );
 
         var context = strategy.retrieve(QueryRequest.builder()
@@ -73,7 +77,7 @@ class NaiveQueryStrategyTest {
         var strategy = new NaiveQueryStrategy(
             new FakeEmbeddingModel(Map.of("naive question", List.of(1.0d, 0.0d))),
             storage,
-            new ContextAssembler()
+            new ContextAssembler(), TOKEN_COUNTER
         );
 
         var context = strategy.retrieve(QueryRequest.builder()
@@ -96,7 +100,7 @@ class NaiveQueryStrategyTest {
         var strategy = new NaiveQueryStrategy(
             new FakeEmbeddingModel(Map.of("naive question", List.of(1.0d, 0.0d))),
             storage,
-            new ContextAssembler()
+            new ContextAssembler(), TOKEN_COUNTER
         );
 
         var context = strategy.retrieve(QueryRequest.builder()
@@ -140,7 +144,7 @@ class NaiveQueryStrategyTest {
         var strategy = new NaiveQueryStrategy(
             new FakeEmbeddingModel(Map.of("tie question", List.of(1.0d, 0.0d))),
             storage,
-            new ContextAssembler()
+            new ContextAssembler(), TOKEN_COUNTER
         );
 
         var context = strategy.retrieve(QueryRequest.builder()
@@ -183,7 +187,7 @@ class NaiveQueryStrategyTest {
         var strategy = new NaiveQueryStrategy(
             new FakeEmbeddingModel(Map.of("parent question", List.of(1.0d, 0.0d))),
             storage,
-            new ContextAssembler()
+            new ContextAssembler(), TOKEN_COUNTER
         );
 
         var context = strategy.retrieve(QueryRequest.builder()
@@ -260,7 +264,7 @@ class NaiveQueryStrategyTest {
         var strategy = new NaiveQueryStrategy(
             new FakeEmbeddingModel(Map.of("aggregate question", List.of(1.0d, 0.0d))),
             storage,
-            new ContextAssembler()
+            new ContextAssembler(), TOKEN_COUNTER
         );
 
         var context = strategy.retrieve(QueryRequest.builder()
@@ -305,7 +309,7 @@ class NaiveQueryStrategyTest {
         var strategy = new NaiveQueryStrategy(
             new FakeEmbeddingModel(Map.of("parent filter question", List.of(1.0d, 0.0d))),
             storage,
-            new ContextAssembler()
+            new ContextAssembler(), TOKEN_COUNTER
         );
 
         var context = strategy.retrieve(QueryRequest.builder()
@@ -382,7 +386,7 @@ class NaiveQueryStrategyTest {
         var strategy = new NaiveQueryStrategy(
             new FakeEmbeddingModel(Map.of("figure question", List.of(1.0d, 0.0d))),
             storage,
-            new ContextAssembler()
+            new ContextAssembler(), TOKEN_COUNTER
         );
 
         var context = strategy.retrieve(QueryRequest.builder()

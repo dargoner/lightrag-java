@@ -2,6 +2,7 @@ package io.github.lightrag.query;
 
 import io.github.lightrag.api.QueryRequest;
 import io.github.lightrag.model.EmbeddingModel;
+import io.github.lightrag.model.TokenCounter;
 import io.github.lightrag.storage.ChunkStore;
 import io.github.lightrag.storage.GraphStore;
 import io.github.lightrag.storage.OneShotRetrievalStore;
@@ -32,12 +33,19 @@ public final class LocalQueryStrategy implements QueryStrategy {
     private final StorageProvider storageProvider;
     private final ContextAssembler contextAssembler;
     private final ParentChunkExpander parentChunkExpander;
+    private final QueryBudgeting budgeting;
 
-    public LocalQueryStrategy(EmbeddingModel embeddingModel, StorageProvider storageProvider, ContextAssembler contextAssembler) {
+    public LocalQueryStrategy(
+        EmbeddingModel embeddingModel,
+        StorageProvider storageProvider,
+        ContextAssembler contextAssembler,
+        TokenCounter tokenCounter
+    ) {
         this.embeddingModel = Objects.requireNonNull(embeddingModel, "embeddingModel");
         this.storageProvider = Objects.requireNonNull(storageProvider, "storageProvider");
         this.contextAssembler = Objects.requireNonNull(contextAssembler, "contextAssembler");
         this.parentChunkExpander = new ParentChunkExpander(storageProvider.chunkStore());
+        this.budgeting = new QueryBudgeting(tokenCounter);
     }
 
     @Override
@@ -74,8 +82,8 @@ public final class LocalQueryStrategy implements QueryStrategy {
         var retrieval = retrieveLocal(entityMatches, entityScores, relationScores);
         var matchedEntities = retrieval.result().entities();
         var matchedRelations = retrieval.result().relations();
-        var limitedEntities = QueryBudgeting.limitEntities(matchedEntities, query.maxEntityTokens());
-        var limitedRelations = QueryBudgeting.limitRelations(matchedRelations, query.maxRelationTokens());
+        var limitedEntities = budgeting.limitEntities(matchedEntities, query.maxEntityTokens());
+        var limitedRelations = budgeting.limitRelations(matchedRelations, query.maxRelationTokens());
         var graphMs = elapsedMillis(graphStartedAt);
         var chunkStartedAt = System.nanoTime();
         var matchedChunks = QueryMetadataFilterSupport.expandAndFilter(

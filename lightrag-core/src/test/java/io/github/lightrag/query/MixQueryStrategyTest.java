@@ -7,6 +7,8 @@ import ch.qos.logback.core.read.ListAppender;
 import io.github.lightrag.api.QueryMode;
 import io.github.lightrag.api.QueryRequest;
 import io.github.lightrag.model.EmbeddingModel;
+import io.github.lightrag.model.HeuristicTokenCounter;
+import io.github.lightrag.model.TokenCounter;
 import io.github.lightrag.storage.BatchVectorStore;
 import io.github.lightrag.storage.HybridVectorStore;
 import io.github.lightrag.storage.InMemoryStorageProvider;
@@ -36,6 +38,8 @@ import static io.github.lightrag.support.RelationIds.relationId;
 import org.slf4j.LoggerFactory;
 
 class MixQueryStrategyTest {
+    private static final TokenCounter TOKEN_COUNTER = new HeuristicTokenCounter();
+
     @Test
     void mixMergesHybridChunksWithDirectChunkRetrieval() {
         var storage = InMemoryStorageProvider.create();
@@ -44,11 +48,11 @@ class MixQueryStrategyTest {
         var embeddings = new FakeEmbeddingModel(Map.of("mix question", List.of(1.0d, 0.0d)));
         var contextAssembler = new ContextAssembler();
         var hybrid = new HybridQueryStrategy(
-            new LocalQueryStrategy(embeddings, storage, contextAssembler),
-            new GlobalQueryStrategy(embeddings, storage, contextAssembler),
-            contextAssembler
+            new LocalQueryStrategy(embeddings, storage, contextAssembler, TOKEN_COUNTER),
+            new GlobalQueryStrategy(embeddings, storage, contextAssembler, TOKEN_COUNTER),
+            contextAssembler, TOKEN_COUNTER
         );
-        var strategy = new MixQueryStrategy(embeddings, storage, hybrid, contextAssembler);
+        var strategy = new MixQueryStrategy(embeddings, storage, hybrid, contextAssembler, TOKEN_COUNTER);
 
         var context = strategy.retrieve(QueryRequest.builder()
             .query("mix question")
@@ -79,11 +83,11 @@ class MixQueryStrategyTest {
         ));
         var contextAssembler = new ContextAssembler();
         var hybrid = new HybridQueryStrategy(
-            new LocalQueryStrategy(embeddings, storage, contextAssembler),
-            new GlobalQueryStrategy(embeddings, storage, contextAssembler),
-            contextAssembler
+            new LocalQueryStrategy(embeddings, storage, contextAssembler, TOKEN_COUNTER),
+            new GlobalQueryStrategy(embeddings, storage, contextAssembler, TOKEN_COUNTER),
+            contextAssembler, TOKEN_COUNTER
         );
-        var strategy = new MixQueryStrategy(embeddings, storage, hybrid, contextAssembler);
+        var strategy = new MixQueryStrategy(embeddings, storage, hybrid, contextAssembler, TOKEN_COUNTER);
 
         var context = strategy.retrieve(QueryRequest.builder()
             .query("direct chunk question")
@@ -125,7 +129,7 @@ class MixQueryStrategyTest {
                 )),
                 ""
             ),
-            new ContextAssembler()
+            new ContextAssembler(), TOKEN_COUNTER
         );
 
         var context = strategy.retrieve(QueryRequest.builder()
@@ -184,7 +188,7 @@ class MixQueryStrategyTest {
                 )),
                 ""
             ),
-            new ContextAssembler()
+            new ContextAssembler(), TOKEN_COUNTER
         );
 
         var context = strategy.retrieve(QueryRequest.builder()
@@ -230,7 +234,7 @@ class MixQueryStrategyTest {
                 )),
                 ""
             ),
-            new ContextAssembler()
+            new ContextAssembler(), TOKEN_COUNTER
         );
 
         var context = strategy.retrieve(QueryRequest.builder()
@@ -263,7 +267,7 @@ class MixQueryStrategyTest {
                 hybridCalled.set(true);
                 return new QueryContext(List.of(), List.of(), List.of(), "");
             },
-            new ContextAssembler()
+            new ContextAssembler(), TOKEN_COUNTER
         );
 
         var context = strategy.retrieve(QueryRequest.builder()
@@ -300,7 +304,7 @@ class MixQueryStrategyTest {
             embeddings,
             oneShot,
             request -> new QueryContext(List.of(), List.of(), List.of(), ""),
-            new ContextAssembler()
+            new ContextAssembler(), TOKEN_COUNTER
         );
 
         strategy.retrieve(QueryRequest.builder()
@@ -366,7 +370,7 @@ class MixQueryStrategyTest {
                 ),
                 ""
             ),
-            new ContextAssembler()
+            new ContextAssembler(), TOKEN_COUNTER
         );
 
         var context = strategy.retrieve(QueryRequest.builder()
@@ -415,7 +419,7 @@ class MixQueryStrategyTest {
                 ),
                 ""
             ),
-            new ContextAssembler()
+            new ContextAssembler(), TOKEN_COUNTER
         );
 
         var context = strategy.retrieve(QueryRequest.builder()
@@ -475,7 +479,7 @@ class MixQueryStrategyTest {
                 )),
                 ""
             ),
-            new ContextAssembler()
+            new ContextAssembler(), TOKEN_COUNTER
         );
 
         var context = strategy.retrieve(QueryRequest.builder()
@@ -506,11 +510,11 @@ class MixQueryStrategyTest {
             var embeddings = new FakeEmbeddingModel(Map.of("mix question", List.of(1.0d, 0.0d)));
             var contextAssembler = new ContextAssembler();
             var hybrid = new HybridQueryStrategy(
-                new LocalQueryStrategy(embeddings, delegate, contextAssembler),
-                new GlobalQueryStrategy(embeddings, delegate, contextAssembler),
-                contextAssembler
+                new LocalQueryStrategy(embeddings, delegate, contextAssembler, TOKEN_COUNTER),
+                new GlobalQueryStrategy(embeddings, delegate, contextAssembler, TOKEN_COUNTER),
+                contextAssembler, TOKEN_COUNTER
             );
-            var strategy = new MixQueryStrategy(embeddings, delegate, hybrid, contextAssembler);
+            var strategy = new MixQueryStrategy(embeddings, delegate, hybrid, contextAssembler, TOKEN_COUNTER);
 
             strategy.retrieve(QueryRequest.builder()
                 .query("mix question")
@@ -557,7 +561,7 @@ class MixQueryStrategyTest {
                 chunkObservedParallelism
             )),
             request -> awaitParallelBranch(barrier, hybridObservedParallelism),
-            new ContextAssembler()
+            new ContextAssembler(), TOKEN_COUNTER
         );
 
         var context = strategy.retrieve(QueryRequest.builder()
@@ -580,7 +584,7 @@ class MixQueryStrategyTest {
             new FakeEmbeddingModel(Map.of("mix failure question", List.of(1.0d, 0.0d))),
             new TestStorageProvider(delegate, new FailingHybridVectorStore(new IllegalStateException("chunk branch failed"))),
             request -> new QueryContext(List.of(), List.of(), List.of(), ""),
-            new ContextAssembler()
+            new ContextAssembler(), TOKEN_COUNTER
         );
 
         assertThatThrownBy(() -> strategy.retrieve(QueryRequest.builder()

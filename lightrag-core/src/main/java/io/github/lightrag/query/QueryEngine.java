@@ -9,8 +9,10 @@ import io.github.lightrag.api.StructuredQueryRelation;
 import io.github.lightrag.api.StructuredQueryResult;
 import io.github.lightrag.model.ChatModel;
 import io.github.lightrag.model.CloseableIterator;
+import io.github.lightrag.model.HeuristicTokenCounter;
 import io.github.lightrag.model.RerankFailureMode;
 import io.github.lightrag.model.RerankModel;
+import io.github.lightrag.model.TokenCounter;
 import io.github.lightrag.synthesis.PathAwareAnswerSynthesizer;
 import io.github.lightrag.types.QueryContext;
 import io.github.lightrag.types.ScoredChunk;
@@ -28,7 +30,8 @@ import java.util.Objects;
 
 public final class QueryEngine {
     private static final Logger log = LoggerFactory.getLogger(QueryEngine.class);
-    private static final int CHUNK_BUDGET_BUFFER_TOKENS = 16;
+    // Upstream operate.py reserves `buffer_tokens` before splitting the context into chunks.
+    private static final int REFERENCE_LIST_BUDGET_BUFFER_TOKENS = 200;
 
     public static final String DEFAULT_FAIL_RESPONSE =
         "Sorry, I'm not able to provide an answer to that question.[no-context]";
@@ -127,6 +130,7 @@ public final class QueryEngine {
     private final PathAwareAnswerSynthesizer pathAwareAnswerSynthesizer;
     private final String failResponse;
     private final String userPromptPrefix;
+    private final QueryBudgeting budgeting;
 
     public QueryEngine(
         ChatModel chatModel,
@@ -325,6 +329,28 @@ public final class QueryEngine {
         String userPromptPrefix,
         RerankFailureMode rerankFailureMode
     ) {
+        this(chatModel, keywordModel, contextAssembler, strategies, rerankModel, automaticKeywordExtractionEnabled,
+            rerankCandidateMultiplier, minRerankScore, queryIntentClassifier, multiHopStrategy,
+            pathAwareAnswerSynthesizer, failResponse, userPromptPrefix, rerankFailureMode, new HeuristicTokenCounter());
+    }
+
+    public QueryEngine(
+        ChatModel chatModel,
+        ChatModel keywordModel,
+        ContextAssembler contextAssembler,
+        Map<QueryMode, QueryStrategy> strategies,
+        RerankModel rerankModel,
+        boolean automaticKeywordExtractionEnabled,
+        int rerankCandidateMultiplier,
+        double minRerankScore,
+        QueryIntentClassifier queryIntentClassifier,
+        QueryStrategy multiHopStrategy,
+        PathAwareAnswerSynthesizer pathAwareAnswerSynthesizer,
+        String failResponse,
+        String userPromptPrefix,
+        RerankFailureMode rerankFailureMode,
+        TokenCounter tokenCounter
+    ) {
         this.chatModel = Objects.requireNonNull(chatModel, "chatModel");
         this.keywordModel = keywordModel == null ? chatModel : keywordModel;
         this.contextAssembler = Objects.requireNonNull(contextAssembler, "contextAssembler");
@@ -345,6 +371,7 @@ public final class QueryEngine {
         this.pathAwareAnswerSynthesizer = Objects.requireNonNull(pathAwareAnswerSynthesizer, "pathAwareAnswerSynthesizer");
         this.failResponse = Objects.requireNonNull(failResponse, "failResponse");
         this.userPromptPrefix = Objects.requireNonNull(userPromptPrefix, "userPromptPrefix");
+        this.budgeting = new QueryBudgeting(tokenCounter);
     }
 
     public QueryResult query(QueryRequest request) {
@@ -553,7 +580,7 @@ public final class QueryEngine {
         var reusableMultiHopContext = useMultiHop
             && !retrievedContext.assembledContext().isBlank()
             && sameChunkIds(retrievedContext.matchedChunks(), filteredChunks);
-        var finalChunks = QueryBudgeting.limitChunks(
+        var finalChunks = budgeting.limitChunks(
             filteredChunks,
             remainingChunkBudget(
                 resolvedQuery,
@@ -563,7 +590,7 @@ public final class QueryEngine {
         );
         var recalculatedWithoutReasoningContext = false;
         if (reusableMultiHopContext && !sameChunkIds(filteredChunks, finalChunks)) {
-            finalChunks = QueryBudgeting.limitChunks(
+            finalChunks = budgeting.limitChunks(
                 filteredChunks,
                 remainingChunkBudget(resolvedQuery, retrievedContext, null)
             );
@@ -590,7 +617,7 @@ public final class QueryEngine {
             assembledContext
         );
         log.info(
-            "LightRAG query engine stages: mode={}, resolvedMode={}, query={}, keywordMs={}, retrieveMs={}, rerankMs={}, assembleMs={}, useMultiHop={}, rerankEnabled={}, entityCount={}, relationCount={}, chunkCount={}, elapsedMs={}",
+            "LightRAG query engine stages: mode={}, resolvedMode={}, query={}, keywordMs={}, retrieveMs={}, rerankMs={}, assembleMs={}, useMultiHop={}, rerankEnabled={}, entityCount={}, relationCount={}, chunkCount={}, bufferTokens={}, elapsedMs={}",
             query.mode(),
             resolvedQuery.mode(),
             query.query(),
@@ -603,6 +630,7 @@ public final class QueryEngine {
             finalContext.matchedEntities().size(),
             finalContext.matchedRelations().size(),
             finalContext.matchedChunks().size(),
+            REFERENCE_LIST_BUDGET_BUFFER_TOKENS,
             elapsedMillis(startedAt)
         );
         var references = QueryReferences.fromChunks(assembledQueryContext.matchedChunks(), resolvedQuery.includeReferences());
@@ -752,9 +780,9 @@ public final class QueryEngine {
             );
             assembledContext = contextAssembler.assemble(nonChunkContext);
         }
-        var systemPromptTokens = QueryBudgeting.approximateTokenCount(buildSystemPrompt(request, assembledContext));
-        var queryTokens = QueryBudgeting.approximateTokenCount(request.query());
-        long remaining = (long) request.maxTotalTokens() - systemPromptTokens - queryTokens - CHUNK_BUDGET_BUFFER_TOKENS;
+        var systemPromptTokens = budgeting.approximateTokenCount(buildSystemPrompt(request, assembledContext));
+        var queryTokens = budgeting.approximateTokenCount(request.query());
+        long remaining = (long) request.maxTotalTokens() - systemPromptTokens - queryTokens - REFERENCE_LIST_BUDGET_BUFFER_TOKENS;
         return (int) Math.max(0L, remaining);
     }
 

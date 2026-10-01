@@ -7,6 +7,8 @@ import io.github.lightrag.api.QueryMode;
 import io.github.lightrag.api.QueryRequest;
 import io.github.lightrag.indexing.ParentChildChunkBuilder;
 import io.github.lightrag.model.EmbeddingModel;
+import io.github.lightrag.model.HeuristicTokenCounter;
+import io.github.lightrag.model.TokenCounter;
 import io.github.lightrag.storage.ChunkStore;
 import io.github.lightrag.storage.GraphStore;
 import io.github.lightrag.storage.HybridVectorStore;
@@ -22,12 +24,14 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static io.github.lightrag.support.RelationIds.relationId;
 
 class LocalQueryStrategyTest {
+    private static final TokenCounter TOKEN_COUNTER = new HeuristicTokenCounter();
+
     @Test
     void localUsesEntitySimilarityAndOneHopNeighbors() {
         var storage = InMemoryStorageProvider.create();
         seedGraph(storage);
         seedVectors(storage);
-        var strategy = new LocalQueryStrategy(new FakeEmbeddingModel(Map.of("alice question", List.of(1.0d, 0.0d))), storage, new ContextAssembler());
+        var strategy = new LocalQueryStrategy(new FakeEmbeddingModel(Map.of("alice question", List.of(1.0d, 0.0d))), storage, new ContextAssembler(), TOKEN_COUNTER);
 
         var context = strategy.retrieve(QueryRequest.builder()
             .query("alice question")
@@ -59,7 +63,7 @@ class LocalQueryStrategyTest {
         var storage = InMemoryStorageProvider.create();
         seedGraph(storage);
         seedVectors(storage);
-        var strategy = new LocalQueryStrategy(new FakeEmbeddingModel(Map.of("alice question", List.of(1.0d, 0.0d))), storage, new ContextAssembler());
+        var strategy = new LocalQueryStrategy(new FakeEmbeddingModel(Map.of("alice question", List.of(1.0d, 0.0d))), storage, new ContextAssembler(), TOKEN_COUNTER);
 
         var context = strategy.retrieve(QueryRequest.builder()
             .query("alice question")
@@ -81,7 +85,7 @@ class LocalQueryStrategyTest {
         var strategy = new LocalQueryStrategy(new FakeEmbeddingModel(Map.of(
             "ambiguous question", List.of(0.0d, 1.0d),
             "alice, focus", List.of(1.0d, 0.0d)
-        )), storage, new ContextAssembler());
+        )), storage, new ContextAssembler(), TOKEN_COUNTER);
 
         var context = strategy.retrieve(QueryRequest.builder()
             .query("ambiguous question")
@@ -104,7 +108,7 @@ class LocalQueryStrategyTest {
         var storage = InMemoryStorageProvider.create();
         seedGraph(storage);
         seedVectors(storage);
-        var strategy = new LocalQueryStrategy(new FakeEmbeddingModel(Map.of("alice question", List.of(1.0d, 0.0d))), storage, new ContextAssembler());
+        var strategy = new LocalQueryStrategy(new FakeEmbeddingModel(Map.of("alice question", List.of(1.0d, 0.0d))), storage, new ContextAssembler(), TOKEN_COUNTER);
 
         var context = strategy.retrieve(QueryRequest.builder()
             .query("alice question")
@@ -124,7 +128,7 @@ class LocalQueryStrategyTest {
         var storage = InMemoryStorageProvider.create();
         seedGraph(storage);
         seedVectors(storage);
-        var strategy = new LocalQueryStrategy(new FakeEmbeddingModel(Map.of("alice question", List.of(1.0d, 0.0d))), storage, new ContextAssembler());
+        var strategy = new LocalQueryStrategy(new FakeEmbeddingModel(Map.of("alice question", List.of(1.0d, 0.0d))), storage, new ContextAssembler(), TOKEN_COUNTER);
 
         var context = strategy.retrieve(QueryRequest.builder()
             .query("alice question")
@@ -178,7 +182,7 @@ class LocalQueryStrategyTest {
         var strategy = new LocalQueryStrategy(
             new FakeEmbeddingModel(Map.of("alpha question", List.of(1.0d, 0.0d))),
             storage,
-            new ContextAssembler()
+            new ContextAssembler(), TOKEN_COUNTER
         );
 
         var context = strategy.retrieve(QueryRequest.builder()
@@ -205,7 +209,7 @@ class LocalQueryStrategyTest {
         var strategy = new LocalQueryStrategy(
             new FakeEmbeddingModel(Map.of("alice, focus", List.of(1.0d, 0.0d))),
             storage,
-            new ContextAssembler()
+            new ContextAssembler(), TOKEN_COUNTER
         );
 
         var context = strategy.retrieve(QueryRequest.builder()
@@ -236,7 +240,7 @@ class LocalQueryStrategyTest {
         var strategy = new LocalQueryStrategy(
             new FakeEmbeddingModel(Map.of("alice question", List.of(1.0d, 0.0d))),
             storage,
-            new ContextAssembler()
+            new ContextAssembler(), TOKEN_COUNTER
         );
 
         strategy.retrieve(QueryRequest.builder()
@@ -264,7 +268,7 @@ class LocalQueryStrategyTest {
         var strategy = new LocalQueryStrategy(
             new FakeEmbeddingModel(Map.of("degree question", List.of(1.0d, 0.0d))),
             storage,
-            new ContextAssembler()
+            new ContextAssembler(), TOKEN_COUNTER
         );
 
         var context = strategy.retrieve(QueryRequest.builder()
@@ -289,7 +293,7 @@ class LocalQueryStrategyTest {
         var strategy = new LocalQueryStrategy(
             new FakeEmbeddingModel(Map.of("alice question", List.of(1.0d, 0.0d))),
             storage,
-            new ContextAssembler()
+            new ContextAssembler(), TOKEN_COUNTER
         );
 
         strategy.retrieve(QueryRequest.builder()
@@ -341,7 +345,7 @@ class LocalQueryStrategyTest {
         var strategy = new LocalQueryStrategy(
             new FakeEmbeddingModel(Map.of("alpha metadata question", List.of(1.0d, 0.0d))),
             storage,
-            new ContextAssembler()
+            new ContextAssembler(), TOKEN_COUNTER
         );
 
         var context = strategy.retrieve(QueryRequest.builder()
@@ -365,7 +369,7 @@ class LocalQueryStrategyTest {
         var strategy = new LocalQueryStrategy(
             new FakeEmbeddingModel(Map.of("quota question", List.of(1.0d, 0.0d))),
             storage,
-            new ContextAssembler()
+            new ContextAssembler(), TOKEN_COUNTER
         );
 
         var context = strategy.retrieve(QueryRequest.builder()
@@ -388,7 +392,7 @@ class LocalQueryStrategyTest {
         var strategy = new LocalQueryStrategy(
             new FakeEmbeddingModel(Map.of("quota question", List.of(1.0d, 0.0d))),
             storage,
-            new ContextAssembler()
+            new ContextAssembler(), TOKEN_COUNTER
         );
 
         var context = strategy.retrieve(QueryRequest.builder()

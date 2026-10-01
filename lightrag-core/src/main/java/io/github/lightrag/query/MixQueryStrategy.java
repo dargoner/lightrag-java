@@ -2,6 +2,7 @@ package io.github.lightrag.query;
 
 import io.github.lightrag.api.QueryRequest;
 import io.github.lightrag.model.EmbeddingModel;
+import io.github.lightrag.model.TokenCounter;
 import io.github.lightrag.storage.BatchVectorStore;
 import io.github.lightrag.storage.ChunkStore;
 import io.github.lightrag.storage.OneShotRetrievalStore;
@@ -34,17 +35,20 @@ public final class MixQueryStrategy implements QueryStrategy {
     private final StorageProvider storageProvider;
     private final QueryStrategy hybridStrategy;
     private final ContextAssembler contextAssembler;
+    private final QueryBudgeting budgeting;
 
     public MixQueryStrategy(
         EmbeddingModel embeddingModel,
         StorageProvider storageProvider,
         QueryStrategy hybridStrategy,
-        ContextAssembler contextAssembler
+        ContextAssembler contextAssembler,
+        TokenCounter tokenCounter
     ) {
         this.embeddingModel = Objects.requireNonNull(embeddingModel, "embeddingModel");
         this.storageProvider = Objects.requireNonNull(storageProvider, "storageProvider");
         this.hybridStrategy = Objects.requireNonNull(hybridStrategy, "hybridStrategy");
         this.contextAssembler = Objects.requireNonNull(contextAssembler, "contextAssembler");
+        this.budgeting = new QueryBudgeting(tokenCounter);
     }
 
     @Override
@@ -71,8 +75,8 @@ public final class MixQueryStrategy implements QueryStrategy {
         var mergeFilterMs = mergeOutcome.mergeFilterMs();
         var directOneShot = mergeOutcome.directOneShotUsed();
         var context = new QueryContext(
-            QueryBudgeting.limitEntities(hybrid.context().matchedEntities(), query.maxEntityTokens()),
-            QueryBudgeting.limitRelations(hybrid.context().matchedRelations(), query.maxRelationTokens()),
+            budgeting.limitEntities(hybrid.context().matchedEntities(), query.maxEntityTokens()),
+            budgeting.limitRelations(hybrid.context().matchedRelations(), query.maxRelationTokens()),
             matchedChunks,
             ""
         );
@@ -135,8 +139,8 @@ public final class MixQueryStrategy implements QueryStrategy {
 
         var graphStartedAt = System.nanoTime();
         var retrieval = oneShotRetrievalStore.retrieveMix(entityMatches, relationMatches, chunkMatches);
-        var entities = QueryBudgeting.limitEntities(retrieval.entities(), query.maxEntityTokens());
-        var relations = QueryBudgeting.limitRelations(retrieval.relations(), query.maxRelationTokens());
+        var entities = budgeting.limitEntities(retrieval.entities(), query.maxEntityTokens());
+        var relations = budgeting.limitRelations(retrieval.relations(), query.maxRelationTokens());
         var graphMs = elapsedMillis(graphStartedAt);
 
         var mergeStartedAt = System.nanoTime();
