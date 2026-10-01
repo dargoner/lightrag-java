@@ -248,10 +248,35 @@ class LocalQueryStrategyTest {
 
         assertThat(graphStore.loadEntitiesCalls).isEqualTo(1);
         assertThat(graphStore.loadRelationsCalls).isEqualTo(1);
-        assertThat(graphStore.batchFindRelationsCalls).isEqualTo(1);
+        // One batched read for the one-hop expansion, one for the degree ranking of the matched relations.
+        assertThat(graphStore.batchFindRelationsCalls).isEqualTo(2);
         assertThat(graphStore.loadEntityCalls).isZero();
         assertThat(graphStore.loadRelationCalls).isZero();
         assertThat(graphStore.findRelationsCalls).isZero();
+    }
+
+    @Test
+    void ranksRelationsByCombinedEndpointDegreeThenWeight() {
+        // r1 (c -> a) must win despite its lower weight and lower entity score: c carries
+        // three incident relations, so the combined endpoint degree (4 vs 2) decides.
+        var storage = InMemoryStorageProvider.create();
+        seedDegreeRankingGraph(storage);
+        var strategy = new LocalQueryStrategy(
+            new FakeEmbeddingModel(Map.of("degree question", List.of(1.0d, 0.0d))),
+            storage,
+            new ContextAssembler()
+        );
+
+        var context = strategy.retrieve(QueryRequest.builder()
+            .query("degree question")
+            .mode(QueryMode.LOCAL)
+            .topK(2)
+            .chunkTopK(2)
+            .build());
+
+        assertThat(context.matchedRelations())
+            .extracting(match -> match.relationId())
+            .containsExactly(relationId("c", "a"), relationId("b", "d"));
     }
 
     @Test
@@ -532,6 +557,35 @@ class LocalQueryStrategyTest {
         storage.vectorStore().saveAll("relations", List.of(
             new VectorStore.VectorRecord(relationId("e1", "e3"), List.of(1.0d, 0.0d)),
             new VectorStore.VectorRecord(relationId("e2", "e3"), List.of(0.5d, 0.5d))
+        ));
+    }
+
+    /**
+     * r1 (c -> a) has the lower weight and the lower entity score, while c is a hub with
+     * three incident relations; the combined endpoint degree (4 vs 2) must order r1 first.
+     */
+    static void seedDegreeRankingGraph(InMemoryStorageProvider storage) {
+        storage.graphStore().saveEntity(new GraphStore.EntityRecord(
+            "a", "A", "concept", "Degree ranking leaf", List.of(), List.of()));
+        storage.graphStore().saveEntity(new GraphStore.EntityRecord(
+            "b", "B", "concept", "Degree ranking match", List.of(), List.of()));
+        storage.graphStore().saveEntity(new GraphStore.EntityRecord(
+            "c", "C", "concept", "Degree ranking hub", List.of(), List.of()));
+        storage.graphStore().saveEntity(new GraphStore.EntityRecord(
+            "d", "D", "concept", "Degree ranking neighbor", List.of(), List.of()));
+
+        storage.graphStore().saveRelation(new GraphStore.RelationRecord(
+            relationId("c", "a"), "c", "a", "links", "Low-weight hub edge", 0.4d, List.of()));
+        storage.graphStore().saveRelation(new GraphStore.RelationRecord(
+            relationId("c", "x"), "c", "x", "links", "Hub edge to x", 0.5d, List.of()));
+        storage.graphStore().saveRelation(new GraphStore.RelationRecord(
+            relationId("c", "y"), "c", "y", "links", "Hub edge to y", 0.5d, List.of()));
+        storage.graphStore().saveRelation(new GraphStore.RelationRecord(
+            relationId("b", "d"), "b", "d", "links", "High-weight edge", 0.9d, List.of()));
+
+        storage.vectorStore().saveAll("entities", List.of(
+            new VectorStore.VectorRecord("b", List.of(1.0d, 0.0d)),
+            new VectorStore.VectorRecord("a", List.of(0.5d, 0.5d))
         ));
     }
 

@@ -22,6 +22,7 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
+import java.util.stream.Stream;
 
 public final class LocalQueryStrategy implements QueryStrategy {
     private static final Logger log = LoggerFactory.getLogger(LocalQueryStrategy.class);
@@ -147,11 +148,37 @@ public final class LocalQueryStrategy implements QueryStrategy {
             .map(entity -> new ScoredEntity(entity.id(), toEntity(entity), entityScores.getOrDefault(entity.id(), 0.0d)))
             .sorted(scoreOrder(ScoredEntity::score, ScoredEntity::entityId))
             .toList();
-        var matchedRelations = storageProvider.graphStore().loadRelations(List.copyOf(relationScores.keySet())).stream()
+        var scoredRelations = storageProvider.graphStore().loadRelations(List.copyOf(relationScores.keySet())).stream()
             .map(relation -> new ScoredRelation(relation.id(), toRelation(relation), relationScores.getOrDefault(relation.id(), 0.0d)))
-            .sorted(scoreOrder(ScoredRelation::score, ScoredRelation::relationId))
             .toList();
+        var matchedRelations = rankRelationsByDegreeThenWeight(scoredRelations);
         return new LocalRetrieval(new OneShotRetrievalStore.LocalRetrievalResult(matchedEntities, matchedRelations, List.of()), false);
+    }
+
+    /**
+     * Upstream ranks local edges by (rank, weight) descending, where rank is the combined
+     * incident-relation count of both endpoints (operate.py:6282-6314). Degrees come from one
+     * batched graph read; the parent-entity similarity score stays on each relation for display.
+     */
+    private List<ScoredRelation> rankRelationsByDegreeThenWeight(List<ScoredRelation> relations) {
+        if (relations.isEmpty()) {
+            return List.of();
+        }
+        var endpointIds = relations.stream()
+            .flatMap(relation -> Stream.of(relation.relation().srcId(), relation.relation().tgtId()))
+            .distinct()
+            .toList();
+        var relationsByEndpointId = storageProvider.graphStore().findRelations(endpointIds);
+        return relations.stream()
+            .sorted(Comparator
+                .<ScoredRelation>comparingInt(relation ->
+                    relationsByEndpointId.getOrDefault(relation.relation().srcId(), List.of()).size()
+                        + relationsByEndpointId.getOrDefault(relation.relation().tgtId(), List.of()).size())
+                .reversed()
+                .thenComparing(Comparator.comparingDouble(
+                    (ScoredRelation relation) -> relation.relation().weight()).reversed())
+                .thenComparing(ScoredRelation::relationId))
+            .toList();
     }
 
     private record LocalRetrieval(OneShotRetrievalStore.LocalRetrievalResult result, boolean oneShotUsed) {
