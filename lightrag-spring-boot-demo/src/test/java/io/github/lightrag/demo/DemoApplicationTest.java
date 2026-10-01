@@ -142,8 +142,8 @@ class DemoApplicationTest {
     }
 
     @Test
-    void uploadsDocxAndAnswersQueryThroughRawSourcePath() throws Exception {
-        var uploadResult = mockMvc.perform(org.springframework.test.web.servlet.request.MockMvcRequestBuilders.multipart("/documents/upload")
+    void rejectsSyncDocxUploadWhenMineruIsNotConfigured() throws Exception {
+        mockMvc.perform(org.springframework.test.web.servlet.request.MockMvcRequestBuilders.multipart("/documents/upload")
                 .file(new MockMultipartFile(
                     "files",
                     "contract.docx",
@@ -152,26 +152,8 @@ class DemoApplicationTest {
                 ))
                 .param("async", "false")
                 .header(WORKSPACE_HEADER, WORKSPACE_A))
-            .andExpect(status().isAccepted())
-            .andExpect(jsonPath("$.jobId").isNotEmpty())
-            .andExpect(jsonPath("$.documentIds[0]").isNotEmpty())
-            .andReturn();
-
-        var uploadBody = objectMapper.readTree(uploadResult.getResponse().getContentAsString());
-        var jobId = uploadBody.get("jobId").asText();
-        awaitJobSuccess(WORKSPACE_A, jobId);
-
-        mockMvc.perform(post("/query")
-                .header(WORKSPACE_HEADER, WORKSPACE_A)
-                .contentType(APPLICATION_JSON)
-                .content("""
-                    {
-                      "query": "Who works with Bob?",
-                      "mode": "MIX"
-                    }
-                    """))
-            .andExpect(status().isOk())
-            .andExpect(jsonPath("$.answer").value("Alice works with Bob."));
+            .andExpect(status().isBadRequest())
+            .andExpect(jsonPath("$.message").value("MinerU provider is not configured"));
     }
 
     @Test
