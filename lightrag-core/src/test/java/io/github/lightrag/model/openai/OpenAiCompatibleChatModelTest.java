@@ -471,6 +471,25 @@ class OpenAiCompatibleChatModelTest {
         }
     }
 
+    @Test
+    void cacheIdentityIncludesConstructorDefaultsButNotTimeouts() {
+        var baseUrl = "https://api.example/v1";
+        var options = new ChatRequestOptions(0.2d, 512, 0.9d, "json_object");
+        var plain = new OpenAiCompatibleChatModel(baseUrl, "gpt-test", "secret");
+        var withDefaults = new OpenAiCompatibleChatModel(
+            baseUrl, "gpt-test", "secret", Duration.ofSeconds(30), options, 3, Duration.ofMillis(1));
+        var otherDefaults = new OpenAiCompatibleChatModel(
+            baseUrl, "gpt-test", "secret", Duration.ofSeconds(30),
+            new ChatRequestOptions(0.7d, 512, 0.9d, "json_object"), 3, Duration.ofMillis(1));
+        var sameDefaultsOtherTimeout = new OpenAiCompatibleChatModel(
+            baseUrl, "gpt-test", "secret", Duration.ofSeconds(5), options, 3, Duration.ofMillis(1));
+
+        assertThat(withDefaults.cacheIdentity()).isNotEqualTo(plain.cacheIdentity());
+        assertThat(withDefaults.cacheIdentity()).isNotEqualTo(otherDefaults.cacheIdentity());
+        assertThat(withDefaults.cacheIdentity()).isEqualTo(sameDefaultsOtherTimeout.cacheIdentity());
+        assertThat(plain.cacheIdentity()).doesNotContain("|defaults:");
+    }
+
     private static OpenAiCompatibleChatModel singleAttemptChatModel(MockWebServer server, Duration timeout) {
         return new OpenAiCompatibleChatModel(
             server.url("/v1/").toString(),

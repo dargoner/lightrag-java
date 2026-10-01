@@ -32,6 +32,22 @@ public record ChatRequestOptions(Double temperature, Integer maxTokens, Double t
     }
 
     /**
+     * Cache-identity suffix describing these options, for {@link ChatModel#cacheIdentity()} implementors
+     * that apply them as merge defaults. Empty for {@link #NONE} (so wrappers without defaults keep the
+     * delegate identity untouched); otherwise every field is encoded so models configured with
+     * different defaults cannot share answer-cache entries.
+     */
+    public String cacheIdentitySuffix() {
+        if (equals(NONE)) {
+            return "";
+        }
+        return "|defaults:t=" + temperature
+            + ",max_tokens=" + maxTokens
+            + ",top_p=" + topP
+            + ",format=" + responseFormat;
+    }
+
+    /**
      * Merge the given override into these options: every non-null field of {@code override} wins, unset
      * fields fall back to this instance. The receiver is the base, so a per-request override beats the
      * model-level default ({@code defaults.merge(request.options())}).

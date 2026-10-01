@@ -91,7 +91,9 @@ public final class OpenAiCompatibleChatModel implements ChatModel {
 
     @Override
     public String cacheIdentity() {
-        return "openai-compatible:" + modelName + "@" + baseUrl;
+        // Constructor defaults must ride in the identity: the answer cache keys the request, and the
+        // merge happens after the cache lookup, so differently configured models would share entries.
+        return "openai-compatible:" + modelName + "@" + baseUrl + defaults.cacheIdentitySuffix();
     }
 
     @Override
