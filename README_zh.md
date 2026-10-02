@@ -410,6 +410,47 @@ lightrag:
       table-prefix: lightrag_
 ```
 
+### 可选的 Apache AGE 图后端
+
+`POSTGRES` 存储的图数据默认落在关系型表（`graph-backend: table`），也可以切换为 Apache AGE 图：
+
+```yaml
+lightrag:
+  storage:
+    type: postgres
+    postgres:
+      graph-backend: age   # table（默认）| age
+      jdbc-url: jdbc:postgresql://localhost:5432/lightrag
+      username: postgres
+      password: postgres
+      schema: lightrag
+      vector-dimensions: 1536
+      table-prefix: lightrag_
+```
+
+SDK 侧在 `PostgresStorageProvider` 构造器末尾传 `PostgresGraphBackend.AGE` 即可。开启后：
+
+- 启动时在同一数据源上引导 AGE 扩展、图与索引；图的命名、属性命名与官方 Python LightRAG 完全一致（默认工作区 `chunk_entity_relation`，其他工作区 `{workspace}_chunk_entity_relation`），可与 Python 版共用同一数据库。
+- 服务端必须能安装 `age` 扩展（官方 `apache/age` 镜像自带；pgvector 系镜像通常没有）。
+- AGE 1.8.0 及以上启动即拒绝（有打崩 PostgreSQL 后端的风险，apache/age#2500）；设置 `POSTGRES_AGE_ALLOW_UNSUPPORTED_VERSION=true` 可强行跳过，风险自负。
+- 边写入要求两端实体节点都存在：端点缺失会直接报错点名缺失实体，而不是静默丢弃。
+- `restore`/清空路径会在同一事务里清空 AGE 图，与其他存储一致。
+
+`postgres-milvus-neo4j` 组合栈也可以把 Neo4j 图投影换成 AGE（向量仍存 Milvus）：
+
+```yaml
+lightrag:
+  storage:
+    type: postgres-milvus-neo4j
+    postgres:
+      graph-backend: age   # neo4j（默认）| age
+    milvus:
+      uri: http://localhost:19530
+      vector-dimensions: 1536
+```
+
+`graph-backend: age` 时无需任何 Neo4j 配置，图投影落在同一 PostgreSQL 数据源上的 AGE 图，上面的要求与注意事项同样适用。`postgres-neo4j` 不提供 AGE 通道：要么保留 Neo4j，要么改用支持 `graph-backend: age` 的存储类型。
+
 ### Postgres + Neo4j 配置示例
 
 ```yaml

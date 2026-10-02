@@ -976,6 +976,46 @@ rag.ingest("default", List.of(
 
 `PostgresStorageProvider` bootstraps its schema automatically on startup. Ingest writes run atomically across document, chunk, graph, vector, and document-status storage. Async SDK tasks are persisted in PostgreSQL task tables and can be polled after process restart.
 
+### Optional Apache AGE Graph Backend
+
+`POSTGRES` storage can store its knowledge graph in Apache AGE instead of relational tables. The default stays `table`, so existing deployments are unaffected.
+
+```java
+// SDK: pass PostgresGraphBackend.AGE as the last constructor argument
+var storage = new PostgresStorageProvider(config, new FileSnapshotStore(), PostgresGraphBackend.AGE);
+```
+
+```yaml
+# Spring Boot starter: opt in per storage
+lightrag:
+  storage:
+    type: postgres
+    postgres:
+      graph-backend: age   # table (default) | age
+```
+
+With `age` the provider creates the AGE extension, the graph, and its indexes on startup on the same data source. Graph reads and writes then run as Cypher against an AGE graph named exactly like the official Python LightRAG (`chunk_entity_relation`; `{workspace}_chunk_entity_relation` for non-default workspaces), with the same property names, so one database can be shared with the Python implementation. Requirements and caveats:
+
+- The `age` extension must be installable on the server (the official `apache/age` image ships it; pgvector-based images usually do not).
+- AGE 1.8.0 and newer are refused at startup because graph queries can crash the PostgreSQL backend (apache/age#2500); set `POSTGRES_AGE_ALLOW_UNSUPPORTED_VERSION=true` to override at your own risk.
+- Edges require both endpoint nodes to exist: saving a relation whose endpoints are missing fails loudly instead of writing a dangling edge.
+- The `restore`/truncate path clears the AGE graph on the same transaction that replaces the other stores.
+
+`postgres-milvus-neo4j` can swap its Neo4j graph projection for AGE as well, while Milvus keeps storing vectors:
+
+```yaml
+lightrag:
+  storage:
+    type: postgres-milvus-neo4j
+    postgres:
+      graph-backend: age   # neo4j (default) | age
+    milvus:
+      uri: http://localhost:19530
+      vector-dimensions: 1536
+```
+
+With `graph-backend: age` no Neo4j configuration is required; the graph is projected into an AGE graph on the PostgreSQL data source, and every requirement and caveat listed above applies. `postgres-neo4j` has no AGE channel: keep its Neo4j graph, or use a storage type that supports `graph-backend: age`.
+
 ## PostgreSQL + Neo4j Storage
 
 `PostgresNeo4jStorageProvider` keeps PostgreSQL as the durable source of truth for documents, chunks, graph rows, vectors, document statuses, and task metadata, while projecting graph reads into Neo4j.
