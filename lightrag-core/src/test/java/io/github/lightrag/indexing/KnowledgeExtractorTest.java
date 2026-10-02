@@ -661,6 +661,104 @@ class KnowledgeExtractorTest {
     }
 
     @Test
+    void promptFencesTheInputTextAndDeclaresItTheOnlyExtractionSource() {
+        var chatModel = new RecordingChatModel(
+            """
+            {
+              "entities": [],
+              "relations": []
+            }
+            """,
+            """
+            {
+              "entities": [],
+              "relations": []
+            }
+            """
+        );
+        var extractor = new KnowledgeExtractor(chatModel, 1, 10_000);
+
+        extractor.extract(chunk("Alice works with Bob"));
+
+        assertThat(chatModel.requests()).hasSize(2);
+        assertThat(chatModel.requests().get(0).userPrompt())
+            .contains("Only the fenced `<Input Text>` block is extraction content; everything outside that block is context, not content.")
+            .contains("<Input Text>\n```\nAlice works with Bob\n```\n\n<Output JSON>");
+        assertThat(chatModel.requests().get(1).userPrompt())
+            .contains("Only the fenced `<Input Text>` block is extraction content; everything outside that block is context, not content.")
+            .contains("<Input Text>\n```\nAlice works with Bob\n```\n\n<Output JSON>");
+    }
+
+    @Test
+    void systemPromptPinsTemplateSafetyEscapingEndpointsAndHeadingRules() {
+        var chatModel = new RecordingChatModel("""
+            {
+              "entities": [],
+              "relations": []
+            }
+            """);
+        var extractor = new KnowledgeExtractor(chatModel, 0, 10_000);
+
+        extractor.extract(chunk("Alice works with Bob"));
+
+        assertThat(chatModel.requests().get(0).systemPrompt())
+            .contains("describe the output format only; they are never source text")
+            .contains("All string values must be properly escaped JSON strings")
+            .contains("escape backslashes as `\\\\`")
+            .contains("double-escaped backslashes")
+            .contains("Only output relationship objects whose source_entity and target_entity are both included in the entities list of this response.")
+            .contains("never extract entities or relations from the heading text itself")
+            .contains("Use empty arrays when nothing is found.");
+    }
+
+    @Test
+    void continuePromptRequiresEmptyIncrementsWithJavaKeyNames() {
+        var chatModel = new RecordingChatModel(
+            """
+            {
+              "entities": [],
+              "relations": []
+            }
+            """,
+            """
+            {
+              "entities": [],
+              "relations": []
+            }
+            """
+        );
+        var extractor = new KnowledgeExtractor(chatModel, 1, 10_000);
+
+        extractor.extract(chunk("Alice works with Bob"));
+
+        assertThat(chatModel.requests().get(1).userPrompt())
+            .contains("If no entity or relationship was missed, return {\"entities\": [], \"relations\": []} and do not invent increments.");
+    }
+
+    @Test
+    void parsesProperlyEscapedJsonStringsFromTheModel() {
+        var extractor = new KnowledgeExtractor(new StubChatModel("""
+            {
+              "entities": [
+                {
+                  "name": "Alice",
+                  "type": "person",
+                  "description": "She said \\"hello\\" and wrote $\\\\frac{1}{2}$",
+                  "aliases": []
+                }
+              ],
+              "relations": []
+            }
+            """));
+
+        var result = extractor.extract(chunk("raw text"));
+
+        assertThat(result.entities()).containsExactly(
+            new ExtractedEntity("Alice", "person", "She said \"hello\" and wrote $\\frac{1}{2}$", List.of())
+        );
+    }
+
+    @Test
     void promptIncludesWorkspaceRelationTypesAndGraphExamples() {
         var chatModel = new RecordingChatModel("""
             {

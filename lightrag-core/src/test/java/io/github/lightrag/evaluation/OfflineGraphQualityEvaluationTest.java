@@ -36,7 +36,7 @@ class OfflineGraphQualityEvaluationTest {
     private static final int VECTOR_DIMENSIONS = 1024;
     private static final Pattern SENTENCE_SPLIT = Pattern.compile("(?<=[.!?])\\s+");
     private static final Pattern INPUT_TEXT = Pattern.compile(
-        "<Input Text>\\s*(.*?)\\s*<Output JSON>",
+        "<Input Text>\\s*```\\s*(.*?)\\s*```\\s*<Output JSON>",
         Pattern.DOTALL
     );
     private static final String EXTRACTION_SYSTEM_MARKER =

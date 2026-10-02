@@ -102,27 +102,33 @@ public final class KnowledgeExtractor {
                  }
                ]
              }
+           - The JSON shape above and any examples in these instructions describe the output format only; they are never source text. Do not extract, infer, or copy entities or relations from them.
+           - All string values must be properly escaped JSON strings (escape `"` as `\\"`, escape backslashes as `\\\\`, and newlines as `\\n`).
+           - Any LaTeX quoted inside a string value must use double-escaped backslashes (write `\\frac` as `\\\\frac` in the JSON).
            - Use empty arrays when nothing is found.
            - Output at most %4$d total records across entities and relations in this response.
            - Output at most %5$d entity objects in this response.
            - Output all entity and relation text in %3$s.
            - Proper nouns should remain in their original language when translation would be ambiguous or unnatural.
+           - When the user prompt includes a `---Section Context---` heading path, use it only as background to disambiguate references; never extract entities or relations from the heading text itself, and do not mention the headings unless they also appear in the input text.
            - Write descriptions in the third person.
            - Avoid vague pronouns such as "this article", "this paper", "it", "they", "he", or "she" when the concrete entity can be named explicitly.
 
         4. Quality Rules:
            - Prioritize the entities and relationships most central to the meaning of the text.
+           - Only output relationship objects whose source_entity and target_entity are both included in the entities list of this response.
            - Prefer complete, well-formed JSON over partial or malformed output.
            - Do not include explanation, markdown, or code fences.
         """;
     private static final String CONTINUE_USER_PROMPT = """
         ---Task---
-        Based on the last extraction task, identify and extract any missed or incorrectly formatted entities and relationships from the same chunk.
+        Based on the last extraction task, identify and extract any missed or incorrectly formatted entities and relationships from the same chunk. Only the fenced `<Input Text>` block is extraction content; everything outside that block is context, not content.
 
         ---Instructions---
         - Do not repeat entities or relationships that were already extracted correctly.
         - If an entity or relationship was missed, output it now.
         - If an entity or relationship was malformed, incomplete, or inconsistent, output the corrected full JSON item.
+        - If no entity or relationship was missed, return {"entities": [], "relations": []} and do not invent increments.
         - Return only incremental JSON using the same schema as before.
         - Output at most %5$d total records and at most %6$d entity rows in this response; a relationship row may reference entities already extracted correctly in the previous response.
         - Keep entity naming consistent with the previous extraction.
@@ -133,7 +139,9 @@ public final class KnowledgeExtractor {
         Document ID: %2$s
 
         %3$s<Input Text>
+        ```
         %4$s
+        ```
 
         <Output JSON>
         """;
@@ -745,14 +753,16 @@ public final class KnowledgeExtractor {
     private String buildUserPrompt(Chunk chunk) {
         return """
             ---Task---
-            Extract entities and relationships from the input text below.
+            Extract entities and relationships from the input text below. Only the fenced `<Input Text>` block is extraction content; everything outside that block is context, not content.
 
             ---Data to be Processed---
             Chunk ID: %1$s
             Document ID: %2$s
 
             %3$s<Input Text>
+            ```
             %4$s
+            ```
 
             <Output JSON>
             """.formatted(chunk.id(), chunk.documentId(), sectionContextBlock(chunk), chunk.text());
