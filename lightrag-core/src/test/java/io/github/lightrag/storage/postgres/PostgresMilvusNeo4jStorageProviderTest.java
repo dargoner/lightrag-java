@@ -9,6 +9,7 @@ import io.github.lightrag.api.DocumentStatus;
 import io.github.lightrag.api.FailureStage;
 import io.github.lightrag.api.GraphMaterializationMode;
 import io.github.lightrag.api.GraphMaterializationStatus;
+import io.github.lightrag.api.KnowledgeGraphView;
 import io.github.lightrag.api.SnapshotSource;
 import io.github.lightrag.api.SnapshotStatus;
 import io.github.lightrag.api.TaskStage;
@@ -86,6 +87,31 @@ class PostgresMilvusNeo4jStorageProviderTest {
         assertThat(loadRelations.getReturnType()).isEqualTo(List.class);
         assertThat(findRelations.getReturnType()).isEqualTo(Map.class);
         assertThat(loadAllChunks.getReturnType()).isEqualTo(Map.class);
+    }
+
+    @Test
+    void forwardsKnowledgeGraphThroughTheMirroringGraphStore() {
+        var config = newConfig();
+        try (var dataSource = newDataSource(config)) {
+            var graphProjection = new RecordingGraphProjection();
+            var stubView = new KnowledgeGraphView(List.of(), List.of(), true);
+            graphProjection.stubKnowledgeGraph(stubView);
+
+            try (var provider = new PostgresMilvusNeo4jStorageProvider(
+                dataSource,
+                config,
+                new InMemorySnapshotStore(),
+                new WorkspaceScope("default"),
+                graphProjection,
+                new RecordingMilvusProjection(),
+                new ReentrantReadWriteLock(true)
+            )) {
+                var view = provider.graphStore().getKnowledgeGraph("c3", 2, 7);
+
+                assertThat(graphProjection.knowledgeGraphCalls()).containsExactly("c3/2/7");
+                assertThat(view).isSameAs(stubView);
+            }
+        }
     }
 
     @Test
@@ -912,6 +938,8 @@ class PostgresMilvusNeo4jStorageProviderTest {
     private static final class RecordingGraphProjection implements PostgresMilvusNeo4jStorageProvider.GraphProjection {
         private final Map<String, GraphStore.EntityRecord> entities = new LinkedHashMap<>();
         private final Map<String, GraphStore.RelationRecord> relations = new LinkedHashMap<>();
+        private final List<String> knowledgeGraphCalls = new java.util.ArrayList<>();
+        private KnowledgeGraphView knowledgeGraphView = new KnowledgeGraphView(List.of(), List.of(), false);
         private RuntimeException failureOnSaveEntity;
         private RuntimeException failureOnRestore;
 
@@ -1000,6 +1028,12 @@ class PostgresMilvusNeo4jStorageProviderTest {
         }
 
         @Override
+        public KnowledgeGraphView getKnowledgeGraph(String nodeLabel, int maxDepth, int maxNodes) {
+            knowledgeGraphCalls.add(nodeLabel + "/" + maxDepth + "/" + maxNodes);
+            return knowledgeGraphView;
+        }
+
+        @Override
         public Neo4jGraphSnapshot captureSnapshot() {
             return new Neo4jGraphSnapshot(allEntities(), allRelations());
         }
@@ -1017,6 +1051,14 @@ class PostgresMilvusNeo4jStorageProviderTest {
 
         @Override
         public void close() {
+        }
+
+        void stubKnowledgeGraph(KnowledgeGraphView view) {
+            this.knowledgeGraphView = Objects.requireNonNull(view, "view");
+        }
+
+        List<String> knowledgeGraphCalls() {
+            return List.copyOf(knowledgeGraphCalls);
         }
 
         void failOnSaveEntity(RuntimeException failure) {

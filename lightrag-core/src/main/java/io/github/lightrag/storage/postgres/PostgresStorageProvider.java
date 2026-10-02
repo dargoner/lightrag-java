@@ -2,6 +2,7 @@ package io.github.lightrag.storage.postgres;
 
 import com.zaxxer.hikari.HikariConfig;
 import com.zaxxer.hikari.HikariDataSource;
+import io.github.lightrag.api.KnowledgeGraphView;
 import io.github.lightrag.api.WorkspaceScope;
 import io.github.lightrag.exception.StorageException;
 import io.github.lightrag.storage.AtomicStorageProvider;
@@ -592,6 +593,11 @@ public final class PostgresStorageProvider implements AtomicStorageProvider, Aut
         @Override
         public java.util.Map<String, java.util.List<RelationRecord>> findRelations(java.util.List<String> entityIds) {
             return withReadLock(() -> delegate.findRelations(entityIds));
+        }
+
+        @Override
+        public KnowledgeGraphView getKnowledgeGraph(String nodeLabel, int maxDepth, int maxNodes) {
+            return withReadLock(() -> delegate.getKnowledgeGraph(nodeLabel, maxDepth, maxNodes));
         }
     }
 

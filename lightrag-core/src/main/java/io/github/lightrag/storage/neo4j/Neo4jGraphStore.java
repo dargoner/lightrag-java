@@ -1,5 +1,6 @@
 package io.github.lightrag.storage.neo4j;
 
+import io.github.lightrag.api.KnowledgeGraphView;
 import io.github.lightrag.api.WorkspaceScope;
 import io.github.lightrag.storage.GraphStore;
 
@@ -57,6 +58,11 @@ public final class Neo4jGraphStore implements GraphStore, AutoCloseable {
     @Override
     public java.util.Map<String, List<RelationRecord>> findRelations(List<String> entityIds) {
         return delegate.findRelations(entityIds);
+    }
+
+    @Override
+    public KnowledgeGraphView getKnowledgeGraph(String nodeLabel, int maxDepth, int maxNodes) {
+        return delegate.getKnowledgeGraph(nodeLabel, maxDepth, maxNodes);
     }
 
     public Neo4jGraphSnapshot captureSnapshot() {

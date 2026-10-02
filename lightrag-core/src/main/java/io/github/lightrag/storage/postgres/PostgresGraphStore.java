@@ -1,7 +1,9 @@
 package io.github.lightrag.storage.postgres;
 
+import io.github.lightrag.api.KnowledgeGraphView;
 import io.github.lightrag.exception.StorageException;
 import io.github.lightrag.storage.GraphStore;
+import io.github.lightrag.storage.GraphViewTraversal;
 import io.github.lightrag.storage.MutableGraphStore;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -10,6 +12,8 @@ import javax.sql.DataSource;
 import java.sql.Connection;
 import java.sql.ResultSet;
 import java.sql.SQLException;
+import java.util.ArrayList;
+import java.util.Collection;
 import java.util.Collections;
 import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
@@ -256,10 +260,208 @@ public final class PostgresGraphStore implements MutableGraphStore {
         });
     }
 
+    @Override
+    public KnowledgeGraphView getKnowledgeGraph(String nodeLabel, int maxDepth, int maxNodes) {
+        return GraphViewTraversal.compute(new PostgresGraphViewSupport(), nodeLabel, maxDepth, maxNodes);
+    }
+
+    private final class PostgresGraphViewSupport implements GraphViewTraversal.Support {
+        @Override
+        public boolean containsEntity(String id) {
+            return connectionAccess.withConnection(connection -> {
+                try (var statement = connection.prepareStatement(
+                    """
+                    SELECT 1
+                    FROM %s
+                    WHERE workspace_id = ?
+                      AND id = ?
+                    """.formatted(entitiesTable)
+                )) {
+                    statement.setString(1, workspaceId);
+                    statement.setString(2, id);
+                    try (var resultSet = statement.executeQuery()) {
+                        return resultSet.next();
+                    }
+                }
+            });
+        }
+
+        @Override
+        public List<String> rankedEntityIds(int limit) {
+            return connectionAccess.withConnection(connection -> {
+                try (var statement = connection.prepareStatement(
+                    """
+                    SELECT entity.id
+                    FROM %s entity
+                    LEFT JOIN (
+                        SELECT endpoint_id, COUNT(*) AS degree
+                        FROM (
+                            SELECT src_id AS endpoint_id FROM %s WHERE workspace_id = ?
+                            UNION ALL
+                            SELECT tgt_id AS endpoint_id FROM %s WHERE workspace_id = ?
+                        ) endpoints
+                        GROUP BY endpoint_id
+                    ) ranked ON ranked.endpoint_id = entity.id
+                    WHERE entity.workspace_id = ?
+                    ORDER BY COALESCE(ranked.degree, 0) DESC, entity.id COLLATE "C"
+                    LIMIT ?
+                    """.formatted(entitiesTable, relationsTable, relationsTable)
+                )) {
+                    statement.setString(1, workspaceId);
+                    statement.setString(2, workspaceId);
+                    statement.setString(3, workspaceId);
+                    statement.setInt(4, limit);
+                    try (var resultSet = statement.executeQuery()) {
+                        var ids = new ArrayList<String>();
+                        while (resultSet.next()) {
+                            ids.add(resultSet.getString(1));
+                        }
+                        return List.copyOf(ids);
+                    }
+                }
+            });
+        }
+
+        @Override
+        public Map<String, Integer> degrees(Collection<String> ids) {
+            var requested = List.copyOf(ids);
+            if (requested.isEmpty()) {
+                return Map.of();
+            }
+            return connectionAccess.withConnection(connection -> {
+                try (var statement = connection.prepareStatement(
+                    """
+                    SELECT endpoint_id, COUNT(*) AS degree
+                    FROM (
+                        SELECT src_id AS endpoint_id FROM %s WHERE workspace_id = ? AND src_id = ANY (?)
+                        UNION ALL
+                        SELECT tgt_id AS endpoint_id FROM %s WHERE workspace_id = ? AND tgt_id = ANY (?)
+                    ) endpoints
+                    GROUP BY endpoint_id
+                    """.formatted(relationsTable, relationsTable)
+                )) {
+                    statement.setString(1, workspaceId);
+                    statement.setArray(2, connection.createArrayOf("text", requested.toArray()));
+                    statement.setString(3, workspaceId);
+                    statement.setArray(4, connection.createArrayOf("text", requested.toArray()));
+                    try (var resultSet = statement.executeQuery()) {
+                        var degrees = new LinkedHashMap<String, Integer>();
+                        while (resultSet.next()) {
+                            degrees.put(resultSet.getString("endpoint_id"), resultSet.getInt("degree"));
+                        }
+                        return degrees;
+                    }
+                }
+            });
+        }
+
+        @Override
+        public Map<String, Set<String>> adjacency(Collection<String> ids) {
+            var requested = List.copyOf(ids);
+            if (requested.isEmpty()) {
+                return Map.of();
+            }
+            var requestedIds = new LinkedHashSet<>(requested);
+            return connectionAccess.withConnection(connection -> {
+                try (var statement = connection.prepareStatement(
+                    """
+                    SELECT src_id, tgt_id
+                    FROM %s
+                    WHERE workspace_id = ?
+                      AND (src_id = ANY (?) OR tgt_id = ANY (?))
+                    """.formatted(relationsTable)
+                )) {
+                    statement.setString(1, workspaceId);
+                    statement.setArray(2, connection.createArrayOf("text", requested.toArray()));
+                    statement.setArray(3, connection.createArrayOf("text", requested.toArray()));
+                    try (var resultSet = statement.executeQuery()) {
+                        var adjacency = new LinkedHashMap<String, Set<String>>();
+                        while (resultSet.next()) {
+                            var srcId = resultSet.getString("src_id");
+                            var tgtId = resultSet.getString("tgt_id");
+                            if (requestedIds.contains(srcId)) {
+                                adjacency.computeIfAbsent(srcId, ignored -> new LinkedHashSet<>()).add(tgtId);
+                            }
+                            if (requestedIds.contains(tgtId)) {
+                                adjacency.computeIfAbsent(tgtId, ignored -> new LinkedHashSet<>()).add(srcId);
+                            }
+                        }
+                        return adjacency;
+                    }
+                }
+            });
+        }
+
+        @Override
+        public Map<String, EntityRecord> entities(Collection<String> ids) {
+            var requested = List.copyOf(ids);
+            if (requested.isEmpty()) {
+                return Map.of();
+            }
+            return connectionAccess.withConnection(connection -> {
+                var aliasesByEntityId = selectStringLists(connection, entityAliasesTable, "entity_id", "alias", requested);
+                var chunkIdsByEntityId = selectStringLists(connection, entityChunksTable, "entity_id", "chunk_id", requested);
+                try (var statement = connection.prepareStatement(
+                    """
+                    SELECT id, name, type, description, file_path
+                    FROM %s
+                    WHERE workspace_id = ?
+                      AND id = ANY (?)
+                    ORDER BY id
+                    """.formatted(entitiesTable)
+                )) {
+                    statement.setString(1, workspaceId);
+                    statement.setArray(2, connection.createArrayOf("text", requested.toArray()));
+                    try (var resultSet = statement.executeQuery()) {
+                        var entitiesById = new LinkedHashMap<String, EntityRecord>();
+                        while (resultSet.next()) {
+                            entitiesById.put(
+                                resultSet.getString("id"),
+                                readEntity(resultSet, aliasesByEntityId, chunkIdsByEntityId)
+                            );
+                        }
+                        return entitiesById;
+                    }
+                }
+            });
+        }
+
+        @Override
+        public List<RelationRecord> relationsWithin(Set<String> included) {
+            if (included.isEmpty()) {
+                return List.of();
+            }
+            var requested = List.copyOf(included);
+            return connectionAccess.withConnection(connection -> {
+                try (var statement = connection.prepareStatement(
+                    """
+                    SELECT id, src_id, tgt_id, keywords, description, weight, source_id, file_path
+                    FROM %s
+                    WHERE workspace_id = ?
+                      AND src_id = ANY (?)
+                      AND tgt_id = ANY (?)
+                    ORDER BY id
+                    """.formatted(relationsTable)
+                )) {
+                    statement.setString(1, workspaceId);
+                    statement.setArray(2, connection.createArrayOf("text", requested.toArray()));
+                    statement.setArray(3, connection.createArrayOf("text", requested.toArray()));
+                    try (var resultSet = statement.executeQuery()) {
+                        var relations = new ArrayList<RelationRecord>();
+                        while (resultSet.next()) {
+                            relations.add(readRelation(connection, resultSet));
+                        }
+                        return List.copyOf(relations);
+                    }
+                }
+            });
+        }
+    }
+
     private Optional<EntityRecord> loadEntity(Connection connection, String entityId) throws SQLException {
         try (var statement = connection.prepareStatement(
             """
-            SELECT id, name, type, description
+            SELECT id, name, type, description, file_path
             FROM %s
             WHERE workspace_id = ?
               AND id = ?
@@ -383,17 +585,49 @@ public final class PostgresGraphStore implements MutableGraphStore {
         )) {
             statement.setString(1, workspaceId);
             try (var resultSet = statement.executeQuery()) {
-                var valuesById = new LinkedHashMap<String, java.util.ArrayList<String>>();
-                while (resultSet.next()) {
-                    valuesById
-                        .computeIfAbsent(resultSet.getString(idColumn), ignored -> new java.util.ArrayList<>())
-                        .add(resultSet.getString(valueColumn));
-                }
-                var immutable = new LinkedHashMap<String, List<String>>();
-                valuesById.forEach((id, values) -> immutable.put(id, List.copyOf(values)));
-                return Collections.unmodifiableMap(immutable);
+                return collectStringLists(resultSet, idColumn, valueColumn);
             }
         }
+    }
+
+    private Map<String, List<String>> selectStringLists(
+        Connection connection,
+        String tableName,
+        String idColumn,
+        String valueColumn,
+        List<String> ids
+    ) throws SQLException {
+        try (var statement = connection.prepareStatement(
+            """
+            SELECT %s, %s
+            FROM %s
+            WHERE workspace_id = ?
+              AND %s = ANY (?)
+            ORDER BY %s, %s
+            """.formatted(idColumn, valueColumn, tableName, idColumn, idColumn, valueColumn)
+        )) {
+            statement.setString(1, workspaceId);
+            statement.setArray(2, connection.createArrayOf("text", ids.toArray()));
+            try (var resultSet = statement.executeQuery()) {
+                return collectStringLists(resultSet, idColumn, valueColumn);
+            }
+        }
+    }
+
+    private static Map<String, List<String>> collectStringLists(
+        ResultSet resultSet,
+        String idColumn,
+        String valueColumn
+    ) throws SQLException {
+        var valuesById = new LinkedHashMap<String, java.util.ArrayList<String>>();
+        while (resultSet.next()) {
+            valuesById
+                .computeIfAbsent(resultSet.getString(idColumn), ignored -> new java.util.ArrayList<>())
+                .add(resultSet.getString(valueColumn));
+        }
+        var immutable = new LinkedHashMap<String, List<String>>();
+        valuesById.forEach((id, values) -> immutable.put(id, List.copyOf(values)));
+        return Collections.unmodifiableMap(immutable);
     }
 
     private static Map<String, List<RelationRecord>> initializeRelationBuckets(Set<String> entityIds) {

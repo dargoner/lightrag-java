@@ -12,6 +12,7 @@ import io.github.lightrag.storage.SnapshotStore;
 import io.github.lightrag.storage.VectorStore;
 import io.github.lightrag.storage.postgres.PostgresStorageConfig;
 import io.github.lightrag.storage.postgres.PostgresStorageProvider;
+import io.github.lightrag.support.GraphViewParity;
 import io.github.lightrag.support.Neo4jTestContainers;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -123,6 +124,16 @@ class PostgresNeo4jStorageProviderTest {
             assertThat(atomicChunkStore.get()).isNotSameAs(provider.chunkStore());
             assertThat(atomicGraphStore.get()).isNotSameAs(provider.graphStore());
             assertThat(atomicVectorStore.get()).isNotSameAs(provider.vectorStore());
+        }
+    }
+
+    @Test
+    void knowledgeGraphViewsFlowThroughTheMirroringGraphStore() {
+        try (var provider = newProvider(new FileSnapshotStore())) {
+            provider.graphStore().saveEntities(GraphViewParity.ENTITIES);
+            provider.graphStore().saveRelations(GraphViewParity.RELATIONS);
+
+            GraphViewParity.assertParityWithDefaultImplementation(provider.graphStore());
         }
     }
 

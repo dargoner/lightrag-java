@@ -2,6 +2,7 @@ package io.github.lightrag.storage.neo4j;
 
 import io.github.lightrag.api.WorkspaceScope;
 import io.github.lightrag.storage.GraphStore;
+import io.github.lightrag.support.GraphViewParity;
 import io.github.lightrag.support.Neo4jTestContainers;
 import org.neo4j.driver.AuthTokens;
 import org.neo4j.driver.GraphDatabase;
@@ -207,6 +208,16 @@ class Neo4jGraphStoreTest {
 
             assertThat(defaultWorkspaceStore.loadEntity("entity-1")).contains(defaultEntity);
             assertThat(alphaWorkspaceStore.loadEntity("entity-1")).contains(alphaEntity);
+        }
+    }
+
+    @Test
+    void knowledgeGraphViewsFlowThroughTheFacade() {
+        try (var store = newGraphStore()) {
+            store.saveEntities(GraphViewParity.ENTITIES);
+            store.saveRelations(GraphViewParity.RELATIONS);
+
+            GraphViewParity.assertParityWithDefaultImplementation(store);
         }
     }
 

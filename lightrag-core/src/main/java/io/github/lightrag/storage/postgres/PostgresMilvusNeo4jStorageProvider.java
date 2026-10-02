@@ -1,5 +1,6 @@
 package io.github.lightrag.storage.postgres;
 
+import io.github.lightrag.api.KnowledgeGraphView;
 import io.github.lightrag.api.WorkspaceScope;
 import io.github.lightrag.indexing.HybridVectorPayloads;
 import io.github.lightrag.storage.AtomicStorageProvider;
@@ -774,6 +775,11 @@ public final class PostgresMilvusNeo4jStorageProvider implements AtomicStoragePr
         @Override
         public Map<String, List<RelationRecord>> findRelations(List<String> entityIds) {
             return withReadLock(() -> coordinator.graphStore().findRelations(entityIds));
+        }
+
+        @Override
+        public KnowledgeGraphView getKnowledgeGraph(String nodeLabel, int maxDepth, int maxNodes) {
+            return withReadLock(() -> coordinator.graphStore().getKnowledgeGraph(nodeLabel, maxDepth, maxNodes));
         }
     }
 

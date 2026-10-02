@@ -26,6 +26,7 @@ import io.github.lightrag.storage.SnapshotStore;
 import io.github.lightrag.storage.TaskDocumentStore;
 import io.github.lightrag.storage.VectorStorageAdapter;
 import io.github.lightrag.storage.VectorStore;
+import io.github.lightrag.support.GraphViewParity;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.testcontainers.junit.jupiter.Container;
@@ -131,6 +132,24 @@ class PostgresStorageProviderTest {
                     .containsExactly("workspace_id", "task_id", "stage");
                 assertThat(schemaVersion(connection, config)).contains(7);
             }
+        }
+    }
+
+    @Test
+    void knowledgeGraphViewsFlowThroughTheLockedGraphStore() {
+        PostgreSQLContainer<?> container = newPostgresContainer();
+        container.start();
+
+        PostgresStorageConfig config = newConfig();
+
+        try (
+            container;
+            PostgresStorageProvider provider = new PostgresStorageProvider(config, new InMemorySnapshotStore())
+        ) {
+            provider.graphStore().saveEntities(GraphViewParity.ENTITIES);
+            provider.graphStore().saveRelations(GraphViewParity.RELATIONS);
+
+            GraphViewParity.assertParityWithDefaultImplementation(provider.graphStore());
         }
     }
 

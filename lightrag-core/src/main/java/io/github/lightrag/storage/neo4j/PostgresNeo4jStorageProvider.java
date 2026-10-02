@@ -1,5 +1,6 @@
 package io.github.lightrag.storage.neo4j;
 
+import io.github.lightrag.api.KnowledgeGraphView;
 import io.github.lightrag.api.WorkspaceScope;
 import io.github.lightrag.storage.AtomicStorageProvider;
 import io.github.lightrag.storage.ChunkStore;
@@ -344,6 +345,11 @@ public final class PostgresNeo4jStorageProvider implements AtomicStorageProvider
         @Override
         public java.util.Map<String, java.util.List<RelationRecord>> findRelations(java.util.List<String> entityIds) {
             return withReadLock(() -> coordinator.graphStore().findRelations(entityIds));
+        }
+
+        @Override
+        public KnowledgeGraphView getKnowledgeGraph(String nodeLabel, int maxDepth, int maxNodes) {
+            return withReadLock(() -> coordinator.graphStore().getKnowledgeGraph(nodeLabel, maxDepth, maxNodes));
         }
     }
 

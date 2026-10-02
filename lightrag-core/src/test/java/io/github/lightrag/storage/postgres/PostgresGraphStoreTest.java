@@ -2,15 +2,21 @@ package io.github.lightrag.storage.postgres;
 
 import com.zaxxer.hikari.HikariConfig;
 import com.zaxxer.hikari.HikariDataSource;
+import io.github.lightrag.api.KnowledgeGraphView;
 import io.github.lightrag.storage.GraphStore;
+import io.github.lightrag.storage.memory.InMemoryGraphStore;
+import io.github.lightrag.support.GraphViewParity;
 import org.junit.jupiter.api.Test;
 import org.testcontainers.containers.PostgreSQLContainer;
 import org.testcontainers.junit.jupiter.Container;
 import org.testcontainers.junit.jupiter.Testcontainers;
 import org.testcontainers.utility.DockerImageName;
 
+import java.util.ArrayList;
 import java.util.List;
 import java.util.UUID;
+import java.util.concurrent.Callable;
+import java.util.concurrent.Executors;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
@@ -173,6 +179,78 @@ class PostgresGraphStoreTest {
 
             assertThat(new PostgresGraphStore(dataSource, config).loadRelation("relation-1")).contains(relation);
         }
+    }
+
+    @Test
+    void matchesDefaultImplementationAcrossTraversalCases() {
+        var config = newConfig();
+        try (var resources = newStoreResources(config)) {
+            resources.store().saveEntities(GraphViewParity.ENTITIES);
+            resources.store().saveRelations(GraphViewParity.RELATIONS);
+
+            GraphViewParity.assertParityWithDefaultImplementation(resources.store());
+        }
+    }
+
+    @Test
+    void keepsKnowledgeGraphViewsWithinTheRequestedWorkspace() {
+        var config = newConfig();
+        var dataSource = newDataSource(config);
+        try (dataSource) {
+            new PostgresSchemaManager(dataSource, config).bootstrap();
+            var alpha = new PostgresGraphStore(dataSource, config, "alpha");
+            var beta = new PostgresGraphStore(dataSource, config, "beta");
+            var betaEntity = new GraphStore.EntityRecord("c3", "Beta Three", "person", "beta only", List.of(), List.of("chunk-beta"));
+
+            alpha.saveEntities(GraphViewParity.ENTITIES);
+            alpha.saveRelations(GraphViewParity.RELATIONS);
+            beta.saveEntity(betaEntity);
+
+            GraphViewParity.assertParityWithDefaultImplementation(alpha);
+
+            assertThat(beta.allEntities()).containsExactly(betaEntity);
+            assertThat(beta.allRelations()).isEmpty();
+            var betaView = beta.getKnowledgeGraph("c3", 3, 100);
+            assertThat(betaView.nodes()).singleElement()
+                .satisfies(node -> assertThat(node.id()).isEqualTo("c3"));
+            assertThat(betaView.edges()).isEmpty();
+        }
+    }
+
+    @Test
+    void servesConcurrentTraversalsConsistently() throws Exception {
+        var config = newConfig();
+        try (var resources = newStoreResources(config)) {
+            resources.store().saveEntities(GraphViewParity.ENTITIES);
+            resources.store().saveRelations(GraphViewParity.RELATIONS);
+            var expected = expectedView("c3", 3, 100);
+
+            var executor = Executors.newFixedThreadPool(4);
+            try {
+                var tasks = new ArrayList<Callable<KnowledgeGraphView>>();
+                for (var worker = 0; worker < 4; worker++) {
+                    tasks.add(() -> {
+                        var view = resources.store().getKnowledgeGraph("c3", 3, 100);
+                        for (var iteration = 0; iteration < 3; iteration++) {
+                            view = resources.store().getKnowledgeGraph("c3", 3, 100);
+                        }
+                        return view;
+                    });
+                }
+                for (var future : executor.invokeAll(tasks)) {
+                    assertThat(future.get()).isEqualTo(expected);
+                }
+            } finally {
+                executor.shutdownNow();
+            }
+        }
+    }
+
+    private static KnowledgeGraphView expectedView(String label, int maxDepth, int maxNodes) {
+        var baseline = new InMemoryGraphStore();
+        baseline.saveEntities(GraphViewParity.ENTITIES);
+        baseline.saveRelations(GraphViewParity.RELATIONS);
+        return baseline.getKnowledgeGraph(label, maxDepth, maxNodes);
     }
 
     private static PostgreSQLContainer<?> newPostgresContainer() {

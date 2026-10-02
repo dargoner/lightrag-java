@@ -1,7 +1,10 @@
 package io.github.lightrag.storage.neo4j;
 
+import io.github.lightrag.api.KnowledgeGraphView;
 import io.github.lightrag.api.WorkspaceScope;
 import io.github.lightrag.storage.GraphStore;
+import io.github.lightrag.storage.memory.InMemoryGraphStore;
+import io.github.lightrag.support.GraphViewParity;
 import io.github.lightrag.support.Neo4jTestContainers;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -20,7 +23,9 @@ import java.lang.reflect.Method;
 import java.lang.reflect.Proxy;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.concurrent.Callable;
 import java.util.concurrent.CopyOnWriteArrayList;
+import java.util.concurrent.Executors;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
@@ -269,6 +274,75 @@ class WorkspaceScopedNeo4jGraphStoreTest {
         assertOverrides("saveRelations", List.class);
         assertOverrides("loadEntities", List.class);
         assertOverrides("loadRelations", List.class);
+        assertOverrides("getKnowledgeGraph", String.class, int.class, int.class);
+    }
+
+    @Test
+    void matchesDefaultImplementationAcrossTraversalCases() {
+        try (var alpha = newStore("alpha")) {
+            alpha.saveEntities(GraphViewParity.ENTITIES);
+            alpha.saveRelations(GraphViewParity.RELATIONS);
+
+            GraphViewParity.assertParityWithDefaultImplementation(alpha);
+        }
+    }
+
+    @Test
+    void keepsKnowledgeGraphViewsWithinTheRequestedWorkspace() {
+        try (var alpha = newStore("alpha");
+             var beta = newStore("beta")) {
+            var betaEntity = entity("c3", "Beta Three");
+
+            alpha.saveEntities(GraphViewParity.ENTITIES);
+            alpha.saveRelations(GraphViewParity.RELATIONS);
+            beta.saveEntity(betaEntity);
+
+            GraphViewParity.assertParityWithDefaultImplementation(alpha);
+            assertThat(beta.allEntities()).containsExactly(betaEntity);
+            assertThat(beta.allRelations()).isEmpty();
+            var betaView = beta.getKnowledgeGraph("c3", 3, 100);
+            assertThat(betaView.nodes()).singleElement()
+                .satisfies(node -> assertThat(node.id()).isEqualTo("c3"));
+            assertThat(betaView.edges()).isEmpty();
+        }
+    }
+
+    @Test
+    void knowledgeGraphViewsFlowThroughTheGraphStorageAdapter() {
+        try (var adapter = new Neo4jGraphStorageAdapter(newStore("alpha"))) {
+            adapter.graphStore().saveEntities(GraphViewParity.ENTITIES);
+            adapter.graphStore().saveRelations(GraphViewParity.RELATIONS);
+
+            GraphViewParity.assertParityWithDefaultImplementation(adapter.graphStore());
+        }
+    }
+
+    @Test
+    void servesConcurrentTraversalsConsistently() throws Exception {
+        try (var alpha = newStore("alpha")) {
+            alpha.saveEntities(GraphViewParity.ENTITIES);
+            alpha.saveRelations(GraphViewParity.RELATIONS);
+            var expected = expectedView("c3", 3, 100);
+
+            var executor = Executors.newFixedThreadPool(4);
+            try {
+                var tasks = new ArrayList<Callable<KnowledgeGraphView>>();
+                for (var worker = 0; worker < 4; worker++) {
+                    tasks.add(() -> {
+                        var view = alpha.getKnowledgeGraph("c3", 3, 100);
+                        for (var iteration = 0; iteration < 3; iteration++) {
+                            view = alpha.getKnowledgeGraph("c3", 3, 100);
+                        }
+                        return view;
+                    });
+                }
+                for (var future : executor.invokeAll(tasks)) {
+                    assertThat(future.get()).isEqualTo(expected);
+                }
+            } finally {
+                executor.shutdownNow();
+            }
+        }
     }
 
     @Test
@@ -290,6 +364,13 @@ class WorkspaceScopedNeo4jGraphStoreTest {
             .contains("$scopedEntityIds")
             .contains("scopedId: scopedEntityId")
             .doesNotContain("id: entityId");
+    }
+
+    private static KnowledgeGraphView expectedView(String label, int maxDepth, int maxNodes) {
+        var baseline = new InMemoryGraphStore();
+        baseline.saveEntities(GraphViewParity.ENTITIES);
+        baseline.saveRelations(GraphViewParity.RELATIONS);
+        return baseline.getKnowledgeGraph(label, maxDepth, maxNodes);
     }
 
     private static WorkspaceScopedNeo4jGraphStore newStore(String workspaceId) {

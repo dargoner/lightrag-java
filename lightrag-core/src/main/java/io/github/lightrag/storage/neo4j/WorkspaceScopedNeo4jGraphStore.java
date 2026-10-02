@@ -1,8 +1,10 @@
 package io.github.lightrag.storage.neo4j;
 
+import io.github.lightrag.api.KnowledgeGraphView;
 import io.github.lightrag.api.WorkspaceScope;
 import io.github.lightrag.exception.StorageException;
 import io.github.lightrag.storage.GraphStore;
+import io.github.lightrag.storage.GraphViewTraversal;
 import io.github.lightrag.storage.MutableGraphStore;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -16,13 +18,17 @@ import org.neo4j.driver.TransactionContext;
 import org.neo4j.driver.Value;
 
 import java.util.ArrayList;
+import java.util.Collection;
 import java.util.Collections;
+import java.util.Comparator;
 import java.util.HashMap;
 import java.util.LinkedHashMap;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
 import java.util.Optional;
+import java.util.Set;
 
 public final class WorkspaceScopedNeo4jGraphStore implements MutableGraphStore, AutoCloseable {
     private static final String ENTITY_LABEL = "Entity";
@@ -335,6 +341,176 @@ public final class WorkspaceScopedNeo4jGraphStore implements MutableGraphStore, 
             elapsedMillis(startedAt)
         );
         return relationsMap;
+    }
+
+    @Override
+    public KnowledgeGraphView getKnowledgeGraph(String nodeLabel, int maxDepth, int maxNodes) {
+        return GraphViewTraversal.compute(new Neo4jGraphViewSupport(), nodeLabel, maxDepth, maxNodes);
+    }
+
+    private final class Neo4jGraphViewSupport implements GraphViewTraversal.Support {
+        @Override
+        public boolean containsEntity(String id) {
+            return read(tx -> single(
+                tx.run(
+                    """
+                    MATCH (entity:%s {workspaceId: $workspaceId, scopedId: $scopedEntityId})
+                    WHERE entity.materialized = true
+                    RETURN entity.id AS id
+                    """.formatted(ENTITY_LABEL),
+                    org.neo4j.driver.Values.parameters(
+                        "workspaceId", workspaceId,
+                        "scopedEntityId", scopedId(id)
+                    )
+                ),
+                record -> record.get("id").asString()
+            )).isPresent();
+        }
+
+        @Override
+        public List<String> rankedEntityIds(int limit) {
+            var ids = read(tx -> list(
+                tx.run(
+                    """
+                    MATCH (entity:%s {workspaceId: $workspaceId})
+                    WHERE entity.materialized = true
+                    RETURN entity.id AS id
+                    """.formatted(ENTITY_LABEL),
+                    org.neo4j.driver.Values.parameters("workspaceId", workspaceId)
+                ),
+                record -> record.get("id").asString()
+            ));
+            if (ids.isEmpty()) {
+                return List.of();
+            }
+            var degrees = endpointDegrees(ids);
+            var ranked = new ArrayList<>(ids);
+            ranked.sort(Comparator
+                .comparingInt((String id) -> degrees.getOrDefault(id, 0))
+                .reversed()
+                .thenComparing(Comparator.naturalOrder()));
+            return List.copyOf(ranked.subList(0, Math.min(limit, ranked.size())));
+        }
+
+        @Override
+        public Map<String, Integer> degrees(Collection<String> ids) {
+            var requested = List.copyOf(ids);
+            if (requested.isEmpty()) {
+                return Map.of();
+            }
+            return endpointDegrees(requested);
+        }
+
+        @Override
+        public Map<String, Set<String>> adjacency(Collection<String> ids) {
+            var requested = List.copyOf(ids);
+            if (requested.isEmpty()) {
+                return Map.of();
+            }
+            var requestedIds = new LinkedHashSet<>(requested);
+            return read(tx -> {
+                var adjacency = new LinkedHashMap<String, Set<String>>();
+                var result = tx.run(
+                    """
+                    MATCH ()-[relation:%s {workspaceId: $workspaceId}]->()
+                    WHERE relation.src_id IN $entityIds OR relation.tgt_id IN $entityIds
+                    RETURN relation.src_id AS srcId, relation.tgt_id AS tgtId
+                    """.formatted(RELATION_TYPE),
+                    org.neo4j.driver.Values.parameters(
+                        "workspaceId", workspaceId,
+                        "entityIds", requested
+                    )
+                );
+                while (result.hasNext()) {
+                    var record = result.next();
+                    var srcId = record.get("srcId").asString();
+                    var tgtId = record.get("tgtId").asString();
+                    if (requestedIds.contains(srcId)) {
+                        adjacency.computeIfAbsent(srcId, ignored -> new LinkedHashSet<>()).add(tgtId);
+                    }
+                    if (requestedIds.contains(tgtId)) {
+                        adjacency.computeIfAbsent(tgtId, ignored -> new LinkedHashSet<>()).add(srcId);
+                    }
+                }
+                return adjacency;
+            });
+        }
+
+        @Override
+        public Map<String, EntityRecord> entities(Collection<String> ids) {
+            var requested = List.copyOf(ids);
+            if (requested.isEmpty()) {
+                return Map.of();
+            }
+            var scopedIds = requested.stream().map(WorkspaceScopedNeo4jGraphStore.this::scopedId).toList();
+            return read(tx -> {
+                var entitiesById = new LinkedHashMap<String, EntityRecord>();
+                var result = tx.run(
+                    """
+                    MATCH (entity:%s {workspaceId: $workspaceId})
+                    WHERE entity.materialized = true AND entity.scopedId IN $scopedEntityIds
+                    RETURN entity
+                    """.formatted(ENTITY_LABEL),
+                    org.neo4j.driver.Values.parameters(
+                        "workspaceId", workspaceId,
+                        "scopedEntityIds", scopedIds
+                    )
+                );
+                while (result.hasNext()) {
+                    var entity = toEntity(result.next());
+                    entitiesById.put(entity.id(), entity);
+                }
+                return entitiesById;
+            });
+        }
+
+        @Override
+        public List<RelationRecord> relationsWithin(Set<String> included) {
+            if (included.isEmpty()) {
+                return List.of();
+            }
+            var scopedIds = included.stream().map(WorkspaceScopedNeo4jGraphStore.this::scopedId).toList();
+            return read(tx -> list(
+                tx.run(
+                    """
+                    MATCH (source:%s)-[relation:%s {workspaceId: $workspaceId}]->(target:%s)
+                    WHERE source.scopedId IN $scopedEntityIds AND target.scopedId IN $scopedEntityIds
+                    RETURN relation
+                    ORDER BY relation.relation_id
+                    """.formatted(ENTITY_LABEL, RELATION_TYPE, ENTITY_LABEL),
+                    org.neo4j.driver.Values.parameters(
+                        "workspaceId", workspaceId,
+                        "scopedEntityIds", scopedIds
+                    )
+                ),
+                WorkspaceScopedNeo4jGraphStore::toRelation
+            ));
+        }
+
+        private Map<String, Integer> endpointDegrees(List<String> ids) {
+            return read(tx -> {
+                var degrees = new LinkedHashMap<String, Integer>();
+                var result = tx.run(
+                    """
+                    MATCH ()-[relation:%s {workspaceId: $workspaceId}]->()
+                    WHERE relation.src_id IN $entityIds OR relation.tgt_id IN $entityIds
+                    UNWIND [relation.src_id, relation.tgt_id] AS endpoint
+                    WITH endpoint
+                    WHERE endpoint IN $entityIds
+                    RETURN endpoint, count(*) AS degree
+                    """.formatted(RELATION_TYPE),
+                    org.neo4j.driver.Values.parameters(
+                        "workspaceId", workspaceId,
+                        "entityIds", ids
+                    )
+                );
+                while (result.hasNext()) {
+                    var record = result.next();
+                    degrees.put(record.get("endpoint").asString(), record.get("degree").asInt(0));
+                }
+                return degrees;
+            });
+        }
     }
 
     @Override

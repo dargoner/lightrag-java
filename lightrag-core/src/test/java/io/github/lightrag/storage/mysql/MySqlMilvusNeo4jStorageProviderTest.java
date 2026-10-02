@@ -9,6 +9,7 @@ import io.github.lightrag.api.DocumentStatus;
 import io.github.lightrag.api.FailureStage;
 import io.github.lightrag.api.GraphMaterializationMode;
 import io.github.lightrag.api.GraphMaterializationStatus;
+import io.github.lightrag.api.KnowledgeGraphView;
 import io.github.lightrag.api.SnapshotSource;
 import io.github.lightrag.api.SnapshotStatus;
 import io.github.lightrag.api.TaskStage;
@@ -831,6 +832,36 @@ class MySqlMilvusNeo4jStorageProviderTest {
         }
     }
 
+    @Test
+    void forwardsKnowledgeGraphThroughTheLockedGraphStore() {
+        try (
+            var container = newMySqlContainer();
+            var dataSource = newDataSource(startedConfig(container))
+        ) {
+            var config = startedConfig(container);
+            new MySqlSchemaManager(dataSource, config).bootstrap();
+
+            var graphProjection = new RecordingGraphProjection();
+            var stubView = new KnowledgeGraphView(List.of(), List.of(), true);
+            graphProjection.stubKnowledgeGraph(stubView);
+
+            try (var provider = new MySqlMilvusNeo4jStorageProvider(
+                dataSource,
+                config,
+                new InMemorySnapshotStore(),
+                new WorkspaceScope("default"),
+                graphProjection,
+                new RecordingMilvusProjection(),
+                new ReentrantReadWriteLock(true)
+            )) {
+                var view = provider.graphStore().getKnowledgeGraph("c3", 2, 7);
+
+                assertThat(graphProjection.knowledgeGraphCalls()).containsExactly("c3/2/7");
+                assertThat(view).isSameAs(stubView);
+            }
+        }
+    }
+
     private static MySQLContainer<?> newMySqlContainer() {
         return new MySQLContainer<>(DockerImageName.parse("mysql:8.4"));
     }
@@ -878,6 +909,8 @@ class MySqlMilvusNeo4jStorageProviderTest {
         private final List<GraphStore.RelationRecord> savedRelationsSinceReset = new java.util.ArrayList<>();
         private final List<List<GraphStore.EntityRecord>> savedEntityBatchesSinceReset = new java.util.ArrayList<>();
         private final List<List<GraphStore.RelationRecord>> savedRelationBatchesSinceReset = new java.util.ArrayList<>();
+        private final List<String> knowledgeGraphCalls = new java.util.ArrayList<>();
+        private KnowledgeGraphView knowledgeGraphView = new KnowledgeGraphView(List.of(), List.of(), false);
         private int restoreCount;
         private RuntimeException failureOnSaveEntity;
         private RuntimeException failureOnSaveRelation;
@@ -945,6 +978,12 @@ class MySqlMilvusNeo4jStorageProviderTest {
         }
 
         @Override
+        public KnowledgeGraphView getKnowledgeGraph(String nodeLabel, int maxDepth, int maxNodes) {
+            knowledgeGraphCalls.add(nodeLabel + "/" + maxDepth + "/" + maxNodes);
+            return knowledgeGraphView;
+        }
+
+        @Override
         public Neo4jGraphSnapshot captureSnapshot() {
             return new Neo4jGraphSnapshot(allEntities(), allRelations());
         }
@@ -963,6 +1002,14 @@ class MySqlMilvusNeo4jStorageProviderTest {
 
         @Override
         public void close() {
+        }
+
+        void stubKnowledgeGraph(KnowledgeGraphView view) {
+            this.knowledgeGraphView = Objects.requireNonNull(view, "view");
+        }
+
+        List<String> knowledgeGraphCalls() {
+            return List.copyOf(knowledgeGraphCalls);
         }
 
         void failOnRestore(RuntimeException failure) {

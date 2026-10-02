@@ -1,5 +1,6 @@
 package io.github.lightrag.storage.neo4j;
 
+import io.github.lightrag.api.KnowledgeGraphView;
 import io.github.lightrag.api.WorkspaceScope;
 import io.github.lightrag.storage.GraphStorageAdapter;
 import io.github.lightrag.storage.GraphStore;
@@ -194,6 +195,11 @@ public final class Neo4jGraphStorageAdapter implements GraphStorageAdapter {
         @Override
         public java.util.Map<String, java.util.List<RelationRecord>> findRelations(java.util.List<String> entityIds) {
             return delegate.findRelations(entityIds);
+        }
+
+        @Override
+        public KnowledgeGraphView getKnowledgeGraph(String nodeLabel, int maxDepth, int maxNodes) {
+            return delegate.getKnowledgeGraph(nodeLabel, maxDepth, maxNodes);
         }
 
         @Override

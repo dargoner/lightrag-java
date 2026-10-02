@@ -108,6 +108,19 @@ class GraphStoreReadSurfaceTest {
         assertThat(view.truncated()).isFalse();
     }
 
+    @Test
+    void viewNodesCarryTheStoredEntityFilePaths() {
+        var inMemory = new InMemoryGraphStore();
+        inMemory.saveEntities(List.of(new GraphStore.EntityRecord(
+            "alpha", "Alpha", "Concept", "", List.of(), List.of(), "/a.md<SEP>/b.md")));
+
+        var view = inMemory.getKnowledgeGraph("alpha", 1, 10);
+
+        assertThat(view.nodes()).singleElement()
+            .extracting(GraphEntity::filePath)
+            .isEqualTo("/a.md<SEP>/b.md");
+    }
+
     private static void assertEdgeEndpointsAreReturned(KnowledgeGraphView view) {
         var returnedIds = view.nodes().stream().map(GraphEntity::id).toList();
         assertThat(view.edges()).allSatisfy(edge -> assertThat(returnedIds)
