@@ -12,6 +12,7 @@ import csv
 import json
 import os
 import shlex
+import shutil
 import subprocess
 from datetime import datetime
 from pathlib import Path
@@ -119,13 +120,20 @@ async def _run_java_batch(
     command = f"./gradlew --no-daemon --quiet :lightrag-core:runRagasBatchEval --args={shlex.quote(app_args)}"
     completed = await asyncio.to_thread(
         subprocess.run,
-        ["/bin/bash", "-lc", command],
+        [shutil.which("bash") or "/bin/bash", "-lc", command],
         cwd=project_dir,
         env=os.environ.copy(),
         capture_output=True,
         text=True,
-        check=True,
+        encoding="utf-8",
+        errors="replace",
     )
+    if completed.returncode != 0:
+        raise SystemExit(
+            (completed.stderr or "").strip()
+            or (completed.stdout or "").strip()
+            or f"Java batch runner exited with status {completed.returncode}"
+        )
     return _normalize_batch_results(json.loads(completed.stdout.strip()))
 
 

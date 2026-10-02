@@ -14,6 +14,7 @@ import json
 import math
 import os
 import shlex
+import shutil
 import subprocess
 from datetime import datetime
 from pathlib import Path
@@ -24,6 +25,7 @@ from dotenv import load_dotenv
 try:
     from datasets import Dataset
     from ragas import evaluate
+    from ragas.run_config import RunConfig
     from ragas.metrics import AnswerRelevancy, ContextPrecision, ContextRecall, Faithfulness
     from ragas.llms import LangchainLLMWrapper
     from langchain_openai import ChatOpenAI, OpenAIEmbeddings
@@ -128,13 +130,20 @@ class JavaRagasEvaluator:
         command = f"./gradlew --no-daemon --quiet :lightrag-core:runRagasBatchEval --args={shlex.quote(app_args)}"
         completed = await asyncio.to_thread(
             subprocess.run,
-            ["/bin/bash", "-lc", command],
+            [shutil.which("bash") or "/bin/bash", "-lc", command],
             cwd=self.project_dir,
             env=os.environ.copy(),
             capture_output=True,
             text=True,
-            check=True,
+            encoding="utf-8",
+            errors="replace",
         )
+        if completed.returncode != 0:
+            raise SystemExit(
+                (completed.stderr or "").strip()
+                or (completed.stdout or "").strip()
+                or f"Java batch runner exited with status {completed.returncode}"
+            )
         return _normalize_batch_results(json.loads(completed.stdout.strip()))
 
     async def evaluate_single_case(self, idx: int, test_case: Dict[str, str], rag_response: Dict[str, Any]) -> Dict[str, Any]:
@@ -153,6 +162,8 @@ class JavaRagasEvaluator:
             metrics=[Faithfulness(), AnswerRelevancy(), ContextRecall(), ContextPrecision()],
             llm=self.eval_llm,
             embeddings=self.eval_embeddings,
+            run_config=RunConfig(timeout=900),
+            raise_exceptions=True,
         )
         row = eval_results.to_pandas().iloc[0]
         metrics = {

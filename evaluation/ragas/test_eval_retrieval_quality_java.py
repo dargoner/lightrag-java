@@ -154,6 +154,7 @@ class RetrievalOutputTest(unittest.TestCase):
     def test_run_java_batch_enables_retrieval_only_mode(self):
         module = load_module()
         completed = mock.Mock()
+        completed.returncode = 0
         completed.stdout = json.dumps({"results": []})
 
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -181,6 +182,26 @@ class RetrievalOutputTest(unittest.TestCase):
         self.assertIn("--max-hop 4", invoked[2])
         self.assertIn("--path-top-k 6", invoked[2])
         self.assertIn("--multi-hop-enabled false", invoked[2])
+
+    def test_run_java_batch_surfaces_java_stderr_on_failure(self):
+        module = load_module()
+        completed = mock.Mock()
+        completed.returncode = 1
+        completed.stdout = ""
+        completed.stderr = "java stack trace: boom"
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            dataset = root / "dataset.json"
+            documents = root / "documents"
+            documents.mkdir()
+            dataset.write_text(json.dumps({"test_cases": []}))
+
+            with mock.patch.object(module.asyncio, "to_thread", new=mock.AsyncMock(return_value=completed)):
+                with self.assertRaises(SystemExit) as raised:
+                    asyncio.run(module._run_java_batch(root, dataset, documents, "candidate"))
+
+        self.assertIn("boom", str(raised.exception))
 
     def test_build_payload_includes_multi_hop_metadata_and_delta(self):
         module = load_module()

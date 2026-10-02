@@ -1,0 +1,513 @@
+{
+  "metadata": {
+    "generated_at": "2026-10-02T22:03:20.862707",
+    "run_label": "beir-scifact-extract-baseline",
+    "baseline_name": "beir-scifact-extract",
+    "dataset_path": "D:\\ai-code\\lightrag-java\\evaluation\\ragas\\datasets\\beir\\scifact\\dataset.json",
+    "documents_dir": "D:\\ai-code\\lightrag-java\\evaluation\\ragas\\datasets\\beir\\scifact\\documents",
+    "query_mode": "MIX",
+    "top_k": 10,
+    "chunk_top_k": 10,
+    "max_hop": 2,
+    "path_top_k": 3,
+    "multi_hop_enabled": true,
+    "retrieval_only": false
+  },
+  "summary": {
+    "total_cases": 25,
+    "top1_hit_rate": 0.88,
+    "top3_hit_rate": 0.96,
+    "all_hops_hit_rate": 1.0,
+    "average_recall": 1.0,
+    "shared_case_count": 0,
+    "top1_hit_rate_delta": null,
+    "top3_hit_rate_delta": null,
+    "all_hops_hit_rate_delta": null,
+    "average_recall_delta": null,
+    "baseline_updated": true
+  },
+  "results": [
+    {
+      "question": "0-dimensional biomaterials show inductive properties.",
+      "expected_doc_ids": [
+        "31715818"
+      ],
+      "matched_doc_ids": [
+        "4381486",
+        "31715818",
+        "20381484",
+        "5373138",
+        "11603066",
+        "9283422",
+        "25254425",
+        "6277638",
+        "12486491"
+      ],
+      "top1_hit": false,
+      "top3_hit": true,
+      "all_hops_hit": true,
+      "recall": 1.0
+    },
+    {
+      "question": "All hematopoietic stem cells segregate their chromosomes randomly.",
+      "expected_doc_ids": [
+        "4381486"
+      ],
+      "matched_doc_ids": [
+        "4381486",
+        "5373138",
+        "31715818",
+        "11603066",
+        "11899391",
+        "16626264"
+      ],
+      "top1_hit": true,
+      "top3_hit": true,
+      "all_hops_hit": true,
+      "recall": 1.0
+    },
+    {
+      "question": "Radioiodine treatment of non-toxic multinodular goitre reduces thyroid volume.",
+      "expected_doc_ids": [
+        "9745001"
+      ],
+      "matched_doc_ids": [
+        "9745001",
+        "6157837",
+        "39281140",
+        "3898784",
+        "11899391",
+        "33370"
+      ],
+      "top1_hit": true,
+      "top3_hit": true,
+      "all_hops_hit": true,
+      "recall": 1.0
+    },
+    {
+      "question": "Rapamycin decreases the concentration of triacylglycerols in fruit flies.",
+      "expected_doc_ids": [
+        "6277638"
+      ],
+      "matched_doc_ids": [
+        "6277638",
+        "33370",
+        "6157837",
+        "9283422",
+        "11603066",
+        "17997584",
+        "33499189",
+        "13770184",
+        "3898784"
+      ],
+      "top1_hit": true,
+      "top3_hit": true,
+      "all_hops_hit": true,
+      "recall": 1.0
+    },
+    {
+      "question": "Rapid phosphotransfer rates govern fidelity in two component systems",
+      "expected_doc_ids": [
+        "11603066"
+      ],
+      "matched_doc_ids": [
+        "11603066",
+        "9433958",
+        "4456756",
+        "33499189",
+        "13940200",
+        "25254425",
+        "11899391",
+        "20381484",
+        "6277638"
+      ],
+      "top1_hit": true,
+      "top3_hit": true,
+      "all_hops_hit": true,
+      "recall": 1.0
+    },
+    {
+      "question": "Rapid up-regulation and higher basal expression of interferon-induced genes increase survival of granule cell neurons that are infected by West Nile virus.",
+      "expected_doc_ids": [
+        "9433958"
+      ],
+      "matched_doc_ids": [
+        "9433958",
+        "37549932",
+        "33370",
+        "16626264",
+        "13923140",
+        "11899391",
+        "17997584"
+      ],
+      "top1_hit": true,
+      "top3_hit": true,
+      "all_hops_hit": true,
+      "recall": 1.0
+    },
+    {
+      "question": "Rapid up-regulation and higher basal expression of interferon-induced genes reduce survival of granule cell neurons that are infected by West Nile virus.",
+      "expected_doc_ids": [
+        "9433958"
+      ],
+      "matched_doc_ids": [
+        "9433958",
+        "37549932",
+        "13923140",
+        "17997584",
+        "33370",
+        "11899391",
+        "20381484"
+      ],
+      "top1_hit": true,
+      "top3_hit": true,
+      "all_hops_hit": true,
+      "recall": 1.0
+    },
+    {
+      "question": "Recurrent mutations occur frequently within CTCF anchor sites adjacent to oncogenes.",
+      "expected_doc_ids": [
+        "5373138"
+      ],
+      "matched_doc_ids": [
+        "5373138",
+        "12486491",
+        "9283422",
+        "11603066",
+        "4456756",
+        "9745001",
+        "33370",
+        "25254425"
+      ],
+      "top1_hit": true,
+      "top3_hit": true,
+      "all_hops_hit": true,
+      "recall": 1.0
+    },
+    {
+      "question": "Reduced responsiveness to interleukin-2 in regulatory T cells is associated with greater resistance to autoimmune diseases such as Type 1 Diabetes.",
+      "expected_doc_ids": [
+        "11899391",
+        "13923140",
+        "13940200"
+      ],
+      "matched_doc_ids": [
+        "11899391",
+        "13923140",
+        "13940200",
+        "17997584",
+        "13770184",
+        "33370",
+        "9433958",
+        "4381486"
+      ],
+      "top1_hit": true,
+      "top3_hit": true,
+      "all_hops_hit": true,
+      "recall": 1.0
+    },
+    {
+      "question": "Replacement of histone H2A with H2A.Z slows gene activation in yeasts by stabilizing +1 nucleosomes.",
+      "expected_doc_ids": [
+        "16626264",
+        "25254425"
+      ],
+      "matched_doc_ids": [
+        "16626264",
+        "25254425",
+        "9283422",
+        "6277638",
+        "20381484",
+        "11899391",
+        "13923140"
+      ],
+      "top1_hit": true,
+      "top3_hit": true,
+      "all_hops_hit": true,
+      "recall": 1.0
+    },
+    {
+      "question": "Ribosomopathies have a low degree of cell and tissue specific pathology.",
+      "expected_doc_ids": [
+        "12486491"
+      ],
+      "matched_doc_ids": [
+        "4381486",
+        "31715818",
+        "11603066",
+        "13923140",
+        "20381484",
+        "9433958",
+        "11899391",
+        "12486491"
+      ],
+      "top1_hit": false,
+      "top3_hit": false,
+      "all_hops_hit": true,
+      "recall": 1.0
+    },
+    {
+      "question": "S-nitrosylated GAPDH physiologically transnitrosylates histone deacetylases.",
+      "expected_doc_ids": [
+        "20381484"
+      ],
+      "matched_doc_ids": [
+        "20381484",
+        "25254425",
+        "16626264",
+        "13940200",
+        "6277638",
+        "11603066",
+        "17628888",
+        "4456756",
+        "33499189"
+      ],
+      "top1_hit": true,
+      "top3_hit": true,
+      "all_hops_hit": true,
+      "recall": 1.0
+    },
+    {
+      "question": "Sildenafil improves erectile function in men who experience sexual dysfunction as a result of the use of SSRI antidepressants.",
+      "expected_doc_ids": [
+        "39281140"
+      ],
+      "matched_doc_ids": [
+        "39281140",
+        "9745001",
+        "3898784",
+        "6157837",
+        "11899391",
+        "7662206"
+      ],
+      "top1_hit": true,
+      "top3_hit": true,
+      "all_hops_hit": true,
+      "recall": 1.0
+    },
+    {
+      "question": "Silencing of Bcl2 is important for the maintenance and progression of tumors.",
+      "expected_doc_ids": [
+        "37549932"
+      ],
+      "matched_doc_ids": [
+        "37549932",
+        "33370",
+        "17997584",
+        "16626264",
+        "17628888",
+        "13923140",
+        "11603066",
+        "11899391"
+      ],
+      "top1_hit": true,
+      "top3_hit": true,
+      "all_hops_hit": true,
+      "recall": 1.0
+    },
+    {
+      "question": "Smc5/6 engagment drives the activation of SUMO E3 ligase Mms21 by ATP-dependent remolding.",
+      "expected_doc_ids": [
+        "17628888"
+      ],
+      "matched_doc_ids": [
+        "17628888",
+        "33499189",
+        "9283422",
+        "11603066",
+        "4456756",
+        "4381486",
+        "33370",
+        "17997584",
+        "13940200"
+      ],
+      "top1_hit": true,
+      "top3_hit": true,
+      "all_hops_hit": true,
+      "recall": 1.0
+    },
+    {
+      "question": "Statins decrease blood cholesterol.",
+      "expected_doc_ids": [
+        "7662206"
+      ],
+      "matched_doc_ids": [
+        "7662206",
+        "13770184",
+        "6157837",
+        "3898784",
+        "33370"
+      ],
+      "top1_hit": true,
+      "top3_hit": true,
+      "all_hops_hit": true,
+      "recall": 1.0
+    },
+    {
+      "question": "Statins increase blood cholesterol.",
+      "expected_doc_ids": [
+        "7662206"
+      ],
+      "matched_doc_ids": [
+        "7662206",
+        "13770184",
+        "6157837",
+        "6277638",
+        "3898784",
+        "33370"
+      ],
+      "top1_hit": true,
+      "top3_hit": true,
+      "all_hops_hit": true,
+      "recall": 1.0
+    },
+    {
+      "question": "Stroke patients with prior use of direct oral anticoagulants have a lower risk of in-hospital mortality than stroke patients with prior use of warfarin.",
+      "expected_doc_ids": [
+        "3898784"
+      ],
+      "matched_doc_ids": [
+        "3898784",
+        "39281140",
+        "7662206",
+        "6157837",
+        "13770184",
+        "9745001",
+        "11899391"
+      ],
+      "top1_hit": true,
+      "top3_hit": true,
+      "all_hops_hit": true,
+      "recall": 1.0
+    },
+    {
+      "question": "Subcutaneous fat depots undergo extensive browning processes after cold exposure.",
+      "expected_doc_ids": [
+        "20532591"
+      ],
+      "matched_doc_ids": [
+        "20532591",
+        "13940200",
+        "13770184",
+        "9745001",
+        "6157837"
+      ],
+      "top1_hit": true,
+      "top3_hit": true,
+      "all_hops_hit": true,
+      "recall": 1.0
+    },
+    {
+      "question": "Suboptimal nutrition is not predictive of chronic disease",
+      "expected_doc_ids": [
+        "13770184"
+      ],
+      "matched_doc_ids": [
+        "11899391",
+        "13940200",
+        "13770184",
+        "13923140",
+        "6157837",
+        "7662206"
+      ],
+      "top1_hit": false,
+      "top3_hit": true,
+      "all_hops_hit": true,
+      "recall": 1.0
+    },
+    {
+      "question": "Synaptic activity enhances local release of brain derived neurotrophic factor from postsynaptic dendrites.",
+      "expected_doc_ids": [
+        "4456756"
+      ],
+      "matched_doc_ids": [
+        "4456756",
+        "9433958",
+        "13770184",
+        "16626264",
+        "39281140"
+      ],
+      "top1_hit": true,
+      "top3_hit": true,
+      "all_hops_hit": true,
+      "recall": 1.0
+    },
+    {
+      "question": "Angiotensin converting enzyme inhibitors are associated with increased risk for functional renal insufficiency.",
+      "expected_doc_ids": [
+        "6157837"
+      ],
+      "matched_doc_ids": [
+        "6157837",
+        "11899391",
+        "13770184",
+        "5373138",
+        "3898784"
+      ],
+      "top1_hit": true,
+      "top3_hit": true,
+      "all_hops_hit": true,
+      "recall": 1.0
+    },
+    {
+      "question": "T regulatory cells (tTregs) lacking \u03b1v\u03b28 are more adept at suppressing pathogenic T-cell responses during active inflammation.",
+      "expected_doc_ids": [
+        "17997584"
+      ],
+      "matched_doc_ids": [
+        "17997584",
+        "11899391",
+        "13923140",
+        "5373138",
+        "4381486",
+        "33370",
+        "9283422"
+      ],
+      "top1_hit": true,
+      "top3_hit": true,
+      "all_hops_hit": true,
+      "recall": 1.0
+    },
+    {
+      "question": "TCR/CD3 microdomains are a required to induce the immunologic synapse to activate T cells.",
+      "expected_doc_ids": [
+        "33499189",
+        "9283422"
+      ],
+      "matched_doc_ids": [
+        "33499189",
+        "33370",
+        "9283422",
+        "37549932",
+        "17997584",
+        "13923140",
+        "5373138",
+        "11899391"
+      ],
+      "top1_hit": true,
+      "top3_hit": true,
+      "all_hops_hit": true,
+      "recall": 1.0
+    },
+    {
+      "question": "TNFAIP3 is a tumor suppressor in glioblastoma.",
+      "expected_doc_ids": [
+        "33370"
+      ],
+      "matched_doc_ids": [
+        "33370",
+        "37549932",
+        "20381484",
+        "9283422",
+        "6277638",
+        "3898784",
+        "33499189",
+        "17997584"
+      ],
+      "top1_hit": true,
+      "top3_hit": true,
+      "all_hops_hit": true,
+      "recall": 1.0
+    }
+  ]
+}

@@ -1,0 +1,110 @@
+{
+  "metadata": {
+    "generated_at": "2026-10-02T22:57:46.717244",
+    "run_label": "a2-pre-baseline-2",
+    "baseline_name": "sample-default",
+    "dataset_path": "D:\\ai-code\\lightrag-java\\evaluation\\ragas\\sample_dataset.json",
+    "dataset_digest": "b6f5a1f00ec2",
+    "documents_dir": "D:\\ai-code\\lightrag-java\\evaluation\\ragas\\sample_documents",
+    "storage_profile": "in-memory",
+    "query_mode": "MIX",
+    "top_k": 10,
+    "chunk_top_k": 10,
+    "max_hop": 2,
+    "path_top_k": 3,
+    "multi_hop_enabled": true,
+    "retrieval_only": false,
+    "chat_model": "qwen-flash",
+    "embedding_model": "bge-m3"
+  },
+  "summary": {
+    "total_cases": 6,
+    "average_ragas_score": 0.8519,
+    "baseline_average_ragas_score": 0.8422,
+    "average_delta": 0.0097,
+    "shared_case_count": 6,
+    "max_average_regression": 0.02,
+    "baseline_updated": true,
+    "regressed": false
+  },
+  "results": [
+    {
+      "test_number": 1,
+      "question": "How does LightRAG solve the hallucination problem in large language models?",
+      "ground_truth": "LightRAG solves the hallucination problem by combining large language models with external knowledge retrieval. The framework ensures accurate responses by grounding LLM outputs in actual documents. LightRAG provides contextual responses that reduce hallucinations significantly.",
+      "metrics": {
+        "faithfulness": 1.0,
+        "answer_relevance": 0.9952402911295918,
+        "context_recall": 1.0,
+        "context_precision": 0.9214285714154082
+      },
+      "ragas_score": 0.9792,
+      "timestamp": "2026-10-02T22:48:54.016845"
+    },
+    {
+      "test_number": 2,
+      "question": "What are the three main components required in a RAG system?",
+      "ground_truth": "A RAG system requires three main components: a retrieval system (vector database or search engine) to find relevant documents, an embedding model to convert text into vector representations for similarity search, and a large language model (LLM) to generate responses based on retrieved context.",
+      "metrics": {
+        "faithfulness": 1.0,
+        "answer_relevance": 0.8040168278846016,
+        "context_recall": 1.0,
+        "context_precision": 0.8055555555287036
+      },
+      "ragas_score": 0.9024,
+      "timestamp": "2026-10-02T22:49:45.781058"
+    },
+    {
+      "test_number": 3,
+      "question": "How does LightRAG's retrieval performance compare to traditional RAG approaches?",
+      "ground_truth": "LightRAG delivers faster retrieval performance than traditional RAG approaches. The framework optimizes document retrieval operations for speed. Traditional RAG systems often suffer from slow query response times. LightRAG achieves high quality results with improved performance. The framework combines speed with accuracy in retrieval operations, prioritizing ease of use without sacrificing quality.",
+      "metrics": {
+        "faithfulness": 0.7916666666666666,
+        "answer_relevance": 0.9547498673494118,
+        "context_recall": 1.0,
+        "context_precision": 0.94999999997625
+      },
+      "ragas_score": 0.9241,
+      "timestamp": "2026-10-02T22:52:39.184812"
+    },
+    {
+      "test_number": 4,
+      "question": "What vector databases does LightRAG support and what are their key characteristics?",
+      "ground_truth": "LightRAG supports multiple vector databases including ChromaDB for simple deployment and efficient similarity search, Neo4j for graph-based knowledge representation with vector capabilities, Milvus for high-performance vector search at scale, Qdrant for fast similarity search with filtering and production-ready infrastructure, MongoDB Atlas for combined document storage and vector search, Redis for in-memory low-latency vector search, and a built-in nano-vectordb that eliminates external dependencies for small projects. This multi-database support enables developers to choose appropriate backends based on scale, performance, and infrastructure requirements.",
+      "metrics": {
+        "faithfulness": 1.0,
+        "answer_relevance": 0.9992635627184795,
+        "context_recall": 1.0,
+        "context_precision": 0.0
+      },
+      "ragas_score": 0.7498,
+      "timestamp": "2026-10-02T22:54:32.200691"
+    },
+    {
+      "test_number": 5,
+      "question": "What are the four key metrics for evaluating RAG system quality and what does each metric measure?",
+      "ground_truth": "RAG system quality is measured through four key metrics: Faithfulness measures whether answers are factually grounded in retrieved context and detects hallucinations. Answer Relevance measures how well answers address the user question and evaluates response appropriateness. Context Recall measures completeness of retrieval and whether all relevant information was retrieved from documents. Context Precision measures quality and relevance of retrieved documents without noise or irrelevant content.",
+      "metrics": {
+        "faithfulness": 0.9642857142857143,
+        "answer_relevance": 0.8414938060430669,
+        "context_recall": 1.0,
+        "context_precision": 0.0
+      },
+      "ragas_score": 0.7014,
+      "timestamp": "2026-10-02T22:56:02.769350"
+    },
+    {
+      "test_number": 6,
+      "question": "What are the core benefits of LightRAG and how does it improve upon traditional RAG systems?",
+      "ground_truth": "LightRAG offers five core benefits: accuracy through document-grounded responses, up-to-date information without model retraining, domain expertise through specialized document collections, cost-effectiveness by avoiding expensive fine-tuning, and transparency by showing source documents. Compared to traditional RAG systems, LightRAG provides a simpler API with intuitive interfaces, faster retrieval performance with optimized operations, better integration with multiple vector database backends for flexible selection, and optimized prompting strategies with refined templates. LightRAG prioritizes ease of use while maintaining quality and combines speed with accuracy.",
+      "metrics": {
+        "faithfulness": 0.9555555555555556,
+        "answer_relevance": 0.9625460503831075,
+        "context_recall": 1.0,
+        "context_precision": 0.49999999995
+      },
+      "ragas_score": 0.8545,
+      "timestamp": "2026-10-02T22:57:46.716071"
+    }
+  ]
+}

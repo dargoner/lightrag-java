@@ -1,0 +1,26 @@
+question,expected_doc_ids,matched_doc_ids,top1_hit,top3_hit,all_hops_hit,recall
+0-dimensional biomaterials show inductive properties.,31715818,4381486|31715818|20381484|5373138|11603066|9283422|25254425|6277638|12486491,false,true,true,1.0000
+All hematopoietic stem cells segregate their chromosomes randomly.,4381486,4381486|5373138|31715818|11603066|11899391|16626264,true,true,true,1.0000
+Radioiodine treatment of non-toxic multinodular goitre reduces thyroid volume.,9745001,9745001|6157837|39281140|3898784|11899391|33370,true,true,true,1.0000
+Rapamycin decreases the concentration of triacylglycerols in fruit flies.,6277638,6277638|33370|6157837|9283422|11603066|17997584|33499189|13770184|3898784,true,true,true,1.0000
+Rapid phosphotransfer rates govern fidelity in two component systems,11603066,11603066|9433958|4456756|33499189|13940200|25254425|11899391|20381484|6277638,true,true,true,1.0000
+Rapid up-regulation and higher basal expression of interferon-induced genes increase survival of granule cell neurons that are infected by West Nile virus.,9433958,9433958|37549932|33370|16626264|13923140|11899391|17997584,true,true,true,1.0000
+Rapid up-regulation and higher basal expression of interferon-induced genes reduce survival of granule cell neurons that are infected by West Nile virus.,9433958,9433958|37549932|13923140|17997584|33370|11899391|20381484,true,true,true,1.0000
+Recurrent mutations occur frequently within CTCF anchor sites adjacent to oncogenes.,5373138,5373138|12486491|9283422|11603066|4456756|9745001|33370|25254425,true,true,true,1.0000
+Reduced responsiveness to interleukin-2 in regulatory T cells is associated with greater resistance to autoimmune diseases such as Type 1 Diabetes.,11899391|13923140|13940200,11899391|13923140|13940200|17997584|13770184|33370|9433958|4381486,true,true,true,1.0000
+Replacement of histone H2A with H2A.Z slows gene activation in yeasts by stabilizing +1 nucleosomes.,16626264|25254425,16626264|25254425|9283422|6277638|20381484|11899391|13923140,true,true,true,1.0000
+Ribosomopathies have a low degree of cell and tissue specific pathology.,12486491,4381486|31715818|11603066|13923140|20381484|9433958|11899391|12486491,false,false,true,1.0000
+S-nitrosylated GAPDH physiologically transnitrosylates histone deacetylases.,20381484,20381484|25254425|16626264|13940200|6277638|11603066|17628888|4456756|33499189,true,true,true,1.0000
+Sildenafil improves erectile function in men who experience sexual dysfunction as a result of the use of SSRI antidepressants.,39281140,39281140|9745001|3898784|6157837|11899391|7662206,true,true,true,1.0000
+Silencing of Bcl2 is important for the maintenance and progression of tumors.,37549932,37549932|33370|17997584|16626264|17628888|13923140|11603066|11899391,true,true,true,1.0000
+Smc5/6 engagment drives the activation of SUMO E3 ligase Mms21 by ATP-dependent remolding.,17628888,17628888|33499189|9283422|11603066|4456756|4381486|33370|17997584|13940200,true,true,true,1.0000
+Statins decrease blood cholesterol.,7662206,7662206|13770184|6157837|3898784|33370,true,true,true,1.0000
+Statins increase blood cholesterol.,7662206,7662206|13770184|6157837|6277638|3898784|33370,true,true,true,1.0000
+Stroke patients with prior use of direct oral anticoagulants have a lower risk of in-hospital mortality than stroke patients with prior use of warfarin.,3898784,3898784|39281140|7662206|6157837|13770184|9745001|11899391,true,true,true,1.0000
+Subcutaneous fat depots undergo extensive browning processes after cold exposure.,20532591,20532591|13940200|13770184|9745001|6157837,true,true,true,1.0000
+Suboptimal nutrition is not predictive of chronic disease,13770184,11899391|13940200|13770184|13923140|6157837|7662206,false,true,true,1.0000
+Synaptic activity enhances local release of brain derived neurotrophic factor from postsynaptic dendrites.,4456756,4456756|9433958|13770184|16626264|39281140,true,true,true,1.0000
+Angiotensin converting enzyme inhibitors are associated with increased risk for functional renal insufficiency.,6157837,6157837|11899391|13770184|5373138|3898784,true,true,true,1.0000
+T regulatory cells (tTregs) lacking ¦Áv¦Â8 are more adept at suppressing pathogenic T-cell responses during active inflammation.,17997584,17997584|11899391|13923140|5373138|4381486|33370|9283422,true,true,true,1.0000
+TCR/CD3 microdomains are a required to induce the immunologic synapse to activate T cells.,33499189|9283422,33499189|33370|9283422|37549932|17997584|13923140|5373138|11899391,true,true,true,1.0000
+TNFAIP3 is a tumor suppressor in glioblastoma.,33370,33370|37549932|20381484|9283422|6277638|3898784|33499189|17997584,true,true,true,1.0000
