@@ -21,6 +21,7 @@ import io.github.lightrag.storage.SnapshotStore;
 import io.github.lightrag.storage.StorageProvider;
 import io.github.lightrag.storage.WorkspaceStorageProvider;
 import io.github.lightrag.storage.milvus.MilvusVectorConfig;
+import io.github.lightrag.storage.postgres.PostgresGraphBackend;
 import io.github.lightrag.types.Chunk;
 import io.github.lightrag.types.Document;
 import io.github.lightrag.types.RawDocumentSource;
@@ -396,6 +397,151 @@ class LightRagAutoConfigurationTest {
                 assertThat(properties.getStorage().getMilvus().getCollectionPrefix()).isEqualTo("vec_");
                 assertThat(properties.getStorage().getNeo4j().getUri()).isEqualTo("bolt://localhost:7687");
             });
+    }
+
+    @Test
+    void bindsPostgresGraphBackendAsNullAndResolvesTableForPostgresType() {
+        contextRunner
+            .withUserConfiguration(CustomStorageProviderConfig.class)
+            .withPropertyValues(postgresStoragePropertyValues())
+            .run(context -> {
+                var postgres = context.getBean(LightRagProperties.class).getStorage().getPostgres();
+                assertThat(postgres.getGraphBackend()).isNull();
+                assertThat(postgres.resolveGraphBackend(LightRagProperties.Type.POSTGRES))
+                    .isEqualTo(PostgresGraphBackend.TABLE);
+            });
+    }
+
+    @Test
+    void bindsExplicitPostgresGraphBackendValues() {
+        contextRunner
+            .withUserConfiguration(CustomStorageProviderConfig.class)
+            .withPropertyValues(concat(postgresStoragePropertyValues(), "lightrag.storage.postgres.graph-backend=age"))
+            .run(context -> assertThat(context.getBean(LightRagProperties.class)
+                .getStorage().getPostgres().getGraphBackend())
+                .isEqualTo(PostgresGraphBackend.AGE));
+
+        contextRunner
+            .withUserConfiguration(CustomStorageProviderConfig.class)
+            .withPropertyValues(concat(postgresStoragePropertyValues(), "lightrag.storage.postgres.graph-backend="))
+            .run(context -> assertThat(context.getBean(LightRagProperties.class)
+                .getStorage().getPostgres().getGraphBackend())
+                .isNull());
+    }
+
+    @Test
+    void resolvesComboGraphBackendDefaultsAndExplicitValues() {
+        var postgres = new LightRagProperties().getStorage().getPostgres();
+
+        assertThat(postgres.resolveGraphBackend(LightRagProperties.Type.POSTGRES_MILVUS_NEO4J))
+            .isEqualTo(PostgresGraphBackend.NEO4J);
+        assertThat(postgres.resolveGraphBackend(LightRagProperties.Type.POSTGRES_NEO4J))
+            .isEqualTo(PostgresGraphBackend.NEO4J);
+
+        postgres.setGraphBackend(PostgresGraphBackend.AGE);
+        assertThat(postgres.resolveGraphBackend(LightRagProperties.Type.POSTGRES_MILVUS_NEO4J))
+            .isEqualTo(PostgresGraphBackend.AGE);
+        assertThat(postgres.resolveGraphBackend(LightRagProperties.Type.POSTGRES))
+            .isEqualTo(PostgresGraphBackend.AGE);
+    }
+
+    @Test
+    void rejectsGraphBackendCombinationsThatDoNotFitTheStorageType() {
+        var postgres = new LightRagProperties().getStorage().getPostgres();
+
+        postgres.setGraphBackend(PostgresGraphBackend.TABLE);
+        assertThatThrownBy(() -> postgres.resolveGraphBackend(LightRagProperties.Type.POSTGRES_MILVUS_NEO4J))
+            .isInstanceOf(IllegalStateException.class)
+            .hasMessageContaining("graph-backend=table")
+            .hasMessageContaining("postgres-milvus-neo4j");
+
+        postgres.setGraphBackend(PostgresGraphBackend.AGE);
+        assertThatThrownBy(() -> postgres.resolveGraphBackend(LightRagProperties.Type.POSTGRES_NEO4J))
+            .isInstanceOf(IllegalStateException.class)
+            .hasMessageContaining("graph-backend=age")
+            .hasMessageContaining("postgres-neo4j");
+
+        postgres.setGraphBackend(PostgresGraphBackend.NEO4J);
+        assertThatThrownBy(() -> postgres.resolveGraphBackend(LightRagProperties.Type.POSTGRES))
+            .isInstanceOf(IllegalStateException.class)
+            .hasMessageContaining("graph-backend=neo4j")
+            .hasMessageContaining("type=postgres-neo4j");
+    }
+
+    @Test
+    void failsFastWhenPostgresNeo4jTypeCombinesWithAgeGraphBackend() {
+        contextRunner
+            .withPropertyValues(
+                "lightrag.storage.type=postgres-neo4j",
+                "lightrag.storage.postgres.graph-backend=age",
+                "lightrag.storage.postgres.jdbc-url=jdbc:postgresql://localhost:5432/lightrag",
+                "lightrag.storage.postgres.username=postgres",
+                "lightrag.storage.postgres.password=secret",
+                "lightrag.storage.postgres.schema=rag",
+                "lightrag.storage.postgres.vector-dimensions=8",
+                "lightrag.storage.postgres.table-prefix=rag_"
+            )
+            .run(context -> {
+                assertThat(context).hasFailed();
+                assertThat(context.getStartupFailure())
+                    .rootCause()
+                    .isInstanceOf(IllegalStateException.class)
+                    .hasMessageContaining("graph-backend=age")
+                    .hasMessageContaining("postgres-neo4j");
+            });
+    }
+
+    @Test
+    void comboAgeDoesNotRequireNeo4jConfiguration() {
+        contextRunner
+            .withPropertyValues(
+                "lightrag.storage.type=postgres-milvus-neo4j",
+                "lightrag.storage.postgres.graph-backend=age",
+                "lightrag.storage.postgres.jdbc-url=jdbc:postgresql://localhost:1/lightrag",
+                "lightrag.storage.postgres.username=postgres",
+                "lightrag.storage.postgres.password=secret",
+                "lightrag.storage.postgres.schema=rag",
+                "lightrag.storage.postgres.vector-dimensions=8",
+                "lightrag.storage.postgres.table-prefix=rag_",
+                "lightrag.storage.milvus.uri=http://localhost:19530",
+                "lightrag.storage.milvus.database=default",
+                "lightrag.storage.milvus.collection-prefix=rag_",
+                "lightrag.storage.milvus.vector-dimensions=8"
+            )
+            .run(context -> {
+                assertThat(context).hasFailed();
+                var failure = context.getStartupFailure();
+                assertThat(failure).isNotNull();
+                assertThat(failureChainMessage(failure))
+                    .doesNotContain("lightrag.storage.neo4j")
+                    .containsIgnoringCase("refused");
+            });
+    }
+
+    private static String failureChainMessage(Throwable failure) {
+        var messages = new StringBuilder();
+        for (var current = failure; current != null; current = current.getCause()) {
+            messages.append(current.getMessage()).append('\n');
+        }
+        return messages.toString();
+    }
+
+    private static String[] postgresStoragePropertyValues() {
+        return new String[] {
+            "lightrag.storage.type=postgres",
+            "lightrag.storage.postgres.jdbc-url=jdbc:postgresql://localhost:5432/lightrag",
+            "lightrag.storage.postgres.username=postgres",
+            "lightrag.storage.postgres.password=secret",
+            "lightrag.storage.postgres.schema=cfg",
+            "lightrag.storage.postgres.vector-dimensions=768",
+            "lightrag.storage.postgres.table-prefix=cfg_"
+        };
+    }
+
+    private static String[] concat(String[] values, String extra) {
+        var combined = java.util.Arrays.copyOf(values, values.length + 1);
+        combined[values.length] = extra;
+        return combined;
     }
 
     @Test

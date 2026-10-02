@@ -16,6 +16,7 @@ import io.github.lightrag.storage.EmbeddingSpaceStore;
 import io.github.lightrag.storage.GraphStore;
 import io.github.lightrag.storage.IndependentlyLockedLlmCacheStore;
 import io.github.lightrag.storage.LlmCacheStore;
+import io.github.lightrag.storage.MutableGraphStore;
 import io.github.lightrag.storage.SnapshotStore;
 import io.github.lightrag.storage.TaskDocumentStore;
 import io.github.lightrag.storage.TaskStageStore;
@@ -57,7 +58,8 @@ public final class PostgresStorageProvider implements AtomicStorageProvider, Aut
     private final PostgresEmbeddingSpaceStore embeddingSpaceStore;
     private final PostgresDocumentStore documentStore;
     private final PostgresChunkStore chunkStore;
-    private final PostgresGraphStore graphStore;
+    private final MutableGraphStore graphStore;
+    private final PostgresGraphBackend graphBackend;
     private final PostgresVectorStore vectorStore;
     private final DocumentStatusStore lockedDocumentStatusStore;
     private final TaskStore lockedTaskStore;
@@ -78,10 +80,27 @@ public final class PostgresStorageProvider implements AtomicStorageProvider, Aut
     private final boolean ownsLockDataSource;
 
     public PostgresStorageProvider(PostgresStorageConfig config, SnapshotStore snapshotStore) {
-        this(config, snapshotStore, DEFAULT_WORKSPACE.workspaceId());
+        this(config, snapshotStore, DEFAULT_WORKSPACE.workspaceId(), PostgresGraphBackend.TABLE);
     }
 
     public PostgresStorageProvider(PostgresStorageConfig config, SnapshotStore snapshotStore, String workspaceId) {
+        this(config, snapshotStore, workspaceId, PostgresGraphBackend.TABLE);
+    }
+
+    public PostgresStorageProvider(
+        PostgresStorageConfig config,
+        SnapshotStore snapshotStore,
+        PostgresGraphBackend graphBackend
+    ) {
+        this(config, snapshotStore, DEFAULT_WORKSPACE.workspaceId(), graphBackend);
+    }
+
+    public PostgresStorageProvider(
+        PostgresStorageConfig config,
+        SnapshotStore snapshotStore,
+        String workspaceId,
+        PostgresGraphBackend graphBackend
+    ) {
         this(
             createDataSource(Objects.requireNonNull(config, "config"), "lightrag-postgres"),
             createDataSource(config, "lightrag-postgres-locks"),
@@ -89,15 +108,35 @@ public final class PostgresStorageProvider implements AtomicStorageProvider, Aut
             true,
             config,
             snapshotStore,
-            workspaceId
+            workspaceId,
+            graphBackend
         );
     }
 
     public PostgresStorageProvider(DataSource dataSource, PostgresStorageConfig config, SnapshotStore snapshotStore) {
-        this(dataSource, config, snapshotStore, DEFAULT_WORKSPACE.workspaceId());
+        this(dataSource, config, snapshotStore, DEFAULT_WORKSPACE.workspaceId(), PostgresGraphBackend.TABLE);
     }
 
     public PostgresStorageProvider(DataSource dataSource, PostgresStorageConfig config, SnapshotStore snapshotStore, String workspaceId) {
+        this(dataSource, config, snapshotStore, workspaceId, PostgresGraphBackend.TABLE);
+    }
+
+    public PostgresStorageProvider(
+        DataSource dataSource,
+        PostgresStorageConfig config,
+        SnapshotStore snapshotStore,
+        PostgresGraphBackend graphBackend
+    ) {
+        this(dataSource, config, snapshotStore, DEFAULT_WORKSPACE.workspaceId(), graphBackend);
+    }
+
+    public PostgresStorageProvider(
+        DataSource dataSource,
+        PostgresStorageConfig config,
+        SnapshotStore snapshotStore,
+        String workspaceId,
+        PostgresGraphBackend graphBackend
+    ) {
         this(
             Objects.requireNonNull(dataSource, "dataSource"),
             dataSource,
@@ -105,7 +144,8 @@ public final class PostgresStorageProvider implements AtomicStorageProvider, Aut
             false,
             config,
             snapshotStore,
-            workspaceId
+            workspaceId,
+            graphBackend
         );
     }
 
@@ -116,7 +156,8 @@ public final class PostgresStorageProvider implements AtomicStorageProvider, Aut
         boolean ownsLockDataSource,
         PostgresStorageConfig config,
         SnapshotStore snapshotStore,
-        String workspaceId
+        String workspaceId,
+        PostgresGraphBackend graphBackend
     ) {
         var resolvedConfig = ownsDataSource
             ? Objects.requireNonNull(config, "config")
@@ -127,6 +168,7 @@ public final class PostgresStorageProvider implements AtomicStorageProvider, Aut
         this.config = resolvedConfig;
         this.snapshotStore = Objects.requireNonNull(snapshotStore, "snapshotStore");
         this.workspaceId = new WorkspaceScope(workspaceId).workspaceId();
+        this.graphBackend = Objects.requireNonNull(graphBackend, "graphBackend");
         this.jdbcDataSource = Objects.requireNonNull(dataSource, "dataSource");
         this.jdbcLockDataSource = Objects.requireNonNull(lockDataSource, "lockDataSource");
         this.ownsDataSource = ownsDataSource;
@@ -139,9 +181,14 @@ public final class PostgresStorageProvider implements AtomicStorageProvider, Aut
         this.trackedDocumentGraphIds = new ConcurrentSkipListSet<>();
         try {
             new PostgresSchemaManager(jdbcDataSource, resolvedConfig).bootstrap();
+            if (graphBackend == PostgresGraphBackend.AGE) {
+                new PostgresAgeBootstrap(jdbcDataSource, this.workspaceId).bootstrap();
+            }
             this.documentStore = new PostgresDocumentStore(jdbcDataSource, resolvedConfig, this.workspaceId);
             this.chunkStore = new PostgresChunkStore(jdbcDataSource, resolvedConfig, this.workspaceId);
-            this.graphStore = new PostgresGraphStore(jdbcDataSource, resolvedConfig, this.workspaceId);
+            this.graphStore = graphBackend == PostgresGraphBackend.AGE
+                ? new PostgresAgeGraphStore(jdbcDataSource, this.workspaceId)
+                : new PostgresGraphStore(jdbcDataSource, resolvedConfig, this.workspaceId);
             this.vectorStore = new PostgresVectorStore(jdbcDataSource, resolvedConfig, this.workspaceId);
             this.documentStatusStore = new PostgresDocumentStatusStore(jdbcDataSource, resolvedConfig, this.workspaceId);
             this.taskStore = new PostgresTaskStore(jdbcDataSource, resolvedConfig, this.workspaceId);
@@ -330,7 +377,9 @@ public final class PostgresStorageProvider implements AtomicStorageProvider, Aut
             new PostgresChunkStore(connectionAccess, config, workspaceId),
             new PostgresDocumentGraphSnapshotStore(connectionAccess, config, workspaceId),
             new PostgresDocumentGraphJournalStore(connectionAccess, config, workspaceId),
-            new PostgresGraphStore(connectionAccess, config, workspaceId),
+            graphBackend == PostgresGraphBackend.AGE
+                ? new PostgresAgeGraphStore(connectionAccess, workspaceId)
+                : new PostgresGraphStore(connectionAccess, config, workspaceId),
             new PostgresVectorStore(connectionAccess, config, workspaceId),
             new PostgresDocumentStatusStore(connectionAccess, config, workspaceId),
             new PostgresEmbeddingSpaceStore(connectionAccess, config, workspaceId)
@@ -430,6 +479,11 @@ public final class PostgresStorageProvider implements AtomicStorageProvider, Aut
         deleteWorkspaceRows(connection, "chunks");
         deleteWorkspaceRows(connection, "document_status");
         deleteWorkspaceRows(connection, "documents");
+        if (graphBackend == PostgresGraphBackend.AGE) {
+            // The AGE graph carries no workspace column - it is per-workspace by construction -
+            // so it is cleared on the same connection inside the same transaction.
+            new PostgresAgeGraphStore(JdbcConnectionAccess.forConnection(connection), workspaceId).clear();
+        }
     }
 
     private void deleteWorkspaceRows(Connection connection, String baseTableName) throws SQLException {

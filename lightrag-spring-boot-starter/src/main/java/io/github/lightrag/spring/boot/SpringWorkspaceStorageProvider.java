@@ -13,6 +13,7 @@ import io.github.lightrag.storage.mysql.MySqlMilvusNeo4jStorageProvider;
 import io.github.lightrag.storage.mysql.MySqlStorageConfig;
 import io.github.lightrag.storage.neo4j.Neo4jGraphConfig;
 import io.github.lightrag.storage.neo4j.PostgresNeo4jStorageProvider;
+import io.github.lightrag.storage.postgres.PostgresGraphBackend;
 import io.github.lightrag.storage.postgres.PostgresMilvusNeo4jStorageProvider;
 import io.github.lightrag.storage.postgres.PostgresStorageConfig;
 import io.github.lightrag.storage.postgres.PostgresStorageProvider;
@@ -147,41 +148,81 @@ public final class SpringWorkspaceStorageProvider implements WorkspaceStoragePro
         ReentrantReadWriteLock lock,
         SnapshotStore snapshotStore
     ) {
-        return switch (properties.getStorage().getType()) {
+        var storage = properties.getStorage();
+        return switch (storage.getType()) {
             case IN_MEMORY -> InMemoryStorageProvider.create(snapshotStore);
-            case POSTGRES -> dataSource != null
-                ? new PostgresStorageProvider(dataSource, postgresConfig(dataSource), snapshotStore, scope.workspaceId())
-                : new PostgresStorageProvider(postgresConfig(null), snapshotStore, scope.workspaceId());
-            case POSTGRES_NEO4J -> dataSource != null
-                ? new PostgresNeo4jStorageProvider(
-                    dataSource,
-                    postgresConfig(dataSource),
-                    neo4jConfig(),
-                    snapshotStore,
-                    scope
-                )
-                : new PostgresNeo4jStorageProvider(
-                    postgresConfig(null),
-                    neo4jConfig(),
-                    snapshotStore,
-                    scope
-                );
-            case POSTGRES_MILVUS_NEO4J -> dataSource != null
-                ? new PostgresMilvusNeo4jStorageProvider(
-                    dataSource,
-                    postgresConfig(dataSource),
-                    milvusConfig(),
-                    neo4jConfig(),
-                    snapshotStore,
-                    scope
-                )
-                : new PostgresMilvusNeo4jStorageProvider(
-                    postgresConfig(null),
-                    milvusConfig(),
-                    neo4jConfig(),
-                    snapshotStore,
-                    scope
-                );
+            case POSTGRES -> {
+                var graphBackend = storage.getPostgres().resolveGraphBackend(storage.getType());
+                yield dataSource != null
+                    ? new PostgresStorageProvider(
+                        dataSource,
+                        postgresConfig(dataSource),
+                        snapshotStore,
+                        scope.workspaceId(),
+                        graphBackend
+                    )
+                    : new PostgresStorageProvider(
+                        postgresConfig(null),
+                        snapshotStore,
+                        scope.workspaceId(),
+                        graphBackend
+                    );
+            }
+            case POSTGRES_NEO4J -> {
+                // Validates lightrag.storage.postgres.graph-backend; this type only accepts its neo4j default.
+                storage.getPostgres().resolveGraphBackend(storage.getType());
+                yield dataSource != null
+                    ? new PostgresNeo4jStorageProvider(
+                        dataSource,
+                        postgresConfig(dataSource),
+                        neo4jConfig(),
+                        snapshotStore,
+                        scope
+                    )
+                    : new PostgresNeo4jStorageProvider(
+                        postgresConfig(null),
+                        neo4jConfig(),
+                        snapshotStore,
+                        scope
+                    );
+            }
+            case POSTGRES_MILVUS_NEO4J -> {
+                var graphBackend = storage.getPostgres().resolveGraphBackend(storage.getType());
+                if (graphBackend == PostgresGraphBackend.AGE) {
+                    yield dataSource != null
+                        ? new PostgresMilvusNeo4jStorageProvider(
+                            dataSource,
+                            postgresConfig(dataSource),
+                            milvusConfig(),
+                            snapshotStore,
+                            scope,
+                            graphBackend
+                        )
+                        : new PostgresMilvusNeo4jStorageProvider(
+                            postgresConfig(null),
+                            milvusConfig(),
+                            snapshotStore,
+                            scope,
+                            graphBackend
+                        );
+                }
+                yield dataSource != null
+                    ? new PostgresMilvusNeo4jStorageProvider(
+                        dataSource,
+                        postgresConfig(dataSource),
+                        milvusConfig(),
+                        neo4jConfig(),
+                        snapshotStore,
+                        scope
+                    )
+                    : new PostgresMilvusNeo4jStorageProvider(
+                        postgresConfig(null),
+                        milvusConfig(),
+                        neo4jConfig(),
+                        snapshotStore,
+                        scope
+                    );
+            }
             case MYSQL_MILVUS_NEO4J -> dataSource != null
                 ? new MySqlMilvusNeo4jStorageProvider(
                     dataSource,

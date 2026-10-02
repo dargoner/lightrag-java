@@ -4,6 +4,7 @@ import io.github.lightrag.api.GraphExtractionExample;
 import io.github.lightrag.api.GraphExtractionNode;
 import io.github.lightrag.api.GraphExtractionRelation;
 import io.github.lightrag.indexing.FixedWindowChunker;
+import io.github.lightrag.storage.postgres.PostgresGraphBackend;
 import org.springframework.boot.context.properties.ConfigurationProperties;
 
 import java.time.Duration;
@@ -904,6 +905,8 @@ public class LightRagProperties {
         private String schema;
         private Integer vectorDimensions;
         private String tablePrefix = "lightrag_";
+        /** Null means "the default for the storage type" — see {@link #resolveGraphBackend(Type)}. */
+        private PostgresGraphBackend graphBackend;
 
         public String getJdbcUrl() {
             return jdbcUrl;
@@ -951,6 +954,70 @@ public class LightRagProperties {
 
         public void setTablePrefix(String tablePrefix) {
             this.tablePrefix = tablePrefix;
+        }
+
+        public PostgresGraphBackend getGraphBackend() {
+            return graphBackend;
+        }
+
+        public void setGraphBackend(PostgresGraphBackend graphBackend) {
+            this.graphBackend = graphBackend;
+        }
+
+        /**
+         * Resolves the effective graph backend for the storage type ({@code lightrag.storage.type}) and validates the
+         * combination:
+         * <ul>
+         *   <li>{@code postgres}: default {@code table}; {@code table} and {@code age} are valid;</li>
+         *   <li>{@code postgres-milvus-neo4j}: default {@code neo4j}; {@code neo4j} and {@code age} are valid
+         *       ({@code age} replaces the Neo4j graph projection with an Apache AGE graph on the same PostgreSQL
+         *       database);</li>
+         *   <li>{@code postgres-neo4j}: default {@code neo4j}; there is no AGE channel on this type.</li>
+         * </ul>
+         */
+        public PostgresGraphBackend resolveGraphBackend(Type storageType) {
+            return switch (storageType) {
+                case POSTGRES -> {
+                    if (graphBackend == null || graphBackend == PostgresGraphBackend.TABLE) {
+                        yield PostgresGraphBackend.TABLE;
+                    }
+                    if (graphBackend == PostgresGraphBackend.AGE) {
+                        yield PostgresGraphBackend.AGE;
+                    }
+                    throw new IllegalStateException(
+                        "lightrag.storage.postgres.graph-backend=" + graphBackend.name().toLowerCase(Locale.ROOT)
+                            + " is not valid for lightrag.storage.type=postgres; "
+                            + "use graph-backend=table|age, or type=postgres-neo4j for a Neo4j graph"
+                    );
+                }
+                case POSTGRES_MILVUS_NEO4J -> {
+                    if (graphBackend == null || graphBackend == PostgresGraphBackend.NEO4J) {
+                        yield PostgresGraphBackend.NEO4J;
+                    }
+                    if (graphBackend == PostgresGraphBackend.AGE) {
+                        yield PostgresGraphBackend.AGE;
+                    }
+                    throw new IllegalStateException(
+                        "lightrag.storage.postgres.graph-backend=" + graphBackend.name().toLowerCase(Locale.ROOT)
+                            + " is not valid for lightrag.storage.type=postgres-milvus-neo4j; "
+                            + "use graph-backend=neo4j|age"
+                    );
+                }
+                case POSTGRES_NEO4J -> {
+                    if (graphBackend == null || graphBackend == PostgresGraphBackend.NEO4J) {
+                        yield PostgresGraphBackend.NEO4J;
+                    }
+                    throw new IllegalStateException(
+                        "lightrag.storage.postgres.graph-backend=" + graphBackend.name().toLowerCase(Locale.ROOT)
+                            + " is not valid for lightrag.storage.type=postgres-neo4j; this type always uses Neo4j — "
+                            + "use type=postgres-milvus-neo4j or type=postgres with graph-backend=age instead"
+                    );
+                }
+                default -> throw new IllegalStateException(
+                    "lightrag.storage.postgres.graph-backend applies only to PostgreSQL-based storage types; got "
+                        + storageType
+                );
+            };
         }
     }
 

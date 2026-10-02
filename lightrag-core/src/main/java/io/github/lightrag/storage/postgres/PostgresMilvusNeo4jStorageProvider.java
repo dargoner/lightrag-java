@@ -106,6 +106,66 @@ public final class PostgresMilvusNeo4jStorageProvider implements AtomicStoragePr
         this(buildFromDataSourceConfigs(dataSource, postgresConfig, milvusConfig, neo4jConfig, snapshotStore, workspaceScope));
     }
 
+    /**
+     * Uses an Apache AGE graph on the same PostgreSQL data source instead of the Neo4j graph
+     * projection ({@link PostgresGraphBackend#AGE}); no Neo4j configuration is required.
+     */
+    public PostgresMilvusNeo4jStorageProvider(
+        PostgresStorageConfig postgresConfig,
+        MilvusVectorConfig milvusConfig,
+        SnapshotStore snapshotStore,
+        PostgresGraphBackend graphBackend
+    ) {
+        this(postgresConfig, milvusConfig, snapshotStore, DEFAULT_WORKSPACE, graphBackend);
+    }
+
+    /** See {@link #PostgresMilvusNeo4jStorageProvider(PostgresStorageConfig, MilvusVectorConfig, SnapshotStore, PostgresGraphBackend)}. */
+    public PostgresMilvusNeo4jStorageProvider(
+        DataSource dataSource,
+        PostgresStorageConfig postgresConfig,
+        MilvusVectorConfig milvusConfig,
+        SnapshotStore snapshotStore,
+        PostgresGraphBackend graphBackend
+    ) {
+        this(dataSource, postgresConfig, milvusConfig, snapshotStore, DEFAULT_WORKSPACE, graphBackend);
+    }
+
+    /** See {@link #PostgresMilvusNeo4jStorageProvider(PostgresStorageConfig, MilvusVectorConfig, SnapshotStore, PostgresGraphBackend)}. */
+    public PostgresMilvusNeo4jStorageProvider(
+        PostgresStorageConfig postgresConfig,
+        MilvusVectorConfig milvusConfig,
+        SnapshotStore snapshotStore,
+        WorkspaceScope workspaceScope,
+        PostgresGraphBackend graphBackend
+    ) {
+        this(buildWithAgeFromConfigs(
+            postgresConfig,
+            milvusConfig,
+            snapshotStore,
+            workspaceScope,
+            requireAgeGraphBackend(graphBackend)
+        ));
+    }
+
+    /** See {@link #PostgresMilvusNeo4jStorageProvider(PostgresStorageConfig, MilvusVectorConfig, SnapshotStore, PostgresGraphBackend)}. */
+    public PostgresMilvusNeo4jStorageProvider(
+        DataSource dataSource,
+        PostgresStorageConfig postgresConfig,
+        MilvusVectorConfig milvusConfig,
+        SnapshotStore snapshotStore,
+        WorkspaceScope workspaceScope,
+        PostgresGraphBackend graphBackend
+    ) {
+        this(buildWithAgeFromDataSourceConfigs(
+            dataSource,
+            postgresConfig,
+            milvusConfig,
+            snapshotStore,
+            workspaceScope,
+            requireAgeGraphBackend(graphBackend)
+        ));
+    }
+
     public PostgresMilvusNeo4jStorageProvider(
         DataSource dataSource,
         PostgresStorageConfig postgresConfig,
@@ -435,6 +495,78 @@ public final class PostgresMilvusNeo4jStorageProvider implements AtomicStoragePr
             new ReentrantReadWriteLock(true),
             StorageLockManager.noop()
         );
+    }
+
+    private static Components buildWithAgeFromConfigs(
+        PostgresStorageConfig postgresConfig,
+        MilvusVectorConfig milvusConfig,
+        SnapshotStore snapshotStore,
+        WorkspaceScope workspaceScope,
+        PostgresGraphBackend graphBackend
+    ) {
+        var relationalAdapter = new PostgresRelationalStorageAdapter(
+            Objects.requireNonNull(postgresConfig, "postgresConfig"),
+            Objects.requireNonNull(snapshotStore, "snapshotStore"),
+            Objects.requireNonNull(workspaceScope, "workspaceScope")
+        );
+        return buildWithAge(relationalAdapter, milvusConfig, snapshotStore, workspaceScope, graphBackend);
+    }
+
+    private static Components buildWithAgeFromDataSourceConfigs(
+        DataSource dataSource,
+        PostgresStorageConfig postgresConfig,
+        MilvusVectorConfig milvusConfig,
+        SnapshotStore snapshotStore,
+        WorkspaceScope workspaceScope,
+        PostgresGraphBackend graphBackend
+    ) {
+        var relationalAdapter = new PostgresRelationalStorageAdapter(
+            Objects.requireNonNull(dataSource, "dataSource"),
+            Objects.requireNonNull(postgresConfig, "postgresConfig"),
+            Objects.requireNonNull(snapshotStore, "snapshotStore"),
+            Objects.requireNonNull(workspaceScope, "workspaceScope")
+        );
+        return buildWithAge(relationalAdapter, milvusConfig, snapshotStore, workspaceScope, graphBackend);
+    }
+
+    private static Components buildWithAge(
+        PostgresRelationalStorageAdapter relationalAdapter,
+        MilvusVectorConfig milvusConfig,
+        SnapshotStore snapshotStore,
+        WorkspaceScope workspaceScope,
+        PostgresGraphBackend graphBackend
+    ) {
+        var dataSource = relationalAdapter.dataSource();
+        var workspaceId = workspaceScope.workspaceId();
+        new PostgresAgeBootstrap(dataSource, workspaceId).bootstrap();
+        var graphAdapter = new PostgresAgeGraphStorageAdapter(dataSource, workspaceId);
+        var vectorAdapter = new MilvusVectorStorageAdapter(
+            new MilvusVectorStore(
+                Objects.requireNonNull(milvusConfig, "milvusConfig"),
+                workspaceId
+            ),
+            snapshot -> buildMilvusPayloads(snapshot, relationalAdapter)
+        );
+        return new Components(
+            snapshotStore,
+            relationalAdapter,
+            graphAdapter,
+            vectorAdapter,
+            new ReentrantReadWriteLock(true),
+            StorageLockManager.noop()
+        );
+    }
+
+    private static PostgresGraphBackend requireAgeGraphBackend(PostgresGraphBackend graphBackend) {
+        var backend = Objects.requireNonNull(graphBackend, "graphBackend");
+        if (backend != PostgresGraphBackend.AGE) {
+            throw new IllegalArgumentException(
+                "postgres-milvus-neo4j graph backend must be AGE; got " + backend
+                    + " (NEO4J is the default projection — use the constructor without a graph backend argument, "
+                    + "and TABLE is not available for this storage type)"
+            );
+        }
+        return backend;
     }
 
     private static Components buildFromProjections(
