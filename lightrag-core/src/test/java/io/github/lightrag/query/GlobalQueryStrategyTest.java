@@ -49,9 +49,9 @@ class GlobalQueryStrategyTest {
             .containsExactly("chunk-3");
         assertThat(context.assembledContext())
             .contains("Relations:")
-            .contains("reports_to")
+            .contains("{\"entity1\":\"bob\",\"entity2\":\"carol\",\"description\":\"Bob reports to Carol\"}")
             .contains("Entities:")
-            .contains("Carol");
+            .contains("{\"entity\":\"Carol\",\"type\":\"person\",\"description\":\"Manager\"}");
     }
 
     @Test
@@ -113,7 +113,7 @@ class GlobalQueryStrategyTest {
             .mode(QueryMode.GLOBAL)
             .topK(2)
             .chunkTopK(2)
-            .maxRelationTokens(9) // one "- alice -> bob | works_with | 0.800" line is 9 heuristic tokens
+            .maxRelationTokens(20) // the alice->bob JSON record is 79 chars = 20 heuristic tokens
             .build());
 
         assertThat(context.matchedRelations())

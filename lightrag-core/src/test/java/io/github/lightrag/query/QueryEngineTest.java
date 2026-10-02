@@ -13,8 +13,12 @@ import io.github.lightrag.model.HeuristicTokenCounter;
 import io.github.lightrag.model.RerankFailureMode;
 import io.github.lightrag.model.RerankModel;
 import io.github.lightrag.types.Chunk;
+import io.github.lightrag.types.Entity;
 import io.github.lightrag.types.QueryContext;
+import io.github.lightrag.types.Relation;
 import io.github.lightrag.types.ScoredChunk;
+import io.github.lightrag.types.ScoredEntity;
+import io.github.lightrag.types.ScoredRelation;
 import org.junit.jupiter.api.Test;
 
 import java.util.AbstractList;
@@ -140,6 +144,34 @@ class QueryEngineTest {
         assertThat(result.contexts())
             .extracting(context -> context.source())
             .containsExactly("alpha.txt", "alpha.txt", "beta.txt");
+    }
+
+    @Test
+    void queryPromptPinsTheAssembledContextEnvelopeWithJsonRows() {
+        var chatModel = new RecordingChatModel();
+        var context = new QueryContext(
+            List.of(new ScoredEntity(
+                "alice",
+                new Entity("alice", "Alice", "person", "Researcher", List.of(), List.of("chunk-1")),
+                0.95d
+            )),
+            List.of(new ScoredRelation(
+                "rel-1",
+                new Relation("rel-1", "alice", "bob", "works_with", "Alice works with Bob", 0.8d, List.of("chunk-1")),
+                0.8d
+            )),
+            List.of(scoredChunk("chunk-1", "Alpha chunk", 0.90d)),
+            ""
+        );
+        var engine = new QueryEngine(chatModel, new ContextAssembler(), strategiesReturning(context), null);
+
+        engine.query(baseRequest());
+
+        assertThat(chatModel.lastRequest().systemPrompt())
+            .contains("Entities:\n{\"entity\":\"Alice\",\"type\":\"person\",\"description\":\"Researcher\"}")
+            .contains("Relations:\n{\"entity1\":\"alice\",\"entity2\":\"bob\",\"description\":\"Alice works with Bob\"}")
+            .contains("Chunks:")
+            .contains("Reference Document List:");
     }
 
     @Test

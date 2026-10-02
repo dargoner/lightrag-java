@@ -20,7 +20,7 @@ class ContextAssemblerTest {
     private static final TokenCounter TOKEN_COUNTER = new HeuristicTokenCounter();
 
     @Test
-    void assemblesRelationsUsingEndpointPairAndKeywords() {
+    void rendersEntitiesAndRelationsAsJsonRecordLines() {
         var assembler = new ContextAssembler();
         var atlas = new Entity("atlas", "Atlas", "Component", "", List.of(), List.of("chunk-1"));
         var graphStore = new Entity("graphstore", "GraphStore", "Service", "", List.of(), List.of("chunk-1"));
@@ -45,9 +45,52 @@ class ContextAssemblerTest {
         var assembled = assembler.assemble(context);
 
         assertThat(assembled)
+            .contains("Entities:")
+            .contains("{\"entity\":\"Atlas\",\"type\":\"Component\",\"description\":\"\"}")
             .contains("Relations:")
-            .contains("- atlas -> graphstore | depends_on, owned_by | 0.880")
-            .doesNotContain("- rel-1 | depends_on, owned_by | 0.880");
+            // Relation endpoints render as entity ids: the entity row carries the display name
+            // ("Atlas") while the relation row carries its normalized key ("atlas").
+            .contains("{\"entity1\":\"atlas\",\"entity2\":\"graphstore\","
+                + "\"description\":\"Atlas depends on GraphStore.\"}")
+            .doesNotContain("depends_on, owned_by")
+            .doesNotContain("0.880");
+    }
+
+    @Test
+    void jsonRowsEscapeQuotesNewlinesAndKeepCjkUnescaped() {
+        var entity = new Entity(
+            "quoted",
+            "He said \"hi\"",
+            "person",
+            "line one\nline two 中文",
+            List.of(),
+            List.of("chunk-1")
+        );
+        var context = new QueryContext(
+            List.of(new ScoredEntity(entity.id(), entity, 0.9d)),
+            List.of(),
+            List.of(),
+            ""
+        );
+
+        var assembled = new ContextAssembler().assemble(context);
+
+        assertThat(assembled).contains(
+            "{\"entity\":\"He said \\\"hi\\\"\",\"type\":\"person\","
+                + "\"description\":\"line one\\nline two 中文\"}"
+        );
+    }
+
+    @Test
+    void emptyEntityAndRelationSectionsStillRenderAsNone() {
+        var context = contextWith(List.of(scoredChunk("c1", "alpha", Map.of())));
+
+        var assembled = new ContextAssembler(TOKEN_COUNTER).assemble(context);
+
+        assertThat(assembled)
+            .contains("Entities:\n(none)")
+            .contains("Relations:\n(none)")
+            .contains("Chunks:\n- [1] c1");
     }
 
     @Test

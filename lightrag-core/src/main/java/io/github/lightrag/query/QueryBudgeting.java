@@ -1,17 +1,23 @@
 package io.github.lightrag.query;
 
+import com.fasterxml.jackson.core.JsonProcessingException;
+import com.fasterxml.jackson.databind.ObjectMapper;
 import io.github.lightrag.model.TokenCounter;
 import io.github.lightrag.types.ScoredChunk;
 import io.github.lightrag.types.ScoredEntity;
 import io.github.lightrag.types.ScoredRelation;
 
 import java.util.ArrayList;
+import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Map;
 import java.util.Objects;
 import java.util.Optional;
 import java.util.function.Function;
 
 final class QueryBudgeting {
+    private static final ObjectMapper JSON = new ObjectMapper();
+
     private final TokenCounter tokenCounter;
 
     QueryBudgeting(TokenCounter tokenCounter) {
@@ -30,16 +36,27 @@ final class QueryBudgeting {
     }
 
     static String formatEntity(ScoredEntity entity) {
-        return "- %s | %s | %.3f".formatted(entity.entityId(), entity.entity().name(), entity.score());
+        var row = new LinkedHashMap<String, String>();
+        row.put("entity", entity.entity().name());
+        row.put("type", entity.entity().type());
+        row.put("description", entity.entity().description());
+        return writeRow(row);
     }
 
     static String formatRelation(ScoredRelation relation) {
-        return "- %s -> %s | %s | %.3f".formatted(
-            relation.relation().srcId(),
-            relation.relation().tgtId(),
-            relation.relation().keywords(),
-            relation.score()
-        );
+        var row = new LinkedHashMap<String, String>();
+        row.put("entity1", relation.relation().srcId());
+        row.put("entity2", relation.relation().tgtId());
+        row.put("description", relation.relation().description());
+        return writeRow(row);
+    }
+
+    private static String writeRow(Map<String, String> row) {
+        try {
+            return JSON.writeValueAsString(row);
+        } catch (JsonProcessingException exception) {
+            throw new IllegalStateException("Failed to serialize the context row", exception);
+        }
     }
 
     static String formatChunk(ScoredChunk chunk, String referenceId, Optional<String> headings) {
@@ -68,16 +85,18 @@ final class QueryBudgeting {
         if (maxTokens <= 0 || items.isEmpty()) {
             return List.of();
         }
-        var limited = new ArrayList<T>(items.size());
-        var remaining = maxTokens;
+        var rendered = new ArrayList<String>(items.size());
         for (var item : items) {
-            var tokenCost = approximateTokenCount(formatter.apply(item));
-            if (tokenCost > remaining) {
-                break;
-            }
-            limited.add(item);
-            remaining -= tokenCost;
+            rendered.add(formatter.apply(item));
         }
-        return List.copyOf(limited);
+        // Mirror upstream truncate_list_by_token_size: the budget covers the exact text the
+        // caller renders later (every row joined by the "\n" separator), so the separator's own
+        // tokens are part of it, and the kept prefix is re-verified against its own join before
+        // returning. Never keeps a partial row.
+        var kept = rendered.size();
+        while (kept > 0 && approximateTokenCount(String.join("\n", rendered.subList(0, kept))) > maxTokens) {
+            kept--;
+        }
+        return List.copyOf(items.subList(0, kept));
     }
 }

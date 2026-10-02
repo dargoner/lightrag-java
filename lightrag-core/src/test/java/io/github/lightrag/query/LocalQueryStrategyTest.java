@@ -51,9 +51,9 @@ class LocalQueryStrategyTest {
             .containsExactly("chunk-1", "chunk-2");
         assertThat(context.assembledContext())
             .contains("Entities:")
-            .contains("Alice")
+            .contains("{\"entity\":\"Alice\",\"type\":\"person\",\"description\":\"Researcher\"}")
             .contains("Relations:")
-            .contains("works_with")
+            .contains("{\"entity1\":\"alice\",\"entity2\":\"bob\",\"description\":\"Alice collaborates with Bob\"}")
             .contains("Chunks:")
             .contains("chunk-1");
     }
@@ -115,7 +115,7 @@ class LocalQueryStrategyTest {
             .mode(QueryMode.LOCAL)
             .topK(1)
             .chunkTopK(2)
-            .maxEntityTokens(6)
+            .maxEntityTokens(16) // the alice JSON record is 61 chars = 16 heuristic tokens
             .build());
 
         assertThat(context.matchedEntities())

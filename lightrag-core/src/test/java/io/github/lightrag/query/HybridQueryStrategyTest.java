@@ -152,7 +152,7 @@ class HybridQueryStrategyTest {
             .chunkTopK(3)
             .llKeywords(List.of("alice", "focus"))
             .hlKeywords(List.of("org", "focus"))
-            .maxEntityTokens(12)
+            .maxEntityTokens(30) // alice + bob JSON records joined = 119 chars = 30 heuristic tokens
             .build());
 
         assertThat(context.matchedEntities())
