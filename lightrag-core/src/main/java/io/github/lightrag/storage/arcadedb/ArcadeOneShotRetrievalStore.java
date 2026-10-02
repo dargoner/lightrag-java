@@ -247,7 +247,8 @@ final class ArcadeOneShotRetrievalStore extends ArcadeStoreSupport implements On
             ArcadeRecordMapper.string(row, "type"),
             ArcadeRecordMapper.string(row, "description"),
             ArcadeRecordMapper.stringList(row, "aliases"),
-            ArcadeRecordMapper.stringList(row, "sourceChunkIds")
+            ArcadeRecordMapper.stringList(row, "sourceChunkIds"),
+            ArcadeRecordMapper.string(row, "filePath")
         );
     }
 

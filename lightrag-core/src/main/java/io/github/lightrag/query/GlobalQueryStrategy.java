@@ -228,7 +228,8 @@ public final class GlobalQueryStrategy implements QueryStrategy {
             entity.type(),
             entity.description(),
             entity.aliases(),
-            entity.sourceChunkIds()
+            entity.sourceChunkIds(),
+            entity.filePath()
         );
     }
 

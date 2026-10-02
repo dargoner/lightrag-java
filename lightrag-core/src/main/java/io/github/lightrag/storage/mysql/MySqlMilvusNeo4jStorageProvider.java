@@ -375,7 +375,8 @@ public final class MySqlMilvusNeo4jStorageProvider implements AtomicStorageProvi
             entityRecord.type(),
             entityRecord.description(),
             entityRecord.aliases(),
-            entityRecord.sourceChunkIds()
+            entityRecord.sourceChunkIds(),
+            entityRecord.filePath()
         );
     }
 

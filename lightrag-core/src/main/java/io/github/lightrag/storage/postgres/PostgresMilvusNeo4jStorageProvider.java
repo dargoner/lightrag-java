@@ -533,7 +533,8 @@ public final class PostgresMilvusNeo4jStorageProvider implements AtomicStoragePr
             entityRecord.type(),
             entityRecord.description(),
             entityRecord.aliases(),
-            entityRecord.sourceChunkIds()
+            entityRecord.sourceChunkIds(),
+            entityRecord.filePath()
         );
     }
 
@@ -584,7 +585,8 @@ public final class PostgresMilvusNeo4jStorageProvider implements AtomicStoragePr
                 entity.type(),
                 entity.description(),
                 entity.aliases(),
-                retainedChunkIds
+                retainedChunkIds,
+                entity.filePath()
             ));
         }
 

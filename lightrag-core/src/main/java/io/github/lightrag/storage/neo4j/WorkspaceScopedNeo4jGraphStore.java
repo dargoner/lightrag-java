@@ -489,6 +489,7 @@ public final class WorkspaceScopedNeo4jGraphStore implements MutableGraphStore, 
                 entity.description = $description,
                 entity.aliases = $aliases,
                 entity.sourceChunkIds = $sourceChunkIds,
+                entity.filePath = $filePath,
                 entity.materialized = true
             """.formatted(ENTITY_LABEL),
             org.neo4j.driver.Values.parameters(
@@ -499,7 +500,8 @@ public final class WorkspaceScopedNeo4jGraphStore implements MutableGraphStore, 
                 "type", record.type(),
                 "description", record.description(),
                 "aliases", record.aliases(),
-                "sourceChunkIds", record.sourceChunkIds()
+                "sourceChunkIds", record.sourceChunkIds(),
+                "filePath", record.filePath()
             )
         );
     }
@@ -519,6 +521,7 @@ public final class WorkspaceScopedNeo4jGraphStore implements MutableGraphStore, 
                 entity.description = row.description,
                 entity.aliases = row.aliases,
                 entity.sourceChunkIds = row.sourceChunkIds,
+                entity.filePath = row.filePath,
                 entity.materialized = true
             """.formatted(ENTITY_LABEL),
             org.neo4j.driver.Values.parameters(
@@ -531,7 +534,8 @@ public final class WorkspaceScopedNeo4jGraphStore implements MutableGraphStore, 
                         "type", record.type(),
                         "description", record.description(),
                         "aliases", record.aliases(),
-                        "sourceChunkIds", record.sourceChunkIds()
+                        "sourceChunkIds", record.sourceChunkIds(),
+                        "filePath", record.filePath()
                     ))
                     .toList()
             )
@@ -565,7 +569,8 @@ public final class WorkspaceScopedNeo4jGraphStore implements MutableGraphStore, 
                           source.type = '',
                           source.description = '',
                           source.aliases = [],
-                          source.sourceChunkIds = []
+                          source.sourceChunkIds = [],
+                          source.filePath = ''
             MERGE (target:%s {scopedId: $scopedTargetEntityId})
             ON CREATE SET target.workspaceId = $workspaceId,
                           target.id = $tgtId,
@@ -574,7 +579,8 @@ public final class WorkspaceScopedNeo4jGraphStore implements MutableGraphStore, 
                           target.type = '',
                           target.description = '',
                           target.aliases = [],
-                          target.sourceChunkIds = []
+                          target.sourceChunkIds = [],
+                          target.filePath = ''
             MERGE (source)-[relation:%s {scopedId: $scopedRelationId}]->(target)
             SET relation.workspaceId = $workspaceId,
                 relation.relation_id = $relationId,
@@ -648,7 +654,8 @@ public final class WorkspaceScopedNeo4jGraphStore implements MutableGraphStore, 
                           source.type = '',
                           source.description = '',
                           source.aliases = [],
-                          source.sourceChunkIds = []
+                          source.sourceChunkIds = [],
+                          source.filePath = ''
             MERGE (target:%s {scopedId: row.scopedTargetEntityId})
             ON CREATE SET target.workspaceId = $workspaceId,
                           target.id = row.tgtId,
@@ -657,7 +664,8 @@ public final class WorkspaceScopedNeo4jGraphStore implements MutableGraphStore, 
                           target.type = '',
                           target.description = '',
                           target.aliases = [],
-                          target.sourceChunkIds = []
+                          target.sourceChunkIds = [],
+                          target.filePath = ''
             """.formatted(ENTITY_LABEL, ENTITY_LABEL),
             org.neo4j.driver.Values.parameters(
                 "workspaceId", workspaceId,
@@ -726,7 +734,8 @@ public final class WorkspaceScopedNeo4jGraphStore implements MutableGraphStore, 
             entity.get("type").asString(""),
             entity.get("description").asString(""),
             stringList(entity.get("aliases")),
-            stringList(entity.get("sourceChunkIds"))
+            stringList(entity.get("sourceChunkIds")),
+            entity.get("filePath").asString("")
         );
     }
 

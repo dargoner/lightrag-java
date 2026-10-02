@@ -29,7 +29,8 @@ class PostgresGraphStoreTest {
                 "person",
                 "Researcher",
                 List.of("A", "Alice A."),
-                List.of("chunk-1", "chunk-2")
+                List.of("chunk-1", "chunk-2"),
+                "/tmp/doc-a.md<SEP>/tmp/doc-b.md"
             );
             var relation = new GraphStore.RelationRecord(
                 "relation-1",

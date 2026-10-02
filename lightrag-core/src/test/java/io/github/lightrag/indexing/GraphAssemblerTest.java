@@ -403,14 +403,72 @@ class GraphAssemblerTest {
         var assembler = new GraphAssembler();
 
         var graph = assembler.assemble(List.of(
-            extractionWithFilePath("chunk-1", "/a.md", new ExtractedRelation("Alice", "Bob", "works_with", "first", 1.0d)),
-            extractionWithFilePath("chunk-2", "/b.md", new ExtractedRelation("Alice", "Bob", "works_with", "second", 1.0d)),
-            extractionWithFilePath("chunk-3", "/a.md", new ExtractedRelation("Alice", "Bob", "works_with", "third", 1.0d))
+            extractionWithFilePath("chunk-1", "/a.md", List.of(), List.of(new ExtractedRelation("Alice", "Bob", "works_with", "first", 1.0d))),
+            extractionWithFilePath("chunk-2", "/b.md", List.of(), List.of(new ExtractedRelation("Alice", "Bob", "works_with", "second", 1.0d))),
+            extractionWithFilePath("chunk-3", "/a.md", List.of(), List.of(new ExtractedRelation("Alice", "Bob", "works_with", "third", 1.0d)))
         ));
 
         assertThat(graph.relations()).singleElement()
             .extracting(Relation::filePath)
             .isEqualTo("/a.md<SEP>/b.md");
+    }
+
+    @Test
+    void accumulatesDedupedFilePathsForEntities() {
+        var assembler = new GraphAssembler();
+
+        var graph = assembler.assemble(List.of(
+            extractionWithFilePath("chunk-1", "/a.md",
+                List.of(new ExtractedEntity("Alice", "person", "Researcher", List.of())), List.of()),
+            extractionWithFilePath("chunk-2", "/b.md",
+                List.of(new ExtractedEntity("alice", "person", "Scientist", List.of())), List.of()),
+            extractionWithFilePath("chunk-3", "/a.md",
+                List.of(new ExtractedEntity("ALICE", "person", "Engineer", List.of())), List.of())
+        ));
+
+        assertThat(graph.entities()).extracting(Entity::filePath)
+            .containsExactly("/a.md<SEP>/b.md");
+    }
+
+    @Test
+    void tagsRelationEndpointEntitiesWithTheRelationFilePath() {
+        // Bob never appears in an entity list, so his record comes from ensureEntity's create branch;
+        // Alice is listed as an entity first and only touched by ensureEntity in the second chunk.
+        var assembler = new GraphAssembler();
+
+        var graph = assembler.assemble(List.of(
+            extractionWithFilePath("chunk-1", "/a.md",
+                List.of(new ExtractedEntity("Alice", "person", "Researcher", List.of())),
+                List.of(new ExtractedRelation("Alice", "Bob", "works_with", "first", 1.0d))),
+            extractionWithFilePath("chunk-2", "/b.md",
+                List.of(),
+                List.of(new ExtractedRelation("Alice", "Bob", "works_with", "second", 1.0d)))
+        ));
+
+        assertThat(graph.entities()).extracting(Entity::id, Entity::filePath)
+            .containsExactly(
+                tuple("alice", "/a.md<SEP>/b.md"),
+                tuple("bob", "/a.md<SEP>/b.md")
+            );
+    }
+
+    @Test
+    void mergesFilePathsWhenAliasKeysBridgeExistingEntities() {
+        // chunk 3's "Bob"["Bobby"] matches both the "robert" record (via its Bob alias) and the "bobby"
+        // record (via its own name), so the two records merge and their file paths union.
+        var assembler = new GraphAssembler();
+
+        var graph = assembler.assemble(List.of(
+            extractionWithFilePath("chunk-1", "/a.md",
+                List.of(new ExtractedEntity("Robert", "person", "Lead", List.of("Bob"))), List.of()),
+            extractionWithFilePath("chunk-2", "/b.md",
+                List.of(new ExtractedEntity("Bobby", "organization", "Agency", List.of())), List.of()),
+            extractionWithFilePath("chunk-3", "/c.md",
+                List.of(new ExtractedEntity("Bob", "person", "Engineer", List.of("Bobby"))), List.of())
+        ));
+
+        assertThat(graph.entities()).extracting(Entity::id, Entity::filePath)
+            .containsExactly(tuple("robert", "/a.md<SEP>/b.md<SEP>/c.md"));
     }
 
     private static GraphAssembler.ChunkExtraction extraction(
@@ -424,11 +482,12 @@ class GraphAssemblerTest {
     private static GraphAssembler.ChunkExtraction extractionWithFilePath(
         String chunkId,
         String filePath,
-        ExtractedRelation relation
+        List<ExtractedEntity> entities,
+        List<ExtractedRelation> relations
     ) {
         return new GraphAssembler.ChunkExtraction(
             chunkId,
-            new ExtractionResult(List.of(), List.of(relation), List.of()),
+            new ExtractionResult(entities, relations, List.of()),
             List.of(),
             filePath
         );

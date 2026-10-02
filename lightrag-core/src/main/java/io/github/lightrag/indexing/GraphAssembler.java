@@ -29,7 +29,14 @@ public final class GraphAssembler {
         for (var extraction : batch) {
             var chunkExtraction = Objects.requireNonNull(extraction, "extraction");
             for (var entity : chunkExtraction.extraction().entities()) {
-                mergeEntity(chunkExtraction.chunkId(), entity, entitiesById, entityIdByMergeKey, mergeGuard);
+                mergeEntity(
+                    chunkExtraction.chunkId(),
+                    chunkExtraction.filePath(),
+                    entity,
+                    entitiesById,
+                    entityIdByMergeKey,
+                    mergeGuard
+                );
             }
         }
 
@@ -73,6 +80,7 @@ public final class GraphAssembler {
 
     private static void mergeEntity(
         String chunkId,
+        String filePath,
         ExtractedEntity extractedEntity,
         Map<String, MutableEntity> entitiesById,
         Map<String, String> entityIdByMergeKey,
@@ -105,6 +113,7 @@ public final class GraphAssembler {
         }
 
         entity.addSourceChunkId(chunkId);
+        entity.addFilePath(filePath);
         entity.registerMergeKeys(candidateKeys);
         for (var key : entity.mergeKeys()) {
             entityIdByMergeKey.put(key, entity.id);
@@ -120,8 +129,9 @@ public final class GraphAssembler {
         Map<String, String> relationIdByMergeKey
     ) {
         var chunkId = chunkExtraction.chunkId();
-        var sourceEntity = ensureEntity(chunkId, extractedRelation.sourceEntityName(), entitiesById, entityIdByMergeKey);
-        var targetEntity = ensureEntity(chunkId, extractedRelation.targetEntityName(), entitiesById, entityIdByMergeKey);
+        var filePath = chunkExtraction.filePath();
+        var sourceEntity = ensureEntity(chunkId, filePath, extractedRelation.sourceEntityName(), entitiesById, entityIdByMergeKey);
+        var targetEntity = ensureEntity(chunkId, filePath, extractedRelation.targetEntityName(), entitiesById, entityIdByMergeKey);
         // Drop self-loops after endpoint normalization so one bad extraction does not abort the batch.
         if (sourceEntity.id.equals(targetEntity.id)) {
             log.warn(
@@ -149,13 +159,14 @@ public final class GraphAssembler {
             relation.mergeFrom(extractedRelation);
         }
         relation.addSourceChunkId(chunkId);
-        relation.addFilePath(chunkExtraction.filePath());
+        relation.addFilePath(filePath);
         relationIdByMergeKey.put(mergeKey, relationId);
         return true;
     }
 
     private static MutableEntity ensureEntity(
         String chunkId,
+        String filePath,
         String entityName,
         Map<String, MutableEntity> entitiesById,
         Map<String, String> entityIdByMergeKey
@@ -165,11 +176,13 @@ public final class GraphAssembler {
         if (entityId != null) {
             var existing = entitiesById.get(entityId);
             existing.addSourceChunkId(chunkId);
+            existing.addFilePath(filePath);
             return existing;
         }
 
         var created = MutableEntity.create(new ExtractedEntity(entityName, "", "", List.of()));
         created.addSourceChunkId(chunkId);
+        created.addFilePath(filePath);
         created.registerMergeKeys(Set.of(normalizedName));
         entitiesById.put(created.id, created);
         for (var key : created.mergeKeys()) {
@@ -316,6 +329,7 @@ public final class GraphAssembler {
         private final LinkedHashMap<String, String> aliasesByKey;
         private final LinkedHashMap<String, Integer> typeCounts = new LinkedHashMap<>();
         private final LinkedHashSet<String> sourceChunkIds = new LinkedHashSet<>();
+        private final LinkedHashSet<String> filePaths = new LinkedHashSet<>();
         private final LinkedHashSet<String> mergeKeys = new LinkedHashSet<>();
 
         private MutableEntity(String id, String name, LinkedHashMap<String, String> aliasesByKey) {
@@ -354,6 +368,7 @@ public final class GraphAssembler {
                 addAlias(alias);
             }
             sourceChunkIds.addAll(entity.sourceChunkIds);
+            filePaths.addAll(entity.filePaths);
             mergeKeys.addAll(entity.mergeKeys);
         }
 
@@ -373,6 +388,12 @@ public final class GraphAssembler {
 
         private void addSourceChunkId(String chunkId) {
             sourceChunkIds.add(chunkId);
+        }
+
+        private void addFilePath(String filePath) {
+            if (filePath != null && !filePath.isBlank()) {
+                filePaths.add(filePath.strip());
+            }
         }
 
         private void addDescriptionFragment(String description) {
@@ -416,7 +437,8 @@ public final class GraphAssembler {
                 votedType(),
                 joinDescriptionFragments(descriptionFragments),
                 new ArrayList<>(aliasesByKey.values()),
-                new ArrayList<>(sourceChunkIds)
+                new ArrayList<>(sourceChunkIds),
+                RelationCanonicalizer.joinValues(new ArrayList<>(filePaths))
             );
         }
     }

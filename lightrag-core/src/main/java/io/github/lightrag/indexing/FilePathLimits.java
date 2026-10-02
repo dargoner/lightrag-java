@@ -8,11 +8,10 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 /**
- * Relation {@code file_path} accumulation, a direct port of upstream's MAX_FILE_PATHS handling
- * ({@code operate.py:2634-2689} nodes, {@code :3067-3120} edges; {@code constants.py:84-88}).
+ * Entity and relation {@code file_path} accumulation, a direct port of upstream's MAX_FILE_PATHS
+ * handling ({@code operate.py:2634-2689} nodes, {@code :3067-3120} edges; {@code constants.py:84-88}).
  *
- * <p>Entity {@code file_path} is deliberately out of scope: the Java entity record has no such
- * column, so only relations keep the accumulated path list. The cap is display-only upstream
+ * <p>Both record kinds share the same cap and truncation method. The cap is display-only upstream
  * ({@code constants.py:85}); it never feeds query behaviour.</p>
  */
 public final class FilePathLimits {

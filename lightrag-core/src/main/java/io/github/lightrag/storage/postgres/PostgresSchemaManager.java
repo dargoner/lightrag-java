@@ -58,6 +58,7 @@ public final class PostgresSchemaManager {
                         replayAppliedMigrations(statement, currentVersion.get());
                     }
                     ensureDocumentStatusMetadataColumn(connection, statement);
+                    ensureEntityFilePathColumn(connection, statement);
                     validateWorkspaceColumns(connection);
                     validateVectorDimensions(connection);
                     connection.commit();
@@ -148,6 +149,7 @@ public final class PostgresSchemaManager {
                     name TEXT NOT NULL,
                     type TEXT NOT NULL,
                     description TEXT NOT NULL,
+                    file_path VARCHAR(32768) NOT NULL DEFAULT '',
                     PRIMARY KEY (workspace_id, id)
                 )
                 """.formatted(config.qualifiedTableName("entities")),
@@ -436,6 +438,20 @@ public final class PostgresSchemaManager {
                 ALTER TABLE %s
                 ADD COLUMN metadata JSONB NOT NULL DEFAULT '{}'::jsonb
                 """.formatted(config.qualifiedTableName("document_status"))
+        );
+    }
+
+    private void ensureEntityFilePathColumn(Connection connection, Statement statement) throws SQLException {
+        if (bootstrapStatements != null
+            || !storageTableExists(connection, "entities")
+            || columnExists(connection, "entities", "file_path")) {
+            return;
+        }
+        statement.execute(
+            """
+                ALTER TABLE %s
+                ADD COLUMN file_path VARCHAR(32768) NOT NULL DEFAULT ''
+                """.formatted(config.qualifiedTableName("entities"))
         );
     }
 

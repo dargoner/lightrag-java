@@ -308,7 +308,8 @@ public final class LocalQueryStrategy implements QueryStrategy {
             entity.type(),
             entity.description(),
             entity.aliases(),
-            entity.sourceChunkIds()
+            entity.sourceChunkIds(),
+            entity.filePath()
         );
     }
 

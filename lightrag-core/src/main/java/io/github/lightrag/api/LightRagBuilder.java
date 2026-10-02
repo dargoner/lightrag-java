@@ -184,9 +184,9 @@ public final class LightRagBuilder {
     }
 
     /**
-     * Relation {@code file_path} cap (upstream {@code max_file_paths}, default 75). Display-only:
-     * over the limit the list keeps its head plus the {@code ...truncated...(KEEP Old)} marker under
-     * the {@link #sourceIdsLimitMethod} in force.
+     * Entity and relation {@code file_path} cap (upstream {@code max_file_paths}, default 75).
+     * Display-only: over the limit the list keeps its head plus the
+     * {@code ...truncated...(KEEP Old)} marker under the {@link #sourceIdsLimitMethod} in force.
      */
     public LightRagBuilder maxFilePaths(int maxFilePaths) {
         if (maxFilePaths <= 0) {

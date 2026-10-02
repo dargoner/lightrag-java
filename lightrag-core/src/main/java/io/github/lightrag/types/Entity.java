@@ -1,5 +1,7 @@
 package io.github.lightrag.types;
 
+import io.github.lightrag.indexing.RelationCanonicalizer;
+
 import java.util.List;
 import java.util.Objects;
 
@@ -9,8 +11,20 @@ public record Entity(
     String type,
     String description,
     List<String> aliases,
-    List<String> sourceChunkIds
+    List<String> sourceChunkIds,
+    String filePath
 ) {
+    public Entity(
+        String id,
+        String name,
+        String type,
+        String description,
+        List<String> aliases,
+        List<String> sourceChunkIds
+    ) {
+        this(id, name, type, description, aliases, sourceChunkIds, "");
+    }
+
     public Entity {
         id = requireNonBlank(id, "id");
         name = requireNonBlank(name, "name");
@@ -18,6 +32,11 @@ public record Entity(
         description = normalizeOptional(description, "description");
         aliases = List.copyOf(Objects.requireNonNull(aliases, "aliases"));
         sourceChunkIds = List.copyOf(Objects.requireNonNull(sourceChunkIds, "sourceChunkIds"));
+        filePath = filePath == null ? "" : filePath.strip();
+    }
+
+    public List<String> filePaths() {
+        return RelationCanonicalizer.splitValues(filePath);
     }
 
     private static String requireNonBlank(String value, String fieldName) {

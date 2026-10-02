@@ -81,6 +81,33 @@ class FileSnapshotStoreTest {
         }
     }
 
+    @Test
+    void loadDefaultsMissingEntityFilePathToEmptyForLegacyPayloads() throws Exception {
+        var store = new FileSnapshotStore();
+        var snapshotPath = tempDir.resolve("repository.snapshot.json");
+        Files.writeString(snapshotPath, """
+            {"schemaVersion":1,"createdAt":"2026-04-12T08:00:00Z","payloadFile":"repository.snapshot.payload.json"}
+            """);
+        Files.writeString(tempDir.resolve("repository.snapshot.payload.json"), """
+            {
+              "documents": [],
+              "chunks": [],
+              "entities": [
+                {"id":"alice","name":"Alice","type":"person","description":"Researcher",
+                 "aliases":["Al"],"sourceChunkIds":["doc-1:0"]}
+              ],
+              "relations": [],
+              "vectors": {}
+            }
+            """);
+
+        var loaded = store.load(snapshotPath);
+
+        assertThat(loaded.entities()).singleElement()
+            .extracting(GraphStore.EntityRecord::filePath)
+            .isEqualTo("");
+    }
+
     private static SnapshotStore.Snapshot sampleSnapshot() {
         var now = Instant.parse("2026-04-12T08:00:00Z");
         return new SnapshotStore.Snapshot(
@@ -92,7 +119,8 @@ class FileSnapshotStoreTest {
                 "person",
                 "Researcher",
                 List.of("Al"),
-                List.of("doc-1:0")
+                List.of("doc-1:0"),
+                "/a.md<SEP>/b.md"
             )),
             List.of(new GraphStore.RelationRecord(
                 relationId("alice", "bob"),

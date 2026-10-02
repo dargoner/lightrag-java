@@ -925,6 +925,7 @@ public final class QueryEngine {
             entity.entity().description(),
             entity.entity().aliases(),
             entity.entity().sourceChunkIds(),
+            entity.entity().filePath(),
             entity.score()
         );
     }

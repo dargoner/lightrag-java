@@ -560,7 +560,7 @@ public final class GraphMaterializationPipeline {
             throw new NoSuchElementException("chunk graph snapshot does not exist: " + chunkId);
         }
         progressListener.onStageStarted(io.github.lightrag.api.TaskStage.ENTITY_MATERIALIZATION, "materializing chunk entities");
-        var chunkGraph = assembleChunkGraph(chunkSnapshot);
+        var chunkGraph = assembleChunkGraph(chunkSnapshot, filePathsByChunkId(state.storedChunks()));
         writeChunkMaterialization(state, chunkSnapshot, chunkGraph, action);
         progressListener.onStageSucceeded(io.github.lightrag.api.TaskStage.ENTITY_MATERIALIZATION, "materialized chunk entities");
         progressListener.onStageStarted(io.github.lightrag.api.TaskStage.RELATION_MATERIALIZATION, "materializing chunk relations");
@@ -895,7 +895,7 @@ public final class GraphMaterializationPipeline {
             .toList();
         var expectedGraph = chunkSnapshots.isEmpty()
             ? new GraphAssembler.Graph(List.of(), List.of())
-            : graphAssembler.assemble(toChunkExtractions(chunkSnapshots));
+            : graphAssembler.assemble(toChunkExtractions(chunkSnapshots, filePathsByChunkId(storedChunks)));
         var chunkIds = chunkSnapshots.stream().map(DocumentGraphSnapshotStore.ChunkGraphSnapshot::chunkId)
             .collect(Collectors.toCollection(LinkedHashSet::new));
         var actualEntities = storageProvider.graphStore().allEntities().stream()
@@ -1103,6 +1103,13 @@ public final class GraphMaterializationPipeline {
     }
 
     static List<GraphAssembler.ChunkExtraction> toChunkExtractions(List<DocumentGraphSnapshotStore.ChunkGraphSnapshot> chunkSnapshots) {
+        return toChunkExtractions(chunkSnapshots, Map.of());
+    }
+
+    static List<GraphAssembler.ChunkExtraction> toChunkExtractions(
+        List<DocumentGraphSnapshotStore.ChunkGraphSnapshot> chunkSnapshots,
+        Map<String, String> filePathsByChunkId
+    ) {
         return chunkSnapshots.stream()
             .map(snapshot -> new GraphAssembler.ChunkExtraction(
                 snapshot.chunkId(),
@@ -1125,13 +1132,30 @@ public final class GraphMaterializationPipeline {
                         ))
                         .toList(),
                     List.of()
-                )
+                ),
+                List.of(),
+                filePathsByChunkId.getOrDefault(snapshot.chunkId(), "")
             ))
             .toList();
     }
 
+    private static Map<String, String> filePathsByChunkId(List<Chunk> chunks) {
+        var filePaths = new LinkedHashMap<String, String>();
+        for (var chunk : chunks) {
+            filePaths.put(chunk.id(), MetadataKeys.filePathOf(chunk));
+        }
+        return filePaths;
+    }
+
     private GraphAssembler.Graph assembleChunkGraph(DocumentGraphSnapshotStore.ChunkGraphSnapshot chunkSnapshot) {
         return graphAssembler.assemble(toChunkExtractions(List.of(chunkSnapshot)));
+    }
+
+    private GraphAssembler.Graph assembleChunkGraph(
+        DocumentGraphSnapshotStore.ChunkGraphSnapshot chunkSnapshot,
+        Map<String, String> filePathsByChunkId
+    ) {
+        return graphAssembler.assemble(toChunkExtractions(List.of(chunkSnapshot), filePathsByChunkId));
     }
 
     private void saveGraph(GraphAssembler.Graph graph, AtomicStorageProvider.AtomicStorageView storage) {
@@ -1465,22 +1489,14 @@ public final class GraphMaterializationPipeline {
     }
 
     private GraphStore.EntityRecord mergeEntity(GraphStore.EntityRecord existing, Entity incoming) {
-        var fragments = DescriptionFragments.combine(
-            DescriptionFragments.split(existing.description()),
-            DescriptionFragments.split(incoming.description())
-        );
-        var summary = descriptionSummarizer.summarize("Entity", existing.name(), fragments);
-        var mergedChunkIds = union(existing.sourceChunkIds(), incoming.sourceChunkIds());
-        var sourceChunkIds = sourceIdsCapsEnabled
-            ? SourceIdLimits.apply(mergedChunkIds, maxSourceIdsPerEntity, sourceIdsLimitMethod)
-            : mergedChunkIds;
-        return new GraphStore.EntityRecord(
-            existing.id(),
-            existing.name(),
-            IndexingPipeline.voteEntityType(List.of(incoming.type()), existing.type()),
-            summary.description(),
-            union(existing.aliases(), incoming.aliases()),
-            sourceChunkIds
+        return IndexingPipeline.mergeEntityWithCaps(
+            existing,
+            incoming,
+            sourceIdsCapsEnabled,
+            maxSourceIdsPerEntity,
+            sourceIdsLimitMethod,
+            maxFilePaths,
+            descriptionSummarizer
         );
     }
 
@@ -1500,7 +1516,7 @@ public final class GraphMaterializationPipeline {
         return votedType.equals(merged.type())
             ? merged
             : new GraphStore.EntityRecord(merged.id(), merged.name(), votedType, merged.description(),
-                merged.aliases(), merged.sourceChunkIds());
+                merged.aliases(), merged.sourceChunkIds(), merged.filePath());
     }
 
     private GraphStore.RelationRecord mergeRelation(GraphStore.RelationRecord existing, Relation incoming) {
@@ -1521,6 +1537,7 @@ public final class GraphMaterializationPipeline {
             sourceIdsCapsEnabled,
             maxSourceIdsPerEntity,
             sourceIdsLimitMethod,
+            maxFilePaths,
             descriptionSummarizer
         );
     }

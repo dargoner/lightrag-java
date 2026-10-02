@@ -993,7 +993,8 @@ class E2ELightRagTest {
             "person",
             "Researcher",
             List.of("Ally"),
-            List.of()
+            List.of(),
+            ""
         ));
 
         assertThat(storage.graphStore().loadEntity("alice"))
@@ -1170,7 +1171,8 @@ class E2ELightRagTest {
             "person",
             "Principal investigator",
             List.of("Bob"),
-            List.of()
+            List.of(),
+            ""
         ));
         assertThat(storage.graphStore().loadEntity("bob")).isEmpty();
         assertThat(storage.graphStore().loadEntity("robert"))
@@ -1295,7 +1297,8 @@ class E2ELightRagTest {
             "person",
             "Principal investigator",
             List.of("Lead Alice"),
-            List.of()
+            List.of(),
+            ""
         ));
         assertThat(storage.graphStore().loadEntity("alice"))
             .contains(new GraphStore.EntityRecord(
@@ -1515,7 +1518,8 @@ class E2ELightRagTest {
             "person",
             "Engineer",
             List.of(),
-            List.of()
+            List.of(),
+            ""
         ));
         assertThat(storage.graphStore().loadEntity("bob"))
             .contains(new GraphStore.EntityRecord(
@@ -1636,7 +1640,8 @@ class E2ELightRagTest {
             "person",
             "Principal investigator\n\nEngineer",
             List.of("Rob", "Robert Jr", "Bob"),
-            List.of()
+            List.of(),
+            ""
         ));
         assertThat(storage.graphStore().loadEntity("bob")).isEmpty();
         assertThat(storage.graphStore().loadEntity("robert"))
@@ -1819,7 +1824,8 @@ class E2ELightRagTest {
             "leader",
             "Merged profile",
             List.of("Merged Bob", "Rob"),
-            List.of()
+            List.of(),
+            ""
         ));
     }
 
@@ -3500,6 +3506,50 @@ class E2ELightRagTest {
         assertThat(storage.graphStore().allRelations()).singleElement()
             .extracting(GraphStore.RelationRecord::filePath)
             .isEqualTo("docs/alpha.md");
+    }
+
+    @Test
+    void ingestStoresEntityFilePathsFromChunkMetadata() {
+        var storage = InMemoryStorageProvider.create();
+        var rag = LightRag.builder()
+            .chatModel(sameRelationChatModel())
+            .embeddingModel(new FakeEmbeddingModel())
+            .chunker(new FixedWindowChunker(10, 0))
+            .storage(storage)
+            .build();
+
+        rag.ingest(WORKSPACE, List.of(new Document(
+            "doc-entity-file-path",
+            "Entity file path",
+            "chunk-000 chunk-001 ",
+            Map.of("file_path", "docs/alpha.md")
+        )));
+
+        assertThat(storage.graphStore().allEntities())
+            .extracting(GraphStore.EntityRecord::filePath)
+            .containsOnly("docs/alpha.md");
+    }
+
+    @Test
+    void ingestFallsBackToTheUnknownSourceSentinelWithoutFilePathMetadata() {
+        var storage = InMemoryStorageProvider.create();
+        var rag = LightRag.builder()
+            .chatModel(sameRelationChatModel())
+            .embeddingModel(new FakeEmbeddingModel())
+            .chunker(new FixedWindowChunker(10, 0))
+            .storage(storage)
+            .build();
+
+        rag.ingest(WORKSPACE, List.of(new Document(
+            "doc-no-file-path",
+            "No file path",
+            "chunk-000 chunk-001 ",
+            Map.of()
+        )));
+
+        assertThat(storage.graphStore().allEntities())
+            .extracting(GraphStore.EntityRecord::filePath)
+            .containsOnly(io.github.lightrag.indexing.MetadataKeys.DEFAULT_FILE_PATH);
     }
 
     @Test

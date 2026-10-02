@@ -22,6 +22,7 @@ public final class ArcadeGraphStore extends ArcadeStoreSupport implements GraphS
         properties.put("description", record.description());
         properties.put("aliases", ArcadeJsonCodec.writeStringList(record.aliases()));
         properties.put("sourceChunkIds", ArcadeJsonCodec.writeStringList(record.sourceChunkIds()));
+        properties.put("filePath", record.filePath());
         upsertByWorkspaceId("Entity", "id", record.id(), properties);
     }
 
@@ -41,7 +42,7 @@ public final class ArcadeGraphStore extends ArcadeStoreSupport implements GraphS
 
     @Override
     public Optional<EntityRecord> loadEntity(String entityId) {
-        return first("SELECT id, name, type, description, aliases, sourceChunkIds FROM Entity WHERE workspaceId = ? AND id = ? LIMIT 1", workspaceId, entityId)
+        return first("SELECT id, name, type, description, aliases, sourceChunkIds, filePath FROM Entity WHERE workspaceId = ? AND id = ? LIMIT 1", workspaceId, entityId)
             .map(this::readEntity);
     }
 
@@ -53,7 +54,7 @@ public final class ArcadeGraphStore extends ArcadeStoreSupport implements GraphS
 
     @Override
     public List<EntityRecord> allEntities() {
-        return query("SELECT id, name, type, description, aliases, sourceChunkIds FROM Entity WHERE workspaceId = ? ORDER BY id", workspaceId)
+        return query("SELECT id, name, type, description, aliases, sourceChunkIds, filePath FROM Entity WHERE workspaceId = ? ORDER BY id", workspaceId)
             .stream()
             .map(this::readEntity)
             .toList();
@@ -93,7 +94,8 @@ public final class ArcadeGraphStore extends ArcadeStoreSupport implements GraphS
             ArcadeRecordMapper.string(row, "type"),
             ArcadeRecordMapper.string(row, "description"),
             ArcadeRecordMapper.stringList(row, "aliases"),
-            ArcadeRecordMapper.stringList(row, "sourceChunkIds")
+            ArcadeRecordMapper.stringList(row, "sourceChunkIds"),
+            ArcadeRecordMapper.string(row, "filePath")
         );
     }
 

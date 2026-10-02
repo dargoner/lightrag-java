@@ -575,8 +575,13 @@ public final class PostgresRelationalStorageAdapter implements RelationalStorage
                         name TEXT NOT NULL,
                         type TEXT NOT NULL,
                         description TEXT NOT NULL,
+                        file_path VARCHAR(32768) NOT NULL DEFAULT '',
                         PRIMARY KEY (workspace_id, id)
                     )
+                    """.formatted(config.qualifiedTableName("entities")),
+                """
+                    ALTER TABLE %s
+                    ADD COLUMN IF NOT EXISTS file_path VARCHAR(32768) NOT NULL DEFAULT ''
                     """.formatted(config.qualifiedTableName("entities")),
                 """
                     CREATE TABLE IF NOT EXISTS %s (

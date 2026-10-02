@@ -151,7 +151,8 @@ public final class GraphVectorIndexer {
             record.type(),
             record.description(),
             record.aliases(),
-            record.sourceChunkIds()
+            record.sourceChunkIds(),
+            record.filePath()
         );
     }
 

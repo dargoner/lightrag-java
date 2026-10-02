@@ -44,7 +44,8 @@ class Neo4jGraphStoreTest {
                 "person",
                 "Researcher",
                 List.of("A", "Alice A."),
-                List.of("chunk-1", "chunk-2")
+                List.of("chunk-1", "chunk-2"),
+                "/tmp/doc-a.md<SEP>/tmp/doc-b.md"
             );
             var relation = new GraphStore.RelationRecord(
                 "relation-1",
@@ -53,7 +54,8 @@ class Neo4jGraphStoreTest {
                 "knows",
                 "Alice knows Bob",
                 0.9d,
-                List.of("chunk-1", "chunk-2")
+                "chunk-1<SEP>chunk-2",
+                "/tmp/doc-a.md<SEP>/tmp/doc-b.md"
             );
 
             store.saveEntity(entity);

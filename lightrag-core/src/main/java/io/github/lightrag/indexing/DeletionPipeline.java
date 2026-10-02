@@ -397,7 +397,8 @@ public final class DeletionPipeline {
             entity.type(),
             entity.description(),
             entity.aliases(),
-            entity.sourceChunkIds().stream().filter(chunkId -> !targetChunkIds.contains(chunkId)).toList()
+            entity.sourceChunkIds().stream().filter(chunkId -> !targetChunkIds.contains(chunkId)).toList(),
+            entity.filePath()
         );
     }
 

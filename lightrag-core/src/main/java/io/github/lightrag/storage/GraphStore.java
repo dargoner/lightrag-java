@@ -266,8 +266,20 @@ public interface GraphStore {
         String type,
         String description,
         List<String> aliases,
-        List<String> sourceChunkIds
+        List<String> sourceChunkIds,
+        String filePath
     ) {
+        public EntityRecord(
+            String id,
+            String name,
+            String type,
+            String description,
+            List<String> aliases,
+            List<String> sourceChunkIds
+        ) {
+            this(id, name, type, description, aliases, sourceChunkIds, "");
+        }
+
         public EntityRecord {
             id = Objects.requireNonNull(id, "id");
             name = Objects.requireNonNull(name, "name");
@@ -275,6 +287,11 @@ public interface GraphStore {
             description = Objects.requireNonNull(description, "description");
             aliases = List.copyOf(Objects.requireNonNull(aliases, "aliases"));
             sourceChunkIds = List.copyOf(Objects.requireNonNull(sourceChunkIds, "sourceChunkIds"));
+            filePath = filePath == null ? "" : filePath.strip();
+        }
+
+        public List<String> filePaths() {
+            return RelationCanonicalizer.splitValues(filePath);
         }
     }
 
@@ -316,7 +333,7 @@ public interface GraphStore {
             keywords = Objects.requireNonNull(keywords, "keywords");
             description = Objects.requireNonNull(description, "description");
             sourceId = sourceId == null ? "" : sourceId;
-            filePath = filePath == null ? "" : filePath;
+            filePath = filePath == null ? "" : filePath.strip();
         }
 
         public String id() {

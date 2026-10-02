@@ -1852,22 +1852,55 @@ public final class IndexingPipeline {
     }
 
     private GraphStore.EntityRecord mergeEntity(GraphStore.EntityRecord existing, Entity incoming) {
+        return mergeEntityWithCaps(
+            existing,
+            incoming,
+            sourceIdsCapsEnabled,
+            maxSourceIdsPerEntity,
+            sourceIdsLimitMethod,
+            maxFilePaths,
+            descriptionSummarizer
+        );
+    }
+
+    /**
+     * The complete storage-level entity merge: source-id cap, the description summary, the voted type,
+     * and the file-path accumulation under the shared file-path cap (upstream {@code operate.py:1788-1791}
+     * writes/merges entity {@code file_path}, {@code :1939-1973} caps it). Shared by both graph pipelines
+     * so the merge has one implementation.
+     */
+    static GraphStore.EntityRecord mergeEntityWithCaps(
+        GraphStore.EntityRecord existing,
+        Entity incoming,
+        boolean capsEnabled,
+        int limit,
+        SourceIdLimits.Method method,
+        int maxFilePaths,
+        DescriptionSummarizer summarizer
+    ) {
         var fragments = DescriptionFragments.combine(
             DescriptionFragments.split(existing.description()),
             DescriptionFragments.split(incoming.description())
         );
-        var summary = descriptionSummarizer.summarize("Entity", existing.name(), fragments);
+        var summary = summarizer.summarize("Entity", existing.name(), fragments);
         var mergedChunkIds = union(existing.sourceChunkIds(), incoming.sourceChunkIds());
-        var sourceChunkIds = sourceIdsCapsEnabled
-            ? SourceIdLimits.apply(mergedChunkIds, maxSourceIdsPerEntity, sourceIdsLimitMethod)
+        var sourceChunkIds = capsEnabled
+            ? SourceIdLimits.apply(mergedChunkIds, limit, method)
             : mergedChunkIds;
+        // File paths accumulate like relations (operate.py:1939-1973 for entities, :3067-3120 for edges).
+        var filePaths = FilePathLimits.apply(
+            union(existing.filePaths(), incoming.filePaths()),
+            maxFilePaths,
+            method
+        );
         return new GraphStore.EntityRecord(
             existing.id(),
             existing.name(),
             voteEntityType(List.of(incoming.type()), existing.type()),
             summary.description(),
             union(existing.aliases(), incoming.aliases()),
-            sourceChunkIds
+            sourceChunkIds,
+            RelationCanonicalizer.joinValues(filePaths)
         );
     }
 
@@ -1920,7 +1953,7 @@ public final class IndexingPipeline {
         return votedType.equals(merged.type())
             ? merged
             : new GraphStore.EntityRecord(merged.id(), merged.name(), votedType, merged.description(),
-                merged.aliases(), merged.sourceChunkIds());
+                merged.aliases(), merged.sourceChunkIds(), merged.filePath());
     }
 
     static Map<String, Integer> countEntityTypes(List<Entity> entities) {
@@ -2048,6 +2081,7 @@ public final class IndexingPipeline {
         boolean capsEnabled,
         int limit,
         SourceIdLimits.Method method,
+        int maxFilePaths,
         DescriptionSummarizer summarizer
     ) {
         var summary = summarizer.summarize(
@@ -2058,13 +2092,15 @@ public final class IndexingPipeline {
         var sourceChunkIds = capsEnabled
             ? SourceIdLimits.apply(entity.sourceChunkIds(), limit, method)
             : entity.sourceChunkIds();
+        var filePaths = FilePathLimits.apply(entity.filePaths(), maxFilePaths, method);
         return new GraphStore.EntityRecord(
             entity.id(),
             entity.name(),
             entity.type(),
             summary.description(),
             entity.aliases(),
-            sourceChunkIds
+            sourceChunkIds,
+            RelationCanonicalizer.joinValues(filePaths)
         );
     }
 
@@ -2087,7 +2123,7 @@ public final class IndexingPipeline {
     }
 
     private GraphStore.EntityRecord mergeNewEntity(Entity entity) {
-        return newEntityRecord(entity, sourceIdsCapsEnabled, maxSourceIdsPerEntity, sourceIdsLimitMethod, descriptionSummarizer);
+        return newEntityRecord(entity, sourceIdsCapsEnabled, maxSourceIdsPerEntity, sourceIdsLimitMethod, maxFilePaths, descriptionSummarizer);
     }
 
     private GraphStore.RelationRecord mergeNewRelation(Relation relation) {

@@ -108,7 +108,8 @@ public final class GraphManagementPipeline {
             editRequest.type() == null ? existing.type() : editRequest.type(),
             editRequest.description() == null ? existing.description() : editRequest.description(),
             aliases,
-            existing.sourceChunkIds()
+            existing.sourceChunkIds(),
+            existing.filePath()
         );
 
         var updatedRelations = renamed
@@ -261,7 +262,8 @@ public final class GraphManagementPipeline {
             mergeRequest.targetAliases() == null
                 ? mergedAliases(target, sources)
                 : normalizeAliasesForName(target.name(), mergeRequest.targetAliases()),
-            mergeSourceChunkIds(target, sources)
+            mergeSourceChunkIds(target, sources),
+            mergeFilePaths(target, sources)
         );
         validateEntityIdentityNamespace(
             snapshot.entities().stream()
@@ -480,6 +482,18 @@ public final class GraphManagementPipeline {
         return List.copyOf(sourceChunkIds);
     }
 
+    private static String mergeFilePaths(
+        GraphStore.EntityRecord target,
+        List<GraphStore.EntityRecord> sources
+    ) {
+        var filePaths = new LinkedHashSet<String>();
+        filePaths.addAll(target.filePaths());
+        for (var source : sources) {
+            filePaths.addAll(source.filePaths());
+        }
+        return RelationCanonicalizer.joinValues(List.copyOf(filePaths));
+    }
+
     private static List<GraphStore.EntityRecord> mergeEntities(
         List<GraphStore.EntityRecord> entities,
         String targetEntityId,
@@ -582,7 +596,8 @@ public final class GraphManagementPipeline {
             entityRecord.type(),
             entityRecord.description(),
             entityRecord.aliases(),
-            entityRecord.sourceChunkIds()
+            entityRecord.sourceChunkIds(),
+            entityRecord.filePath()
         );
     }
 
@@ -606,7 +621,8 @@ public final class GraphManagementPipeline {
             entityRecord.type(),
             entityRecord.description(),
             entityRecord.aliases(),
-            entityRecord.sourceChunkIds()
+            entityRecord.sourceChunkIds(),
+            entityRecord.filePath()
         );
     }
 

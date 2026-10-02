@@ -102,7 +102,7 @@ class PostgresStorageProviderTest {
                 );
                 assertThat(columnNames(connection, config, "documents")).contains("workspace_id");
                 assertThat(columnNames(connection, config, "chunks")).contains("workspace_id", "document_id");
-                assertThat(columnNames(connection, config, "entities")).contains("workspace_id");
+                assertThat(columnNames(connection, config, "entities")).contains("workspace_id", "file_path");
                 assertThat(columnNames(connection, config, "relations"))
                     .contains("workspace_id", "id", "src_id", "tgt_id", "keywords", "description", "weight", "source_id", "file_path");
                 assertThat(columnNames(connection, config, "vectors")).contains("workspace_id");

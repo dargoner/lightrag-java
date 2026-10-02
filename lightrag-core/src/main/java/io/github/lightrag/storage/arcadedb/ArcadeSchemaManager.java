@@ -83,6 +83,7 @@ public final class ArcadeSchemaManager {
             "CREATE PROPERTY IF NOT EXISTS Entity.description STRING",
             "CREATE PROPERTY IF NOT EXISTS Entity.aliases STRING",
             "CREATE PROPERTY IF NOT EXISTS Entity.sourceChunkIds STRING",
+            "CREATE PROPERTY IF NOT EXISTS Entity.filePath STRING",
             "CREATE INDEX IF NOT EXISTS ON Entity (workspaceId, id) UNIQUE",
 
             "CREATE DOCUMENT TYPE IF NOT EXISTS Relation",

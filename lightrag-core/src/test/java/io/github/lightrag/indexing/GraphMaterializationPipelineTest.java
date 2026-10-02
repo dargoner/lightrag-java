@@ -251,6 +251,61 @@ class GraphMaterializationPipelineTest {
     }
 
     @Test
+    void replayMaterializationStampsEntityFilePathsFromStoredChunkMetadata() {
+        // The snapshot carries no file paths, so the replayed entity records can only get them from the
+        // stored chunk metadata keyed by chunk id (GraphMaterializationPipeline.filePathsByChunkId).
+        var storage = InMemoryStorageProvider.create();
+        seedDocumentGraphState(storage, "doc-1", Instant.parse("2026-04-12T00:00:00Z"), List.of(
+            chunkSnapshot("doc-1", "doc-1:0", 0, "Alice works with Bob")
+        ));
+        storage.chunkStore().save(new ChunkStore.ChunkRecord(
+            "doc-1:0", "doc-1", "Alice works with Bob", 4, 0, Map.of(MetadataKeys.FILE_PATH, "docs/alpha.md")));
+
+        var pipeline = new GraphMaterializationPipeline(
+            new FakeChatModel(),
+            new FakeEmbeddingModel(),
+            storage,
+            io.github.lightrag.indexing.refinement.ExtractionRefinementOptions.disabled(),
+            null,
+            TaskMetadataReporter.noop(),
+            IndexingProgressListener.noop()
+        );
+
+        var result = pipeline.materialize("doc-1", GraphMaterializationMode.AUTO);
+
+        assertThat(result.executedMode()).isNotEqualTo(GraphMaterializationMode.REBUILD);
+        assertThat(storage.graphStore().allEntities())
+            .extracting(GraphStore.EntityRecord::filePath)
+            .containsOnly("docs/alpha.md");
+    }
+
+    @Test
+    void repairChunkStampsEntityFilePathsFromStoredChunkMetadata() {
+        var storage = InMemoryStorageProvider.create();
+        seedDocumentGraphState(storage, "doc-1", Instant.parse("2026-04-12T00:00:00Z"), List.of(
+            chunkSnapshot("doc-1", "doc-1:0", 0, "Alice works with Bob")
+        ));
+        storage.chunkStore().save(new ChunkStore.ChunkRecord(
+            "doc-1:0", "doc-1", "Alice works with Bob", 4, 0, Map.of(MetadataKeys.FILE_PATH, "docs/alpha.md")));
+
+        var pipeline = new GraphMaterializationPipeline(
+            new FakeChatModel(),
+            new FakeEmbeddingModel(),
+            storage,
+            io.github.lightrag.indexing.refinement.ExtractionRefinementOptions.disabled(),
+            null,
+            TaskMetadataReporter.noop(),
+            IndexingProgressListener.noop()
+        );
+
+        pipeline.repairChunk("doc-1", "doc-1:0");
+
+        assertThat(storage.graphStore().allEntities())
+            .extracting(GraphStore.EntityRecord::filePath)
+            .containsOnly("docs/alpha.md");
+    }
+
+    @Test
     void recommendsRebuildWhenStoredChunksDifferFromSnapshotChunkSet() {
         var storage = InMemoryStorageProvider.create();
         seedDocumentGraphState(storage, "doc-1", Instant.parse("2026-04-12T00:00:00Z"), List.of(

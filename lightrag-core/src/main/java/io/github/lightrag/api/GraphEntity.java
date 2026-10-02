@@ -9,8 +9,20 @@ public record GraphEntity(
     String type,
     String description,
     List<String> aliases,
-    List<String> sourceChunkIds
+    List<String> sourceChunkIds,
+    String filePath
 ) {
+    public GraphEntity(
+        String id,
+        String name,
+        String type,
+        String description,
+        List<String> aliases,
+        List<String> sourceChunkIds
+    ) {
+        this(id, name, type, description, aliases, sourceChunkIds, "");
+    }
+
     public GraphEntity {
         id = requireNonBlank(id, "id");
         name = requireNonBlank(name, "name");
@@ -18,6 +30,7 @@ public record GraphEntity(
         description = description == null ? "" : description.strip();
         aliases = List.copyOf(Objects.requireNonNull(aliases, "aliases"));
         sourceChunkIds = List.copyOf(Objects.requireNonNull(sourceChunkIds, "sourceChunkIds"));
+        filePath = filePath == null ? "" : filePath.strip();
     }
 
     private static String requireNonBlank(String value, String fieldName) {

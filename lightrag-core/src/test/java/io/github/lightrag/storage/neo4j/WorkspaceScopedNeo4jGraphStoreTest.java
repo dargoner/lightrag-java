@@ -117,6 +117,28 @@ class WorkspaceScopedNeo4jGraphStoreTest {
     }
 
     @Test
+    void savesEntityFilePathUnderTheCamelCaseProperty() {
+        try (var alpha = newStore("alpha")) {
+            alpha.saveEntity(new GraphStore.EntityRecord(
+                "entity-1",
+                "Alice",
+                "person",
+                "entity one",
+                List.of(),
+                List.of("chunk-1", "chunk-2"),
+                "/tmp/doc-a.md<SEP>/tmp/doc-b.md"
+            ));
+
+            var properties = readSingleEntityProperties();
+
+            assertThat(properties).containsEntry("filePath", "/tmp/doc-a.md<SEP>/tmp/doc-b.md");
+            assertThat(alpha.loadEntity("entity-1")).get()
+                .extracting(GraphStore.EntityRecord::filePath)
+                .isEqualTo("/tmp/doc-a.md<SEP>/tmp/doc-b.md");
+        }
+    }
+
+    @Test
     void listsEntitiesRelationsAndNeighborsWithinCurrentWorkspace() {
         try (var alpha = newStore("alpha");
              var beta = newStore("beta")) {
@@ -338,6 +360,21 @@ class WorkspaceScopedNeo4jGraphStoreTest {
     private static void assertOverrides(String methodName, Class<?>... parameterTypes) throws NoSuchMethodException {
         Method method = WorkspaceScopedNeo4jGraphStore.class.getMethod(methodName, parameterTypes);
         assertThat(method.getDeclaringClass()).isEqualTo(WorkspaceScopedNeo4jGraphStore.class);
+    }
+
+    private static java.util.Map<String, Object> readSingleEntityProperties() {
+        try (var driver = GraphDatabase.driver(
+            NEO4J.getBoltUrl(),
+            AuthTokens.basic("neo4j", NEO4J.getAdminPassword())
+        );
+             var session = driver.session(SessionConfig.forDatabase("neo4j"))) {
+            return session.executeRead(tx -> tx.run(
+                """
+                MATCH (entity:Entity)
+                RETURN properties(entity) AS props
+                """
+            ).single().get("props").asMap());
+        }
     }
 
     private static java.util.Map<String, Object> readSingleRelationProperties() {

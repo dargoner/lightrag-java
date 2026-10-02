@@ -64,7 +64,10 @@ public final class HybridVectorPayloads {
                     vector.id(),
                     vector.vector(),
                     entitySummary(entity),
-                    entityKeywords(entity)
+                    entityKeywords(entity),
+                    "",
+                    "",
+                    entity.filePath()
                 );
             })
             .toList();

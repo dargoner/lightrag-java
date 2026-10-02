@@ -10,6 +10,7 @@ public record StructuredQueryEntity(
     String description,
     List<String> aliases,
     List<String> sourceChunkIds,
+    String filePath,
     double score
 ) {
     public StructuredQueryEntity {
@@ -19,6 +20,7 @@ public record StructuredQueryEntity(
         description = description == null ? "" : description.strip();
         aliases = List.copyOf(Objects.requireNonNull(aliases, "aliases"));
         sourceChunkIds = List.copyOf(Objects.requireNonNull(sourceChunkIds, "sourceChunkIds"));
+        filePath = filePath == null ? "" : filePath.strip();
         if (!Double.isFinite(score)) {
             throw new IllegalArgumentException("score must be finite");
         }

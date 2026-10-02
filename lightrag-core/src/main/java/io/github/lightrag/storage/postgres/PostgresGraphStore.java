@@ -114,7 +114,7 @@ public final class PostgresGraphStore implements MutableGraphStore {
             var chunkIdsByEntityId = selectStringLists(connection, entityChunksTable, "entity_id", "chunk_id");
             try (var statement = connection.prepareStatement(
                 """
-                SELECT id, name, type, description
+                SELECT id, name, type, description, file_path
                 FROM %s
                 WHERE workspace_id = ?
                 ORDER BY id
@@ -304,7 +304,8 @@ public final class PostgresGraphStore implements MutableGraphStore {
             resultSet.getString("type"),
             resultSet.getString("description"),
             selectStringList(connection, entityAliasesTable, "entity_id", entityId, "alias"),
-            selectStringList(connection, entityChunksTable, "entity_id", entityId, "chunk_id")
+            selectStringList(connection, entityChunksTable, "entity_id", entityId, "chunk_id"),
+            resultSet.getString("file_path")
         );
     }
 
@@ -320,7 +321,8 @@ public final class PostgresGraphStore implements MutableGraphStore {
             resultSet.getString("type"),
             resultSet.getString("description"),
             aliasesByEntityId.getOrDefault(entityId, List.of()),
-            chunkIdsByEntityId.getOrDefault(entityId, List.of())
+            chunkIdsByEntityId.getOrDefault(entityId, List.of()),
+            resultSet.getString("file_path")
         );
     }
 
@@ -429,12 +431,13 @@ public final class PostgresGraphStore implements MutableGraphStore {
     private void upsertEntity(Connection connection, EntityRecord entity) throws SQLException {
         try (var statement = connection.prepareStatement(
             """
-            INSERT INTO %s (workspace_id, id, name, type, description)
-            VALUES (?, ?, ?, ?, ?)
+            INSERT INTO %s (workspace_id, id, name, type, description, file_path)
+            VALUES (?, ?, ?, ?, ?, ?)
             ON CONFLICT (workspace_id, id) DO UPDATE
             SET name = EXCLUDED.name,
                 type = EXCLUDED.type,
-                description = EXCLUDED.description
+                description = EXCLUDED.description,
+                file_path = EXCLUDED.file_path
             """.formatted(entitiesTable)
         )) {
             statement.setString(1, workspaceId);
@@ -442,6 +445,7 @@ public final class PostgresGraphStore implements MutableGraphStore {
             statement.setString(3, entity.name());
             statement.setString(4, entity.type());
             statement.setString(5, entity.description());
+            statement.setString(6, entity.filePath());
             statement.executeUpdate();
         }
     }
