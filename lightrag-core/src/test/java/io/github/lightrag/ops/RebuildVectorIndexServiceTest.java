@@ -56,6 +56,73 @@ class RebuildVectorIndexServiceTest {
     }
 
     @Test
+    void rebuildEmbeddingsQueueAtLowPriorityBehindQueryEmbeddings() throws Exception {
+        var storage = driftedStorage();
+        storage.embeddingSpaceStore().save(new EmbeddingSpaceStore.Marker("fake-a", 2, "2026-10-01T00:00:00Z"));
+        var budget = new LlmConcurrencyBudget(4, 1);
+        var order = new java.util.concurrent.CopyOnWriteArrayList<String>();
+        var holderEntered = new java.util.concurrent.CountDownLatch(1);
+        var releaseHolder = new java.util.concurrent.CountDownLatch(1);
+        var holder = budget.limitEmbedding(LlmConcurrencyBudget.EmbeddingPriority.HIGH, texts -> {
+            holderEntered.countDown();
+            awaitQuietly(releaseHolder);
+            order.add("holder");
+            return vectors(texts);
+        });
+        var query = budget.limitEmbedding(LlmConcurrencyBudget.EmbeddingPriority.HIGH, texts -> {
+            order.add("query");
+            return vectors(texts);
+        });
+        var recording = new EmbeddingModel() {
+            @Override
+            public List<List<Double>> embedAll(List<String> texts) {
+                order.add("rebuild");
+                return texts.stream().map(text -> List.of((double) text.length(), 1.0d)).toList();
+            }
+
+            @Override
+            public String cacheIdentity() {
+                return "fake-a";
+            }
+        };
+        var service = new RebuildVectorIndexService(storage, recording, budget, false);
+
+        var holderThread = new Thread(() -> holder.embedAll(List.of("hold")));
+        holderThread.start();
+        assertThat(holderEntered.await(5, java.util.concurrent.TimeUnit.SECONDS)).isTrue();
+        var rebuildFailure = new java.util.concurrent.atomic.AtomicReference<Throwable>();
+        var rebuildThread = new Thread(() -> {
+            try {
+                service.rebuild("default");
+            } catch (Throwable throwable) {
+                rebuildFailure.set(throwable);
+            }
+        });
+        rebuildThread.start();
+        awaitParked(rebuildThread);
+        var queryThread = new Thread(() -> query.embedAll(List.of("query")));
+        queryThread.start();
+        awaitParked(queryThread);
+        try {
+            releaseHolder.countDown();
+            holderThread.join(5_000L);
+            rebuildThread.join(5_000L);
+            queryThread.join(5_000L);
+            assertThat(holderThread.isAlive()).isFalse();
+            assertThat(rebuildThread.isAlive()).isFalse();
+            assertThat(queryThread.isAlive()).isFalse();
+        } finally {
+            releaseHolder.countDown();
+        }
+
+        assertThat(rebuildFailure.get()).isNull();
+        // The rebuild path must claim the LOW priority: the query request overtakes it even though
+        // the rebuild enqueued first (upstream query embeddings at 5 vs ingestion at 10,
+        // operate.py:5347-5349). Chunks, entities and relations embed in one batch each.
+        assertThat(order).containsExactly("holder", "query", "rebuild", "rebuild", "rebuild");
+    }
+
+    @Test
     void rebuildReplacesStaleVectorsAndClearsTheMarker() {
         var storage = driftedStorage();
         storage.vectorStore().saveAll(
@@ -177,6 +244,29 @@ class RebuildVectorIndexServiceTest {
 
     private static GraphStore.RelationRecord relation(String id, String srcId, String tgtId) {
         return new GraphStore.RelationRecord(id, srcId, tgtId, "works_with", "description of " + id, 1.0, "c1", "");
+    }
+
+    private static List<List<Double>> vectors(List<String> texts) {
+        return texts.stream().map(text -> List.of(1.0d, 0.0d)).toList();
+    }
+
+    private static void awaitQuietly(java.util.concurrent.CountDownLatch latch) {
+        try {
+            if (!latch.await(10, java.util.concurrent.TimeUnit.SECONDS)) {
+                throw new AssertionError("timed out waiting for latch release");
+            }
+        } catch (InterruptedException exception) {
+            Thread.currentThread().interrupt();
+            throw new AssertionError("interrupted while waiting for latch release", exception);
+        }
+    }
+
+    private static void awaitParked(Thread thread) throws InterruptedException {
+        var deadline = System.nanoTime() + java.util.concurrent.TimeUnit.SECONDS.toNanos(5);
+        while (thread.getState() != Thread.State.WAITING && System.nanoTime() < deadline) {
+            Thread.sleep(5L);
+        }
+        assertThat(thread.getState()).isEqualTo(Thread.State.WAITING);
     }
 
     private static final class FakeEmbeddingModel implements EmbeddingModel {

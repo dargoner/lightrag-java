@@ -113,7 +113,7 @@ public final class RebuildVectorIndexService {
         }
 
 
-        var limitedEmbeddingModel = budget.limitEmbedding(embeddingModel);
+        var limitedEmbeddingModel = budget.limitEmbedding(LlmConcurrencyBudget.EmbeddingPriority.LOW, embeddingModel);
         var chunkVectors = GraphVectorIndexer.chunkVectors(limitedEmbeddingModel, embeddingBatchSize, chunks);
         var entityVectors = GraphVectorIndexer.entityVectors(limitedEmbeddingModel, embeddingBatchSize, entities);
         var relationVectors = GraphVectorIndexer.relationVectors(limitedEmbeddingModel, embeddingBatchSize, relations);

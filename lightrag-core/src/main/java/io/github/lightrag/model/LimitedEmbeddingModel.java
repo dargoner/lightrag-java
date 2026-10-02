@@ -2,15 +2,24 @@ package io.github.lightrag.model;
 
 import java.util.List;
 import java.util.Objects;
-import java.util.concurrent.Semaphore;
 
-/** Takes one slot from the shared embedding budget for the duration of each {@code embedAll} call. */
+/**
+ * Takes one slot from the shared embedding budget for the duration of each {@code embedAll} call.
+ * Queued calls are woken by {@link LlmConcurrencyBudget.EmbeddingPriority} first, arrival order
+ * second.
+ */
 final class LimitedEmbeddingModel implements EmbeddingModel {
-    private final Semaphore slots;
+    private final PrioritySemaphore slots;
+    private final LlmConcurrencyBudget.EmbeddingPriority priority;
     private final EmbeddingModel delegate;
 
-    LimitedEmbeddingModel(Semaphore slots, EmbeddingModel delegate) {
+    LimitedEmbeddingModel(
+        PrioritySemaphore slots,
+        LlmConcurrencyBudget.EmbeddingPriority priority,
+        EmbeddingModel delegate
+    ) {
         this.slots = Objects.requireNonNull(slots, "slots");
+        this.priority = Objects.requireNonNull(priority, "priority");
         this.delegate = Objects.requireNonNull(delegate, "delegate");
     }
 
@@ -32,14 +41,9 @@ final class LimitedEmbeddingModel implements EmbeddingModel {
     private void acquire() {
         // tryAcquire keeps a pending cancellation flag from failing an uncontended call: the budget
         // orders calls, it does not decide cancellation - that stays the delegate's business.
-        if (slots.tryAcquire()) {
+        if (slots.tryAcquire(priority)) {
             return;
         }
-        try {
-            slots.acquire();
-        } catch (InterruptedException exception) {
-            Thread.currentThread().interrupt();
-            throw new IllegalStateException("interrupted while waiting for an embedding slot", exception);
-        }
+        slots.acquire(priority);
     }
 }

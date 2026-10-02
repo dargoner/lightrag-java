@@ -1,11 +1,13 @@
 package io.github.lightrag.model;
 
+import io.github.lightrag.model.LlmConcurrencyBudget.EmbeddingPriority;
 import org.junit.jupiter.api.Test;
 
 import java.util.ArrayList;
 import java.util.List;
 import java.util.NoSuchElementException;
 import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.Semaphore;
 import java.util.concurrent.TimeUnit;
@@ -118,6 +120,238 @@ class LlmConcurrencyBudgetTest {
 
         assertThat(peak).hasValue(2);
         assertThat(calls).hasValue(6);
+    }
+
+    @Test
+    void highPriorityEmbeddingsJumpAheadOfQueuedLowPriorityWaiters() throws Exception {
+        // Mirrors upstream: query-time embedding requests (priority 5) overtake queued ingestion
+        // requests (priority 10) in the shared embedding queue (operate.py:5347-5349).
+        var budget = new LlmConcurrencyBudget(4, 1);
+        var order = new CopyOnWriteArrayList<String>();
+        var holderEntered = new CountDownLatch(1);
+        var releaseHolder = new CountDownLatch(1);
+        var holder = budget.limitEmbedding(EmbeddingPriority.LOW, texts -> {
+            holderEntered.countDown();
+            awaitQuietly(releaseHolder);
+            order.add("holder");
+            return vectors(texts);
+        });
+        var low = budget.limitEmbedding(EmbeddingPriority.LOW, texts -> {
+            order.add("low");
+            return vectors(texts);
+        });
+        var high = budget.limitEmbedding(EmbeddingPriority.HIGH, texts -> {
+            order.add("high");
+            return vectors(texts);
+        });
+
+        var holderThread = new Thread(() -> holder.embedAll(List.of("text")));
+        holderThread.start();
+        assertThat(holderEntered.await(5, TimeUnit.SECONDS)).isTrue();
+        var lowThread = new Thread(() -> low.embedAll(List.of("text")));
+        lowThread.start();
+        awaitParked(lowThread);
+        var highThread = new Thread(() -> high.embedAll(List.of("text")));
+        highThread.start();
+        awaitParked(highThread);
+        try {
+            releaseHolder.countDown();
+            holderThread.join(5_000L);
+            lowThread.join(5_000L);
+            highThread.join(5_000L);
+            assertThat(holderThread.isAlive()).isFalse();
+            assertThat(lowThread.isAlive()).isFalse();
+            assertThat(highThread.isAlive()).isFalse();
+        } finally {
+            releaseHolder.countDown();
+        }
+
+        assertThat(order).containsExactly("holder", "high", "low");
+    }
+
+    @Test
+    void priorityQueueUnderConcurrencyNeverLosesAWakeup() throws Exception {
+        var budget = new LlmConcurrencyBudget(4, 2);
+        var calls = new AtomicInteger();
+        var peak = new AtomicInteger();
+        var active = new AtomicInteger();
+        var recorder = (EmbeddingModel) texts -> {
+            calls.incrementAndGet();
+            peak.accumulateAndGet(active.incrementAndGet(), Math::max);
+            try {
+                Thread.sleep(1L);
+                return vectors(texts);
+            } catch (InterruptedException exception) {
+                Thread.currentThread().interrupt();
+                throw new IllegalStateException("interrupted", exception);
+            } finally {
+                active.decrementAndGet();
+            }
+        };
+        var high = budget.limitEmbedding(EmbeddingPriority.HIGH, recorder);
+        var low = budget.limitEmbedding(EmbeddingPriority.LOW, recorder);
+
+        var threads = new ArrayList<Thread>();
+        for (var index = 0; index < 8; index++) {
+            var callIndex = index;
+            var thread = new Thread(() -> {
+                for (var round = 0; round < 5; round++) {
+                    if ((callIndex + round) % 2 == 0) {
+                        high.embedAll(List.of("text"));
+                    } else {
+                        low.embedAll(List.of("text"));
+                    }
+                }
+            });
+            thread.start();
+            threads.add(thread);
+        }
+        for (var thread : threads) {
+            thread.join(10_000L);
+            assertThat(thread.isAlive()).isFalse();
+        }
+
+        assertThat(calls).hasValue(40);
+        assertThat(peak.get()).isLessThanOrEqualTo(2);
+    }
+
+    @Test
+    void samePriorityEmbeddingsKeepTheirArrivalOrder() throws Exception {
+        var budget = new LlmConcurrencyBudget(4, 1);
+        var order = new CopyOnWriteArrayList<String>();
+        var holderEntered = new CountDownLatch(1);
+        var releaseHolder = new CountDownLatch(1);
+        var holder = budget.limitEmbedding(EmbeddingPriority.LOW, texts -> {
+            holderEntered.countDown();
+            awaitQuietly(releaseHolder);
+            order.add("holder");
+            return vectors(texts);
+        });
+        var first = budget.limitEmbedding(EmbeddingPriority.LOW, texts -> {
+            order.add("first");
+            return vectors(texts);
+        });
+        var second = budget.limitEmbedding(EmbeddingPriority.LOW, texts -> {
+            order.add("second");
+            return vectors(texts);
+        });
+
+        var holderThread = new Thread(() -> holder.embedAll(List.of("text")));
+        holderThread.start();
+        assertThat(holderEntered.await(5, TimeUnit.SECONDS)).isTrue();
+        var firstThread = new Thread(() -> first.embedAll(List.of("text")));
+        firstThread.start();
+        awaitParked(firstThread);
+        var secondThread = new Thread(() -> second.embedAll(List.of("text")));
+        secondThread.start();
+        awaitParked(secondThread);
+        try {
+            releaseHolder.countDown();
+            holderThread.join(5_000L);
+            firstThread.join(5_000L);
+            secondThread.join(5_000L);
+            assertThat(holderThread.isAlive()).isFalse();
+            assertThat(firstThread.isAlive()).isFalse();
+            assertThat(secondThread.isAlive()).isFalse();
+        } finally {
+            releaseHolder.countDown();
+        }
+
+        assertThat(order).containsExactly("holder", "first", "second");
+    }
+
+    @Test
+    void legacyLimitEmbeddingOverloadQueuesAtLowPriority() throws Exception {
+        var budget = new LlmConcurrencyBudget(4, 1);
+        var order = new CopyOnWriteArrayList<String>();
+        var holderEntered = new CountDownLatch(1);
+        var releaseHolder = new CountDownLatch(1);
+        var holder = budget.limitEmbedding(EmbeddingPriority.HIGH, texts -> {
+            holderEntered.countDown();
+            awaitQuietly(releaseHolder);
+            order.add("holder");
+            return vectors(texts);
+        });
+        var legacy = budget.limitEmbedding(texts -> {
+            order.add("legacy");
+            return vectors(texts);
+        });
+        var high = budget.limitEmbedding(EmbeddingPriority.HIGH, texts -> {
+            order.add("high");
+            return vectors(texts);
+        });
+
+        var holderThread = new Thread(() -> holder.embedAll(List.of("text")));
+        holderThread.start();
+        assertThat(holderEntered.await(5, TimeUnit.SECONDS)).isTrue();
+        var legacyThread = new Thread(() -> legacy.embedAll(List.of("text")));
+        legacyThread.start();
+        awaitParked(legacyThread);
+        var highThread = new Thread(() -> high.embedAll(List.of("text")));
+        highThread.start();
+        awaitParked(highThread);
+        try {
+            releaseHolder.countDown();
+            holderThread.join(5_000L);
+            legacyThread.join(5_000L);
+            highThread.join(5_000L);
+            assertThat(holderThread.isAlive()).isFalse();
+            assertThat(legacyThread.isAlive()).isFalse();
+            assertThat(highThread.isAlive()).isFalse();
+        } finally {
+            releaseHolder.countDown();
+        }
+
+        assertThat(order).containsExactly("holder", "high", "legacy");
+    }
+
+    @Test
+    void interruptedEmbeddingWaitersAbortWithoutConsumingTheSlot() throws Exception {
+        var budget = new LlmConcurrencyBudget(4, 1);
+        var holderEntered = new CountDownLatch(1);
+        var releaseHolder = new CountDownLatch(1);
+        var holder = budget.limitEmbedding(EmbeddingPriority.LOW, texts -> {
+            holderEntered.countDown();
+            awaitQuietly(releaseHolder);
+            return vectors(texts);
+        });
+        var waiter = budget.limitEmbedding(EmbeddingPriority.LOW, texts -> vectors(texts));
+
+        var holderThread = new Thread(() -> holder.embedAll(List.of("text")));
+        holderThread.start();
+        assertThat(holderEntered.await(5, TimeUnit.SECONDS)).isTrue();
+        var failure = new AtomicReference<RuntimeException>();
+        var interruptFlagRestored = new AtomicInteger();
+        var waiterThread = new Thread(() -> {
+            try {
+                waiter.embedAll(List.of("text"));
+            } catch (RuntimeException exception) {
+                failure.set(exception);
+                interruptFlagRestored.set(Thread.currentThread().isInterrupted() ? 1 : 0);
+            }
+        });
+        waiterThread.start();
+        awaitParked(waiterThread);
+        waiterThread.interrupt();
+        waiterThread.join(5_000L);
+        try {
+            assertThat(failure.get())
+                .isInstanceOf(IllegalStateException.class)
+                .hasMessageContaining("interrupted while waiting for an embedding slot");
+            assertThat(interruptFlagRestored).hasValue(1);
+
+            // The aborted waiter must not have swallowed a permit: after the holder leaves, a
+            // fresh acquisition still completes.
+            releaseHolder.countDown();
+            holderThread.join(5_000L);
+            var recovered = CompletableFuture.supplyAsync(
+                () -> budget.limitEmbedding(EmbeddingPriority.HIGH, texts -> vectors(texts))
+                    .embedAll(List.of("text")));
+            assertThat(recovered.get(5, TimeUnit.SECONDS)).hasSize(1);
+        } finally {
+            releaseHolder.countDown();
+            holderThread.join(5_000L);
+        }
     }
 
     @Test
@@ -894,6 +1128,10 @@ class LlmConcurrencyBudgetTest {
 
     private static ChatModel.ChatRequest request(String prompt) {
         return new ChatModel.ChatRequest("System prompt", prompt);
+    }
+
+    private static List<List<Double>> vectors(List<String> texts) {
+        return texts.stream().map(text -> List.of(1.0d, 0.0d)).toList();
     }
 
     private static void awaitQuietly(CountDownLatch latch) {

@@ -964,7 +964,7 @@ public final class LightRag implements AutoCloseable {
         return new IndexingPipeline(
             cachedModel("extract", config.extractionModel(), llmCacheStore),
             cachedModel("summary", config.summaryModel(), llmCacheStore),
-            limitedEmbeddingModel(),
+            limitedEmbeddingModel(LlmConcurrencyBudget.EmbeddingPriority.LOW),
             storageProvider,
             config.snapshotPath(),
             chunker,
@@ -1052,7 +1052,7 @@ public final class LightRag implements AutoCloseable {
         }
         return new GraphMaterializationPipeline(
             cachedModel("extract", config.extractionModel(), llmCacheStore),
-            limitedEmbeddingModel(),
+            limitedEmbeddingModel(LlmConcurrencyBudget.EmbeddingPriority.LOW),
             storageProvider,
             extractionRefinementOptions,
             config.snapshotPath(),
@@ -1191,11 +1191,12 @@ public final class LightRag implements AutoCloseable {
     private QueryEngine newQueryEngine(AtomicStorageProvider storageProvider) {
         var llmCacheStore = storageProvider.llmCacheStore();
         var contextAssembler = new ContextAssembler(tokenCounter);
-        var naive = new NaiveQueryStrategy(limitedEmbeddingModel(), storageProvider, contextAssembler, tokenCounter);
-        var local = new LocalQueryStrategy(limitedEmbeddingModel(), storageProvider, contextAssembler, tokenCounter);
-        var global = new GlobalQueryStrategy(limitedEmbeddingModel(), storageProvider, contextAssembler, tokenCounter);
+        var queryPriority = LlmConcurrencyBudget.EmbeddingPriority.HIGH;
+        var naive = new NaiveQueryStrategy(limitedEmbeddingModel(queryPriority), storageProvider, contextAssembler, tokenCounter);
+        var local = new LocalQueryStrategy(limitedEmbeddingModel(queryPriority), storageProvider, contextAssembler, tokenCounter);
+        var global = new GlobalQueryStrategy(limitedEmbeddingModel(queryPriority), storageProvider, contextAssembler, tokenCounter);
         var hybrid = new HybridQueryStrategy(local, global, contextAssembler, tokenCounter);
-        var mix = new MixQueryStrategy(limitedEmbeddingModel(), storageProvider, hybrid, contextAssembler, tokenCounter);
+        var mix = new MixQueryStrategy(limitedEmbeddingModel(queryPriority), storageProvider, hybrid, contextAssembler, tokenCounter);
         var multiHop = new MultiHopQueryStrategy(
             mix::retrieve,
             new DefaultPathRetriever(storageProvider.graphStore(), 5),
@@ -1245,8 +1246,8 @@ public final class LightRag implements AutoCloseable {
         return new CachedChatModel(role, llmConcurrencyBudget.limitChat(role, delegate), cacheStore);
     }
 
-    private EmbeddingModel limitedEmbeddingModel() {
-        return llmConcurrencyBudget.limitEmbedding(config.embeddingModel());
+    private EmbeddingModel limitedEmbeddingModel(LlmConcurrencyBudget.EmbeddingPriority priority) {
+        return llmConcurrencyBudget.limitEmbedding(priority, config.embeddingModel());
     }
 
     @FunctionalInterface
