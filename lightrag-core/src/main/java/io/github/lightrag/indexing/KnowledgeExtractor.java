@@ -26,6 +26,8 @@ import io.github.lightrag.types.Chunk;
 import io.github.lightrag.types.ExtractedEntity;
 import io.github.lightrag.types.ExtractedRelation;
 import io.github.lightrag.types.ExtractionResult;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
@@ -38,6 +40,7 @@ import java.util.Optional;
 
 public final class KnowledgeExtractor {
     private static final ObjectMapper OBJECT_MAPPER = new ObjectMapper();
+    private static final Logger log = LoggerFactory.getLogger(KnowledgeExtractor.class);
     public static final int DEFAULT_ENTITY_EXTRACT_MAX_GLEANING = 1;
     public static final int DEFAULT_MAX_EXTRACT_INPUT_TOKENS = 20_480;
     // Per-response output limits for the extraction prompts, matching upstream constants.py:26-27.
@@ -332,7 +335,8 @@ public final class KnowledgeExtractor {
         var request = new ChatRequest(systemPrompt, userPrompt, ChatRequestOptions.JSON_OBJECT);
         cacheIds.add(CachedChatModel.cacheId("extract", chatModel.cacheIdentity(), request));
         var response = chatModel.generate(request);
-        var current = sanitizeAliasConflicts(parseExtractionResult(response, chunk.id()));
+        var current = sanitizeAliasConflicts(parseOrEmpty(response, chunk, warnings,
+            "primary extraction response was empty or unrecoverable; continuing with an empty extraction"));
 
         var history = new ArrayList<ChatRequest.ConversationMessage>();
         history.add(new ChatRequest.ConversationMessage("user", userPrompt));
@@ -347,7 +351,8 @@ public final class KnowledgeExtractor {
             var gleanRequest = new ChatRequest(systemPrompt, continuePrompt, history, ChatRequestOptions.JSON_OBJECT);
             cacheIds.add(CachedChatModel.cacheId("extract", chatModel.cacheIdentity(), gleanRequest));
             var gleanResponse = chatModel.generate(gleanRequest);
-            var gleaned = sanitizeAliasConflicts(parseExtractionResult(gleanResponse, chunk.id()));
+            var gleaned = sanitizeAliasConflicts(parseOrEmpty(gleanResponse, chunk, warnings,
+                "gleaning extraction response was empty or unrecoverable; keeping the accumulated extraction"));
             current = sanitizeAliasConflicts(merge(current, gleaned));
             history.add(new ChatRequest.ConversationMessage("user", continuePrompt));
             history.add(new ChatRequest.ConversationMessage("assistant", gleanResponse));
@@ -390,7 +395,20 @@ public final class KnowledgeExtractor {
         );
     }
 
-    private static ExtractionResult parseExtractionResult(String response, String context) {
+    private static ExtractionResult parseOrEmpty(String response, Chunk chunk, List<String> warnings, String unrecoverableMessage) {
+        try {
+            return parseExtractionResult(response, chunk.id(), warnings);
+        } catch (ExtractionException failure) {
+            // Upstream degrades an unrecoverable extraction payload to a warning plus an empty
+            // result (operate.py:948-953) instead of failing the chunk; mirror that here so one
+            // malformed response cannot abort the whole ingest batch.
+            log.warn("Chunk {}: {}", chunk.id(), unrecoverableMessage, failure);
+            warnings.add(unrecoverableMessage);
+            return new ExtractionResult(List.of(), List.of(), List.of());
+        }
+    }
+
+    private static ExtractionResult parseExtractionResult(String response, String context, List<String> warnings) {
         var root = parseResponse(response);
         // Models quoting LaTeX in descriptions routinely under-escape backslashes ("\frac" is
         // valid JSON meaning form feed + "rac"); restore the zero-risk cases before field
@@ -399,10 +417,23 @@ public final class KnowledgeExtractor {
         // (operate.py:960); covers initial extraction and gleaning, which both parse here.
         repairLatexEscapeDamage(root, context);
         return new ExtractionResult(
-            parseEntities(topLevelArray(root, "entities")),
-            parseRelations(topLevelArray(root, "relations")),
+            parseEntities(tolerantArray(root, "entities", context, warnings)),
+            parseRelations(tolerantArray(root, "relations", context, warnings)),
             List.of()
         );
+    }
+
+    private static JsonNode tolerantArray(JsonNode root, String fieldName, String context, List<String> warnings) {
+        var field = root.path(fieldName);
+        if (field.isArray() || field.isMissingNode()) {
+            return field;
+        }
+        // Upstream warns and treats a mistyped payload field as empty (operate.py:963-968),
+        // keeping whatever sibling fields did parse.
+        var warning = "knowledge extraction response field '%s' is not an array; treating it as empty".formatted(fieldName);
+        log.warn("Chunk {}: {}", context, warning);
+        warnings.add(warning);
+        return OBJECT_MAPPER.createArrayNode();
     }
 
     private static void repairLatexEscapeDamage(JsonNode node, String context) {

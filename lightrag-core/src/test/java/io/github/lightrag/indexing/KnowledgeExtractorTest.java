@@ -1051,6 +1051,100 @@ class KnowledgeExtractorTest {
             assertThat(request.options().responseFormat()).isEqualTo("json_object"));
     }
 
+    @Test
+    void unrecoverablePrimaryResponseContinuesWithEmptyExtractionAndWarning() {
+        var chatModel = new RecordingChatModel("this is not a json extraction payload");
+        var extractor = new KnowledgeExtractor(chatModel, 0, 10_000);
+
+        var result = extractor.extract(chunk("Alice works with Bob"));
+
+        assertThat(result.entities()).isEmpty();
+        assertThat(result.relations()).isEmpty();
+        assertThat(result.warnings()).containsExactly(
+            "primary extraction response was empty or unrecoverable; continuing with an empty extraction"
+        );
+        assertThat(chatModel.requests()).hasSize(1);
+    }
+
+    @Test
+    void unrecoverablePrimaryResponseStillGleansAndUsesGleanedExtraction() {
+        var chatModel = new RecordingChatModel(
+            "this is not a json extraction payload",
+            """
+            {
+              "entities": [
+                {"name": "Bob", "type": "person", "description": "Engineer", "aliases": []}
+              ],
+              "relations": []
+            }
+            """
+        );
+        var extractor = new KnowledgeExtractor(chatModel, 1, 10_000);
+
+        var result = extractor.extract(chunk("Alice works with Bob"));
+
+        assertThat(result.entities()).containsExactly(
+            new ExtractedEntity("Bob", "person", "Engineer", List.of())
+        );
+        assertThat(result.warnings()).containsExactly(
+            "primary extraction response was empty or unrecoverable; continuing with an empty extraction"
+        );
+        assertThat(chatModel.requests()).hasSize(2);
+    }
+
+    @Test
+    void unrecoverableGleaningResponseKeepsPrimaryExtractionWithWarning() {
+        var chatModel = new RecordingChatModel(
+            """
+            {
+              "entities": [
+                {"name": "Alice", "type": "person", "description": "Researcher", "aliases": []}
+              ],
+              "relations": []
+            }
+            """,
+            "this is not a json extraction payload"
+        );
+        var extractor = new KnowledgeExtractor(chatModel, 1, 10_000);
+
+        var result = extractor.extract(chunk("Alice works with Bob"));
+
+        assertThat(result.entities()).containsExactly(
+            new ExtractedEntity("Alice", "person", "Researcher", List.of())
+        );
+        assertThat(result.warnings()).containsExactly(
+            "gleaning extraction response was empty or unrecoverable; keeping the accumulated extraction"
+        );
+        assertThat(chatModel.requests()).hasSize(2);
+    }
+
+    @Test
+    void mistypedEntitiesFieldIsTreatedAsEmptyWhileRelationsSurvive() {
+        var extractor = new KnowledgeExtractor(new StubChatModel("""
+            {
+              "entities": "not-an-array",
+              "relations": [
+                {
+                  "source_entity": "Alice",
+                  "target_entity": "Bob",
+                  "relationship_keywords": "works_with",
+                  "relationship_description": "collaboration"
+                }
+              ]
+            }
+            """), 0, 10_000);
+
+        var result = extractor.extract(chunk("Alice works with Bob"));
+
+        assertThat(result.entities()).isEmpty();
+        assertThat(result.relations()).containsExactly(
+            new ExtractedRelation("Alice", "Bob", "works_with", "collaboration", 1.0d)
+        );
+        assertThat(result.warnings()).containsExactly(
+            "knowledge extraction response field 'entities' is not an array; treating it as empty"
+        );
+    }
+
     private static KnowledgeExtractor extractorWithValidator(KgExtractionValidator validator) {
         return new KnowledgeExtractor(
             new StubChatModel("""
