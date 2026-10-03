@@ -41,7 +41,9 @@ class RagasCliOutputTest {
                 config.batchRequest().multiHopEnabled(),
                 config.batchRequest().storageProfile(),
                 config.batchRequest().retrievalOnly(),
-                config.runLabel()
+                config.runLabel(),
+                "bge-reranker-v2-m3",
+                3
             ),
             new RagasBatchEvaluationCli.Summary(1),
             List.of(new RagasBatchEvaluationService.Result(
@@ -63,6 +65,8 @@ class RagasCliOutputTest {
         assertThat(json.path("request").path("multiHopEnabled").asBoolean()).isFalse();
         assertThat(json.path("request").path("retrievalOnly").asBoolean()).isTrue();
         assertThat(json.path("request").path("runLabel").asText()).isEqualTo("candidate-rerank-4");
+        assertThat(json.path("request").path("rerankModel").asText()).isEqualTo("bge-reranker-v2-m3");
+        assertThat(json.path("request").path("rerankCandidateMultiplier").asInt()).isEqualTo(3);
         assertThat(json.path("summary").path("totalCases").asInt()).isEqualTo(1);
         assertThat(json.path("results").isArray()).isTrue();
         assertThat(json.path("results").get(0).path("groundTruth").asText()).isEqualTo("Alice works with Bob.");
@@ -107,7 +111,9 @@ class RagasCliOutputTest {
                 true,
                 RagasStorageProfile.IN_MEMORY,
                 false,
-                "encoding-probe"
+                "encoding-probe",
+                null,
+                0
             ),
             new RagasBatchEvaluationCli.Summary(1),
             List.of(new RagasBatchEvaluationService.Result(
@@ -172,5 +178,30 @@ class RagasCliOutputTest {
 
         assertThat(response).contains("\"entities\": []");
         assertThat(response).contains("\"relations\": []");
+    }
+
+    @Test
+    void rerankSettingsAreBuiltFromEnvironmentWithEmbeddingFallbacks() {
+        var config = RagasBatchEvaluationCli.createRerankSettings(Map.of(
+            "LIGHTRAG_JAVA_EVAL_RERANK_MODEL", "bge-reranker-v2-m3",
+            "LIGHTRAG_JAVA_EVAL_EMBEDDING_BASE_URL", "http://127.0.0.1:9997/v1",
+            "LIGHTRAG_JAVA_EVAL_EMBEDDING_API_KEY", "secret",
+            "LIGHTRAG_JAVA_EVAL_RERANK_CANDIDATE_MULTIPLIER", "3"
+        ));
+
+        assertThat(config).isNotNull();
+        assertThat(config.modelName()).isEqualTo("bge-reranker-v2-m3");
+        assertThat(config.settings().model()).isNotNull();
+        assertThat(config.settings().candidateMultiplier()).isEqualTo(3);
+        assertThat(config.settings().minScore()).isZero();
+    }
+
+    @Test
+    void rerankSettingsStayDisabledWithoutRerankModelEnvironment() {
+        assertThat(RagasBatchEvaluationCli.createRerankSettings(Map.of())).isNull();
+        assertThat(RagasBatchEvaluationCli.createRerankSettings(Map.of(
+            "LIGHTRAG_JAVA_EVAL_RERANK_MODEL", "  ",
+            "LIGHTRAG_JAVA_EVAL_EMBEDDING_API_KEY", "secret"
+        ))).isNull();
     }
 }

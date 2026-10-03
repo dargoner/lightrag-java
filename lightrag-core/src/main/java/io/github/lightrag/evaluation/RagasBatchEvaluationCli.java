@@ -5,6 +5,7 @@ import io.github.lightrag.api.QueryMode;
 import io.github.lightrag.model.ChatModel;
 import io.github.lightrag.model.openai.OpenAiCompatibleChatModel;
 import io.github.lightrag.model.openai.OpenAiCompatibleEmbeddingModel;
+import io.github.lightrag.model.openai.OpenAiCompatibleRerankModel;
 
 import java.io.FileDescriptor;
 import java.io.FileOutputStream;
@@ -33,6 +34,7 @@ public final class RagasBatchEvaluationCli {
     public static void main(String[] args) throws Exception {
         var config = buildConfig(parseArgs(args));
         var batchRequest = config.batchRequest();
+        var rerankConfig = createRerankSettings(System.getenv());
         var service = new RagasBatchEvaluationService();
         var results = service.evaluateBatch(
             batchRequest,
@@ -41,7 +43,8 @@ public final class RagasBatchEvaluationCli {
                 envOrFallback("LIGHTRAG_JAVA_EVAL_EMBEDDING_BASE_URL", "LIGHTRAG_JAVA_EVAL_CHAT_BASE_URL", "https://api.openai.com/v1/"),
                 envOrDefault("LIGHTRAG_JAVA_EVAL_EMBEDDING_MODEL", "text-embedding-3-small"),
                 requiredEnv("LIGHTRAG_JAVA_EVAL_EMBEDDING_API_KEY", "LIGHTRAG_JAVA_EVAL_CHAT_API_KEY", "OPENAI_API_KEY")
-            )
+            ),
+            rerankConfig == null ? null : rerankConfig.settings()
         );
         printEnvelope(new FileOutputStream(FileDescriptor.out), new OutputEnvelope(
             new RequestMetadata(
@@ -55,7 +58,9 @@ public final class RagasBatchEvaluationCli {
                 batchRequest.multiHopEnabled(),
                 batchRequest.storageProfile(),
                 batchRequest.retrievalOnly(),
-                config.runLabel()
+                config.runLabel(),
+                rerankConfig == null ? null : rerankConfig.modelName(),
+                rerankConfig == null ? 0 : rerankConfig.settings().candidateMultiplier()
             ),
             new Summary(results.size()),
             results
@@ -95,6 +100,9 @@ public final class RagasBatchEvaluationCli {
     record BatchCliConfig(RagasBatchEvaluationService.BatchRequest batchRequest, String runLabel) {
     }
 
+    record RerankCliConfig(String modelName, RagasBatchEvaluationService.RerankSettings settings) {
+    }
+
     record OutputEnvelope(RequestMetadata request, Summary summary, java.util.List<RagasBatchEvaluationService.Result> results) {
     }
 
@@ -109,11 +117,64 @@ public final class RagasBatchEvaluationCli {
         boolean multiHopEnabled,
         RagasStorageProfile storageProfile,
         boolean retrievalOnly,
-        String runLabel
+        String runLabel,
+        String rerankModel,
+        int rerankCandidateMultiplier
     ) {
     }
 
     record Summary(int totalCases) {
+    }
+
+    /**
+     * Builds the optional rerank settings from the environment; a missing
+     * {@code LIGHTRAG_JAVA_EVAL_RERANK_MODEL} leaves rerank disabled.
+     */
+    static RerankCliConfig createRerankSettings(Map<String, String> environment) {
+        var modelName = blankToNull(environment.get("LIGHTRAG_JAVA_EVAL_RERANK_MODEL"));
+        if (modelName == null) {
+            return null;
+        }
+        var baseUrl = firstNonBlank(
+            environment.get("LIGHTRAG_JAVA_EVAL_RERANK_BASE_URL"),
+            environment.get("LIGHTRAG_JAVA_EVAL_EMBEDDING_BASE_URL"),
+            environment.get("LIGHTRAG_JAVA_EVAL_CHAT_BASE_URL"),
+            "https://api.openai.com/v1/"
+        );
+        var apiKey = firstNonBlank(
+            environment.get("LIGHTRAG_JAVA_EVAL_RERANK_API_KEY"),
+            environment.get("LIGHTRAG_JAVA_EVAL_EMBEDDING_API_KEY"),
+            environment.get("LIGHTRAG_JAVA_EVAL_CHAT_API_KEY"),
+            environment.get("OPENAI_API_KEY")
+        );
+        if (apiKey == null) {
+            throw new IllegalStateException(
+                "Missing required environment variable. Checked: LIGHTRAG_JAVA_EVAL_RERANK_API_KEY, "
+                    + "LIGHTRAG_JAVA_EVAL_EMBEDDING_API_KEY, LIGHTRAG_JAVA_EVAL_CHAT_API_KEY, OPENAI_API_KEY"
+            );
+        }
+        var timeoutSeconds = Long.parseLong(environment.getOrDefault("LIGHTRAG_JAVA_EVAL_RERANK_TIMEOUT_SECONDS", "60"));
+        var candidateMultiplier = Integer.parseInt(environment.getOrDefault("LIGHTRAG_JAVA_EVAL_RERANK_CANDIDATE_MULTIPLIER", "3"));
+        var minScore = Double.parseDouble(environment.getOrDefault("LIGHTRAG_JAVA_EVAL_RERANK_MIN_SCORE", "0"));
+        var model = new OpenAiCompatibleRerankModel(baseUrl, modelName, apiKey, Duration.ofSeconds(timeoutSeconds));
+        return new RerankCliConfig(
+            modelName,
+            new RagasBatchEvaluationService.RerankSettings(model, candidateMultiplier, minScore)
+        );
+    }
+
+    private static String blankToNull(String value) {
+        return value == null || value.isBlank() ? null : value.strip();
+    }
+
+    private static String firstNonBlank(String... values) {
+        for (var value : values) {
+            var candidate = blankToNull(value);
+            if (candidate != null) {
+                return candidate;
+            }
+        }
+        return null;
     }
 
     static ChatModel createChatModel(RagasBatchEvaluationService.BatchRequest batchRequest) {

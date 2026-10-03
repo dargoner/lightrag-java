@@ -3,11 +3,13 @@ package io.github.lightrag.evaluation;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import io.github.lightrag.api.LightRag;
+import io.github.lightrag.api.LightRagBuilder;
 import io.github.lightrag.api.QueryMode;
 import io.github.lightrag.api.QueryRequest;
 import io.github.lightrag.api.QueryResult;
 import io.github.lightrag.model.ChatModel;
 import io.github.lightrag.model.EmbeddingModel;
+import io.github.lightrag.model.RerankModel;
 import io.github.lightrag.persistence.FileSnapshotStore;
 import io.github.lightrag.storage.InMemoryStorageProvider;
 import io.github.lightrag.storage.StorageProvider;
@@ -32,11 +34,23 @@ public final class RagasBatchEvaluationService {
     private static final String WORKSPACE = "default";
 
     public List<Result> evaluateBatch(BatchRequest request, ChatModel chatModel, EmbeddingModel embeddingModel) throws IOException {
+        return evaluateBatch(request, chatModel, embeddingModel, null);
+    }
+
+    /**
+     * Runs the batch with optional rerank settings; {@code null} keeps the retrieval order.
+     */
+    public List<Result> evaluateBatch(
+        BatchRequest request,
+        ChatModel chatModel,
+        EmbeddingModel embeddingModel,
+        RerankSettings rerankSettings
+    ) throws IOException {
         var batchRequest = Objects.requireNonNull(request, "request");
         var testCases = loadTestCases(batchRequest.datasetPath());
         var documents = RagasEvaluationService.loadDocuments(batchRequest.documentsDir());
 
-        try (var runtime = createRuntime(batchRequest.storageProfile(), chatModel, embeddingModel, batchRequest.retrievalOnly())) {
+        try (var runtime = createRuntime(batchRequest.storageProfile(), chatModel, embeddingModel, batchRequest.retrievalOnly(), rerankSettings)) {
             runtime.rag().ingest(WORKSPACE, documents);
             var results = new ArrayList<Result>(testCases.size());
             for (int index = 0; index < testCases.size(); index++) {
@@ -73,24 +87,41 @@ public final class RagasBatchEvaluationService {
         RagasStorageProfile profile,
         ChatModel chatModel,
         EmbeddingModel embeddingModel,
-        boolean retrievalOnly
+        boolean retrievalOnly,
+        RerankSettings rerankSettings
     ) {
         return switch (profile) {
             case IN_MEMORY -> new EvaluationRuntime(
-                LightRag.builder()
-                    .chatModel(chatModel)
-                    .embeddingModel(embeddingModel)
-                    .storage(InMemoryStorageProvider.create())
-                    .automaticQueryKeywordExtraction(!retrievalOnly)
-                    .build(),
+                applyRerankSettings(
+                    LightRag.builder()
+                        .chatModel(chatModel)
+                        .embeddingModel(embeddingModel)
+                        .storage(InMemoryStorageProvider.create())
+                        .automaticQueryKeywordExtraction(!retrievalOnly),
+                    rerankSettings
+                ).build(),
                 () -> {
                 }
             );
-            case POSTGRES_NEO4J_TESTCONTAINERS -> postgresNeo4jRuntime(chatModel, embeddingModel, retrievalOnly);
+            case POSTGRES_NEO4J_TESTCONTAINERS -> postgresNeo4jRuntime(chatModel, embeddingModel, retrievalOnly, rerankSettings);
         };
     }
 
-    private static EvaluationRuntime postgresNeo4jRuntime(ChatModel chatModel, EmbeddingModel embeddingModel, boolean retrievalOnly) {
+    private static LightRagBuilder applyRerankSettings(LightRagBuilder builder, RerankSettings rerankSettings) {
+        if (rerankSettings != null) {
+            builder.rerankModel(rerankSettings.model())
+                .rerankCandidateMultiplier(rerankSettings.candidateMultiplier())
+                .minRerankScore(rerankSettings.minScore());
+        }
+        return builder;
+    }
+
+    private static EvaluationRuntime postgresNeo4jRuntime(
+        ChatModel chatModel,
+        EmbeddingModel embeddingModel,
+        boolean retrievalOnly,
+        RerankSettings rerankSettings
+    ) {
         var postgres = new PostgreSQLContainer<>(
             DockerImageName.parse("pgvector/pgvector:pg16").asCompatibleSubstituteFor("postgres")
         );
@@ -117,12 +148,14 @@ public final class RagasBatchEvaluationService {
                 ),
                 new FileSnapshotStore()
             );
-            var rag = LightRag.builder()
-                .chatModel(chatModel)
-                .embeddingModel(embeddingModel)
-                .storage(storage)
-                .automaticQueryKeywordExtraction(!retrievalOnly)
-                .build();
+            var rag = applyRerankSettings(
+                LightRag.builder()
+                    .chatModel(chatModel)
+                    .embeddingModel(embeddingModel)
+                    .storage(storage)
+                    .automaticQueryKeywordExtraction(!retrievalOnly),
+                rerankSettings
+            ).build();
             return new EvaluationRuntime(
                 rag,
                 () -> {
@@ -164,6 +197,18 @@ public final class RagasBatchEvaluationService {
             }
         }
         return List.copyOf(testCases);
+    }
+
+    public record RerankSettings(RerankModel model, int candidateMultiplier, double minScore) {
+        public RerankSettings {
+            model = Objects.requireNonNull(model, "model");
+            if (candidateMultiplier <= 0) {
+                throw new IllegalArgumentException("candidateMultiplier must be positive");
+            }
+            if (!Double.isFinite(minScore) || minScore < 0.0d) {
+                throw new IllegalArgumentException("minScore must be non-negative");
+            }
+        }
     }
 
     public record BatchRequest(

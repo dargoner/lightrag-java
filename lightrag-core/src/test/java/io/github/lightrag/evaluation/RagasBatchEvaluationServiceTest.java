@@ -5,6 +5,7 @@ import io.github.lightrag.api.QueryRequest;
 import io.github.lightrag.indexing.KnowledgeExtractor;
 import io.github.lightrag.model.ChatModel;
 import io.github.lightrag.model.EmbeddingModel;
+import io.github.lightrag.model.RerankModel;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 
@@ -143,6 +144,53 @@ class RagasBatchEvaluationServiceTest {
     }
 
     @Test
+    void rerankSettingsReorderRetrievedContextsWhenConfigured() throws Exception {
+        Files.writeString(tempDir.resolve("01_notes.md"), """
+            # Notes
+
+            Alice works with Bob on retrieval systems.
+            """);
+        Files.writeString(tempDir.resolve("02_storage.md"), """
+            # Storage
+
+            Carol works on storage engines.
+            """);
+        Files.writeString(tempDir.resolve("dataset.json"), """
+            {
+              "test_cases": [
+                {"question": "Who works with Bob?", "ground_truth": "Alice works with Bob."}
+              ]
+            }
+            """);
+
+        var rerankModel = new ReversingRerankModel();
+        var service = new RagasBatchEvaluationService();
+        var results = service.evaluateBatch(
+            new RagasBatchEvaluationService.BatchRequest(
+                tempDir,
+                tempDir.resolve("dataset.json"),
+                QueryMode.NAIVE,
+                10,
+                2,
+                2,
+                3,
+                false,
+                RagasStorageProfile.IN_MEMORY,
+                false
+            ),
+            new FakeChatModel(),
+            new FakeEmbeddingModel(),
+            new RagasBatchEvaluationService.RerankSettings(rerankModel, 2, 0.0d)
+        );
+
+        assertThat(rerankModel.calls).isEqualTo(1);
+        assertThat(results).hasSize(1);
+        assertThat(results.get(0).contexts()).hasSize(2);
+        assertThat(results.get(0).contexts().get(0).text()).contains("Carol");
+        assertThat(results.get(0).contexts().get(1).text()).contains("Alice");
+    }
+
+    @Test
     void buildsQueryRequestIncludingMultiHopParameters() {
         var batchRequest = new RagasBatchEvaluationService.BatchRequest(
             tempDir,
@@ -211,6 +259,21 @@ class RagasBatchEvaluationServiceTest {
                   ]
                 }
                 """;
+        }
+    }
+
+    private static final class ReversingRerankModel implements RerankModel {
+        private int calls;
+
+        @Override
+        public List<RerankResult> rerank(RerankRequest request) {
+            calls++;
+            var candidates = request.candidates();
+            var reordered = new java.util.ArrayList<RerankResult>(candidates.size());
+            for (int index = candidates.size() - 1; index >= 0; index--) {
+                reordered.add(new RerankResult(candidates.get(index).id(), index + 1.0d));
+            }
+            return List.copyOf(reordered);
         }
     }
 
