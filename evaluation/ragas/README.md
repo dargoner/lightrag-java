@@ -44,6 +44,28 @@ Optional multi-hop query controls:
 - `LIGHTRAG_JAVA_EVAL_MULTI_HOP_ENABLED`
 - `LIGHTRAG_JAVA_EVAL_RETRIEVAL_ONLY`
 
+Optional rerank (off unless a model name is set):
+
+- `LIGHTRAG_JAVA_EVAL_RERANK_MODEL`, blank or missing disables rerank
+- `LIGHTRAG_JAVA_EVAL_RERANK_BASE_URL`, falls back to the embedding base URL, then the chat base URL
+- `LIGHTRAG_JAVA_EVAL_RERANK_API_KEY`, falls back to the embedding key, the chat key, then `OPENAI_API_KEY`
+- `LIGHTRAG_JAVA_EVAL_RERANK_CANDIDATE_MULTIPLIER`, default `3` (candidate pool = multiplier x top-k)
+- `LIGHTRAG_JAVA_EVAL_RERANK_MIN_SCORE`, default `0`
+- `LIGHTRAG_JAVA_EVAL_RERANK_TIMEOUT_SECONDS`, default `60`
+
+Example:
+
+```bash
+LIGHTRAG_JAVA_EVAL_RERANK_MODEL=bge-reranker-v2-m3 \
+LIGHTRAG_JAVA_EVAL_RERANK_BASE_URL=http://127.0.0.1:9997/v1 \
+python3 evaluation/ragas/eval_rag_quality_java.py \
+  --run-label gjj-rerank
+```
+
+The batch envelope records the effective rerank configuration in
+`request.rerankModel` / `request.rerankCandidateMultiplier` (`null` / `0` when
+rerank is off).
+
 ## Python dependencies
 
 Install:
@@ -142,6 +164,59 @@ python3 -m py_compile evaluation/ragas/eval_rag_quality_java.py
 python3 -m unittest evaluation/ragas/test_prepare_beir_dataset.py
 python3 -m py_compile evaluation/ragas/prepare_beir_dataset.py
 ```
+
+## Housing-fund (Changzhou) corpus
+
+A bundled Chinese policy suite used as the regression gate for Chinese-language
+retrieval quality: 10 markdown policy snapshots and 53 golden questions whose
+references are assembled deterministically from the snapshots.
+
+- `evaluation/ragas/gjj_documents/*.md`
+- `evaluation/ragas/gjj_dataset.json`
+- baseline: `evaluation/ragas/baselines/gjj-default.{json,csv}` (`ragas_score` 0.8702)
+
+Run the suite against the checked-in baseline:
+
+```bash
+python3 evaluation/ragas/eval_rag_quality_java.py \
+  --dataset evaluation/ragas/gjj_dataset.json \
+  --documents-dir evaluation/ragas/gjj_documents \
+  --run-label gjj-candidate \
+  --baseline-name gjj-default
+```
+
+Rebuild the corpus from the source domain profile (point `--profile-dir` at a
+checkout of the profile; the script only reads it):
+
+```bash
+python3 evaluation/ragas/build_gjj_dataset.py \
+  --profile-dir ../GraphRAG-SDK/.worktrees/changzhou-housing-fund-ontology/domain_profiles/changzhou_housing_fund
+```
+
+The builder selects the text-answerable cases, assembles each reference from the
+policy snapshots, and exits non-zero when any reference cannot be resolved.
+
+## Result reproducibility
+
+Four repeated Java-only context captures (two runs per arm, same binary) on the
+53-case housing-fund suite showed:
+
+- the baseline (no rerank) arm returned a different retrieved context set or
+  order between identical runs on all 53 cases; the rerank arm was stable on 50/53
+- expected-source file coverage stayed at 100% in every run: the run-to-run
+  variance is chunk selection and ordering inside the expected files, not
+  missing documents
+
+Treat single-run deltas below roughly 0.01 total score as noise: the two
+loan-rate cases alone flip between 0.0 and ~0.93 `answer_relevance` from judge
+sampling, in both directions across runs. When attributing a change to a
+retrieval knob, compare stable footprints (cases identical across repeats) or
+use a rerank-on reference arm.
+
+Measured effect of the rerank arm on the same suite: +0.0115 headline score, of
+which about +0.008 is the judge flipping on the two loan-rate cases; net of that
+about +0.004 (`context_precision` +0.033, `context_recall` essentially flat,
+`faithfulness` -0.020).
 
 ## Retrieval-only baseline
 
