@@ -5,6 +5,8 @@ import io.github.lightrag.api.QueryMode;
 import io.github.lightrag.api.QueryResult;
 import org.junit.jupiter.api.Test;
 
+import java.io.ByteArrayOutputStream;
+import java.nio.charset.StandardCharsets;
 import java.nio.file.Path;
 import java.util.List;
 import java.util.Map;
@@ -89,6 +91,46 @@ class RagasCliOutputTest {
         assertThat(json.path("request").path("chunkTopK").asInt()).isEqualTo(7);
         assertThat(json.path("result").path("answer").asText()).isEqualTo("Alice works with Bob.");
         assertThat(json.path("result").path("contexts").get(0).path("text").asText()).contains("Alice works with Bob");
+    }
+
+    @Test
+    void batchCliEnvelopeIsPrintedAsUtf8RegardlessOfPlatformDefaultCharset() throws Exception {
+        var output = new RagasBatchEvaluationCli.OutputEnvelope(
+            new RagasBatchEvaluationCli.RequestMetadata(
+                Path.of("docs"),
+                Path.of("dataset.json"),
+                QueryMode.MIX,
+                10,
+                10,
+                2,
+                3,
+                true,
+                RagasStorageProfile.IN_MEMORY,
+                false,
+                "encoding-probe"
+            ),
+            new RagasBatchEvaluationCli.Summary(1),
+            List.of(new RagasBatchEvaluationService.Result(
+                0,
+                "常州加装电梯提取公积金最多可以提取多少？",
+                "合计提取总额不得超过该次加装或更新电梯总费用中个人分摊金额。",
+                Map.of(),
+                "在常州市，加装或更新电梯提取住房公积金合计提取总额不得超过个人分摊金额。",
+                List.of(new QueryResult.Context("chunk-1", "常州市电梯提取政策中文内容", "1", "czgjj-elevator-withdrawal.md")),
+                List.of(new QueryResult.Reference("1", "czgjj-elevator-withdrawal.md"))
+            ))
+        );
+
+        var buffer = new ByteArrayOutputStream();
+        RagasBatchEvaluationCli.printEnvelope(buffer, output);
+
+        var decoded = buffer.toString(StandardCharsets.UTF_8);
+        assertThat(decoded).doesNotContain("\ufffd");
+        var json = OBJECT_MAPPER.readTree(decoded);
+        assertThat(json.path("results").get(0).path("answer").asText())
+            .isEqualTo("在常州市，加装或更新电梯提取住房公积金合计提取总额不得超过个人分摊金额。");
+        assertThat(json.path("results").get(0).path("contexts").get(0).path("text").asText())
+            .isEqualTo("常州市电梯提取政策中文内容");
     }
 
     @Test

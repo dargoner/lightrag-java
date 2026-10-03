@@ -6,6 +6,13 @@ import io.github.lightrag.model.ChatModel;
 import io.github.lightrag.model.openai.OpenAiCompatibleChatModel;
 import io.github.lightrag.model.openai.OpenAiCompatibleEmbeddingModel;
 
+import java.io.FileDescriptor;
+import java.io.FileOutputStream;
+import java.io.IOException;
+import java.io.OutputStream;
+import java.io.OutputStreamWriter;
+import java.io.PrintWriter;
+import java.nio.charset.StandardCharsets;
 import java.nio.file.Path;
 import java.time.Duration;
 import java.util.HashMap;
@@ -36,7 +43,7 @@ public final class RagasBatchEvaluationCli {
                 requiredEnv("LIGHTRAG_JAVA_EVAL_EMBEDDING_API_KEY", "LIGHTRAG_JAVA_EVAL_CHAT_API_KEY", "OPENAI_API_KEY")
             )
         );
-        System.out.println(OBJECT_MAPPER.writeValueAsString(new OutputEnvelope(
+        printEnvelope(new FileOutputStream(FileDescriptor.out), new OutputEnvelope(
             new RequestMetadata(
                 batchRequest.documentsDir(),
                 batchRequest.datasetPath(),
@@ -52,7 +59,19 @@ public final class RagasBatchEvaluationCli {
             ),
             new Summary(results.size()),
             results
-        )));
+        ));
+    }
+
+    /**
+     * Writes the envelope as UTF-8 bytes regardless of the platform default charset.
+     * Relying on {@code System.out} here corrupts non-ASCII answers and contexts on
+     * hosts whose console encoding is not UTF-8 (the stdout contract with the RAGAS
+     * harness is UTF-8 JSON).
+     */
+    static void printEnvelope(OutputStream target, OutputEnvelope envelope) throws IOException {
+        var writer = new PrintWriter(new OutputStreamWriter(target, StandardCharsets.UTF_8));
+        writer.println(OBJECT_MAPPER.writeValueAsString(envelope));
+        writer.flush();
     }
 
     static BatchCliConfig buildConfig(Map<String, String> arguments) {

@@ -82,7 +82,7 @@ class JavaRagasEvaluator:
         self.baselines_dir = project_dir / "evaluation" / "ragas" / "baselines"
         self.results_dir.mkdir(parents=True, exist_ok=True)
         self.baselines_dir.mkdir(parents=True, exist_ok=True)
-        self.test_cases = json.loads(dataset_path.read_text()).get("test_cases", [])
+        self.test_cases = json.loads(dataset_path.read_text(encoding="utf-8")).get("test_cases", [])
         self.eval_llm = self._build_eval_llm()
         self.eval_embeddings = self._build_eval_embeddings()
 
@@ -346,7 +346,7 @@ def _average_score(results: List[Dict[str, Any]]) -> float:
 def _load_baseline_payload(path: Path) -> Optional[Dict[str, Any]]:
     if not path.exists():
         return None
-    return json.loads(path.read_text())
+    return json.loads(path.read_text(encoding="utf-8"))
 
 
 def _compare_with_baseline(
@@ -415,11 +415,11 @@ def _build_summary(
 
 
 def _write_json(path: Path, payload: Dict[str, Any]) -> None:
-    path.write_text(json.dumps(payload, indent=2))
+    path.write_text(json.dumps(payload, indent=2), encoding="utf-8")
 
 
 def _write_csv(path: Path, results: List[Dict[str, Any]]) -> None:
-    with path.open("w", newline="") as handle:
+    with path.open("w", newline="", encoding="utf-8-sig") as handle:
         writer = csv.DictWriter(
             handle,
             fieldnames=[
