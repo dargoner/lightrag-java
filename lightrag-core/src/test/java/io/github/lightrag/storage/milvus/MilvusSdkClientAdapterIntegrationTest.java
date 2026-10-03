@@ -42,7 +42,8 @@ class MilvusSdkClientAdapterIntegrationTest {
 
     private static final Network NETWORK = Network.newNetwork();
     private static final DockerImageName ETCD_IMAGE = DockerImageName.parse("quay.io/coreos/etcd:v3.5.25");
-    private static final DockerImageName MINIO_IMAGE = DockerImageName.parse("minio/minio:RELEASE.2024-12-18T13-15-44Z");
+    // MinIO no longer publishes public images; pgsty/minio is the community continuation.
+    private static final DockerImageName MINIO_IMAGE = DockerImageName.parse("pgsty/minio:RELEASE.2026-08-04T00-00-00Z");
     private static final DockerImageName MILVUS_IMAGE = DockerImageName.parse("milvusdb/milvus:v2.6.11");
 
     @Container
