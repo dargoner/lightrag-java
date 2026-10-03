@@ -16,6 +16,10 @@ import org.testcontainers.junit.jupiter.Container;
 import org.testcontainers.junit.jupiter.Testcontainers;
 import org.testcontainers.utility.DockerImageName;
 
+import java.io.IOException;
+import java.net.InetSocketAddress;
+import java.net.Socket;
+import java.net.URI;
 import java.nio.file.Path;
 import java.sql.SQLException;
 import java.util.ArrayList;
@@ -26,14 +30,18 @@ import java.util.UUID;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
+import static org.junit.jupiter.api.Assumptions.assumeTrue;
 
 @Testcontainers
 class PostgresMilvusNeo4jAgeStorageProviderTest {
+    private static final String MILVUS_URI = "http://localhost:19530";
+
     @Container
     private static final PostgreSQLContainer<?> POSTGRES = newAgeContainer();
 
     @Test
     void roundTripsGraphWritesThroughTheAgeProjectionAndKeepsTheRelationalMirror() throws SQLException {
+        assumeTrue(milvusReachable(), "Milvus is not reachable at " + MILVUS_URI);
         var config = newConfig();
         try (var dataSource = newDataSource(config)) {
             try (var provider = new PostgresMilvusNeo4jStorageProvider(
@@ -66,6 +74,7 @@ class PostgresMilvusNeo4jAgeStorageProviderTest {
 
     @Test
     void assemblesProviderFromConfigsWithoutNeo4jConfiguration() throws SQLException {
+        assumeTrue(milvusReachable(), "Milvus is not reachable at " + MILVUS_URI);
         var config = newConfig();
         try (var provider = new PostgresMilvusNeo4jStorageProvider(
             config,
@@ -194,7 +203,17 @@ class PostgresMilvusNeo4jAgeStorageProviderTest {
     }
 
     private static MilvusVectorConfig milvusConfig() {
-        return new MilvusVectorConfig("http://localhost:19530", "root:Milvus", null, null, "default", "rag_", 3);
+        return new MilvusVectorConfig(MILVUS_URI, "root:Milvus", null, null, "default", "rag_", 3);
+    }
+
+    private static boolean milvusReachable() {
+        var uri = URI.create(MILVUS_URI);
+        try (var socket = new Socket()) {
+            socket.connect(new InetSocketAddress(uri.getHost(), uri.getPort()), 1000);
+            return true;
+        } catch (IOException exception) {
+            return false;
+        }
     }
 
     private static HikariDataSource newDataSource(PostgresStorageConfig config) {
