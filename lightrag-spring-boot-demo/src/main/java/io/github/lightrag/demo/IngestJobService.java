@@ -105,7 +105,7 @@ class IngestJobService {
                 async,
                 jobId,
                 original.attempt() + 1
-            ).toSnapshot();
+            );
         }
         var retryDocuments = original.documents().stream()
             .filter(document -> shouldRetryDocument(workspaceId, document.id()))
@@ -113,7 +113,7 @@ class IngestJobService {
         if (retryDocuments.isEmpty()) {
             throw new JobConflictException("job has no retryable documents: " + jobId);
         }
-        return createDocumentJob(workspaceId, retryDocuments, async, jobId, original.attempt() + 1).toSnapshot();
+        return createDocumentJob(workspaceId, retryDocuments, async, jobId, original.attempt() + 1);
     }
 
     @PreDestroy
@@ -121,7 +121,7 @@ class IngestJobService {
         executor.shutdownNow();
     }
 
-    private JobState createDocumentJob(
+    private JobSnapshot createDocumentJob(
         String workspaceId,
         List<Document> documents,
         boolean async,
@@ -141,7 +141,7 @@ class IngestJobService {
         );
     }
 
-    private JobState createSourceJob(
+    private JobSnapshot createSourceJob(
         String workspaceId,
         List<RawDocumentSource> sources,
         DocumentIngestOptions options,
@@ -162,7 +162,7 @@ class IngestJobService {
         );
     }
 
-    private JobState createJob(
+    private JobSnapshot createJob(
         String workspaceId,
         List<Document> documents,
         List<RawDocumentSource> rawSources,
@@ -188,17 +188,19 @@ class IngestJobService {
         );
         jobs.put(jobId, jobState);
         if (async) {
+            // Snapshot before scheduling: the worker may advance the job before the response is rendered.
+            var accepted = jobState.toSnapshot();
             var futureTask = new FutureTask<Void>(() -> {
                 runJob(jobState);
                 return null;
             });
             jobState.attachFuture(futureTask);
             executor.execute(futureTask);
-        } else {
-            runJob(jobState);
-            rethrowJobFailure(jobState.failureCause());
+            return accepted;
         }
-        return jobState;
+        runJob(jobState);
+        rethrowJobFailure(jobState.failureCause());
+        return jobState.toSnapshot();
     }
 
     private JobState requireJob(String workspaceId, String jobId) {
