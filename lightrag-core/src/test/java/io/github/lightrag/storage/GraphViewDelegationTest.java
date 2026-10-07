@@ -2,6 +2,7 @@ package io.github.lightrag.storage;
 
 import io.github.lightrag.storage.neo4j.Neo4jGraphStore;
 import io.github.lightrag.storage.neo4j.WorkspaceScopedNeo4jGraphStore;
+import io.github.lightrag.storage.postgres.PostgresAgeGraphStore;
 import io.github.lightrag.storage.postgres.PostgresGraphStore;
 import org.junit.jupiter.api.Test;
 
@@ -44,5 +45,35 @@ class GraphViewDelegationTest {
             .anyMatch(method ->
                 method.getName().equals("getKnowledgeGraph")
                     && Arrays.equals(method.getParameterTypes(), new Class<?>[]{String.class, int.class, int.class}));
+    }
+
+    @Test
+    void bothNativeAdaptersDeclareTheSearchEntitiesByTextOverride() {
+        assertDeclaresSearchOverride(PostgresAgeGraphStore.class);
+        assertDeclaresSearchOverride(WorkspaceScopedNeo4jGraphStore.class);
+    }
+
+    @Test
+    void everyWrapperInFrontOfANativeSearchDeclaresTheSearchEntitiesByTextOverride() throws ClassNotFoundException {
+        // Only wrappers that can front an AGE or workspace-scoped Neo4j store: PostgresStorageProvider
+        // wraps the jsonb store, which has no native search.
+        var wrappers = List.of(
+            Class.forName("io.github.lightrag.storage.mysql.MySqlMilvusNeo4jStorageProvider$LockedGraphStore"),
+            Class.forName("io.github.lightrag.storage.postgres.PostgresMilvusNeo4jStorageProvider$MirroringGraphStore"),
+            Class.forName("io.github.lightrag.storage.neo4j.PostgresNeo4jStorageProvider$MirroringGraphStore"),
+            Class.forName("io.github.lightrag.storage.neo4j.Neo4jGraphStorageAdapter$WorkspaceStoreProjection")
+        );
+
+        for (var wrapper : wrappers) {
+            assertDeclaresSearchOverride(wrapper);
+        }
+    }
+
+    private static void assertDeclaresSearchOverride(Class<?> type) {
+        assertThat(type.getDeclaredMethods())
+            .as("%s declares searchEntitiesByText(String)", type.getName())
+            .anyMatch(method ->
+                method.getName().equals("searchEntitiesByText")
+                    && Arrays.equals(method.getParameterTypes(), new Class<?>[]{String.class}));
     }
 }

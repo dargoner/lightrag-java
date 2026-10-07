@@ -16,6 +16,7 @@ import java.sql.SQLException;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Locale;
+import java.util.Map;
 import java.util.UUID;
 
 import static org.assertj.core.api.Assertions.assertThat;
@@ -233,6 +234,29 @@ class PostgresAgeGraphStoreTest {
     }
 
     @Test
+    void searchesEntitiesByTextNativelyAcrossTheCandidateFields() {
+        try (var resources = newResources()) {
+            var store = resources.store();
+            store.saveEntities(List.of(
+                new EntityRecord("e1", "Alice", "person", "", List.of(), List.of("chunk-1")),
+                new EntityRecord("e2", "Bob", "researcher", "colleague of Alice", List.of(), List.of("chunk-1")),
+                new EntityRecord("e3", "Gamma", "person", "", List.of("ALICE-TWO", "共事"), List.of("chunk-1")),
+                new EntityRecord("e4", "Delta", "artifact", "", List.of(), List.of("chunk-1"))
+            ));
+
+            // Name, description and alias matches, case-insensitive, in id order.
+            assertThat(store.searchEntitiesByText("alice"))
+                .extracting(EntityRecord::id)
+                .containsExactly("e1", "e2", "e3");
+            assertThat(store.searchEntitiesByText("共事"))
+                .extracting(EntityRecord::id)
+                .containsExactly("e3");
+            assertThat(store.searchEntitiesByText("  ")).isEmpty();
+            assertThat(store.searchEntitiesByText("e4")).isEmpty();
+        }
+    }
+
+    @Test
     void clearRemovesAllVerticesAndEdges() {
         try (var resources = newResources()) {
             var store = resources.store();
@@ -319,6 +343,62 @@ class PostgresAgeGraphStoreTest {
             resources.store().saveRelations(GraphViewParity.ENDPOINT_COMPLETE_RELATIONS);
 
             GraphViewParity.assertParityOnEndpointCompleteGraph(resources.store());
+        }
+    }
+
+    @Test
+    void executesAdHocCypherWithParametersAndConvertsValues() {
+        try (var resources = newResources()) {
+            var store = resources.store();
+            store.saveEntity(new EntityRecord("e1", "Alice", "person", "orig", List.of("A"), List.of("chunk-1")));
+            store.saveEntity(new EntityRecord("e2", "Bob", "researcher", "other", List.of(), List.of("chunk-1")));
+
+            var scalars = store.executeCypher(
+                "MATCH (n:base {entity_id: $id}) RETURN n.name AS name, n.entity_type AS type",
+                Map.of("id", "e1"));
+            assertThat(scalars.columns()).containsExactly("name", "type");
+            assertThat(scalars.records()).containsExactly(Map.of("name", "Alice", "type", "person"));
+
+            var ordered = store.executeCypher(
+                "MATCH (n:base) RETURN n.entity_id ORDER BY n.entity_id DESC LIMIT 5",
+                Map.of());
+            assertThat(ordered.columns()).containsExactly("n.entity_id");
+            assertThat(ordered.records()).extracting(record -> record.get("n.entity_id"))
+                .containsExactly("e2", "e1");
+
+            var vertices = store.executeCypher("MATCH (n:base {entity_id: 'e1'}) RETURN n", Map.of());
+            assertThat(vertices.columns()).containsExactly("n");
+            var vertex = (Map<?, ?>) vertices.records().get(0).get("n");
+            assertThat(vertex.get("label")).isEqualTo("base");
+            assertThat(vertex.get("id")).isInstanceOf(Number.class);
+            var properties = (Map<?, ?>) vertex.get("properties");
+            assertThat(properties.get("entity_id")).isEqualTo("e1");
+            assertThat(properties.get("name")).isEqualTo("Alice");
+        }
+    }
+
+    @Test
+    void executesMutatingCypherWithoutReturn() {
+        try (var resources = newResources()) {
+            var store = resources.store();
+            store.saveEntity(new EntityRecord("e1", "Alice", "person", "orig", List.of(), List.of("chunk-1")));
+
+            var result = store.executeCypher(
+                "MATCH (n:base {entity_id: $id}) SET n.description = $description",
+                Map.of("id", "e1", "description", "updated by cypher"));
+
+            assertThat(result.columns()).isEmpty();
+            assertThat(result.records()).isEmpty();
+            assertThat(store.loadEntity("e1").map(EntityRecord::description)).contains("updated by cypher");
+        }
+    }
+
+    @Test
+    void executeCypherRejectsReturnStar() {
+        try (var resources = newResources()) {
+            assertThatThrownBy(() -> resources.store().executeCypher("MATCH (n:base) RETURN *", Map.of()))
+                .isInstanceOf(StorageException.class)
+                .hasMessageContaining("RETURN *");
         }
     }
 

@@ -12,6 +12,8 @@ import java.util.Objects;
 
 public final class JdbcJsonCodec {
     private static final ObjectMapper OBJECT_MAPPER = new ObjectMapper();
+    private static final TypeReference<Object> OBJECT = new TypeReference<>() {
+    };
     private static final TypeReference<Map<String, String>> STRING_MAP = new TypeReference<>() {
     };
     private static final TypeReference<Map<String, Object>> OBJECT_MAP = new TypeReference<>() {
@@ -42,6 +44,11 @@ public final class JdbcJsonCodec {
 
     public static Map<String, Object> readObjectMap(String value) {
         return readJson(value, OBJECT_MAP);
+    }
+
+    /** Generic JSON text to plain Java value ({@code Map}, {@code List}, scalar or {@code null}). */
+    public static Object readJsonValue(String value) {
+        return readJson(value, OBJECT);
     }
 
     public static String writeStringList(List<String> value) {

@@ -905,6 +905,11 @@ public final class PostgresMilvusNeo4jStorageProvider implements AtomicStoragePr
         }
 
         @Override
+        public List<EntityRecord> searchEntitiesByText(String query) {
+            return withReadLock(() -> coordinator.graphStore().searchEntitiesByText(query));
+        }
+
+        @Override
         public Map<String, List<RelationRecord>> findRelations(List<String> entityIds) {
             return withReadLock(() -> coordinator.graphStore().findRelations(entityIds));
         }
@@ -912,6 +917,16 @@ public final class PostgresMilvusNeo4jStorageProvider implements AtomicStoragePr
         @Override
         public KnowledgeGraphView getKnowledgeGraph(String nodeLabel, int maxDepth, int maxNodes) {
             return withReadLock(() -> coordinator.graphStore().getKnowledgeGraph(nodeLabel, maxDepth, maxNodes));
+        }
+
+        /**
+         * Ad-hoc Cypher is the caller's statement (it may write), so it runs directly on the
+         * backing store: no read lock and no writeAtomically staging, matching the direct console
+         * access the Neo4j graph backend already had.
+         */
+        @Override
+        public CypherQueryResult executeCypher(String cypher, Map<String, Object> parameters) {
+            return coordinator.graphStore().executeCypher(cypher, parameters);
         }
     }
 

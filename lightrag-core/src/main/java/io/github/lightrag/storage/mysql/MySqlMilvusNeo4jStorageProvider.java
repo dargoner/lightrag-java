@@ -691,6 +691,11 @@ public final class MySqlMilvusNeo4jStorageProvider implements AtomicStorageProvi
         }
 
         @Override
+        public List<EntityRecord> searchEntitiesByText(String query) {
+            return withReadLock(() -> delegate.searchEntitiesByText(query));
+        }
+
+        @Override
         public java.util.Map<String, java.util.List<RelationRecord>> findRelations(java.util.List<String> entityIds) {
             return withReadLock(() -> delegate.findRelations(entityIds));
         }

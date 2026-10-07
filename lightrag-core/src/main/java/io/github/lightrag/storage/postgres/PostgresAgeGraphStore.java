@@ -13,6 +13,7 @@ import java.sql.ResultSet;
 import java.sql.SQLException;
 import java.sql.Types;
 import java.util.ArrayList;
+import java.util.Collections;
 import java.util.Comparator;
 import java.util.LinkedHashMap;
 import java.util.List;
@@ -256,6 +257,120 @@ public final class PostgresAgeGraphStore implements MutableGraphStore {
                 return List.copyOf(labels);
             }
         });
+    }
+
+    /**
+     * Store-native text search: Cypher filters the four candidate fields case-insensitively, then a
+     * single follow-up statement fetches the matched property rows by id (the same id-row shape
+     * {@link #presentEndpointIds} probes). Superset of the caller-side ranking per
+     * {@link GraphStore#searchEntitiesByText}.
+     */
+    @Override
+    public List<EntityRecord> searchEntitiesByText(String query) {
+        var needle = Objects.requireNonNull(query, "query").strip();
+        if (needle.isEmpty()) {
+            return List.of();
+        }
+        return inAgeSession(connection -> {
+            var cypher = "MATCH (n:base)\n"
+                + "WHERE toLower(coalesce(n.name, '')) CONTAINS $query\n"
+                + "   OR toLower(coalesce(n.entity_type, '')) CONTAINS $query\n"
+                + "   OR toLower(coalesce(n.description, '')) CONTAINS $query\n"
+                // AGE < 1.8 rejects the any(... WHERE ...) predicate function, but accepts a filtered
+                // list comprehension, so the alias clause counts matches instead.
+                + "   OR size([alias IN coalesce(n.aliases, []) WHERE toLower(alias) CONTAINS $query]) > 0\n"
+                + "RETURN n.entity_id AS value";
+            var matchedIds = searchMatchedIds(connection, cypher, needle);
+            if (matchedIds.isEmpty()) {
+                return List.of();
+            }
+            var fetch = "SELECT v.properties FROM " + qualifiedLabel("base") + " v WHERE "
+                + "ag_catalog.agtype_access_operator(VARIADIC ARRAY[v.properties, '\"entity_id\"'::ag_catalog.agtype])"
+                + " IN (SELECT (to_json(u.value::text)::text)::ag_catalog.agtype FROM unnest(?::text[]) AS u(value))";
+            try (var statement = connection.prepareStatement(fetch)) {
+                statement.setArray(1, connection.createArrayOf("text", matchedIds.toArray()));
+                try (var resultSet = statement.executeQuery()) {
+                    var entities = new ArrayList<EntityRecord>();
+                    while (resultSet.next()) {
+                        var properties = resultSet.getString(1);
+                        if (properties != null) {
+                            entities.add(toEntityRecord(properties));
+                        }
+                    }
+                    entities.sort(Comparator.comparing(EntityRecord::id));
+                    return List.copyOf(entities);
+                }
+            }
+        });
+    }
+
+    /**
+     * Executes one caller-supplied Cypher statement against this workspace graph. Parameters bind
+     * as agtype through the same session wrapper as every other native statement (search_path,
+     * transaction ownership, transient-failure retry), and each top-level RETURN item becomes a
+     * positional agtype column that {@link PostgresAgeCypherSupport} converts back to plain Java
+     * values. Statements without RETURN run for their effect and return an empty result.
+     */
+    @Override
+    public CypherQueryResult executeCypher(String cypher, Map<String, Object> parameters) {
+        var query = Objects.requireNonNull(cypher, "cypher");
+        var boundParameters = parameters == null ? Map.<String, Object>of() : parameters;
+        var returnItems = PostgresAgeCypherSupport.returnItems(query);
+        var columnNames = PostgresAgeCypherSupport.columnNames(returnItems);
+        return PostgresRetrySupport.execute("execute Apache AGE cypher statement", () -> inAgeSession(connection -> {
+            var sql = "SELECT * FROM ag_catalog.cypher("
+                + PostgresAgeSupport.dollarQuote(graphName) + "::name, "
+                + PostgresAgeSupport.dollarQuote(query) + "::cstring, "
+                + "?::ag_catalog.agtype) AS ("
+                + PostgresAgeCypherSupport.columnDefinitionList(returnItems.size()) + ")";
+            try (var statement = connection.prepareStatement(sql)) {
+                statement.setObject(1, JdbcJsonCodec.writeObjectMap(boundParameters), Types.OTHER);
+                try (var resultSet = statement.executeQuery()) {
+                    if (returnItems.isEmpty()) {
+                        while (resultSet.next()) {
+                            // Drain: a no-RETURN statement still executes inside cypher().
+                        }
+                        return new CypherQueryResult(List.of(), List.of());
+                    }
+                    var records = new ArrayList<Map<String, Object>>();
+                    while (resultSet.next()) {
+                        var record = new LinkedHashMap<String, Object>();
+                        for (var index = 0; index < columnNames.size(); index++) {
+                            record.put(
+                                columnNames.get(index),
+                                PostgresAgeCypherSupport.toJavaValue(resultSet.getString(index + 1))
+                            );
+                        }
+                        records.add(Collections.unmodifiableMap(record));
+                    }
+                    return new CypherQueryResult(columnNames, records);
+                }
+            }
+        }));
+    }
+
+    /**
+     * The shared {@code queryCypher} helper declares its output as agtype, whose text form quotes
+     * string scalars; declaring {@code text} yields the bare id, same as {@link #labels()}.
+     */
+    private List<String> searchMatchedIds(Connection connection, String cypher, String needle) throws SQLException {
+        var sql = "SELECT * FROM ag_catalog.cypher("
+            + PostgresAgeSupport.dollarQuote(graphName) + "::name, "
+            + PostgresAgeSupport.dollarQuote(cypher) + "::cstring, "
+            + "?::ag_catalog.agtype) AS (value text)";
+        try (var statement = connection.prepareStatement(sql)) {
+            statement.setObject(1, JdbcJsonCodec.writeObjectMap(Map.of("query", needle)), Types.OTHER);
+            try (var resultSet = statement.executeQuery()) {
+                var ids = new ArrayList<String>();
+                while (resultSet.next()) {
+                    var id = resultSet.getString(1);
+                    if (id != null) {
+                        ids.add(id);
+                    }
+                }
+                return ids;
+            }
+        }
     }
 
     /** Clears the graph; called by the provider's truncate/restore path. */

@@ -25,6 +25,7 @@ import java.util.HashMap;
 import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
+import java.util.Locale;
 import java.util.Map;
 import java.util.Objects;
 import java.util.Optional;
@@ -245,6 +246,39 @@ public final class WorkspaceScopedNeo4jGraphStore implements MutableGraphStore, 
                 ORDER BY entity.id
                 """.formatted(ENTITY_LABEL),
                 org.neo4j.driver.Values.parameters("workspaceId", workspaceId)
+            ),
+            WorkspaceScopedNeo4jGraphStore::toEntity
+        ));
+    }
+
+    /**
+     * Store-native text search over the four candidate fields, mirroring the default
+     * {@link GraphStore#searchEntitiesByText} contract with the match pushed into Cypher.
+     */
+    @Override
+    public List<EntityRecord> searchEntitiesByText(String query) {
+        var needle = Objects.requireNonNull(query, "query").strip().toLowerCase(Locale.ROOT);
+        if (needle.isEmpty()) {
+            return List.of();
+        }
+        return read(tx -> list(
+            tx.run(
+                """
+                MATCH (entity:%s {workspaceId: $workspaceId})
+                WHERE entity.materialized = true
+                  AND (
+                    toLower(coalesce(entity.name, '')) CONTAINS $query
+                    OR toLower(coalesce(entity.type, '')) CONTAINS $query
+                    OR toLower(coalesce(entity.description, '')) CONTAINS $query
+                    OR any(alias IN coalesce(entity.aliases, []) WHERE toLower(alias) CONTAINS $query)
+                  )
+                RETURN entity
+                ORDER BY entity.id
+                """.formatted(ENTITY_LABEL),
+                org.neo4j.driver.Values.parameters(
+                    "workspaceId", workspaceId,
+                    "query", needle
+                )
             ),
             WorkspaceScopedNeo4jGraphStore::toEntity
         ));

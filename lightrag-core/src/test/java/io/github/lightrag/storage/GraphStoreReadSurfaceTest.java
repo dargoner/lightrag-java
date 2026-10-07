@@ -48,6 +48,24 @@ class GraphStoreReadSurfaceTest {
     }
 
     @Test
+    void searchEntitiesByTextMatchesTheFourCandidateFieldsCaseInsensitivelyInIdOrder() {
+        var inMemory = new InMemoryGraphStore();
+        inMemory.saveEntities(List.of(
+            new GraphStore.EntityRecord("e1", "Alpha", "person", "", List.of(), List.of()),
+            new GraphStore.EntityRecord("e2", "Beta", "concept", "an ALPHA note", List.of(), List.of()),
+            new GraphStore.EntityRecord("e3", "Gamma", "concept", "", List.of("Alpha-Two"), List.of()),
+            new GraphStore.EntityRecord("e4", "Delta", "concept", "", List.of(), List.of())
+        ));
+
+        assertThat(inMemory.searchEntitiesByText("alpha"))
+            .extracting(GraphStore.EntityRecord::id)
+            .containsExactly("e1", "e2", "e3");
+        assertThat(inMemory.searchEntitiesByText("  ")).isEmpty();
+        // Ids are not a candidate field, unlike searchLabels.
+        assertThat(inMemory.searchEntitiesByText("e4")).isEmpty();
+    }
+
+    @Test
     void starReturnsTheHighestDegreeNodesAndFlagsTruncation() {
         var capped = store.getKnowledgeGraph("*", 3, 3);
 

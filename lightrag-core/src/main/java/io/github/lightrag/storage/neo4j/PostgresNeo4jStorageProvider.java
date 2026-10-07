@@ -343,6 +343,11 @@ public final class PostgresNeo4jStorageProvider implements AtomicStorageProvider
         }
 
         @Override
+        public List<EntityRecord> searchEntitiesByText(String query) {
+            return withReadLock(() -> coordinator.graphStore().searchEntitiesByText(query));
+        }
+
+        @Override
         public java.util.Map<String, java.util.List<RelationRecord>> findRelations(java.util.List<String> entityIds) {
             return withReadLock(() -> coordinator.graphStore().findRelations(entityIds));
         }

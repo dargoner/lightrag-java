@@ -117,6 +117,34 @@ public interface GraphStore {
     }
 
     /**
+     * Entities whose name, type, description or any alias contains {@code query}, case-insensitive.
+     * The result is a superset contract: adapters may answer with a broader match set (e.g. a
+     * store-native prefilter), but must never omit a matching entity, and callers re-rank with their
+     * own priority rules. A blank query yields an empty list. The default implementation scans
+     * {@link #allEntities()}; graph-database adapters that can push the match into the store should
+     * override it.
+     */
+    default List<EntityRecord> searchEntitiesByText(String query) {
+        var normalizedQuery = Objects.requireNonNull(query, "query").strip();
+        if (normalizedQuery.isEmpty()) {
+            return List.of();
+        }
+        var needle = normalizedQuery.toLowerCase(Locale.ROOT);
+        var matches = new ArrayList<EntityRecord>();
+        for (var entity : allEntities()) {
+            if (entity.name().toLowerCase(Locale.ROOT).contains(needle)
+                || entity.type().toLowerCase(Locale.ROOT).contains(needle)
+                || entity.description().toLowerCase(Locale.ROOT).contains(needle)
+                || entity.aliases().stream()
+                    .anyMatch(alias -> alias.toLowerCase(Locale.ROOT).contains(needle))) {
+                matches.add(entity);
+            }
+        }
+        matches.sort(Comparator.comparing(EntityRecord::id));
+        return List.copyOf(matches);
+    }
+
+    /**
      * Bounded graph view for visualization-style consumers. This Java contract is normative:
      * {@code "*"} ranks all entities by {@code (degree desc, entity id asc)} and cuts to
      * {@code maxNodes}; any other label runs a frontier-capped BFS from that entity, ordering each
@@ -139,6 +167,31 @@ public interface GraphStore {
             maxDepth,
             maxNodes
         );
+    }
+
+    /**
+     * Executes one native Cypher statement against the backing graph database and returns its raw
+     * columns and records. This is the escape hatch for ad-hoc query surfaces (consoles, agent
+     * query tools) that must speak the store's own dialect; callers own that dialect, the store's
+     * isolation model and the statement kind (read or write). Values are converted to plain Java
+     * types where the store can ({@code String}, {@code Number}, {@code Boolean}, {@code List},
+     * {@code Map}); graph elements keep their structural form as maps. A statement without a
+     * RETURN clause yields no columns and no records. {@code parameters} are bound as named Cypher
+     * parameters as-is. The default implementation rejects the call: a store without a Cypher
+     * engine cannot serve it.
+     */
+    default CypherQueryResult executeCypher(String cypher, Map<String, Object> parameters) {
+        throw new UnsupportedOperationException(
+            getClass().getName() + " does not support native Cypher execution"
+        );
+    }
+
+    /** Result of {@link #executeCypher}: display column names plus one ordered map per record. */
+    record CypherQueryResult(List<String> columns, List<Map<String, Object>> records) {
+        public CypherQueryResult {
+            columns = List.copyOf(Objects.requireNonNull(columns, "columns"));
+            records = List.copyOf(Objects.requireNonNull(records, "records"));
+        }
     }
 
     record EntityRecord(

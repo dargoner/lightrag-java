@@ -66,6 +66,27 @@ class WorkspaceScopedNeo4jGraphStoreTest {
     }
 
     @Test
+    void searchEntitiesByTextMatchesTheCandidateFieldsWithinTheWorkspaceOnly() {
+        try (var alpha = newStore("alpha");
+             var beta = newStore("beta")) {
+            alpha.saveEntities(List.of(
+                new GraphStore.EntityRecord("e1", "Alice", "person", "", List.of(), List.of()),
+                new GraphStore.EntityRecord("e2", "Bob", "researcher", "colleague of Alice", List.of(), List.of()),
+                new GraphStore.EntityRecord("e3", "Gamma", "person", "", List.of("ALICE-TWO"), List.of()),
+                new GraphStore.EntityRecord("e4", "Delta", "artifact", "", List.of(), List.of())
+            ));
+            beta.saveEntity(new GraphStore.EntityRecord("e9", "Alice", "person", "", List.of(), List.of()));
+
+            assertThat(alpha.searchEntitiesByText("alice"))
+                .extracting(GraphStore.EntityRecord::id)
+                .containsExactly("e1", "e2", "e3");
+            assertThat(alpha.searchEntitiesByText("  ")).isEmpty();
+            assertThat(alpha.searchEntitiesByText("e4")).isEmpty();
+            assertThat(beta.searchEntitiesByText("gamma")).isEmpty();
+        }
+    }
+
+    @Test
     void savesRelationWithWorkspaceScopedPlaceholders() {
         try (var alpha = newStore("alpha");
              var beta = newStore("beta")) {
