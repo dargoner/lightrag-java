@@ -6,6 +6,7 @@ import io.github.lightrag.storage.VectorStorageAdapter;
 import io.github.lightrag.storage.VectorStore;
 
 import java.util.LinkedHashMap;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
@@ -24,20 +25,31 @@ public final class PostgresVectorStorageAdapter implements VectorStorageAdapter 
     };
 
     private final PostgresStorageProvider postgresProvider;
+    private final VectorStore sharedVectorStore;
 
     public PostgresVectorStorageAdapter(PostgresStorageProvider postgresProvider) {
         this.postgresProvider = Objects.requireNonNull(postgresProvider, "postgresProvider");
+        this.sharedVectorStore = null;
+    }
+
+    /**
+     * Family-mode adapter backed by a caller-owned store: since family writes already go through the
+     * relational transaction, the store carries the vector rows and this adapter only snapshots them.
+     */
+    PostgresVectorStorageAdapter(VectorStore sharedVectorStore) {
+        this.postgresProvider = null;
+        this.sharedVectorStore = Objects.requireNonNull(sharedVectorStore, "sharedVectorStore");
     }
 
     @Override
     public VectorStore vectorStore() {
-        return postgresProvider.vectorStore();
+        return sharedVectorStore != null ? sharedVectorStore : postgresProvider.vectorStore();
     }
 
     @Override
     public VectorSnapshot captureSnapshot() {
         var namespaces = new LinkedHashMap<String, List<VectorStore.VectorRecord>>();
-        var vectorStore = postgresProvider.vectorStore();
+        var vectorStore = vectorStore();
         for (var namespace : DEFAULT_NAMESPACES) {
             namespaces.put(namespace, vectorStore.list(namespace));
         }
@@ -54,6 +66,10 @@ public final class PostgresVectorStorageAdapter implements VectorStorageAdapter 
     @Override
     public void restore(VectorSnapshot snapshot) {
         var source = Objects.requireNonNull(snapshot, "snapshot");
+        if (sharedVectorStore != null) {
+            restoreSharedSnapshot(source);
+            return;
+        }
         var documentGraphState = DocumentGraphStateSupport.capture(
             postgresProvider.documentGraphSnapshotStore(),
             postgresProvider.documentGraphJournalStore(),
@@ -73,6 +89,18 @@ public final class PostgresVectorStorageAdapter implements VectorStorageAdapter 
             documentGraphState.documentJournals(),
             documentGraphState.chunkJournals()
         ));
+    }
+
+    private void restoreSharedSnapshot(VectorSnapshot source) {
+        var namespaces = new LinkedHashSet<String>(DEFAULT_NAMESPACES);
+        namespaces.addAll(source.namespaces().keySet());
+        for (var namespace : namespaces) {
+            sharedVectorStore.deleteNamespace(namespace);
+            var records = source.namespaces().getOrDefault(namespace, List.of());
+            if (!records.isEmpty()) {
+                sharedVectorStore.saveAll(namespace, records);
+            }
+        }
     }
 
     @Override

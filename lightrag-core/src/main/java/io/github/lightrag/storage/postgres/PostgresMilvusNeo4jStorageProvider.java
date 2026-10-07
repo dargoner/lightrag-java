@@ -166,6 +166,55 @@ public final class PostgresMilvusNeo4jStorageProvider implements AtomicStoragePr
         ));
     }
 
+    /**
+     * Uses an Apache AGE graph on the same PostgreSQL data source ({@link PostgresGraphBackend#AGE}) together
+     * with an externally supplied vector projection and workspace write lock; no Neo4j or Milvus client
+     * configuration is required.
+     */
+    public PostgresMilvusNeo4jStorageProvider(
+        DataSource dataSource,
+        PostgresStorageConfig postgresConfig,
+        SnapshotStore snapshotStore,
+        WorkspaceScope workspaceScope,
+        PostgresGraphBackend graphBackend,
+        VectorProjection vectorProjection,
+        StorageLockManager storageLockManager
+    ) {
+        this(buildWithAgeFromDataSourceProjections(
+            dataSource,
+            postgresConfig,
+            snapshotStore,
+            workspaceScope,
+            requireAgeGraphBackend(graphBackend),
+            // Validated before the relational adapter and AGE bootstrap touch the database.
+            Objects.requireNonNull(vectorProjection, "vectorProjection"),
+            Objects.requireNonNull(storageLockManager, "storageLockManager")
+        ));
+    }
+
+    /**
+     * Uses an Apache AGE graph on the same PostgreSQL data source ({@link PostgresGraphBackend#AGE}) and
+     * stores vectors as pgvector rows in that data source; no Neo4j or Milvus client configuration is required.
+     */
+    public PostgresMilvusNeo4jStorageProvider(
+        DataSource dataSource,
+        PostgresStorageConfig postgresConfig,
+        SnapshotStore snapshotStore,
+        WorkspaceScope workspaceScope,
+        PostgresGraphBackend graphBackend,
+        StorageLockManager storageLockManager
+    ) {
+        this(buildWithAgeAndPgvector(
+            dataSource,
+            postgresConfig,
+            snapshotStore,
+            workspaceScope,
+            // Validated before the relational adapter and AGE bootstrap touch the database.
+            requireAgeGraphBackend(graphBackend),
+            Objects.requireNonNull(storageLockManager, "storageLockManager")
+        ));
+    }
+
     public PostgresMilvusNeo4jStorageProvider(
         DataSource dataSource,
         PostgresStorageConfig postgresConfig,
@@ -228,6 +277,28 @@ public final class PostgresMilvusNeo4jStorageProvider implements AtomicStoragePr
         VectorStorageAdapter vectorAdapter
     ) {
         this(buildFromAdapters(dataSource, postgresConfig, snapshotStore, workspaceScope, graphAdapter, vectorAdapter));
+    }
+
+    public PostgresMilvusNeo4jStorageProvider(
+        DataSource dataSource,
+        PostgresStorageConfig postgresConfig,
+        SnapshotStore snapshotStore,
+        WorkspaceScope workspaceScope,
+        GraphStorageAdapter graphAdapter,
+        VectorStorageAdapter vectorAdapter,
+        StorageLockManager storageLockManager
+    ) {
+        this(buildFromAdapters(
+            dataSource,
+            postgresConfig,
+            snapshotStore,
+            workspaceScope,
+            // Validated before the relational adapter touches the database.
+            Objects.requireNonNull(graphAdapter, "graphAdapter"),
+            Objects.requireNonNull(vectorAdapter, "vectorAdapter"),
+            new ReentrantReadWriteLock(true),
+            Objects.requireNonNull(storageLockManager, "storageLockManager")
+        ));
     }
 
     private PostgresMilvusNeo4jStorageProvider(Components components) {
@@ -529,6 +600,67 @@ public final class PostgresMilvusNeo4jStorageProvider implements AtomicStoragePr
         return buildWithAge(relationalAdapter, milvusConfig, snapshotStore, workspaceScope, graphBackend);
     }
 
+    private static Components buildWithAgeFromDataSourceProjections(
+        DataSource dataSource,
+        PostgresStorageConfig postgresConfig,
+        SnapshotStore snapshotStore,
+        WorkspaceScope workspaceScope,
+        PostgresGraphBackend graphBackend,
+        VectorProjection vectorProjection,
+        StorageLockManager storageLockManager
+    ) {
+        var relationalAdapter = new PostgresRelationalStorageAdapter(
+            Objects.requireNonNull(dataSource, "dataSource"),
+            Objects.requireNonNull(postgresConfig, "postgresConfig"),
+            Objects.requireNonNull(snapshotStore, "snapshotStore"),
+            Objects.requireNonNull(workspaceScope, "workspaceScope")
+        );
+        return buildWithAge(
+            relationalAdapter,
+            vectorProjection,
+            snapshotStore,
+            workspaceScope,
+            graphBackend,
+            storageLockManager
+        );
+    }
+
+    /**
+     * Family mode: relational rows, the AGE graph and pgvector vectors share the same PostgreSQL data
+     * source. Vectors are written through the relational transaction and the schema manager owns the
+     * vectors table (including its ANN index).
+     */
+    private static Components buildWithAgeAndPgvector(
+        DataSource dataSource,
+        PostgresStorageConfig postgresConfig,
+        SnapshotStore snapshotStore,
+        WorkspaceScope workspaceScope,
+        PostgresGraphBackend graphBackend,
+        StorageLockManager storageLockManager
+    ) {
+        var source = Objects.requireNonNull(dataSource, "dataSource");
+        var config = Objects.requireNonNull(postgresConfig, "postgresConfig");
+        var snapshots = Objects.requireNonNull(snapshotStore, "snapshotStore");
+        var scope = Objects.requireNonNull(workspaceScope, "workspaceScope");
+        var relationalAdapter = new PostgresRelationalStorageAdapter(source, config, snapshots, scope, true);
+        var alignedConfig = relationalAdapter.config();
+        new PostgresSchemaManager(source, alignedConfig).bootstrap();
+        var workspaceId = scope.workspaceId();
+        new PostgresAgeBootstrap(source, workspaceId).bootstrap();
+        var graphAdapter = new PostgresAgeGraphStorageAdapter(source, workspaceId);
+        var vectorAdapter = new PostgresVectorStorageAdapter(
+            new PostgresVectorStore(source, alignedConfig, workspaceId)
+        );
+        return new Components(
+            snapshots,
+            relationalAdapter,
+            graphAdapter,
+            vectorAdapter,
+            new ReentrantReadWriteLock(true),
+            storageLockManager
+        );
+    }
+
     private static Components buildWithAge(
         PostgresRelationalStorageAdapter relationalAdapter,
         MilvusVectorConfig milvusConfig,
@@ -554,6 +686,32 @@ public final class PostgresMilvusNeo4jStorageProvider implements AtomicStoragePr
             vectorAdapter,
             new ReentrantReadWriteLock(true),
             StorageLockManager.noop()
+        );
+    }
+
+    private static Components buildWithAge(
+        PostgresRelationalStorageAdapter relationalAdapter,
+        VectorProjection vectorProjection,
+        SnapshotStore snapshotStore,
+        WorkspaceScope workspaceScope,
+        PostgresGraphBackend graphBackend,
+        StorageLockManager storageLockManager
+    ) {
+        var dataSource = relationalAdapter.dataSource();
+        var workspaceId = workspaceScope.workspaceId();
+        new PostgresAgeBootstrap(dataSource, workspaceId).bootstrap();
+        var graphAdapter = new PostgresAgeGraphStorageAdapter(dataSource, workspaceId);
+        var vectorAdapter = new MilvusVectorStorageAdapter(
+            Objects.requireNonNull(vectorProjection, "vectorProjection"),
+            snapshot -> buildMilvusPayloads(snapshot, relationalAdapter)
+        );
+        return new Components(
+            snapshotStore,
+            relationalAdapter,
+            graphAdapter,
+            vectorAdapter,
+            new ReentrantReadWriteLock(true),
+            storageLockManager
         );
     }
 
@@ -623,6 +781,29 @@ public final class PostgresMilvusNeo4jStorageProvider implements AtomicStoragePr
         GraphStorageAdapter graphAdapter,
         VectorStorageAdapter vectorAdapter
     ) {
+        return buildFromAdapters(
+            dataSource,
+            postgresConfig,
+            snapshotStore,
+            workspaceScope,
+            graphAdapter,
+            vectorAdapter,
+            new ReentrantReadWriteLock(true),
+            StorageLockManager.noop()
+        );
+    }
+
+    private static Components buildFromAdapters(
+        DataSource dataSource,
+        PostgresStorageConfig postgresConfig,
+        SnapshotStore snapshotStore,
+        WorkspaceScope workspaceScope,
+        GraphStorageAdapter graphAdapter,
+        VectorStorageAdapter vectorAdapter,
+        ReentrantReadWriteLock lock,
+        StorageLockManager storageLockManager
+    ) {
+        Objects.requireNonNull(lock, "lock");
         var relationalAdapter = new PostgresRelationalStorageAdapter(
             Objects.requireNonNull(dataSource, "dataSource"),
             Objects.requireNonNull(postgresConfig, "postgresConfig"),
@@ -634,8 +815,8 @@ public final class PostgresMilvusNeo4jStorageProvider implements AtomicStoragePr
             relationalAdapter,
             Objects.requireNonNull(graphAdapter, "graphAdapter"),
             Objects.requireNonNull(vectorAdapter, "vectorAdapter"),
-            new ReentrantReadWriteLock(true),
-            StorageLockManager.noop()
+            lock,
+            storageLockManager
         );
     }
 
@@ -801,6 +982,23 @@ public final class PostgresMilvusNeo4jStorageProvider implements AtomicStoragePr
     }
 
     private int deleteVectors(Set<String> chunkIds, List<String> entityIds, List<String> relationIds) {
+        var vectorStore = vectorAdapter.vectorStore();
+        if (vectorStore instanceof PostgresVectorStore postgresVectorStore) {
+            var touched = 0;
+            if (!chunkIds.isEmpty()) {
+                postgresVectorStore.deleteIds("chunks", List.copyOf(chunkIds));
+                touched++;
+            }
+            if (!entityIds.isEmpty()) {
+                postgresVectorStore.deleteIds("entities", entityIds);
+                touched++;
+            }
+            if (!relationIds.isEmpty()) {
+                postgresVectorStore.deleteIds("relations", relationIds);
+                touched++;
+            }
+            return touched;
+        }
         if (!(vectorAdapter instanceof MilvusVectorStorageAdapter milvusAdapter)) {
             return 0;
         }
@@ -1122,19 +1320,41 @@ public final class PostgresMilvusNeo4jStorageProvider implements AtomicStoragePr
 
         @Override
         public void saveAllEnriched(String namespace, List<EnrichedVectorRecord> records) {
-            withWriteLock(() -> hybridDelegate().saveAllEnriched(namespace, records));
+            if (delegate instanceof HybridVectorStore hybridVectorStore) {
+                withWriteLock(() -> hybridVectorStore.saveAllEnriched(namespace, records));
+                return;
+            }
+            // Plain stores (for example the pgvector baseline) keep only the dense vector; the keyword
+            // payload has no column there, matching the non-hybrid degradation in VectorSearches.
+            withWriteLock(() -> delegate.saveAll(
+                namespace,
+                records.stream().map(EnrichedVectorRecord::toVectorRecord).toList()
+            ));
         }
 
         @Override
         public List<VectorMatch> search(String namespace, SearchRequest request) {
-            return withReadLock(() -> hybridDelegate().search(namespace, request));
-        }
-
-        private HybridVectorStore hybridDelegate() {
             if (delegate instanceof HybridVectorStore hybridVectorStore) {
-                return hybridVectorStore;
+                return withReadLock(() -> hybridVectorStore.search(namespace, request));
             }
-            throw new UnsupportedOperationException("Delegate vector store does not support hybrid search");
+            if (request.queryVector().isEmpty()) {
+                log.info(
+                    "LightRAG vector search degraded: storeType={}, namespace={}, mode={} carries no query vector and the delegate has no keyword index; returning no matches",
+                    delegate.getClass().getSimpleName(),
+                    namespace,
+                    request.mode()
+                );
+                return List.of();
+            }
+            if (request.mode() != SearchMode.SEMANTIC) {
+                log.info(
+                    "LightRAG vector search degraded: storeType={}, namespace={}, mode={} has no keyword index on the delegate; falling back to dense-only search",
+                    delegate.getClass().getSimpleName(),
+                    namespace,
+                    request.mode()
+                );
+            }
+            return withReadLock(() -> delegate.search(namespace, request.queryVector(), request.topK()));
         }
     }
 

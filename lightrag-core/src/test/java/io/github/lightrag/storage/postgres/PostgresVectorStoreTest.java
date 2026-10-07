@@ -108,6 +108,104 @@ class PostgresVectorStoreTest {
         }
     }
 
+    @Test
+    void deletesVectorsByIdWithinTheirNamespaceOnly() {
+        var config = newConfig();
+        try (var resources = newStoreResources(config)) {
+            resources.store().saveAll(
+                "chunks",
+                List.of(
+                    new VectorStore.VectorRecord("chunk-1", List.of(1.0d, 0.0d, 0.0d)),
+                    new VectorStore.VectorRecord("chunk-2", List.of(0.0d, 1.0d, 0.0d))
+                )
+            );
+            resources.store().saveAll(
+                "entities",
+                List.of(new VectorStore.VectorRecord("chunk-1", List.of(0.0d, 0.0d, 1.0d)))
+            );
+
+            resources.store().deleteIds("chunks", List.of("chunk-1", "missing"));
+
+            assertThat(resources.store().list("chunks")).containsExactly(
+                new VectorStore.VectorRecord("chunk-2", List.of(0.0d, 1.0d, 0.0d))
+            );
+            assertThat(resources.store().list("entities")).containsExactly(
+                new VectorStore.VectorRecord("chunk-1", List.of(0.0d, 0.0d, 1.0d))
+            );
+        }
+    }
+
+    @Test
+    void ignoresDeletesWithoutIds() {
+        var config = newConfig();
+        try (var resources = newStoreResources(config)) {
+            resources.store().saveAll(
+                "chunks",
+                List.of(new VectorStore.VectorRecord("chunk-1", List.of(1.0d, 0.0d, 0.0d)))
+            );
+
+            resources.store().deleteIds("chunks", List.of());
+
+            assertThat(resources.store().list("chunks")).containsExactly(
+                new VectorStore.VectorRecord("chunk-1", List.of(1.0d, 0.0d, 0.0d))
+            );
+        }
+    }
+
+    @Test
+    void deletesWholeNamespace() {
+        var config = newConfig();
+        try (var resources = newStoreResources(config)) {
+            resources.store().saveAll(
+                "chunks",
+                List.of(new VectorStore.VectorRecord("chunk-1", List.of(1.0d, 0.0d, 0.0d)))
+            );
+            resources.store().saveAll(
+                "entities",
+                List.of(new VectorStore.VectorRecord("entity-1", List.of(0.0d, 1.0d, 0.0d)))
+            );
+
+            resources.store().deleteNamespace("chunks");
+
+            assertThat(resources.store().list("chunks")).isEmpty();
+            assertThat(resources.store().list("entities")).containsExactly(
+                new VectorStore.VectorRecord("entity-1", List.of(0.0d, 1.0d, 0.0d))
+            );
+        }
+    }
+
+    @Test
+    void createsHnswIndexOnTheEmbeddingColumn() {
+        var config = newConfig();
+        try (var resources = newStoreResources(config)) {
+            try (var connection = java.sql.DriverManager.getConnection(
+                config.jdbcUrl(),
+                config.username(),
+                config.password()
+            ); var statement = connection.prepareStatement(
+                """
+                SELECT indexdef
+                FROM pg_indexes
+                WHERE schemaname = ?
+                  AND tablename = ?
+                  AND indexname = ?
+                """
+            )) {
+                statement.setString(1, config.schema());
+                statement.setString(2, config.tableName("vectors"));
+                statement.setString(3, config.tableName("vectors") + "_embedding_hnsw_idx");
+                try (var resultSet = statement.executeQuery()) {
+                    assertThat(resultSet.next()).isTrue();
+                    var indexDefinition = resultSet.getString("indexdef");
+                    assertThat(indexDefinition).contains("hnsw");
+                    assertThat(indexDefinition).contains("vector_ip_ops");
+                }
+            } catch (java.sql.SQLException exception) {
+                throw new IllegalStateException(exception);
+            }
+        }
+    }
+
     private static PostgreSQLContainer<?> newPostgresContainer() {
         var image = DockerImageName.parse("pgvector/pgvector:pg16")
             .asCompatibleSubstituteFor("postgres");

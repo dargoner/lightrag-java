@@ -229,6 +229,32 @@ class PostgresMilvusNeo4jStorageProviderTest {
     }
 
     @Test
+    void usesInjectedStorageLockManagerForAdaptersFamilyWrites() {
+        var config = newConfig();
+        try (var dataSource = newDataSource(config)) {
+            var externalLock = new RecordingStorageLockManager();
+            try (var provider = new PostgresMilvusNeo4jStorageProvider(
+                dataSource,
+                config,
+                new InMemorySnapshotStore(),
+                new WorkspaceScope("default"),
+                new RecordingGraphStorageAdapter(),
+                new RecordingVectorStorageAdapter(),
+                externalLock
+            )) {
+                provider.writeAtomically(storage -> {
+                    storage.documentStore().save(new DocumentStore.DocumentRecord("doc-adapters-lock", "Title", "Body", Map.of()));
+                    return null;
+                });
+
+                assertThat(provider.documentStore().load("doc-adapters-lock")).isPresent();
+                assertThat(externalLock.exclusiveCalls()).isEqualTo(1);
+                assertThat(externalLock.activeExclusiveCalls()).isZero();
+            }
+        }
+    }
+
+    @Test
     void queryReadsDoNotHoldWorkspaceAdvisoryLock() throws Exception {
         var config = newConfig();
         try (var dataSource = newDataSource(config)) {

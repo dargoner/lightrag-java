@@ -180,7 +180,7 @@ class PostgresAgeStorageProviderIntegrationTest {
 
     private static String buildAgePgVectorImage() {
         // ImageFromDockerfile builds lazily and caches the image under this name between runs.
-        return new ImageFromDockerfile("lightrag-postgres-age-pgvector:pg16", false)
+        return new ImageFromDockerfile("postgres-age-pgvector:pg16", false)
             .withFileFromClasspath("Dockerfile", "postgres-age/Dockerfile")
             .get();
     }

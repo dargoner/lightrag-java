@@ -134,6 +134,55 @@ public final class PostgresVectorStore implements VectorStore {
         });
     }
 
+    @Override
+    public void deleteIds(String namespace, List<String> ids) {
+        var targetNamespace = Objects.requireNonNull(namespace, "namespace");
+        Objects.requireNonNull(ids, "ids");
+        if (ids.isEmpty()) {
+            return;
+        }
+
+        connectionAccess.withConnection(connection -> {
+            var placeholders = String.join(", ", java.util.Collections.nCopies(ids.size(), "?"));
+            try (var statement = connection.prepareStatement(
+                """
+                DELETE FROM %s
+                WHERE workspace_id = ?
+                  AND namespace = ?
+                  AND vector_id IN (%s)
+                """.formatted(tableName, placeholders)
+            )) {
+                statement.setString(1, workspaceId);
+                statement.setString(2, targetNamespace);
+                var index = 3;
+                for (var id : ids) {
+                    statement.setString(index++, Objects.requireNonNull(id, "id"));
+                }
+                statement.executeUpdate();
+                return null;
+            }
+        });
+    }
+
+    @Override
+    public void deleteNamespace(String namespace) {
+        var targetNamespace = Objects.requireNonNull(namespace, "namespace");
+        connectionAccess.withConnection(connection -> {
+            try (var statement = connection.prepareStatement(
+                """
+                DELETE FROM %s
+                WHERE workspace_id = ?
+                  AND namespace = ?
+                """.formatted(tableName)
+            )) {
+                statement.setString(1, workspaceId);
+                statement.setString(2, targetNamespace);
+                statement.executeUpdate();
+                return null;
+            }
+        });
+    }
+
     private VectorRecord readVector(ResultSet resultSet) throws SQLException {
         var vector = new PGvector(resultSet.getString("embedding"));
         return new VectorRecord(

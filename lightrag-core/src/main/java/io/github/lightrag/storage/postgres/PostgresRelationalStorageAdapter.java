@@ -17,6 +17,7 @@ import io.github.lightrag.storage.SnapshotStore;
 import io.github.lightrag.storage.TaskDocumentStore;
 import io.github.lightrag.storage.TaskStageStore;
 import io.github.lightrag.storage.TaskStore;
+import io.github.lightrag.storage.VectorStore;
 import javax.sql.DataSource;
 import java.sql.Connection;
 import java.sql.PreparedStatement;
@@ -47,6 +48,7 @@ public final class PostgresRelationalStorageAdapter implements RelationalStorage
     private final DocumentGraphSnapshotStore documentGraphSnapshotStore;
     private final DocumentGraphJournalStore documentGraphJournalStore;
     private final java.util.Set<String> trackedDocumentGraphIds;
+    private final boolean exposeTransactionalVectorStore;
 
     public PostgresRelationalStorageAdapter(
         DataSource dataSource,
@@ -59,7 +61,8 @@ public final class PostgresRelationalStorageAdapter implements RelationalStorage
             false,
             Objects.requireNonNull(config, "config"),
             Objects.requireNonNull(snapshotStore, "snapshotStore"),
-            Objects.requireNonNull(workspaceScope, "workspaceScope").workspaceId()
+            Objects.requireNonNull(workspaceScope, "workspaceScope").workspaceId(),
+            false
         );
     }
 
@@ -74,7 +77,8 @@ public final class PostgresRelationalStorageAdapter implements RelationalStorage
             false,
             Objects.requireNonNull(config, "config"),
             Objects.requireNonNull(snapshotStore, "snapshotStore"),
-            Objects.requireNonNull(workspaceId, "workspaceId")
+            Objects.requireNonNull(workspaceId, "workspaceId"),
+            false
         );
     }
 
@@ -88,7 +92,29 @@ public final class PostgresRelationalStorageAdapter implements RelationalStorage
             true,
             config,
             Objects.requireNonNull(snapshotStore, "snapshotStore"),
-            Objects.requireNonNull(workspaceScope, "workspaceScope").workspaceId()
+            Objects.requireNonNull(workspaceScope, "workspaceScope").workspaceId(),
+            false
+        );
+    }
+
+    /**
+     * Family mode: vectors live in the same PostgreSQL schema and are written through the transaction,
+     * so the transactional view exposes a {@link PostgresVectorStore} bound to the open connection.
+     */
+    PostgresRelationalStorageAdapter(
+        DataSource dataSource,
+        PostgresStorageConfig config,
+        SnapshotStore snapshotStore,
+        WorkspaceScope workspaceScope,
+        boolean exposeTransactionalVectorStore
+    ) {
+        this(
+            Objects.requireNonNull(dataSource, "dataSource"),
+            false,
+            Objects.requireNonNull(config, "config"),
+            Objects.requireNonNull(snapshotStore, "snapshotStore"),
+            Objects.requireNonNull(workspaceScope, "workspaceScope").workspaceId(),
+            exposeTransactionalVectorStore
         );
     }
 
@@ -97,11 +123,13 @@ public final class PostgresRelationalStorageAdapter implements RelationalStorage
         boolean ownsDataSource,
         PostgresStorageConfig config,
         SnapshotStore snapshotStore,
-        String workspaceId
+        String workspaceId,
+        boolean exposeTransactionalVectorStore
     ) {
         this.dataSource = Objects.requireNonNull(dataSource, "dataSource");
         this.ownedDataSource = dataSource instanceof HikariDataSource hikari ? hikari : null;
         this.ownsDataSource = ownsDataSource;
+        this.exposeTransactionalVectorStore = exposeTransactionalVectorStore;
         this.config = ownsDataSource
             ? Objects.requireNonNull(config, "config")
             : PostgresSchemaResolver.alignWithDataSourceSchema(
@@ -322,6 +350,14 @@ public final class PostgresRelationalStorageAdapter implements RelationalStorage
                         @Override
                         public Optional<GraphStore> transactionalGraphStore() {
                             return Optional.of(new PostgresGraphStore(connectionAccess, config, workspaceId));
+                        }
+
+                        @Override
+                        public Optional<VectorStore> transactionalVectorStore() {
+                            if (!exposeTransactionalVectorStore) {
+                                return Optional.empty();
+                            }
+                            return Optional.of(new PostgresVectorStore(connectionAccess, config, workspaceId));
                         }
                     }));
                 } catch (SQLException exception) {

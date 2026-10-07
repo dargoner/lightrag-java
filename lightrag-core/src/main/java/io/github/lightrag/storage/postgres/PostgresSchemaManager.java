@@ -15,6 +15,7 @@ public final class PostgresSchemaManager {
     private final DataSource dataSource;
     private final PostgresStorageConfig config;
     private final List<String> bootstrapStatements;
+    private String vectorExtensionSchema;
 
     public PostgresSchemaManager(DataSource dataSource, PostgresStorageConfig config) {
         this(dataSource, config, null);
@@ -34,6 +35,7 @@ public final class PostgresSchemaManager {
                 try {
                     statement.execute("CREATE SCHEMA IF NOT EXISTS " + config.schemaName());
                     ensureSchemaVersionTable(statement);
+                    vectorExtensionSchema = resolveVectorExtensionSchema(connection, statement);
 
                     Optional<Integer> currentVersion = loadCurrentVersion(connection);
                     if (currentVersion.isEmpty()) {
@@ -106,7 +108,8 @@ public final class PostgresSchemaManager {
             new Migration(4, versionFourStatements()),
             new Migration(5, versionFiveStatements()),
             new Migration(6, versionSixStatements()),
-            new Migration(7, versionSevenStatements())
+            new Migration(7, versionSevenStatements()),
+            new Migration(8, versionEightStatements())
         );
     }
 
@@ -369,6 +372,49 @@ public final class PostgresSchemaManager {
                 )
                 """.formatted(config.qualifiedTableName("embedding_space"))
         );
+    }
+
+    private List<String> versionEightStatements() {
+        return List.of(
+            """
+                CREATE INDEX IF NOT EXISTS %s
+                ON %s USING hnsw (embedding %s)
+                """.formatted(
+                quoteIdentifier(config.tableName("vectors") + "_embedding_hnsw_idx"),
+                config.qualifiedTableName("vectors"),
+                vectorInnerProductOperatorClass()
+            )
+        );
+    }
+
+    /**
+     * Qualifies the operator class with the schema that owns the vector extension: index definitions are
+     * parsed - and operator classes resolved - before the {@code IF NOT EXISTS} existence check, so an
+     * unqualified name fails on connections whose {@code search_path} excludes the extension schema.
+     */
+    private String vectorInnerProductOperatorClass() {
+        if (vectorExtensionSchema == null || vectorExtensionSchema.isBlank()) {
+            return "vector_ip_ops";
+        }
+        return quoteIdentifier(vectorExtensionSchema) + ".vector_ip_ops";
+    }
+
+    private String resolveVectorExtensionSchema(Connection connection, Statement statement) throws SQLException {
+        try (var resultSet = statement.executeQuery(
+            """
+                SELECT namespace.nspname
+                FROM pg_extension extension
+                JOIN pg_namespace namespace ON namespace.oid = extension.extnamespace
+                WHERE extension.extname = 'vector'
+                """
+        )) {
+            if (resultSet.next()) {
+                return resultSet.getString(1);
+            }
+        }
+        try (var resultSet = statement.executeQuery("SELECT current_schema()")) {
+            return resultSet.next() ? resultSet.getString(1) : null;
+        }
     }
 
     private void ensureSchemaVersionTable(Statement statement) throws SQLException {
