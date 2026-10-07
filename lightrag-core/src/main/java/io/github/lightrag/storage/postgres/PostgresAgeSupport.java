@@ -30,8 +30,17 @@ final class PostgresAgeSupport {
         var workspace = workspaceId == null ? "" : workspaceId.strip();
         var candidate = workspace.isEmpty() || workspace.equalsIgnoreCase("default")
             ? GRAPH_NAMESPACE
-            : workspace.replaceAll("[^A-Za-z0-9_]", "_") + "_" + GRAPH_NAMESPACE;
+            : sanitizeWorkspace(workspace) + "_" + GRAPH_NAMESPACE;
         return candidate.substring(0, Math.min(candidate.length(), PG_NAME_MAX_BYTES));
+    }
+
+    /**
+     * Maps every character outside {@code [A-Za-z0-9_]} to {@code _}, the same replacement
+     * {@link #graphName} applies to workspace prefixes. Case is preserved, so the result
+     * {@code startsWith} comparisons observe the same textual form as the stored graph names.
+     */
+    static String sanitizeWorkspace(String workspace) {
+        return workspace.replaceAll("[^A-Za-z0-9_]", "_");
     }
 
     /**
