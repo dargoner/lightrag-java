@@ -19,8 +19,17 @@ import java.util.Set;
  * Bootstraps Apache AGE for one workspace, ported from the upstream Python
  * {@code PostgreSQLDB.configure_age_extension} and {@code PGGraphStorage.initialize}
  * ({@code kg/postgres_impl.py}). Runs once per provider construction on a dedicated
- * auto-commit connection, because {@code CREATE INDEX CONCURRENTLY} cannot run inside a
- * transaction block.
+ * auto-commit connection.
+ *
+ * <p>Index DDL deliberately uses plain {@code CREATE INDEX IF NOT EXISTS} rather than
+ * {@code CREATE INDEX CONCURRENTLY}: the concurrent form waits for every transaction that
+ * was open when it started, which deadlocks hold-and-wait against an application transaction
+ * that is itself waiting for the bootstrap (observed: a platform transaction holding a
+ * knowledge-base row lock blocked the bootstrap call until it finished, while the concurrent
+ * index build waited for that same transaction forever). Bootstrap only creates missing
+ * indexes on an AGE graph it just ensured exists, so the plain build is effectively
+ * instantaneous for the common (new graph) case; an already-populated graph that is missing
+ * an index briefly blocks writes to its own label tables, which is acceptable.</p>
  *
  * <p>The version gate refuses Apache AGE 1.8.0 and newer unless
  * {@code POSTGRES_AGE_ALLOW_UNSUPPORTED_VERSION} (environment variable or system property)
@@ -70,8 +79,23 @@ final class PostgresAgeBootstrap {
                     }
                 }
                 installExtension(connection);
-                ensureGraph(connection);
-                ensureLabelsAndIndexes(connection);
+                var originalSearchPath = readSearchPath(connection);
+                try {
+                    applySearchPath(connection, agCatalogFirstSearchPath(originalSearchPath));
+                    ensureGraph(connection);
+                    ensureLabelsAndIndexes(connection);
+                } finally {
+                    if (originalSearchPath != null) {
+                        try {
+                            applySearchPath(connection, originalSearchPath);
+                        } catch (SQLException restoreFailure) {
+                            log.debug(
+                                "Could not restore search_path on the Apache AGE bootstrap connection",
+                                restoreFailure
+                            );
+                        }
+                    }
+                }
             } finally {
                 if (!originalAutoCommit) {
                     try {
@@ -132,6 +156,35 @@ final class PostgresAgeBootstrap {
         }
     }
 
+    /**
+     * AGE's {@code create_graph} and the label helpers resolve the {@code graphid_ops} opclass by
+     * its unqualified name, so {@code ag_catalog} must be on the search_path; without it the
+     * bootstrap fails with 'operator class "graphid_ops" does not exist for access method "btree"'
+     * (observed with AGE 1.8.0 on PostgreSQL 18). The connection stays in auto-commit, so
+     * {@code SET LOCAL} cannot be used: the path is applied with session scope and the caller
+     * restores the original value afterwards.
+     */
+    static String agCatalogFirstSearchPath(String original) {
+        if (original == null || original.isBlank()) {
+            return "ag_catalog, \"$user\", public";
+        }
+        return "ag_catalog, " + original.strip();
+    }
+
+    private static String readSearchPath(Connection connection) throws SQLException {
+        try (var statement = connection.createStatement();
+             var resultSet = statement.executeQuery("SHOW search_path")) {
+            return resultSet.next() ? resultSet.getString(1) : null;
+        }
+    }
+
+    private static void applySearchPath(Connection connection, String searchPath) throws SQLException {
+        try (var statement = connection.prepareStatement("SELECT set_config('search_path', ?, false)")) {
+            statement.setString(1, searchPath);
+            statement.execute();
+        }
+    }
+
     private void ensureLabelsAndIndexes(Connection connection) throws SQLException {
         var presentLabels = presentLabels(connection);
         if (!presentLabels.contains("base")) {
@@ -186,29 +239,29 @@ final class PostgresAgeBootstrap {
         // The schema is double-quoted because create_graph preserves case; see PostgresAgeGraphStore#qualifiedLabel.
         return List.of(
             """
-            CREATE INDEX CONCURRENTLY IF NOT EXISTS vertex_idx_node_id ON "%s"."_ag_label_vertex"
+            CREATE INDEX IF NOT EXISTS vertex_idx_node_id ON "%s"."_ag_label_vertex"
                 (ag_catalog.agtype_access_operator(properties, '"entity_id"'::ag_catalog.agtype))""",
             """
-            CREATE INDEX CONCURRENTLY IF NOT EXISTS edge_sid_idx ON "%s"."_ag_label_edge" (start_id)""",
+            CREATE INDEX IF NOT EXISTS edge_sid_idx ON "%s"."_ag_label_edge" (start_id)""",
             """
-            CREATE INDEX CONCURRENTLY IF NOT EXISTS edge_eid_idx ON "%s"."_ag_label_edge" (end_id)""",
+            CREATE INDEX IF NOT EXISTS edge_eid_idx ON "%s"."_ag_label_edge" (end_id)""",
             """
-            CREATE INDEX CONCURRENTLY IF NOT EXISTS edge_seid_idx ON "%s"."_ag_label_edge" (start_id,end_id)""",
+            CREATE INDEX IF NOT EXISTS edge_seid_idx ON "%s"."_ag_label_edge" (start_id,end_id)""",
             """
-            CREATE INDEX CONCURRENTLY IF NOT EXISTS directed_p_idx ON "%s"."DIRECTED" (id)""",
+            CREATE INDEX IF NOT EXISTS directed_p_idx ON "%s"."DIRECTED" (id)""",
             """
-            CREATE INDEX CONCURRENTLY IF NOT EXISTS directed_eid_idx ON "%s"."DIRECTED" (end_id)""",
+            CREATE INDEX IF NOT EXISTS directed_eid_idx ON "%s"."DIRECTED" (end_id)""",
             """
-            CREATE INDEX CONCURRENTLY IF NOT EXISTS directed_sid_idx ON "%s"."DIRECTED" (start_id)""",
+            CREATE INDEX IF NOT EXISTS directed_sid_idx ON "%s"."DIRECTED" (start_id)""",
             """
-            CREATE INDEX CONCURRENTLY IF NOT EXISTS directed_seid_idx ON "%s"."DIRECTED" (start_id,end_id)""",
+            CREATE INDEX IF NOT EXISTS directed_seid_idx ON "%s"."DIRECTED" (start_id,end_id)""",
             """
-            CREATE INDEX CONCURRENTLY IF NOT EXISTS entity_p_idx ON "%s"."base" (id)""",
+            CREATE INDEX IF NOT EXISTS entity_p_idx ON "%s"."base" (id)""",
             """
-            CREATE INDEX CONCURRENTLY IF NOT EXISTS entity_idx_node_id ON "%s"."base"
+            CREATE INDEX IF NOT EXISTS entity_idx_node_id ON "%s"."base"
                 (ag_catalog.agtype_access_operator(properties, '"entity_id"'::ag_catalog.agtype))""",
             """
-            CREATE INDEX CONCURRENTLY IF NOT EXISTS entity_node_id_gin_idx ON "%s"."base" using gin(properties)""",
+            CREATE INDEX IF NOT EXISTS entity_node_id_gin_idx ON "%s"."base" using gin(properties)""",
             """
             ALTER TABLE "%s"."DIRECTED" CLUSTER ON directed_sid_idx"""
         ).stream().map(ddl -> ddl.formatted(graphName)).toList();
