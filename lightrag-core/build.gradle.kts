@@ -30,6 +30,7 @@ dependencies {
     implementation("com.zaxxer:HikariCP:7.0.2")
     implementation("com.pgvector:pgvector:0.1.6")
     implementation("org.neo4j.driver:neo4j-java-driver:5.28.5")
+    implementation("com.falkordb:jfalkordb:0.13.1")
     implementation("org.testcontainers:mysql:1.21.4")
     implementation("org.testcontainers:postgresql:1.21.4")
     implementation("org.testcontainers:neo4j:1.21.4")
