@@ -31,6 +31,10 @@ dependencies {
     implementation("com.pgvector:pgvector:0.1.6")
     implementation("org.neo4j.driver:neo4j-java-driver:5.28.5")
     implementation("com.falkordb:jfalkordb:0.13.1")
+    implementation("com.vesoft:client:3.8.4") {
+        exclude(group = "javax.servlet", module = "javax.servlet-api")
+        exclude(group = "org.mortbay.jetty.alpn", module = "alpn-boot")
+    }
     implementation("org.testcontainers:mysql:1.21.4")
     implementation("org.testcontainers:postgresql:1.21.4")
     implementation("org.testcontainers:neo4j:1.21.4")
