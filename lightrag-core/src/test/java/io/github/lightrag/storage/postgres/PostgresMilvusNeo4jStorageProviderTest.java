@@ -255,6 +255,72 @@ class PostgresMilvusNeo4jStorageProviderTest {
     }
 
     @Test
+    void keepsReadsAvailableWhileAWriteWaitsForTheExternalStorageLock() throws Exception {
+        var config = newConfig();
+        try (var dataSource = newDataSource(config)) {
+            var externalLock = new BlockingStorageLockManager();
+            try (var provider = new PostgresMilvusNeo4jStorageProvider(
+                dataSource,
+                config,
+                new InMemorySnapshotStore(),
+                new WorkspaceScope("default"),
+                new RecordingGraphProjection(),
+                new RecordingMilvusProjection(),
+                externalLock
+            )) {
+                provider.documentStore().save(new DocumentStore.DocumentRecord("doc-existing", "Title", "Body", Map.of()));
+                externalLock.startBlocking();
+
+                var writeFinished = new CountDownLatch(1);
+                var writeFailure = new AtomicReference<Throwable>();
+                var writer = new Thread(() -> {
+                    try {
+                        provider.documentStore().save(new DocumentStore.DocumentRecord("doc-deferred", "Title", "Body", Map.of()));
+                    } catch (Throwable throwable) {
+                        writeFailure.set(throwable);
+                    } finally {
+                        writeFinished.countDown();
+                    }
+                });
+                var readFinished = new CountDownLatch(1);
+                var readFailure = new AtomicReference<Throwable>();
+                var readResult = new AtomicReference<Optional<DocumentStore.DocumentRecord>>();
+                var reader = new Thread(() -> {
+                    try {
+                        readResult.set(provider.documentStore().load("doc-existing"));
+                    } catch (Throwable throwable) {
+                        readFailure.set(throwable);
+                    } finally {
+                        readFinished.countDown();
+                    }
+                });
+
+                writer.start();
+                try {
+                    assertThat(externalLock.awaitEntered(10, TimeUnit.SECONDS)).isTrue();
+
+                    reader.start();
+                    // The local read lock must stay available while the write waits for the external lock.
+                    assertThat(readFinished.await(5, TimeUnit.SECONDS)).isTrue();
+                    reader.join(1000);
+                    assertThat(readFailure.get()).isNull();
+                    assertThat(readResult.get()).isPresent();
+
+                    externalLock.release();
+                    assertThat(writeFinished.await(5, TimeUnit.SECONDS)).isTrue();
+                    writer.join(1000);
+                    assertThat(writeFailure.get()).isNull();
+                    assertThat(provider.documentStore().load("doc-deferred")).isPresent();
+                } finally {
+                    externalLock.release();
+                    writer.join(5000);
+                    reader.join(5000);
+                }
+            }
+        }
+    }
+
+    @Test
     void queryReadsDoNotHoldWorkspaceAdvisoryLock() throws Exception {
         var config = newConfig();
         try (var dataSource = newDataSource(config)) {
@@ -1400,6 +1466,41 @@ class PostgresMilvusNeo4jStorageProviderTest {
 
         int activeExclusiveCalls() {
             return activeExclusiveCalls.get();
+        }
+    }
+
+    private static final class BlockingStorageLockManager implements StorageLockManager {
+        private final AtomicBoolean blocking = new AtomicBoolean();
+        private final CountDownLatch entered = new CountDownLatch(1);
+        private final CountDownLatch released = new CountDownLatch(1);
+
+        void startBlocking() {
+            blocking.set(true);
+        }
+
+        @Override
+        public <T> T withExclusiveLock(Supplier<T> supplier) {
+            if (!blocking.get()) {
+                return supplier.get();
+            }
+            entered.countDown();
+            try {
+                if (!released.await(10, TimeUnit.SECONDS)) {
+                    throw new IllegalStateException("Timed out waiting to release the blocked storage lock");
+                }
+            } catch (InterruptedException interrupted) {
+                Thread.currentThread().interrupt();
+                throw new IllegalStateException("Interrupted while waiting to release the blocked storage lock", interrupted);
+            }
+            return supplier.get();
+        }
+
+        boolean awaitEntered(long timeout, TimeUnit unit) throws InterruptedException {
+            return entered.await(timeout, unit);
+        }
+
+        void release() {
+            released.countDown();
         }
     }
 }

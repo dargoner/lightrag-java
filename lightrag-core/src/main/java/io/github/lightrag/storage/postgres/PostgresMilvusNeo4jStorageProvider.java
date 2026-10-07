@@ -395,9 +395,7 @@ public final class PostgresMilvusNeo4jStorageProvider implements AtomicStoragePr
         Objects.requireNonNull(operation, "operation");
         long started = System.nanoTime();
         try {
-            return withExclusiveProviderLock(() -> storageLockManager.withExclusiveLock(() -> withExclusiveStorageLockScope(
-                () -> coordinator.writeAtomically(operation)
-            )));
+            return withExclusiveWriteScope(() -> coordinator.writeAtomically(operation));
         } finally {
             log.info(
                 "LightRAG postgres-milvus-neo4j provider writeAtomically completed: totalMs={}",
@@ -411,10 +409,10 @@ public final class PostgresMilvusNeo4jStorageProvider implements AtomicStoragePr
         var source = Objects.requireNonNull(snapshot, "snapshot");
         long started = System.nanoTime();
         try {
-            withExclusiveProviderLock(() -> storageLockManager.withExclusiveLock(() -> withExclusiveStorageLockScope(() -> {
+            withExclusiveWriteScope(() -> {
                 coordinator.restore(source);
                 return null;
-            })));
+            });
         } finally {
             log.info(
                 "LightRAG postgres-milvus-neo4j provider restore completed: documents={}, chunks={}, entities={}, relations={}, vectorNamespaces={}, totalMs={}",
@@ -433,7 +431,7 @@ public final class PostgresMilvusNeo4jStorageProvider implements AtomicStoragePr
         var targetDocumentId = requireNonBlank(documentId, "documentId");
         var targetChunkIds = new LinkedHashSet<>(List.copyOf(Objects.requireNonNull(chunkIds, "chunkIds")));
         long started = System.nanoTime();
-        return withExclusiveProviderLock(() -> storageLockManager.withExclusiveLock(() -> withExclusiveStorageLockScope(() -> {
+        return withExclusiveWriteScope(() -> {
             long resolveStarted = System.nanoTime();
             var existingChunks = targetChunkIds.isEmpty()
                 ? coordinator.chunkStore().listByDocument(targetDocumentId)
@@ -492,7 +490,7 @@ public final class PostgresMilvusNeo4jStorageProvider implements AtomicStoragePr
                 elapsedMillis(started, relationalAt)
             );
             return result;
-        })));
+        });
     }
 
     @Override
@@ -1369,13 +1367,20 @@ public final class PostgresMilvusNeo4jStorageProvider implements AtomicStoragePr
     }
 
     private void withWriteLock(Runnable runnable) {
-        withExclusiveProviderLock(() -> {
-            storageLockManager.withExclusiveLock(() -> withExclusiveStorageLockScope(() -> {
-                runnable.run();
-                return null;
-            }));
+        withExclusiveWriteScope(() -> {
+            runnable.run();
             return null;
         });
+    }
+
+    /**
+     * Runs the supplier under the workspace-wide write exclusion in the order remote, local, scope:
+     * the external storage lock is taken first so that waiting on a slow or contended
+     * {@link StorageLockManager} never blocks this JVM's readers on the local write lock.
+     */
+    private <T> T withExclusiveWriteScope(RuntimeSupplier<T> supplier) {
+        return storageLockManager.withExclusiveLock(() -> withExclusiveProviderLock(() ->
+            withExclusiveStorageLockScope(supplier)));
     }
 
     private <T> T withExclusiveProviderLock(RuntimeSupplier<T> supplier) {
