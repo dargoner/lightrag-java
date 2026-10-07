@@ -17,6 +17,7 @@ import io.github.lightrag.api.TaskStageStatus;
 import io.github.lightrag.api.TaskStatus;
 import io.github.lightrag.api.TaskType;
 import io.github.lightrag.api.WorkspaceScope;
+import io.github.lightrag.exception.StorageException;
 import io.github.lightrag.storage.ChunkStore;
 import io.github.lightrag.storage.DocumentGraphJournalStore;
 import io.github.lightrag.storage.DocumentGraphSnapshotStore;
@@ -315,6 +316,100 @@ class PostgresMilvusNeo4jStorageProviderTest {
                     externalLock.release();
                     writer.join(5000);
                     reader.join(5000);
+                }
+            }
+        }
+    }
+
+    @Test
+    void releasesReadWaitersByInterruptionWithExplicitFailure() throws Exception {
+        var config = newConfig();
+        try (var dataSource = newDataSource(config)) {
+            var providerLock = new ReentrantReadWriteLock(true);
+            try (var provider = new PostgresMilvusNeo4jStorageProvider(
+                dataSource,
+                config,
+                new InMemorySnapshotStore(),
+                new WorkspaceScope("default"),
+                new RecordingGraphProjection(),
+                new RecordingMilvusProjection(),
+                providerLock
+            )) {
+                var readFinished = new CountDownLatch(1);
+                var readFailure = new AtomicReference<Throwable>();
+                var reader = new Thread(() -> {
+                    try {
+                        provider.documentStore().load("doc-interrupted");
+                    } catch (Throwable throwable) {
+                        readFailure.set(throwable);
+                    } finally {
+                        readFinished.countDown();
+                    }
+                });
+
+                providerLock.writeLock().lock();
+                try {
+                    reader.start();
+                    assertThat(readFinished.await(200, TimeUnit.MILLISECONDS)).isFalse();
+
+                    reader.interrupt();
+
+                    assertThat(readFinished.await(5, TimeUnit.SECONDS)).isTrue();
+                    reader.join(1000);
+                    assertThat(readFailure.get()).isInstanceOf(StorageException.class);
+                    assertThat(reader.isInterrupted()).isTrue();
+                } finally {
+                    if (providerLock.isWriteLockedByCurrentThread()) {
+                        providerLock.writeLock().unlock();
+                    }
+                    reader.join(5000);
+                }
+            }
+        }
+    }
+
+    @Test
+    void releasesWriteWaitersByInterruptionWithExplicitFailure() throws Exception {
+        var config = newConfig();
+        try (var dataSource = newDataSource(config)) {
+            var providerLock = new ReentrantReadWriteLock(true);
+            try (var provider = new PostgresMilvusNeo4jStorageProvider(
+                dataSource,
+                config,
+                new InMemorySnapshotStore(),
+                new WorkspaceScope("default"),
+                new RecordingGraphProjection(),
+                new RecordingMilvusProjection(),
+                providerLock
+            )) {
+                var writeFinished = new CountDownLatch(1);
+                var writeFailure = new AtomicReference<Throwable>();
+                var writer = new Thread(() -> {
+                    try {
+                        provider.documentStore().save(new DocumentStore.DocumentRecord("doc-interrupted", "Title", "Body", Map.of()));
+                    } catch (Throwable throwable) {
+                        writeFailure.set(throwable);
+                    } finally {
+                        writeFinished.countDown();
+                    }
+                });
+
+                providerLock.writeLock().lock();
+                try {
+                    writer.start();
+                    assertThat(writeFinished.await(200, TimeUnit.MILLISECONDS)).isFalse();
+
+                    writer.interrupt();
+
+                    assertThat(writeFinished.await(5, TimeUnit.SECONDS)).isTrue();
+                    writer.join(1000);
+                    assertThat(writeFailure.get()).isInstanceOf(StorageException.class);
+                    assertThat(writer.isInterrupted()).isTrue();
+                } finally {
+                    if (providerLock.isWriteLockedByCurrentThread()) {
+                        providerLock.writeLock().unlock();
+                    }
+                    writer.join(5000);
                 }
             }
         }

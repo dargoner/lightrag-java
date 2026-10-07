@@ -2,6 +2,7 @@ package io.github.lightrag.storage.postgres;
 
 import io.github.lightrag.api.KnowledgeGraphView;
 import io.github.lightrag.api.WorkspaceScope;
+import io.github.lightrag.exception.StorageException;
 import io.github.lightrag.indexing.HybridVectorPayloads;
 import io.github.lightrag.storage.AtomicStorageProvider;
 import io.github.lightrag.storage.ChunkStore;
@@ -45,6 +46,7 @@ import org.slf4j.LoggerFactory;
 public final class PostgresMilvusNeo4jStorageProvider implements AtomicStorageProvider, DocumentScopedDeletionStorageProvider, AutoCloseable {
     private static final Logger log = LoggerFactory.getLogger(PostgresMilvusNeo4jStorageProvider.class);
     private static final WorkspaceScope DEFAULT_WORKSPACE = new WorkspaceScope("default");
+    private static final long SLOW_LOCK_WAIT_MILLIS = 1_000L;
 
     private final ReentrantReadWriteLock lock;
     private final StorageLockManager storageLockManager;
@@ -1358,7 +1360,24 @@ public final class PostgresMilvusNeo4jStorageProvider implements AtomicStoragePr
 
     private <T> T withReadLock(RuntimeSupplier<T> supplier) {
         var readLock = lock.readLock();
-        readLock.lock();
+        long waitStarted = System.nanoTime();
+        try {
+            readLock.lockInterruptibly();
+        } catch (InterruptedException interrupted) {
+            Thread.currentThread().interrupt();
+            throw new StorageException(
+                "Interrupted while waiting for the LightRAG postgres-milvus-neo4j provider read lock",
+                interrupted
+            );
+        }
+        long acquiredAt = System.nanoTime();
+        long waitMillis = elapsedMillis(waitStarted, acquiredAt);
+        if (waitMillis >= SLOW_LOCK_WAIT_MILLIS) {
+            log.info(
+                "LightRAG postgres-milvus-neo4j provider local read lock acquired slowly: waitMs={}",
+                waitMillis
+            );
+        }
         try {
             return supplier.get();
         } finally {
@@ -1386,7 +1405,15 @@ public final class PostgresMilvusNeo4jStorageProvider implements AtomicStoragePr
     private <T> T withExclusiveProviderLock(RuntimeSupplier<T> supplier) {
         var writeLock = lock.writeLock();
         long waitStarted = System.nanoTime();
-        writeLock.lock();
+        try {
+            writeLock.lockInterruptibly();
+        } catch (InterruptedException interrupted) {
+            Thread.currentThread().interrupt();
+            throw new StorageException(
+                "Interrupted while waiting for the LightRAG postgres-milvus-neo4j provider write lock",
+                interrupted
+            );
+        }
         long acquiredAt = System.nanoTime();
         try {
             return supplier.get();
