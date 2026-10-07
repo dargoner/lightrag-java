@@ -501,6 +501,7 @@ class WorkspaceScopedNeo4jGraphStoreTest {
             (proxy, method, args) -> switch (method.getName()) {
                 case "hasNext" -> false;
                 case "list" -> List.of();
+                case "consume" -> null;
                 case "close" -> null;
                 default -> unsupported(method.getName());
             }
@@ -520,6 +521,10 @@ class WorkspaceScopedNeo4jGraphStoreTest {
             Driver.class.getClassLoader(),
             new Class<?>[]{org.neo4j.driver.Session.class},
             (proxy, method, args) -> {
+                if ("run".equals(method.getName())) {
+                    queries.add((String) args[0]);
+                    return emptyResult;
+                }
                 if ("executeRead".equals(method.getName()) || "executeWrite".equals(method.getName())) {
                     return invokeTransactionCallback(args[0], tx);
                 }

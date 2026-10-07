@@ -31,7 +31,14 @@ import java.util.Objects;
 import java.util.Optional;
 import java.util.Set;
 
-public final class WorkspaceScopedNeo4jGraphStore implements MutableGraphStore, AutoCloseable {
+/**
+ * Workspace-scoped graph store on a Bolt-compatible Cypher engine: every read and write is pushed
+ * into the database with the workspace id attached to each node and relationship.
+ *
+ * <p>Subclasses may retarget the bootstrap DDL for engines with a narrower dialect (see
+ * {@link #bootstrapStatements()}); all workspace-scoped statements are shared as-is.</p>
+ */
+public class WorkspaceScopedNeo4jGraphStore implements MutableGraphStore, AutoCloseable {
     private static final String ENTITY_LABEL = "Entity";
     private static final String RELATION_TYPE = "RELATION";
     private static final Logger log = LoggerFactory.getLogger(WorkspaceScopedNeo4jGraphStore.class);
@@ -59,7 +66,11 @@ public final class WorkspaceScopedNeo4jGraphStore implements MutableGraphStore, 
         );
     }
 
-    private WorkspaceScopedNeo4jGraphStore(
+    /**
+     * Extension constructor for subclass stores: {@code ownsDriver} controls whether {@link #close()}
+     * shuts the driver down.
+     */
+    protected WorkspaceScopedNeo4jGraphStore(
         Driver driver,
         SessionConfig sessionConfig,
         WorkspaceScope scope,
@@ -591,12 +602,14 @@ public final class WorkspaceScopedNeo4jGraphStore implements MutableGraphStore, 
         var startedAt = System.nanoTime();
         var scopedIds = ids.stream().map(this::scopedId).toList();
         var deleted = write(tx -> {
+            // DISTINCT guards engines that expand a fully-unbound undirected pattern into one row
+            // per direction: the same relationship must still be deleted and counted once.
             var result = tx.run(
                 """
                 UNWIND $scopedRelationIds AS scopedRelationId
                 MATCH ()-[relation:%s {scopedId: scopedRelationId}]-()
                 WHERE relation.workspaceId = $workspaceId
-                WITH collect(relation) AS relations, count(relation) AS deletedCount
+                WITH collect(DISTINCT relation) AS relations, count(DISTINCT relation) AS deletedCount
                 FOREACH (relation IN relations | DELETE relation)
                 RETURN deletedCount
                 """.formatted(RELATION_TYPE),
@@ -669,23 +682,35 @@ public final class WorkspaceScopedNeo4jGraphStore implements MutableGraphStore, 
     }
 
     private void bootstrap() {
-        write(tx -> {
-            tx.run("DROP CONSTRAINT neo4j_entity_id IF EXISTS");
-            tx.run("DROP CONSTRAINT neo4j_relation_id IF EXISTS");
-            tx.run(
-                """
-                CREATE CONSTRAINT neo4j_entity_scoped_id IF NOT EXISTS
-                FOR (entity:%s) REQUIRE entity.scopedId IS UNIQUE
-                """.formatted(ENTITY_LABEL)
-            );
-            tx.run(
-                """
-                CREATE CONSTRAINT neo4j_relation_scoped_id IF NOT EXISTS
-                FOR ()-[relation:%s]-() REQUIRE relation.scopedId IS UNIQUE
-                """.formatted(RELATION_TYPE)
-            );
-            return null;
-        });
+        // Auto-commit sessions, not a managed transaction: Memgraph rejects constraint and index
+        // manipulation inside multi-command transactions, and Neo4j accepts the same statements in
+        // either mode.
+        try (var session = driver.session(sessionConfig)) {
+            for (var statement : bootstrapStatements()) {
+                session.run(statement).consume();
+            }
+        } catch (RuntimeException exception) {
+            throw new StorageException("Neo4j graph bootstrap failed", exception);
+        }
+    }
+
+    /**
+     * Bootstrap DDL, executed in order via auto-commit sessions on every store construction. The
+     * defaults target Neo4j; subclasses retarget them for engines with a narrower dialect.
+     */
+    protected List<String> bootstrapStatements() {
+        return List.of(
+            "DROP CONSTRAINT neo4j_entity_id IF EXISTS",
+            "DROP CONSTRAINT neo4j_relation_id IF EXISTS",
+            """
+            CREATE CONSTRAINT neo4j_entity_scoped_id IF NOT EXISTS
+            FOR (entity:%s) REQUIRE entity.scopedId IS UNIQUE
+            """.formatted(ENTITY_LABEL),
+            """
+            CREATE CONSTRAINT neo4j_relation_scoped_id IF NOT EXISTS
+            FOR ()-[relation:%s]-() REQUIRE relation.scopedId IS UNIQUE
+            """.formatted(RELATION_TYPE)
+        );
     }
 
     private void saveEntity(TransactionContext tx, EntityRecord record) {
