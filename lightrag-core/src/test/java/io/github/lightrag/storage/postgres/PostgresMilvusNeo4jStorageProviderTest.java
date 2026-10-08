@@ -463,9 +463,6 @@ class PostgresMilvusNeo4jStorageProviderTest {
                         readFailure.set(throwable);
                     }
                 });
-                reader.start();
-                assertThat(selectStarted.await(5, TimeUnit.SECONDS)).isTrue();
-
                 var writeFinished = new CountDownLatch(1);
                 var writeFailure = new AtomicReference<Throwable>();
                 var writer = new Thread(() -> {
@@ -477,8 +474,12 @@ class PostgresMilvusNeo4jStorageProviderTest {
                         writeFinished.countDown();
                     }
                 });
-                writer.start();
+
+                reader.start();
                 try {
+                    assertThat(selectStarted.await(5, TimeUnit.SECONDS)).isTrue();
+
+                    writer.start();
                     // The writer must already hold the external lock while the parked reader keeps it off the local lock.
                     awaitActiveExclusiveCalls(externalLock, 1);
                     // The interrupt must hit the local write lock wait, so confirm the writer is parked there.
@@ -1373,10 +1374,12 @@ class PostgresMilvusNeo4jStorageProviderTest {
 
     private static void awaitThreadWaiting(Thread worker) throws InterruptedException {
         long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(5);
-        while (worker.getState() != Thread.State.WAITING && System.nanoTime() < deadline) {
+        Thread.State state = worker.getState();
+        while (state != Thread.State.WAITING && System.nanoTime() < deadline) {
             Thread.sleep(10);
+            state = worker.getState();
         }
-        assertThat(worker.getState()).isEqualTo(Thread.State.WAITING);
+        assertThat(state).isEqualTo(Thread.State.WAITING);
     }
 
     private static void awaitActiveExclusiveCalls(RecordingStorageLockManager manager, int expected)
