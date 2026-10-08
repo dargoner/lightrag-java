@@ -1371,14 +1371,14 @@ public final class PostgresMilvusNeo4jStorageProvider implements AtomicStoragePr
             );
         }
         long acquiredAt = System.nanoTime();
-        long waitMillis = elapsedMillis(waitStarted, acquiredAt);
-        if (waitMillis >= SLOW_LOCK_WAIT_MILLIS) {
-            log.info(
-                "LightRAG postgres-milvus-neo4j provider local read lock acquired slowly: waitMs={}",
-                waitMillis
-            );
-        }
         try {
+            long waitMillis = elapsedMillis(waitStarted, acquiredAt);
+            if (waitMillis >= SLOW_LOCK_WAIT_MILLIS) {
+                log.info(
+                    "LightRAG postgres-milvus-neo4j provider local read lock acquired slowly: waitMs={}",
+                    waitMillis
+                );
+            }
             return supplier.get();
         } finally {
             readLock.unlock();
@@ -1393,9 +1393,9 @@ public final class PostgresMilvusNeo4jStorageProvider implements AtomicStoragePr
     }
 
     /**
-     * Runs the supplier under the workspace-wide write exclusion in the order remote, local, scope:
-     * the external storage lock is taken first so that waiting on a slow or contended
-     * {@link StorageLockManager} never blocks this JVM's readers on the local write lock.
+     * Runs the supplier under the workspace-wide write exclusion in the order remote, local, scope.
+     * A top-level write entry takes the external storage lock first, so first-time waiting on a
+     * slow or contended {@link StorageLockManager} holds no local write lock.
      */
     private <T> T withExclusiveWriteScope(RuntimeSupplier<T> supplier) {
         return storageLockManager.withExclusiveLock(() -> withExclusiveProviderLock(() ->
