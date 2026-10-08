@@ -2,11 +2,18 @@ package io.github.lightrag.storage;
 
 import io.github.lightrag.api.GraphEntity;
 import io.github.lightrag.api.KnowledgeGraphView;
+import io.github.lightrag.storage.GraphStore.EntityRecord;
+import io.github.lightrag.storage.GraphStore.RelationRecord;
 import io.github.lightrag.storage.memory.InMemoryGraphStore;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 
+import java.util.ArrayList;
+import java.util.Collections;
+import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Map;
+import java.util.Optional;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
@@ -150,6 +157,64 @@ class GraphStoreReadSurfaceTest {
 
         assertThat(degrees).containsExactly(entry("b", 1), entry("a", 2), entry("ghost", 0));
         assertThatThrownBy(() -> degrees.put("x", 1)).isInstanceOf(UnsupportedOperationException.class);
+    }
+
+    @Test
+    void degreesDoNotAmplifyCountsWhenTheBackendRepeatsWorkPerInputSlot() {
+        var delegate = new InMemoryGraphStore();
+        delegate.saveEntities(List.of(entity("a", "A"), entity("b", "B")));
+        delegate.saveRelations(List.of(relation("ab", "a", "b")));
+        // Neo4j-style batch reads run one lookup per input slot and append into a shared bucket, so
+        // a repeated id only stays correct if degrees de-duplicates before delegating.
+        var slotPerInput = new GraphStore() {
+            @Override
+            public void saveEntity(EntityRecord entity) {
+                delegate.saveEntity(entity);
+            }
+
+            @Override
+            public void saveRelation(RelationRecord relation) {
+                delegate.saveRelation(relation);
+            }
+
+            @Override
+            public Optional<EntityRecord> loadEntity(String entityId) {
+                return delegate.loadEntity(entityId);
+            }
+
+            @Override
+            public Optional<RelationRecord> loadRelation(String relationId) {
+                return delegate.loadRelation(relationId);
+            }
+
+            @Override
+            public List<EntityRecord> allEntities() {
+                return delegate.allEntities();
+            }
+
+            @Override
+            public List<RelationRecord> allRelations() {
+                return delegate.allRelations();
+            }
+
+            @Override
+            public List<RelationRecord> findRelations(String entityId) {
+                return delegate.findRelations(entityId);
+            }
+
+            @Override
+            public Map<String, List<RelationRecord>> findRelations(List<String> entityIds) {
+                var relationsByEntityId = new LinkedHashMap<String, List<RelationRecord>>();
+                for (var entityId : entityIds) {
+                    relationsByEntityId
+                        .computeIfAbsent(entityId, key -> new ArrayList<>())
+                        .addAll(findRelations(entityId));
+                }
+                return Collections.unmodifiableMap(relationsByEntityId);
+            }
+        };
+
+        assertThat(slotPerInput.degrees(List.of("a", "a"))).containsExactly(entry("a", 1));
     }
 
     @Test

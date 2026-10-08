@@ -6,6 +6,7 @@ import io.github.lightrag.indexing.RelationCanonicalizer;
 import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.LinkedHashMap;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
@@ -80,18 +81,21 @@ public interface GraphStore {
 
     /**
      * Incident-relation count of each id: the size of {@link #findRelations(String)} for that id,
-     * i.e. the number of relations holding it as source or target. Every requested id appears in the
-     * result, zero-filled when unknown, in request order; the map is unmodifiable. The default
-     * implementation derives the counts from {@link #findRelations(List)}; graph-database adapters
-     * that can count natively should override it so degree-ranked ordering does not have to
-     * materialize the adjacent edges.
+     * i.e. the number of relations holding it as source or target, where a self-loop counts once.
+     * Every distinct requested id gets exactly one entry - repeated ids collapse to their first
+     * position - zero-filled when unknown, in first-occurrence order; the map is unmodifiable. The
+     * default implementation de-duplicates before calling {@link #findRelations(List)} because
+     * batch implementations that run one lookup per input slot would otherwise count a repeated id
+     * several times; graph-database adapters that can count natively should override it so
+     * degree-ranked ordering does not have to materialize the adjacent edges.
      */
     default Map<String, Integer> degrees(java.util.Collection<String> entityIds) {
         var ids = List.copyOf(Objects.requireNonNull(entityIds, "entityIds"));
         var degrees = new LinkedHashMap<String, Integer>();
         if (!ids.isEmpty()) {
-            var relationsByEntityId = findRelations(ids);
-            for (var entityId : ids) {
+            var distinctIds = List.copyOf(new LinkedHashSet<>(ids));
+            var relationsByEntityId = findRelations(distinctIds);
+            for (var entityId : distinctIds) {
                 degrees.put(entityId, relationsByEntityId.getOrDefault(entityId, List.of()).size());
             }
         }
