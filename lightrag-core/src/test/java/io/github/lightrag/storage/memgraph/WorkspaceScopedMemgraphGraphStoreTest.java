@@ -17,6 +17,7 @@ import org.testcontainers.junit.jupiter.Container;
 import org.testcontainers.junit.jupiter.Testcontainers;
 
 import java.util.List;
+import java.util.Map;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
@@ -175,6 +176,58 @@ class WorkspaceScopedMemgraphGraphStoreTest {
             store.saveRelations(GraphViewParity.RELATIONS);
 
             GraphViewParity.assertParityWithDefaultImplementation(store);
+        }
+    }
+
+    @Test
+    void executesAdHocCypherWithParametersAndConvertsValues() {
+        try (var store = newStore("alpha")) {
+            store.saveEntity(entity("e1", "Alice"));
+            store.saveRelations(List.of(relation("r1", "e1", "e2", "first")));
+
+            var scalars = store.executeCypher(
+                "MATCH (n:Entity {workspaceId: $workspaceId, id: $id}) RETURN n.name AS name, n.type AS type",
+                Map.of("workspaceId", "alpha", "id", "e1"));
+            assertThat(scalars.columns()).containsExactly("name", "type");
+            assertThat(scalars.records()).containsExactly(Map.of("name", "Alice", "type", "person"));
+
+            var nodes = store.executeCypher(
+                "MATCH (n:Entity {workspaceId: 'alpha', id: 'e1'}) RETURN n",
+                Map.of());
+            assertThat(nodes.columns()).containsExactly("n");
+            var node = (Map<?, ?>) nodes.records().get(0).get("n");
+            assertThat(node.get("elementId")).isNotNull();
+            assertThat(node.get("labels")).isEqualTo(List.of("Entity"));
+            var nodeProperties = (Map<?, ?>) node.get("properties");
+            assertThat(nodeProperties.get("name")).isEqualTo("Alice");
+            assertThat(nodeProperties.get("workspaceId")).isEqualTo("alpha");
+
+            var relations = store.executeCypher(
+                "MATCH (:Entity {workspaceId: 'alpha'})-[r:RELATION]->() RETURN r",
+                Map.of());
+            assertThat(relations.columns()).containsExactly("r");
+            var relation = (Map<?, ?>) relations.records().get(0).get("r");
+            assertThat(relation.get("type")).isEqualTo("RELATION");
+            assertThat(relation.get("startNodeElementId")).isNotNull();
+            assertThat(relation.get("endNodeElementId")).isNotNull();
+            var relationProperties = (Map<?, ?>) relation.get("properties");
+            assertThat(relationProperties.get("relation_id")).isEqualTo("r1");
+        }
+    }
+
+    @Test
+    void executesMutatingCypherWithoutReturn() {
+        try (var store = newStore("alpha")) {
+            store.saveEntity(entity("e1", "Alice"));
+
+            var result = store.executeCypher(
+                "MATCH (n:Entity {workspaceId: 'alpha', id: 'e1'}) SET n.description = $description",
+                Map.of("description", "updated by cypher"));
+
+            assertThat(result.columns()).isEmpty();
+            assertThat(result.records()).isEmpty();
+            assertThat(store.loadEntity("e1").map(GraphStore.EntityRecord::description))
+                .contains("updated by cypher");
         }
     }
 

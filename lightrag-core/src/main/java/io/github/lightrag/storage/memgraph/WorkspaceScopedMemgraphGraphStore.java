@@ -2,9 +2,7 @@ package io.github.lightrag.storage.memgraph;
 
 import io.github.lightrag.api.WorkspaceScope;
 import io.github.lightrag.storage.neo4j.WorkspaceScopedNeo4jGraphStore;
-import org.neo4j.driver.AuthTokens;
 import org.neo4j.driver.Driver;
-import org.neo4j.driver.GraphDatabase;
 import org.neo4j.driver.SessionConfig;
 
 import java.util.List;
@@ -26,7 +24,7 @@ public final class WorkspaceScopedMemgraphGraphStore extends WorkspaceScopedNeo4
 
     public WorkspaceScopedMemgraphGraphStore(MemgraphGraphConfig config, WorkspaceScope scope) {
         super(
-            createDriver(Objects.requireNonNull(config, "config")),
+            MemgraphSupport.createDriver(Objects.requireNonNull(config, "config")),
             SessionConfig.forDatabase(config.database()),
             Objects.requireNonNull(scope, "scope"),
             true
@@ -46,13 +44,6 @@ public final class WorkspaceScopedMemgraphGraphStore extends WorkspaceScopedNeo4
             """.formatted(ENTITY_LABEL),
             "CREATE INDEX ON :Entity(scopedId)",
             "CREATE INDEX ON :Entity(workspaceId)"
-        );
-    }
-
-    private static Driver createDriver(MemgraphGraphConfig config) {
-        return GraphDatabase.driver(
-            config.boltUri(),
-            AuthTokens.basic(config.username(), config.password())
         );
     }
 }
