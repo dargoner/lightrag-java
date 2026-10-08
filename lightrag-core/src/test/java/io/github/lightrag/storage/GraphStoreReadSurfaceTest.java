@@ -9,6 +9,8 @@ import org.junit.jupiter.api.Test;
 import java.util.List;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
+import static org.assertj.core.api.Assertions.entry;
 
 class GraphStoreReadSurfaceTest {
     private GraphStore store;
@@ -124,6 +126,30 @@ class GraphStoreReadSurfaceTest {
         assertThat(view.nodes()).isEmpty();
         assertThat(view.edges()).isEmpty();
         assertThat(view.truncated()).isFalse();
+    }
+
+    @Test
+    void degreesCountIncidentRelationsPerRequestedIdWithZeroFilledMisses() {
+        assertThat(store.degrees(List.of("beta", "missing", "alpha", "alpha")))
+            .containsExactly(
+                entry("beta", 2),
+                entry("missing", 0),
+                entry("alpha", 3)
+            );
+        assertThat(store.degrees(List.of()))
+            .isEmpty();
+    }
+
+    @Test
+    void degreesCountASelfLoopOnceAndAreUnmodifiable() {
+        var inMemory = new InMemoryGraphStore();
+        inMemory.saveEntities(List.of(entity("a", "A"), entity("b", "B")));
+        inMemory.saveRelations(List.of(relation("loop", "a", "a"), relation("ab", "a", "b")));
+
+        var degrees = inMemory.degrees(List.of("b", "a", "ghost"));
+
+        assertThat(degrees).containsExactly(entry("b", 1), entry("a", 2), entry("ghost", 0));
+        assertThatThrownBy(() -> degrees.put("x", 1)).isInstanceOf(UnsupportedOperationException.class);
     }
 
     @Test

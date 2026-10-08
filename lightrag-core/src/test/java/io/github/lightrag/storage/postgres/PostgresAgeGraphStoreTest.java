@@ -24,6 +24,7 @@ import java.util.concurrent.atomic.AtomicInteger;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
+import static org.assertj.core.api.Assertions.entry;
 
 @Testcontainers
 class PostgresAgeGraphStoreTest {
@@ -411,8 +412,40 @@ class PostgresAgeGraphStoreTest {
             dataSource.resetConnectionCount();
             assertThat(store.findRelations(List.of("e1", "e2", "e3"))).hasSize(3);
             assertThat(dataSource.connectionCount()).isEqualTo(1);
+
+            dataSource.resetConnectionCount();
+            assertThat(store.degrees(List.of("e1", "e2", "e3")))
+                .containsExactly(entry("e1", 1), entry("e2", 2), entry("e3", 1));
+            assertThat(dataSource.connectionCount()).isEqualTo(1);
         } finally {
             dataSource.close();
+        }
+    }
+
+    @Test
+    void nativeDegreesMatchFindRelationsSizesWithZeroFill() {
+        try (var resources = newResources()) {
+            var store = resources.store();
+            saveEntities(store, "e1", "e2", "e3", "e4");
+            saveRelation(store, "r1", "e1", "e2");
+            saveRelation(store, "r2", "e1", "e3");
+            saveRelation(store, "r3", "e2", "e2");
+
+            var ids = List.of("e2", "ghost", "e1", "e4");
+            var degrees = store.degrees(ids);
+
+            assertThat(degrees).containsExactly(
+                entry("e2", 2),
+                entry("ghost", 0),
+                entry("e1", 2),
+                entry("e4", 0)
+            );
+            for (var id : ids) {
+                assertThat(degrees.get(id)).isEqualTo(store.findRelations(id).size());
+            }
+            assertThat(store.degrees(List.of())).isEmpty();
+            assertThatThrownBy(() -> degrees.put("x", 1))
+                .isInstanceOf(UnsupportedOperationException.class);
         }
     }
 

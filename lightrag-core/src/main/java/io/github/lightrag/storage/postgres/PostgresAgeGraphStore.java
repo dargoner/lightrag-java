@@ -13,6 +13,7 @@ import java.sql.ResultSet;
 import java.sql.SQLException;
 import java.sql.Types;
 import java.util.ArrayList;
+import java.util.Collection;
 import java.util.Collections;
 import java.util.Comparator;
 import java.util.LinkedHashMap;
@@ -325,6 +326,53 @@ public final class PostgresAgeGraphStore implements MutableGraphStore {
                         immutable.put(entityId, List.copyOf(relations));
                     });
                     return Collections.unmodifiableMap(immutable);
+                }
+            }
+        });
+    }
+
+    /**
+     * Native incident-relation count: the UNION deduplicates per entity exactly like
+     * {@link #findRelations(String)} (a self-loop counts once), so the count equals that method's
+     * size while the degree-ranked ordering no longer has to materialize the adjacent edges.
+     */
+    @Override
+    public Map<String, Integer> degrees(Collection<String> entityIds) {
+        var ids = List.copyOf(Objects.requireNonNull(entityIds, "entityIds"));
+        if (ids.isEmpty()) {
+            return Map.of();
+        }
+        return inAgeSession(connection -> {
+            var predicate = "ag_catalog.agtype_access_operator(VARIADIC ARRAY[a.properties, '\"entity_id\"'::ag_catalog.agtype])"
+                + " = (to_json(c.entity_id::text)::text)::ag_catalog.agtype";
+            var sql = "WITH candidates AS ("
+                + " SELECT u.value::text AS entity_id FROM unnest(?::text[]) AS u(value)"
+                + ")"
+                + " SELECT incident.entity_id AS entity_id, COUNT(*) AS degree"
+                + " FROM ("
+                + " SELECT c.entity_id AS entity_id, r.properties AS properties"
+                + " FROM candidates c"
+                + " JOIN " + qualifiedLabel("base") + " a ON " + predicate
+                + " JOIN " + qualifiedLabel("DIRECTED") + " r ON r.start_id = a.id"
+                + " UNION"
+                + " SELECT c.entity_id AS entity_id, r.properties AS properties"
+                + " FROM candidates c"
+                + " JOIN " + qualifiedLabel("base") + " a ON " + predicate
+                + " JOIN " + qualifiedLabel("DIRECTED") + " r ON r.end_id = a.id"
+                + " ) incident"
+                + " GROUP BY incident.entity_id";
+            try (var statement = connection.prepareStatement(sql)) {
+                statement.setArray(1, connection.createArrayOf("text", ids.toArray()));
+                try (var resultSet = statement.executeQuery()) {
+                    var counted = new LinkedHashMap<String, Integer>();
+                    while (resultSet.next()) {
+                        counted.put(resultSet.getString(1), resultSet.getInt(2));
+                    }
+                    var degrees = new LinkedHashMap<String, Integer>();
+                    for (var id : ids) {
+                        degrees.putIfAbsent(id, counted.getOrDefault(id, 0));
+                    }
+                    return Collections.unmodifiableMap(degrees);
                 }
             }
         });

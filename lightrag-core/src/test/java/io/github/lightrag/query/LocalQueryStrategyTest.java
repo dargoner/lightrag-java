@@ -252,8 +252,10 @@ class LocalQueryStrategyTest {
 
         assertThat(graphStore.loadEntitiesCalls).isEqualTo(1);
         assertThat(graphStore.loadRelationsCalls).isEqualTo(1);
-        // One batched read for the one-hop expansion, one for the degree ranking of the matched relations.
-        assertThat(graphStore.batchFindRelationsCalls).isEqualTo(2);
+        // One batched read for the one-hop expansion; degree ranking counts natively instead of
+        // reading the endpoint adjacency a second time.
+        assertThat(graphStore.batchFindRelationsCalls).isEqualTo(1);
+        assertThat(graphStore.degreesCalls).isEqualTo(1);
         assertThat(graphStore.loadEntityCalls).isZero();
         assertThat(graphStore.loadRelationCalls).isZero();
         assertThat(graphStore.findRelationsCalls).isZero();
@@ -760,6 +762,7 @@ class LocalQueryStrategyTest {
         private int loadRelationsCalls;
         private int findRelationsCalls;
         private int batchFindRelationsCalls;
+        private int degreesCalls;
 
         private RecordingGraphStore(GraphStore delegate) {
             this.delegate = delegate;
@@ -803,6 +806,12 @@ class LocalQueryStrategyTest {
         public Map<String, List<RelationRecord>> findRelations(List<String> entityIds) {
             batchFindRelationsCalls++;
             return delegate.findRelations(entityIds);
+        }
+
+        @Override
+        public Map<String, Integer> degrees(java.util.Collection<String> entityIds) {
+            degreesCalls++;
+            return delegate.degrees(entityIds);
         }
 
         @Override

@@ -79,6 +79,26 @@ public interface GraphStore {
     }
 
     /**
+     * Incident-relation count of each id: the size of {@link #findRelations(String)} for that id,
+     * i.e. the number of relations holding it as source or target. Every requested id appears in the
+     * result, zero-filled when unknown, in request order; the map is unmodifiable. The default
+     * implementation derives the counts from {@link #findRelations(List)}; graph-database adapters
+     * that can count natively should override it so degree-ranked ordering does not have to
+     * materialize the adjacent edges.
+     */
+    default Map<String, Integer> degrees(java.util.Collection<String> entityIds) {
+        var ids = List.copyOf(Objects.requireNonNull(entityIds, "entityIds"));
+        var degrees = new LinkedHashMap<String, Integer>();
+        if (!ids.isEmpty()) {
+            var relationsByEntityId = findRelations(ids);
+            for (var entityId : ids) {
+                degrees.put(entityId, relationsByEntityId.getOrDefault(entityId, List.of()).size());
+            }
+        }
+        return java.util.Collections.unmodifiableMap(degrees);
+    }
+
+    /**
      * All entity ids, sorted by code point (upstream {@code get_all_labels}, {@code base.py:1111-1117}).
      * The default implementation scans {@link #allEntities()}; graph-database adapters that can answer
      * this natively should override it.

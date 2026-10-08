@@ -660,6 +660,11 @@ public final class PostgresStorageProvider implements AtomicStorageProvider, Aut
         }
 
         @Override
+        public java.util.Map<String, Integer> degrees(java.util.Collection<String> entityIds) {
+            return withReadLock(() -> delegate.degrees(entityIds));
+        }
+
+        @Override
         public KnowledgeGraphView getKnowledgeGraph(String nodeLabel, int maxDepth, int maxNodes) {
             return withReadLock(() -> delegate.getKnowledgeGraph(nodeLabel, maxDepth, maxNodes));
         }

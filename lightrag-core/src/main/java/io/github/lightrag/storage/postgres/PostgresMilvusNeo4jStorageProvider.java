@@ -1113,6 +1113,11 @@ public final class PostgresMilvusNeo4jStorageProvider implements AtomicStoragePr
         }
 
         @Override
+        public Map<String, Integer> degrees(java.util.Collection<String> entityIds) {
+            return withReadLock(() -> coordinator.graphStore().degrees(entityIds));
+        }
+
+        @Override
         public KnowledgeGraphView getKnowledgeGraph(String nodeLabel, int maxDepth, int maxNodes) {
             return withReadLock(() -> coordinator.graphStore().getKnowledgeGraph(nodeLabel, maxDepth, maxNodes));
         }
