@@ -12,9 +12,15 @@ import org.testcontainers.junit.jupiter.Container;
 import org.testcontainers.junit.jupiter.Testcontainers;
 import org.testcontainers.utility.DockerImageName;
 
+import java.lang.reflect.InvocationTargetException;
+import java.lang.reflect.Method;
+import java.lang.reflect.Proxy;
 import java.sql.Connection;
+import java.sql.PreparedStatement;
 import java.sql.SQLException;
+import java.sql.Statement;
 import java.util.ArrayList;
+import java.util.Collections;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Locale;
@@ -401,25 +407,53 @@ class PostgresAgeGraphStoreTest {
             saveRelation(store, "r1", "e1", "e2");
             saveRelation(store, "r2", "e2", "e3");
 
-            dataSource.resetConnectionCount();
+            dataSource.reset();
             assertThat(store.loadEntities(List.of("e1", "e2", "e3"))).hasSize(3);
-            assertThat(dataSource.connectionCount()).isEqualTo(1);
+            assertOneSessionOneDataQuery(dataSource, "unnest");
 
-            dataSource.resetConnectionCount();
+            dataSource.reset();
             assertThat(store.loadRelations(List.of("r1", "r2"))).hasSize(2);
-            assertThat(dataSource.connectionCount()).isEqualTo(1);
+            assertOneSessionOneDataQuery(dataSource, "unnest");
 
-            dataSource.resetConnectionCount();
+            dataSource.reset();
             assertThat(store.findRelations(List.of("e1", "e2", "e3"))).hasSize(3);
-            assertThat(dataSource.connectionCount()).isEqualTo(1);
+            assertOneSessionOneDataQuery(dataSource, "UNION");
 
-            dataSource.resetConnectionCount();
+            dataSource.reset();
             assertThat(store.degrees(List.of("e1", "e2", "e3")))
                 .containsExactly(entry("e1", 1), entry("e2", 2), entry("e3", 1));
-            assertThat(dataSource.connectionCount()).isEqualTo(1);
+            assertOneSessionOneDataQuery(dataSource, "COUNT(*)");
         } finally {
             dataSource.close();
         }
+    }
+
+    @Test
+    void emptyBatchReadsNeverCheckOutAConnection() {
+        var dataSource = newCountingDataSource();
+        try {
+            var workspaceId = "ws_" + UUID.randomUUID().toString().replace("-", "");
+            new PostgresAgeBootstrap(dataSource, workspaceId).bootstrap();
+            var store = new PostgresAgeGraphStore(dataSource, workspaceId);
+
+            dataSource.reset();
+            assertThat(store.loadEntities(List.of())).isEmpty();
+            assertThat(store.loadRelations(List.of())).isEmpty();
+            assertThat(store.findRelations(List.of())).isEmpty();
+            assertThat(store.degrees(List.of())).isEmpty();
+            assertThat(dataSource.connectionCount()).isZero();
+        } finally {
+            dataSource.close();
+        }
+    }
+
+    private static void assertOneSessionOneDataQuery(CountingDataSource dataSource, String sqlFragment) {
+        assertThat(dataSource.connectionCount()).isEqualTo(1);
+        assertThat(dataSource.setLocalCount()).isEqualTo(1);
+        assertThat(dataSource.dataQueries()).singleElement()
+            .satisfies(sql -> assertThat(sql).contains(sqlFragment));
+        assertThat(dataSource.commitCount()).isEqualTo(1);
+        assertThat(dataSource.rollbackCount()).isZero();
     }
 
     @Test
@@ -443,6 +477,8 @@ class PostgresAgeGraphStoreTest {
             for (var id : ids) {
                 assertThat(degrees.get(id)).isEqualTo(store.findRelations(id).size());
             }
+            assertThat(store.degrees(List.of("e2", "e2", "ghost")))
+                .containsExactly(entry("e2", 2), entry("ghost", 0));
             assertThat(store.degrees(List.of())).isEmpty();
             assertThatThrownBy(() -> degrees.put("x", 1))
                 .isInstanceOf(UnsupportedOperationException.class);
@@ -572,9 +608,17 @@ class PostgresAgeGraphStoreTest {
         return new CountingDataSource(hikariConfig);
     }
 
-    /** Counts checkout requests so a test can pin how many sessions an operation opens. */
+    /**
+     * Counts checkout requests, and through JDBC proxies the statement and transaction traffic, so a
+     * test can pin how many sessions an operation opens and whether a batch really collapsed into one
+     * data query inside one transaction.
+     */
     private static final class CountingDataSource extends HikariDataSource {
         private final AtomicInteger connectionCount = new AtomicInteger();
+        private final AtomicInteger setLocalCount = new AtomicInteger();
+        private final List<String> dataQueries = Collections.synchronizedList(new ArrayList<>());
+        private final AtomicInteger commitCount = new AtomicInteger();
+        private final AtomicInteger rollbackCount = new AtomicInteger();
 
         private CountingDataSource(HikariConfig hikariConfig) {
             super(hikariConfig);
@@ -583,15 +627,86 @@ class PostgresAgeGraphStoreTest {
         @Override
         public Connection getConnection() throws SQLException {
             connectionCount.incrementAndGet();
-            return super.getConnection();
+            return countingConnection(super.getConnection());
+        }
+
+        private Connection countingConnection(Connection connection) {
+            return (Connection) Proxy.newProxyInstance(
+                CountingDataSource.class.getClassLoader(),
+                new Class<?>[] {Connection.class},
+                (proxy, method, arguments) -> {
+                    var invoked = invoke(method, connection, arguments);
+                    return switch (method.getName()) {
+                        case "prepareStatement" ->
+                            countingStatement((Statement) invoked, (String) arguments[0], PreparedStatement.class);
+                        case "createStatement" -> countingStatement((Statement) invoked, null, Statement.class);
+                        case "commit" -> {
+                            commitCount.incrementAndGet();
+                            yield invoked;
+                        }
+                        case "rollback" -> {
+                            rollbackCount.incrementAndGet();
+                            yield invoked;
+                        }
+                        default -> invoked;
+                    };
+                }
+            );
+        }
+
+        private Statement countingStatement(Statement statement, String preparedSql, Class<?> statementFace) {
+            return (Statement) Proxy.newProxyInstance(
+                CountingDataSource.class.getClassLoader(),
+                new Class<?>[] {statementFace},
+                (proxy, method, arguments) -> {
+                    var invoked = invoke(method, statement, arguments);
+                    if ("executeQuery".equals(method.getName()) || "execute".equals(method.getName())) {
+                        var sql = arguments == null ? preparedSql : (String) arguments[0];
+                        if (sql != null && sql.startsWith("SET LOCAL")) {
+                            setLocalCount.incrementAndGet();
+                        } else {
+                            dataQueries.add(sql == null ? "<dynamic>" : sql);
+                        }
+                    }
+                    return invoked;
+                }
+            );
+        }
+
+        private static Object invoke(Method method, Object target, Object[] arguments) throws Throwable {
+            try {
+                return method.invoke(target, arguments);
+            } catch (InvocationTargetException exception) {
+                throw exception.getCause();
+            }
         }
 
         private int connectionCount() {
             return connectionCount.get();
         }
 
-        private void resetConnectionCount() {
+        private int setLocalCount() {
+            return setLocalCount.get();
+        }
+
+        private List<String> dataQueries() {
+            return List.copyOf(dataQueries);
+        }
+
+        private int commitCount() {
+            return commitCount.get();
+        }
+
+        private int rollbackCount() {
+            return rollbackCount.get();
+        }
+
+        private void reset() {
             connectionCount.set(0);
+            setLocalCount.set(0);
+            dataQueries.clear();
+            commitCount.set(0);
+            rollbackCount.set(0);
         }
     }
 
