@@ -120,6 +120,46 @@ public final class PostgresAgeGraphStore implements MutableGraphStore {
         });
     }
 
+    /**
+     * One session, one statement for the whole batch: the default loops {@link #loadEntity} with a
+     * fresh connection and transaction per id. Output stays default-equivalent - request order,
+     * missing ids skipped, duplicates preserved.
+     */
+    @Override
+    public List<EntityRecord> loadEntities(List<String> entityIds) {
+        var ids = List.copyOf(Objects.requireNonNull(entityIds, "entityIds"));
+        if (ids.isEmpty()) {
+            return List.of();
+        }
+        return inAgeSession(connection -> {
+            try (var statement = connection.prepareStatement(
+                "SELECT v.properties FROM " + qualifiedLabel("base") + " v WHERE "
+                    + "ag_catalog.agtype_access_operator(VARIADIC ARRAY[v.properties, '\"entity_id\"'::ag_catalog.agtype])"
+                    + " IN (SELECT (to_json(u.value::text)::text)::ag_catalog.agtype FROM unnest(?::text[]) AS u(value))"
+            )) {
+                statement.setArray(1, connection.createArrayOf("text", ids.toArray()));
+                try (var resultSet = statement.executeQuery()) {
+                    var entitiesById = new LinkedHashMap<String, EntityRecord>();
+                    while (resultSet.next()) {
+                        var properties = resultSet.getString(1);
+                        if (properties != null) {
+                            var entity = toEntityRecord(properties);
+                            entitiesById.putIfAbsent(entity.id(), entity);
+                        }
+                    }
+                    var entities = new ArrayList<EntityRecord>(ids.size());
+                    for (var id : ids) {
+                        var entity = entitiesById.get(id);
+                        if (entity != null) {
+                            entities.add(entity);
+                        }
+                    }
+                    return List.copyOf(entities);
+                }
+            }
+        });
+    }
+
     @Override
     public Optional<RelationRecord> loadRelation(String relationId) {
         var id = Objects.requireNonNull(relationId, "relationId");
@@ -134,6 +174,45 @@ public final class PostgresAgeGraphStore implements MutableGraphStore {
                     return resultSet.next()
                         ? Optional.of(toRelationRecord(resultSet.getString(1)))
                         : Optional.empty();
+                }
+            }
+        });
+    }
+
+    /**
+     * One session, one statement for the whole batch; see {@link #loadEntities(List)} for the
+     * default-equivalence rules (request order, missing ids skipped, duplicates preserved).
+     */
+    @Override
+    public List<RelationRecord> loadRelations(List<String> relationIds) {
+        var ids = List.copyOf(Objects.requireNonNull(relationIds, "relationIds"));
+        if (ids.isEmpty()) {
+            return List.of();
+        }
+        return inAgeSession(connection -> {
+            try (var statement = connection.prepareStatement(
+                "SELECT r.properties FROM " + qualifiedLabel("DIRECTED") + " r WHERE "
+                    + "ag_catalog.agtype_access_operator(VARIADIC ARRAY[r.properties, '\"relation_id\"'::ag_catalog.agtype])"
+                    + " IN (SELECT (to_json(u.value::text)::text)::ag_catalog.agtype FROM unnest(?::text[]) AS u(value))"
+            )) {
+                statement.setArray(1, connection.createArrayOf("text", ids.toArray()));
+                try (var resultSet = statement.executeQuery()) {
+                    var relationsById = new LinkedHashMap<String, RelationRecord>();
+                    while (resultSet.next()) {
+                        var properties = resultSet.getString(1);
+                        if (properties != null) {
+                            var relation = toRelationRecord(properties);
+                            relationsById.putIfAbsent(relation.id(), relation);
+                        }
+                    }
+                    var relations = new ArrayList<RelationRecord>(ids.size());
+                    for (var id : ids) {
+                        var relation = relationsById.get(id);
+                        if (relation != null) {
+                            relations.add(relation);
+                        }
+                    }
+                    return List.copyOf(relations);
                 }
             }
         });
@@ -193,6 +272,59 @@ public final class PostgresAgeGraphStore implements MutableGraphStore {
                     }
                     relations.sort(Comparator.comparing(RelationRecord::id));
                     return List.copyOf(relations);
+                }
+            }
+        });
+    }
+
+    /**
+     * One session, one statement for the whole batch: the default loops {@link #findRelations(String)}
+     * with a fresh connection and transaction per id. The UNION deduplicates per entity exactly like
+     * the single-id form (a self-loop counts once), and each per-entity list is ordered and immutable
+     * the same way.
+     */
+    @Override
+    public Map<String, List<RelationRecord>> findRelations(List<String> entityIds) {
+        var ids = List.copyOf(Objects.requireNonNull(entityIds, "entityIds"));
+        if (ids.isEmpty()) {
+            return Map.of();
+        }
+        return inAgeSession(connection -> {
+            var predicate = "ag_catalog.agtype_access_operator(VARIADIC ARRAY[a.properties, '\"entity_id\"'::ag_catalog.agtype])"
+                + " = (to_json(c.entity_id::text)::text)::ag_catalog.agtype";
+            var sql = "WITH candidates AS ("
+                + " SELECT u.value::text AS entity_id FROM unnest(?::text[]) AS u(value)"
+                + ")"
+                + " SELECT c.entity_id AS entity_id, r.properties AS properties"
+                + " FROM candidates c"
+                + " JOIN " + qualifiedLabel("base") + " a ON " + predicate
+                + " JOIN " + qualifiedLabel("DIRECTED") + " r ON r.start_id = a.id"
+                + " UNION"
+                + " SELECT c.entity_id AS entity_id, r.properties AS properties"
+                + " FROM candidates c"
+                + " JOIN " + qualifiedLabel("base") + " a ON " + predicate
+                + " JOIN " + qualifiedLabel("DIRECTED") + " r ON r.end_id = a.id";
+            try (var statement = connection.prepareStatement(sql)) {
+                statement.setArray(1, connection.createArrayOf("text", ids.toArray()));
+                try (var resultSet = statement.executeQuery()) {
+                    var relationsByEntityId = new LinkedHashMap<String, List<RelationRecord>>();
+                    for (var id : ids) {
+                        relationsByEntityId.put(id, new ArrayList<>());
+                    }
+                    while (resultSet.next()) {
+                        var entityId = resultSet.getString(1);
+                        var properties = resultSet.getString(2);
+                        var relations = entityId == null ? null : relationsByEntityId.get(entityId);
+                        if (relations != null && properties != null) {
+                            relations.add(toRelationRecord(properties));
+                        }
+                    }
+                    var immutable = new LinkedHashMap<String, List<RelationRecord>>();
+                    relationsByEntityId.forEach((entityId, relations) -> {
+                        relations.sort(Comparator.comparing(RelationRecord::id));
+                        immutable.put(entityId, List.copyOf(relations));
+                    });
+                    return Collections.unmodifiableMap(immutable);
                 }
             }
         });

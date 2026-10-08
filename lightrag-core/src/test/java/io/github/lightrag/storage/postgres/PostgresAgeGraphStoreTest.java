@@ -12,12 +12,15 @@ import org.testcontainers.junit.jupiter.Container;
 import org.testcontainers.junit.jupiter.Testcontainers;
 import org.testcontainers.utility.DockerImageName;
 
+import java.sql.Connection;
 import java.sql.SQLException;
 import java.util.ArrayList;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 import java.util.UUID;
+import java.util.concurrent.atomic.AtomicInteger;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
@@ -347,6 +350,73 @@ class PostgresAgeGraphStoreTest {
     }
 
     @Test
+    void bulkReadsMatchSingleReadsInOrderAndSkipMissingIds() {
+        try (var resources = newResources()) {
+            var store = resources.store();
+            saveEntities(store, "e1", "e2", "e3");
+            saveRelation(store, "r1", "e1", "e2");
+            saveRelation(store, "r2", "e1", "e3");
+            saveRelation(store, "r3", "e2", "e2");
+
+            var entityIds = List.of("e2", "missing", "e1", "e2");
+            var expectedEntities = new ArrayList<EntityRecord>();
+            for (var id : entityIds) {
+                store.loadEntity(id).ifPresent(expectedEntities::add);
+            }
+            assertThat(store.loadEntities(entityIds)).isEqualTo(expectedEntities);
+
+            var relationIds = List.of("r3", "ghost", "r1", "r3");
+            var expectedRelations = new ArrayList<RelationRecord>();
+            for (var id : relationIds) {
+                store.loadRelation(id).ifPresent(expectedRelations::add);
+            }
+            assertThat(store.loadRelations(relationIds)).isEqualTo(expectedRelations);
+
+            var adjacencyIds = List.of("e2", "ghost", "e1", "e4", "e1");
+            var expectedAdjacency = new LinkedHashMap<String, List<RelationRecord>>();
+            for (var id : adjacencyIds) {
+                expectedAdjacency.put(id, store.findRelations(id));
+            }
+            var adjacency = store.findRelations(adjacencyIds);
+            assertThat(adjacency.keySet()).containsExactlyElementsOf(expectedAdjacency.keySet());
+            for (var id : adjacencyIds) {
+                assertThat(adjacency.get(id)).containsExactlyElementsOf(expectedAdjacency.get(id));
+            }
+            assertThat(adjacency.get("ghost")).isEmpty();
+            assertThat(adjacency.get("e4")).isEmpty();
+            assertThatThrownBy(() -> adjacency.put("x", List.of()))
+                .isInstanceOf(UnsupportedOperationException.class);
+        }
+    }
+
+    @Test
+    void bulkReadsShareOneConnectionPerBatch() {
+        var dataSource = newCountingDataSource();
+        try {
+            var workspaceId = "ws_" + UUID.randomUUID().toString().replace("-", "");
+            new PostgresAgeBootstrap(dataSource, workspaceId).bootstrap();
+            var store = new PostgresAgeGraphStore(dataSource, workspaceId);
+            saveEntities(store, "e1", "e2", "e3");
+            saveRelation(store, "r1", "e1", "e2");
+            saveRelation(store, "r2", "e2", "e3");
+
+            dataSource.resetConnectionCount();
+            assertThat(store.loadEntities(List.of("e1", "e2", "e3"))).hasSize(3);
+            assertThat(dataSource.connectionCount()).isEqualTo(1);
+
+            dataSource.resetConnectionCount();
+            assertThat(store.loadRelations(List.of("r1", "r2"))).hasSize(2);
+            assertThat(dataSource.connectionCount()).isEqualTo(1);
+
+            dataSource.resetConnectionCount();
+            assertThat(store.findRelations(List.of("e1", "e2", "e3"))).hasSize(3);
+            assertThat(dataSource.connectionCount()).isEqualTo(1);
+        } finally {
+            dataSource.close();
+        }
+    }
+
+    @Test
     void executesAdHocCypherWithParametersAndConvertsValues() {
         try (var resources = newResources()) {
             var store = resources.store();
@@ -415,6 +485,18 @@ class PostgresAgeGraphStoreTest {
         }
     }
 
+    private static void saveRelation(PostgresAgeGraphStore store, String relationId, String srcId, String tgtId) {
+        store.saveRelation(new RelationRecord(
+            relationId,
+            srcId,
+            tgtId,
+            "knows",
+            "description of " + relationId,
+            1.0d,
+            List.of("chunk-1")
+        ));
+    }
+
     private static PostgreSQLContainer<?> newAgeContainer() {
         var image = DockerImageName.parse(
             System.getenv().getOrDefault("LIGHTRAG_AGE_IMAGE", "apache/age:release_PG16_1.6.0")
@@ -445,6 +527,39 @@ class PostgresAgeGraphStoreTest {
         hikariConfig.setMaximumPoolSize(2);
         hikariConfig.setMinimumIdle(0);
         return new HikariDataSource(hikariConfig);
+    }
+
+    private static CountingDataSource newCountingDataSource() {
+        var hikariConfig = new HikariConfig();
+        hikariConfig.setJdbcUrl(POSTGRES.getJdbcUrl());
+        hikariConfig.setUsername(POSTGRES.getUsername());
+        hikariConfig.setPassword(POSTGRES.getPassword());
+        hikariConfig.setMaximumPoolSize(2);
+        hikariConfig.setMinimumIdle(0);
+        return new CountingDataSource(hikariConfig);
+    }
+
+    /** Counts checkout requests so a test can pin how many sessions an operation opens. */
+    private static final class CountingDataSource extends HikariDataSource {
+        private final AtomicInteger connectionCount = new AtomicInteger();
+
+        private CountingDataSource(HikariConfig hikariConfig) {
+            super(hikariConfig);
+        }
+
+        @Override
+        public Connection getConnection() throws SQLException {
+            connectionCount.incrementAndGet();
+            return super.getConnection();
+        }
+
+        private int connectionCount() {
+            return connectionCount.get();
+        }
+
+        private void resetConnectionCount() {
+            connectionCount.set(0);
+        }
     }
 
     private static List<String> queryStrings(HikariDataSource dataSource, String sql) {

@@ -630,6 +630,16 @@ public final class PostgresStorageProvider implements AtomicStorageProvider, Aut
         }
 
         @Override
+        public List<EntityRecord> loadEntities(java.util.List<String> entityIds) {
+            return withReadLock(() -> delegate.loadEntities(entityIds));
+        }
+
+        @Override
+        public List<RelationRecord> loadRelations(java.util.List<String> relationIds) {
+            return withReadLock(() -> delegate.loadRelations(relationIds));
+        }
+
+        @Override
         public List<EntityRecord> allEntities() {
             return withReadLock(delegate::allEntities);
         }
