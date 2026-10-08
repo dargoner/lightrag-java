@@ -258,6 +258,50 @@ class PostgresMilvusNeo4jStorageProviderTest {
     }
 
     @Test
+    void delegatesAtomicWriteWithInjectedGraphAdapterAndMilvusProjection() {
+        var config = newConfig();
+        try (var dataSource = newDataSource(config)) {
+            RecordingGraphStorageAdapter graphAdapter = new RecordingGraphStorageAdapter();
+            RecordingMilvusProjection milvusProjection = new RecordingMilvusProjection();
+            var externalLock = new RecordingStorageLockManager();
+
+            try (var provider = new PostgresMilvusNeo4jStorageProvider(
+                dataSource,
+                config,
+                new InMemorySnapshotStore(),
+                new WorkspaceScope("default"),
+                graphAdapter,
+                milvusProjection,
+                externalLock
+            )) {
+                provider.writeAtomically(storage -> {
+                    storage.documentStore().save(new DocumentStore.DocumentRecord("doc-1", "Title", "Body", Map.of("source", "test")));
+                    storage.chunkStore().save(new ChunkStore.ChunkRecord("doc-1:0", "doc-1", "Body", 4, 0, Map.of("source", "test")));
+                    storage.graphStore().saveEntity(new GraphStore.EntityRecord(
+                        "entity-1",
+                        "Alice",
+                        "person",
+                        "Researcher",
+                        List.of("A"),
+                        List.of("doc-1:0")
+                    ));
+                    storage.vectorStore().saveAll("chunks", List.of(new VectorStore.VectorRecord("doc-1:0", List.of(1.0d, 0.0d, 0.0d))));
+                    return null;
+                });
+
+                assertThat(graphAdapter.applyCount()).isEqualTo(1);
+                assertThat(provider.graphStore().loadEntity("entity-1")).isPresent();
+                assertThat(milvusProjection.list("chunks"))
+                    .containsExactly(new VectorStore.VectorRecord("doc-1:0", List.of(1.0d, 0.0d, 0.0d)));
+                assertThat(externalLock.exclusiveCalls()).isEqualTo(1);
+                assertThat(externalLock.activeExclusiveCalls()).isZero();
+                assertThat(countRows(dataSource, config, "documents", "doc-1")).isEqualTo(1);
+                assertThat(countRows(dataSource, config, "chunks", "doc-1:0")).isEqualTo(1);
+            }
+        }
+    }
+
+    @Test
     void keepsReadsAvailableWhileAWriteWaitsForTheExternalStorageLock() throws Exception {
         var config = newConfig();
         try (var dataSource = newDataSource(config)) {

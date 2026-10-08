@@ -2,6 +2,7 @@ package io.github.lightrag.storage.neo4j;
 
 import io.github.lightrag.api.KnowledgeGraphView;
 import io.github.lightrag.api.WorkspaceScope;
+import io.github.lightrag.exception.StorageException;
 import io.github.lightrag.storage.GraphStore;
 import io.github.lightrag.storage.memory.InMemoryGraphStore;
 import io.github.lightrag.support.GraphViewParity;
@@ -23,11 +24,13 @@ import java.lang.reflect.Method;
 import java.lang.reflect.Proxy;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Map;
 import java.util.concurrent.Callable;
 import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.Executors;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 @Testcontainers
 class WorkspaceScopedNeo4jGraphStoreTest {
@@ -363,6 +366,77 @@ class WorkspaceScopedNeo4jGraphStoreTest {
             } finally {
                 executor.shutdownNow();
             }
+        }
+    }
+
+    @Test
+    void executesAdHocCypherWithParametersAndConvertsValues() {
+        try (var store = newStore("alpha")) {
+            store.saveEntities(List.of(entity("e1", "Alice"), entity("e2", "Bob")));
+            store.saveRelations(List.of(relation("relation-1", "e1", "e2", "knows")));
+
+            var scalars = store.executeCypher(
+                "MATCH (n:Entity {workspaceId: $workspaceId, id: $id}) RETURN n.name AS name, n.type AS type",
+                Map.of("workspaceId", "alpha", "id", "e1"));
+            assertThat(scalars.columns()).containsExactly("name", "type");
+            assertThat(scalars.records()).containsExactly(Map.of("name", "Alice", "type", "person"));
+
+            var nodes = store.executeCypher(
+                "MATCH (n:Entity {workspaceId: 'alpha', id: 'e1'}) RETURN n",
+                Map.of());
+            assertThat(nodes.columns()).containsExactly("n");
+            var node = (Map<?, ?>) nodes.records().get(0).get("n");
+            assertThat(node.get("labels")).isEqualTo(List.of("Entity"));
+            assertThat((String) node.get("elementId")).isNotBlank();
+            var nodeProperties = (Map<?, ?>) node.get("properties");
+            assertThat(nodeProperties.get("name")).isEqualTo("Alice");
+            assertThat(nodeProperties.get("workspaceId")).isEqualTo("alpha");
+
+            var relations = store.executeCypher(
+                "MATCH (:Entity {workspaceId: 'alpha'})-[r:RELATION]->() RETURN r",
+                Map.of());
+            assertThat(relations.columns()).containsExactly("r");
+            var relation = (Map<?, ?>) relations.records().get(0).get("r");
+            assertThat(relation.get("type")).isEqualTo("RELATION");
+            assertThat((String) relation.get("startNodeElementId")).isNotBlank();
+            assertThat((String) relation.get("endNodeElementId")).isNotBlank();
+            var relationProperties = (Map<?, ?>) relation.get("properties");
+            assertThat(relationProperties.get("relation_id")).isEqualTo("relation-1");
+            assertThat(relationProperties.get("keywords")).isEqualTo("knows");
+
+            var paths = store.executeCypher(
+                "MATCH path = (:Entity {workspaceId: 'alpha', id: 'e1'})-[:RELATION]->() RETURN path",
+                Map.of());
+            assertThat(paths.columns()).containsExactly("path");
+            var path = (Map<?, ?>) paths.records().get(0).get("path");
+            assertThat(path.get("length")).isEqualTo(1);
+            assertThat((List<?>) path.get("nodes")).hasSize(2);
+            assertThat((List<?>) path.get("relationships")).hasSize(1);
+        }
+    }
+
+    @Test
+    void executesMutatingCypherWithoutReturn() {
+        try (var store = newStore("alpha")) {
+            store.saveEntity(entity("e1", "Alice"));
+
+            var result = store.executeCypher(
+                "MATCH (n:Entity {workspaceId: 'alpha', id: 'e1'}) SET n.description = $description",
+                Map.of("description", "updated by cypher"));
+
+            assertThat(result.columns()).isEmpty();
+            assertThat(result.records()).isEmpty();
+            assertThat(store.loadEntity("e1").map(GraphStore.EntityRecord::description))
+                .contains("updated by cypher");
+        }
+    }
+
+    @Test
+    void executeCypherWrapsStatementFailuresInStorageException() {
+        try (var store = newStore("alpha")) {
+            assertThatThrownBy(() -> store.executeCypher("MATCH (", Map.of()))
+                .isInstanceOf(StorageException.class)
+                .hasMessageContaining("executeCypher failed");
         }
     }
 

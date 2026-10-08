@@ -16,6 +16,9 @@ import org.neo4j.driver.Result;
 import org.neo4j.driver.SessionConfig;
 import org.neo4j.driver.TransactionContext;
 import org.neo4j.driver.Value;
+import org.neo4j.driver.types.Node;
+import org.neo4j.driver.types.Path;
+import org.neo4j.driver.types.Relationship;
 
 import java.util.ArrayList;
 import java.util.Collection;
@@ -661,6 +664,44 @@ public class WorkspaceScopedNeo4jGraphStore implements MutableGraphStore, AutoCl
         }
     }
 
+    /**
+     * Executes one caller-supplied statement through an auto-commit session, mirroring the
+     * driver-level executor: the caller owns the statement kind (read or write) and its workspace
+     * scoping. Values convert to plain Java structures - graph elements keep their structural form
+     * as unmodifiable maps (see {@link #toPlainValue}) - and a statement without RETURN yields no
+     * columns and no records.
+     */
+    @Override
+    public CypherQueryResult executeCypher(String cypher, Map<String, Object> parameters) {
+        var statement = Objects.requireNonNull(cypher, "cypher");
+        var boundParameters = parameters == null ? Map.<String, Object>of() : parameters;
+        var startedAt = System.nanoTime();
+        try (var session = driver.session(sessionConfig)) {
+            var result = session.run(statement, boundParameters);
+            var columns = List.copyOf(result.keys());
+            var records = new ArrayList<Map<String, Object>>();
+            while (result.hasNext()) {
+                var record = result.next();
+                var row = new LinkedHashMap<String, Object>();
+                for (var column : columns) {
+                    row.put(column, toPlainValue(record.get(column)));
+                }
+                records.add(Collections.unmodifiableMap(row));
+            }
+            log.info(
+                "Neo4j graph executeCypher completed: workspaceId={}, columnCount={}, recordCount={}, elapsedMs={}",
+                workspaceId,
+                columns.size(),
+                records.size(),
+                elapsedMillis(startedAt)
+            );
+            return new CypherQueryResult(columns, records);
+        } catch (RuntimeException exception) {
+            log.error("Neo4j graph executeCypher failed: workspaceId={}", workspaceId, exception);
+            throw new StorageException("Neo4j graph executeCypher failed", exception);
+        }
+    }
+
     private static String requireNonBlank(String value, String label) {
         Objects.requireNonNull(value, label);
         if (value.isBlank()) {
@@ -993,6 +1034,84 @@ public class WorkspaceScopedNeo4jGraphStore implements MutableGraphStore, AutoCl
             return List.of();
         }
         return value.asList(Value::asString);
+    }
+
+    private static Object toPlainValue(Value value) {
+        if (value == null || value.isNull()) {
+            return null;
+        }
+        return toPlainObject(value.asObject());
+    }
+
+    /**
+     * Mirrors the platform's driver-value normalisation so every Bolt-backed executor returns the
+     * same JSON-like shapes: nodes as {@code {elementId, labels, properties}}, relationships as
+     * {@code {elementId, type, startNodeElementId, endNodeElementId, properties}}, paths as
+     * {@code {length, nodes, relationships}}; maps and lists convert recursively and scalars pass
+     * through, with anything else falling back to its string form.
+     */
+    private static Object toPlainObject(Object value) {
+        if (value == null) {
+            return null;
+        }
+        if (value instanceof Node node) {
+            var element = new LinkedHashMap<String, Object>();
+            element.put("elementId", node.elementId());
+            element.put("labels", plainStrings(node.labels()));
+            element.put("properties", plainMap(node.asMap()));
+            return Collections.unmodifiableMap(element);
+        }
+        if (value instanceof Relationship relationship) {
+            var element = new LinkedHashMap<String, Object>();
+            element.put("elementId", relationship.elementId());
+            element.put("type", relationship.type());
+            element.put("startNodeElementId", relationship.startNodeElementId());
+            element.put("endNodeElementId", relationship.endNodeElementId());
+            element.put("properties", plainMap(relationship.asMap()));
+            return Collections.unmodifiableMap(element);
+        }
+        if (value instanceof Path path) {
+            var element = new LinkedHashMap<String, Object>();
+            element.put("length", path.length());
+            element.put("nodes", plainIterable(path.nodes()));
+            element.put("relationships", plainIterable(path.relationships()));
+            return Collections.unmodifiableMap(element);
+        }
+        if (value instanceof Map<?, ?> map) {
+            var converted = new LinkedHashMap<String, Object>();
+            map.forEach((key, element) -> converted.put(String.valueOf(key), toPlainObject(element)));
+            return Collections.unmodifiableMap(converted);
+        }
+        if (value instanceof Iterable<?> iterable) {
+            return plainIterable(iterable);
+        }
+        if (value instanceof String || value instanceof Number || value instanceof Boolean) {
+            return value;
+        }
+        if (value instanceof Character character) {
+            return character.toString();
+        }
+        return value.toString();
+    }
+
+    private static List<Object> plainIterable(Iterable<?> values) {
+        var converted = new ArrayList<Object>();
+        for (var value : values) {
+            converted.add(toPlainObject(value));
+        }
+        return List.copyOf(converted);
+    }
+
+    private static Map<String, Object> plainMap(Map<String, Object> values) {
+        var converted = new LinkedHashMap<String, Object>();
+        values.forEach((key, value) -> converted.put(key, toPlainObject(value)));
+        return Collections.unmodifiableMap(converted);
+    }
+
+    private static List<String> plainStrings(Iterable<String> values) {
+        var converted = new ArrayList<String>();
+        values.forEach(converted::add);
+        return List.copyOf(converted);
     }
 
     private <T> T read(TransactionWork<T> work) {

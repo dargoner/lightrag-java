@@ -303,6 +303,32 @@ public final class PostgresMilvusNeo4jStorageProvider implements AtomicStoragePr
         ));
     }
 
+    /**
+     * Uses the supplied graph projection - any Bolt/Cypher-native engine adapter - on a PostgreSQL data
+     * source with externally supplied Milvus-space vector projection and workspace write lock; no Neo4j,
+     * AGE or Milvus client configuration is required.
+     */
+    public PostgresMilvusNeo4jStorageProvider(
+        DataSource dataSource,
+        PostgresStorageConfig postgresConfig,
+        SnapshotStore snapshotStore,
+        WorkspaceScope workspaceScope,
+        GraphStorageAdapter graphAdapter,
+        VectorProjection vectorProjection,
+        StorageLockManager storageLockManager
+    ) {
+        this(buildWithGraphAdapterFromDataSourceProjections(
+            dataSource,
+            postgresConfig,
+            snapshotStore,
+            workspaceScope,
+            // Validated before the relational adapter touches the database.
+            Objects.requireNonNull(graphAdapter, "graphAdapter"),
+            Objects.requireNonNull(vectorProjection, "vectorProjection"),
+            Objects.requireNonNull(storageLockManager, "storageLockManager")
+        ));
+    }
+
     private PostgresMilvusNeo4jStorageProvider(Components components) {
         this.lock = components.lock;
         this.snapshotStore = components.snapshotStore;
@@ -621,6 +647,40 @@ public final class PostgresMilvusNeo4jStorageProvider implements AtomicStoragePr
             snapshotStore,
             workspaceScope,
             graphBackend,
+            storageLockManager
+        );
+    }
+
+    /**
+     * Family mode: relational rows and Milvus vectors share the given PostgreSQL data source, the
+     * graph projection is the supplied adapter (an external Bolt/Cypher-native engine), and vector
+     * payload snapshots resolve against the relational rows. No AGE bootstrap runs.
+     */
+    private static Components buildWithGraphAdapterFromDataSourceProjections(
+        DataSource dataSource,
+        PostgresStorageConfig postgresConfig,
+        SnapshotStore snapshotStore,
+        WorkspaceScope workspaceScope,
+        GraphStorageAdapter graphAdapter,
+        VectorProjection vectorProjection,
+        StorageLockManager storageLockManager
+    ) {
+        var relationalAdapter = new PostgresRelationalStorageAdapter(
+            Objects.requireNonNull(dataSource, "dataSource"),
+            Objects.requireNonNull(postgresConfig, "postgresConfig"),
+            Objects.requireNonNull(snapshotStore, "snapshotStore"),
+            Objects.requireNonNull(workspaceScope, "workspaceScope")
+        );
+        var vectorAdapter = new MilvusVectorStorageAdapter(
+            vectorProjection,
+            snapshot -> buildMilvusPayloads(snapshot, relationalAdapter)
+        );
+        return new Components(
+            snapshotStore,
+            relationalAdapter,
+            graphAdapter,
+            vectorAdapter,
+            new ReentrantReadWriteLock(true),
             storageLockManager
         );
     }
