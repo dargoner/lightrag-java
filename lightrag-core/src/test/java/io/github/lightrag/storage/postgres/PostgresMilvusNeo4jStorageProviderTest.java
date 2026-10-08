@@ -50,8 +50,10 @@ import java.util.UUID;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicReference;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.locks.ReentrantLock;
 import java.util.concurrent.locks.ReentrantReadWriteLock;
 import java.util.function.Supplier;
 import javax.sql.DataSource;
@@ -350,6 +352,7 @@ class PostgresMilvusNeo4jStorageProviderTest {
                 providerLock.writeLock().lock();
                 try {
                     reader.start();
+                    awaitQueuedOn(providerLock, reader);
                     assertThat(readFinished.await(200, TimeUnit.MILLISECONDS)).isFalse();
 
                     reader.interrupt();
@@ -357,6 +360,7 @@ class PostgresMilvusNeo4jStorageProviderTest {
                     assertThat(readFinished.await(5, TimeUnit.SECONDS)).isTrue();
                     reader.join(1000);
                     assertThat(readFailure.get()).isInstanceOf(StorageException.class);
+                    assertThat(readFailure.get()).hasCauseInstanceOf(InterruptedException.class);
                     assertThat(reader.isInterrupted()).isTrue();
                 } finally {
                     if (providerLock.isWriteLockedByCurrentThread()) {
@@ -397,6 +401,7 @@ class PostgresMilvusNeo4jStorageProviderTest {
                 providerLock.writeLock().lock();
                 try {
                     writer.start();
+                    awaitQueuedOn(providerLock, writer);
                     assertThat(writeFinished.await(200, TimeUnit.MILLISECONDS)).isFalse();
 
                     writer.interrupt();
@@ -404,12 +409,203 @@ class PostgresMilvusNeo4jStorageProviderTest {
                     assertThat(writeFinished.await(5, TimeUnit.SECONDS)).isTrue();
                     writer.join(1000);
                     assertThat(writeFailure.get()).isInstanceOf(StorageException.class);
+                    assertThat(writeFailure.get()).hasCauseInstanceOf(InterruptedException.class);
                     assertThat(writer.isInterrupted()).isTrue();
                 } finally {
                     if (providerLock.isWriteLockedByCurrentThread()) {
                         providerLock.writeLock().unlock();
                     }
                     writer.join(5000);
+                }
+            }
+        }
+    }
+
+    @Test
+    void releasesExternalLockWhenAnInterruptedWriterWaitsBehindAReader() throws Exception {
+        var config = newConfig();
+        try (var dataSource = newDataSource(config)) {
+            var externalLock = new RecordingStorageLockManager();
+            var selectStarted = new CountDownLatch(1);
+            var allowSelectToFinish = new CountDownLatch(1);
+            DataSource blockingDataSource = blockingChunkSelectDataSource(
+                dataSource,
+                config,
+                selectStarted,
+                allowSelectToFinish
+            );
+            try (var provider = new PostgresMilvusNeo4jStorageProvider(
+                blockingDataSource,
+                config,
+                new InMemorySnapshotStore(),
+                new WorkspaceScope("default"),
+                new RecordingGraphProjection(),
+                new RecordingMilvusProjection(),
+                externalLock
+            )) {
+                provider.chunkStore().save(new ChunkStore.ChunkRecord(
+                    "doc-1:0",
+                    "doc-1",
+                    "Body",
+                    4,
+                    0,
+                    Map.of("source", "test")
+                ));
+
+                var readResult = new AtomicReference<Optional<ChunkStore.ChunkRecord>>();
+                var readFailure = new AtomicReference<Throwable>();
+                var reader = new Thread(() -> {
+                    try {
+                        readResult.set(provider.chunkStore().load("doc-1:0"));
+                    } catch (Throwable throwable) {
+                        readFailure.set(throwable);
+                    }
+                });
+                reader.start();
+                assertThat(selectStarted.await(5, TimeUnit.SECONDS)).isTrue();
+
+                var writeFinished = new CountDownLatch(1);
+                var writeFailure = new AtomicReference<Throwable>();
+                var writer = new Thread(() -> {
+                    try {
+                        provider.documentStore().save(new DocumentStore.DocumentRecord("doc-w", "Title", "Body", Map.of()));
+                    } catch (Throwable throwable) {
+                        writeFailure.set(throwable);
+                    } finally {
+                        writeFinished.countDown();
+                    }
+                });
+                writer.start();
+                try {
+                    // The writer must already hold the external lock while the parked reader keeps it off the local lock.
+                    awaitActiveExclusiveCalls(externalLock, 1);
+
+                    writer.interrupt();
+
+                    assertThat(writeFinished.await(5, TimeUnit.SECONDS)).isTrue();
+                    writer.join(1000);
+                    assertThat(writeFailure.get()).isInstanceOf(StorageException.class);
+                    assertThat(writeFailure.get()).hasCauseInstanceOf(InterruptedException.class);
+                    assertThat(externalLock.activeExclusiveCalls()).isZero();
+
+                    allowSelectToFinish.countDown();
+                    reader.join(5000);
+                    assertThat(readFailure.get()).isNull();
+                    assertThat(readResult.get()).isPresent();
+
+                    provider.documentStore().save(new DocumentStore.DocumentRecord("doc-after", "Title", "Body", Map.of()));
+                    assertThat(provider.documentStore().load("doc-after")).isPresent();
+                } finally {
+                    allowSelectToFinish.countDown();
+                    writer.join(5000);
+                    reader.join(5000);
+                }
+            }
+        }
+    }
+
+    @Test
+    void supportsReentrantNestedWritesUnderTheExternalLock() {
+        var config = newConfig();
+        try (var dataSource = newDataSource(config)) {
+            var externalLock = new ExclusiveStorageLockManager();
+            try (var provider = new PostgresMilvusNeo4jStorageProvider(
+                dataSource,
+                config,
+                new InMemorySnapshotStore(),
+                new WorkspaceScope("default"),
+                new RecordingGraphProjection(),
+                new RecordingMilvusProjection(),
+                externalLock
+            )) {
+                provider.writeAtomically(storage -> {
+                    storage.documentStore().save(new DocumentStore.DocumentRecord("doc-outer", "Title", "Body", Map.of()));
+                    provider.documentStore().save(new DocumentStore.DocumentRecord("doc-nested", "Title", "Body", Map.of()));
+                    return null;
+                });
+
+                assertThat(externalLock.exclusiveCalls()).isEqualTo(2);
+                assertThat(externalLock.maxConcurrentThreads()).isEqualTo(1);
+                assertThat(provider.documentStore().load("doc-outer")).isPresent();
+                assertThat(provider.documentStore().load("doc-nested")).isPresent();
+            }
+        }
+    }
+
+    @Test
+    void serializesWritersFromDifferentProvidersUnderTheSharedExternalLock() throws Exception {
+        var config = newConfig();
+        try (var dataSource = newDataSource(config)) {
+            var externalLock = new ExclusiveStorageLockManager();
+            try (
+                var first = new PostgresMilvusNeo4jStorageProvider(
+                    dataSource,
+                    config,
+                    new InMemorySnapshotStore(),
+                    new WorkspaceScope("default"),
+                    new RecordingGraphProjection(),
+                    new RecordingMilvusProjection(),
+                    externalLock
+                );
+                var second = new PostgresMilvusNeo4jStorageProvider(
+                    dataSource,
+                    config,
+                    new InMemorySnapshotStore(),
+                    new WorkspaceScope("default"),
+                    new RecordingGraphProjection(),
+                    new RecordingMilvusProjection(),
+                    externalLock
+                )
+            ) {
+                var firstFailure = new AtomicReference<Throwable>();
+                var secondFailure = new AtomicReference<Throwable>();
+                var firstFinished = new CountDownLatch(1);
+                var secondFinished = new CountDownLatch(1);
+
+                var firstWriter = new Thread(() -> {
+                    try {
+                        first.writeAtomically(storage -> {
+                            pause(400);
+                            storage.documentStore().save(new DocumentStore.DocumentRecord("doc-first", "Title", "Body", Map.of()));
+                            return null;
+                        });
+                    } catch (Throwable throwable) {
+                        firstFailure.set(throwable);
+                    } finally {
+                        firstFinished.countDown();
+                    }
+                });
+                var secondWriter = new Thread(() -> {
+                    try {
+                        second.writeAtomically(storage -> {
+                            storage.documentStore().save(new DocumentStore.DocumentRecord("doc-second", "Title", "Body", Map.of()));
+                            return null;
+                        });
+                    } catch (Throwable throwable) {
+                        secondFailure.set(throwable);
+                    } finally {
+                        secondFinished.countDown();
+                    }
+                });
+
+                firstWriter.start();
+                try {
+                    assertThat(externalLock.awaitSupplierEntered(5, TimeUnit.SECONDS)).isTrue();
+                    secondWriter.start();
+
+                    assertThat(firstFinished.await(10, TimeUnit.SECONDS)).isTrue();
+                    assertThat(secondFinished.await(10, TimeUnit.SECONDS)).isTrue();
+                    firstWriter.join(1000);
+                    secondWriter.join(1000);
+                    assertThat(firstFailure.get()).isNull();
+                    assertThat(secondFailure.get()).isNull();
+                    assertThat(externalLock.exclusiveCalls()).isEqualTo(2);
+                    assertThat(externalLock.maxConcurrentThreads()).isEqualTo(1);
+                    assertThat(first.documentStore().load("doc-first")).isPresent();
+                    assertThat(second.documentStore().load("doc-second")).isPresent();
+                } finally {
+                    firstWriter.join(5000);
+                    secondWriter.join(5000);
                 }
             }
         }
@@ -1122,6 +1318,32 @@ class PostgresMilvusNeo4jStorageProviderTest {
         }
     }
 
+    private static void awaitQueuedOn(ReentrantReadWriteLock lock, Thread worker) throws InterruptedException {
+        long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(5);
+        while (!lock.hasQueuedThread(worker) && System.nanoTime() < deadline) {
+            Thread.sleep(10);
+        }
+        assertThat(lock.hasQueuedThread(worker)).isTrue();
+    }
+
+    private static void awaitActiveExclusiveCalls(RecordingStorageLockManager manager, int expected)
+        throws InterruptedException {
+        long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(5);
+        while (manager.activeExclusiveCalls() < expected && System.nanoTime() < deadline) {
+            Thread.sleep(10);
+        }
+        assertThat(manager.activeExclusiveCalls()).isEqualTo(expected);
+    }
+
+    private static void pause(long millis) {
+        try {
+            Thread.sleep(millis);
+        } catch (InterruptedException interrupted) {
+            Thread.currentThread().interrupt();
+            throw new IllegalStateException(interrupted);
+        }
+    }
+
     private static final class RecordingGraphProjection implements PostgresMilvusNeo4jStorageProvider.GraphProjection {
         private final Map<String, GraphStore.EntityRecord> entities = new LinkedHashMap<>();
         private final Map<String, GraphStore.RelationRecord> relations = new LinkedHashMap<>();
@@ -1537,6 +1759,41 @@ class PostgresMilvusNeo4jStorageProviderTest {
         @Override
         public List<Path> list() {
             return snapshots.keySet().stream().toList();
+        }
+    }
+
+    private static final class ExclusiveStorageLockManager implements StorageLockManager {
+        private final ReentrantLock lock = new ReentrantLock(true);
+        private final AtomicInteger exclusiveCalls = new AtomicInteger();
+        private final Map<Thread, Integer> holders = new ConcurrentHashMap<>();
+        private final AtomicInteger maxConcurrentThreads = new AtomicInteger();
+        private final CountDownLatch supplierEntered = new CountDownLatch(1);
+
+        @Override
+        public <T> T withExclusiveLock(Supplier<T> supplier) {
+            lock.lock();
+            try {
+                exclusiveCalls.incrementAndGet();
+                holders.merge(Thread.currentThread(), 1, Integer::sum);
+                maxConcurrentThreads.accumulateAndGet(holders.size(), Math::max);
+                supplierEntered.countDown();
+                return supplier.get();
+            } finally {
+                holders.computeIfPresent(Thread.currentThread(), (thread, depth) -> depth <= 1 ? null : depth - 1);
+                lock.unlock();
+            }
+        }
+
+        int exclusiveCalls() {
+            return exclusiveCalls.get();
+        }
+
+        int maxConcurrentThreads() {
+            return maxConcurrentThreads.get();
+        }
+
+        boolean awaitSupplierEntered(long timeout, TimeUnit unit) throws InterruptedException {
+            return supplierEntered.await(timeout, unit);
         }
     }
 
