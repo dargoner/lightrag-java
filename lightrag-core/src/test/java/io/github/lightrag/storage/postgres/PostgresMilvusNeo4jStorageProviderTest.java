@@ -428,11 +428,13 @@ class PostgresMilvusNeo4jStorageProviderTest {
             var externalLock = new RecordingStorageLockManager();
             var selectStarted = new CountDownLatch(1);
             var allowSelectToFinish = new CountDownLatch(1);
+            // Long fallback: the parked read must outlive the whole observation window; the test releases it explicitly.
             DataSource blockingDataSource = blockingChunkSelectDataSource(
                 dataSource,
                 config,
                 selectStarted,
-                allowSelectToFinish
+                allowSelectToFinish,
+                30
             );
             try (var provider = new PostgresMilvusNeo4jStorageProvider(
                 blockingDataSource,
@@ -479,6 +481,8 @@ class PostgresMilvusNeo4jStorageProviderTest {
                 try {
                     // The writer must already hold the external lock while the parked reader keeps it off the local lock.
                     awaitActiveExclusiveCalls(externalLock, 1);
+                    // The interrupt must hit the local write lock wait, so confirm the writer is parked there.
+                    awaitThreadWaiting(writer);
 
                     writer.interrupt();
 
@@ -561,12 +565,25 @@ class PostgresMilvusNeo4jStorageProviderTest {
                 var secondFailure = new AtomicReference<Throwable>();
                 var firstFinished = new CountDownLatch(1);
                 var secondFinished = new CountDownLatch(1);
+                var firstOperationEntered = new CountDownLatch(1);
+                var releaseFirstOperation = new CountDownLatch(1);
+                var businessConcurrent = new AtomicInteger();
+                var businessPeak = new AtomicInteger();
+                var firstOperationHeldExternalLock = new AtomicBoolean();
+                var secondOperationHeldExternalLock = new AtomicBoolean();
 
                 var firstWriter = new Thread(() -> {
                     try {
                         first.writeAtomically(storage -> {
-                            pause(400);
-                            storage.documentStore().save(new DocumentStore.DocumentRecord("doc-first", "Title", "Body", Map.of()));
+                            businessPeak.accumulateAndGet(businessConcurrent.incrementAndGet(), Math::max);
+                            try {
+                                firstOperationHeldExternalLock.set(externalLock.isHeldByCurrentThread());
+                                firstOperationEntered.countDown();
+                                awaitLatch(releaseFirstOperation, 30);
+                                storage.documentStore().save(new DocumentStore.DocumentRecord("doc-first", "Title", "Body", Map.of()));
+                            } finally {
+                                businessConcurrent.decrementAndGet();
+                            }
                             return null;
                         });
                     } catch (Throwable throwable) {
@@ -578,7 +595,13 @@ class PostgresMilvusNeo4jStorageProviderTest {
                 var secondWriter = new Thread(() -> {
                     try {
                         second.writeAtomically(storage -> {
-                            storage.documentStore().save(new DocumentStore.DocumentRecord("doc-second", "Title", "Body", Map.of()));
+                            businessPeak.accumulateAndGet(businessConcurrent.incrementAndGet(), Math::max);
+                            try {
+                                secondOperationHeldExternalLock.set(externalLock.isHeldByCurrentThread());
+                                storage.documentStore().save(new DocumentStore.DocumentRecord("doc-second", "Title", "Body", Map.of()));
+                            } finally {
+                                businessConcurrent.decrementAndGet();
+                            }
                             return null;
                         });
                     } catch (Throwable throwable) {
@@ -590,8 +613,12 @@ class PostgresMilvusNeo4jStorageProviderTest {
 
                 firstWriter.start();
                 try {
-                    assertThat(externalLock.awaitSupplierEntered(5, TimeUnit.SECONDS)).isTrue();
+                    assertThat(firstOperationEntered.await(5, TimeUnit.SECONDS)).isTrue();
                     secondWriter.start();
+                    // The second writer must queue on the shared external lock while the first write is still resident.
+                    awaitQueuedOn(externalLock, secondWriter);
+
+                    releaseFirstOperation.countDown();
 
                     assertThat(firstFinished.await(10, TimeUnit.SECONDS)).isTrue();
                     assertThat(secondFinished.await(10, TimeUnit.SECONDS)).isTrue();
@@ -601,9 +628,13 @@ class PostgresMilvusNeo4jStorageProviderTest {
                     assertThat(secondFailure.get()).isNull();
                     assertThat(externalLock.exclusiveCalls()).isEqualTo(2);
                     assertThat(externalLock.maxConcurrentThreads()).isEqualTo(1);
+                    assertThat(businessPeak.get()).isEqualTo(1);
+                    assertThat(firstOperationHeldExternalLock.get()).isTrue();
+                    assertThat(secondOperationHeldExternalLock.get()).isTrue();
                     assertThat(first.documentStore().load("doc-first")).isPresent();
                     assertThat(second.documentStore().load("doc-second")).isPresent();
                 } finally {
+                    releaseFirstOperation.countDown();
                     firstWriter.join(5000);
                     secondWriter.join(5000);
                 }
@@ -621,7 +652,8 @@ class PostgresMilvusNeo4jStorageProviderTest {
                 dataSource,
                 config,
                 selectStarted,
-                allowSelectToFinish
+                allowSelectToFinish,
+                5
             );
             try (var provider = new PostgresMilvusNeo4jStorageProvider(
                 blockingDataSource,
@@ -1188,7 +1220,8 @@ class PostgresMilvusNeo4jStorageProviderTest {
         DataSource delegate,
         PostgresStorageConfig config,
         CountDownLatch selectStarted,
-        CountDownLatch allowSelectToFinish
+        CountDownLatch allowSelectToFinish,
+        long selectWaitSeconds
     ) {
         return (DataSource) Proxy.newProxyInstance(
             DataSource.class.getClassLoader(),
@@ -1199,7 +1232,8 @@ class PostgresMilvusNeo4jStorageProviderTest {
                         delegate.getConnection(),
                         config,
                         selectStarted,
-                        allowSelectToFinish
+                        allowSelectToFinish,
+                        selectWaitSeconds
                     );
                 }
                 if ("getConnection".equals(method.getName()) && args != null && args.length == 2) {
@@ -1207,7 +1241,8 @@ class PostgresMilvusNeo4jStorageProviderTest {
                         delegate.getConnection((String) args[0], (String) args[1]),
                         config,
                         selectStarted,
-                        allowSelectToFinish
+                        allowSelectToFinish,
+                        selectWaitSeconds
                     );
                 }
                 return method.invoke(delegate, args);
@@ -1219,7 +1254,8 @@ class PostgresMilvusNeo4jStorageProviderTest {
         Connection delegate,
         PostgresStorageConfig config,
         CountDownLatch selectStarted,
-        CountDownLatch allowSelectToFinish
+        CountDownLatch allowSelectToFinish,
+        long selectWaitSeconds
     ) {
         return (Connection) Proxy.newProxyInstance(
             Connection.class.getClassLoader(),
@@ -1228,7 +1264,7 @@ class PostgresMilvusNeo4jStorageProviderTest {
                 if ("prepareStatement".equals(method.getName()) && args != null && args.length > 0 && args[0] instanceof String sql) {
                     PreparedStatement statement = (PreparedStatement) method.invoke(delegate, args);
                     if (isChunkLoadSql(sql, config)) {
-                        return blockingPreparedStatement(statement, selectStarted, allowSelectToFinish);
+                        return blockingPreparedStatement(statement, selectStarted, allowSelectToFinish, selectWaitSeconds);
                     }
                     return statement;
                 }
@@ -1240,7 +1276,8 @@ class PostgresMilvusNeo4jStorageProviderTest {
     private static PreparedStatement blockingPreparedStatement(
         PreparedStatement delegate,
         CountDownLatch selectStarted,
-        CountDownLatch allowSelectToFinish
+        CountDownLatch allowSelectToFinish,
+        long selectWaitSeconds
     ) {
         return (PreparedStatement) Proxy.newProxyInstance(
             PreparedStatement.class.getClassLoader(),
@@ -1248,7 +1285,7 @@ class PostgresMilvusNeo4jStorageProviderTest {
             (proxy, method, args) -> {
                 if ("executeQuery".equals(method.getName()) && (args == null || args.length == 0)) {
                     selectStarted.countDown();
-                    if (!allowSelectToFinish.await(5, TimeUnit.SECONDS)) {
+                    if (!allowSelectToFinish.await(selectWaitSeconds, TimeUnit.SECONDS)) {
                         throw new IllegalStateException("Timed out waiting to finish blocked chunk SELECT");
                     }
                 }
@@ -1326,6 +1363,22 @@ class PostgresMilvusNeo4jStorageProviderTest {
         assertThat(lock.hasQueuedThread(worker)).isTrue();
     }
 
+    private static void awaitQueuedOn(ExclusiveStorageLockManager manager, Thread worker) throws InterruptedException {
+        long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(5);
+        while (!manager.hasQueuedThread(worker) && System.nanoTime() < deadline) {
+            Thread.sleep(10);
+        }
+        assertThat(manager.hasQueuedThread(worker)).isTrue();
+    }
+
+    private static void awaitThreadWaiting(Thread worker) throws InterruptedException {
+        long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(5);
+        while (worker.getState() != Thread.State.WAITING && System.nanoTime() < deadline) {
+            Thread.sleep(10);
+        }
+        assertThat(worker.getState()).isEqualTo(Thread.State.WAITING);
+    }
+
     private static void awaitActiveExclusiveCalls(RecordingStorageLockManager manager, int expected)
         throws InterruptedException {
         long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(5);
@@ -1335,9 +1388,11 @@ class PostgresMilvusNeo4jStorageProviderTest {
         assertThat(manager.activeExclusiveCalls()).isEqualTo(expected);
     }
 
-    private static void pause(long millis) {
+    private static void awaitLatch(CountDownLatch latch, long timeoutSeconds) {
         try {
-            Thread.sleep(millis);
+            if (!latch.await(timeoutSeconds, TimeUnit.SECONDS)) {
+                throw new IllegalStateException("Timed out waiting for the latch");
+            }
         } catch (InterruptedException interrupted) {
             Thread.currentThread().interrupt();
             throw new IllegalStateException(interrupted);
@@ -1767,7 +1822,6 @@ class PostgresMilvusNeo4jStorageProviderTest {
         private final AtomicInteger exclusiveCalls = new AtomicInteger();
         private final Map<Thread, Integer> holders = new ConcurrentHashMap<>();
         private final AtomicInteger maxConcurrentThreads = new AtomicInteger();
-        private final CountDownLatch supplierEntered = new CountDownLatch(1);
 
         @Override
         public <T> T withExclusiveLock(Supplier<T> supplier) {
@@ -1776,7 +1830,6 @@ class PostgresMilvusNeo4jStorageProviderTest {
                 exclusiveCalls.incrementAndGet();
                 holders.merge(Thread.currentThread(), 1, Integer::sum);
                 maxConcurrentThreads.accumulateAndGet(holders.size(), Math::max);
-                supplierEntered.countDown();
                 return supplier.get();
             } finally {
                 holders.computeIfPresent(Thread.currentThread(), (thread, depth) -> depth <= 1 ? null : depth - 1);
@@ -1792,8 +1845,12 @@ class PostgresMilvusNeo4jStorageProviderTest {
             return maxConcurrentThreads.get();
         }
 
-        boolean awaitSupplierEntered(long timeout, TimeUnit unit) throws InterruptedException {
-            return supplierEntered.await(timeout, unit);
+        boolean hasQueuedThread(Thread thread) {
+            return lock.hasQueuedThread(thread);
+        }
+
+        boolean isHeldByCurrentThread() {
+            return holders.containsKey(Thread.currentThread());
         }
     }
 
