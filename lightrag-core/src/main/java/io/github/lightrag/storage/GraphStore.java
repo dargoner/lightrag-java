@@ -80,6 +80,31 @@ public interface GraphStore {
     }
 
     /**
+     * Relation endpoints (relation id, source, target) of every relation incident to each requested
+     * entity id, in the same per-id structure as {@link #findRelations(List)}: one entry per
+     * distinct requested id - repeated ids collapse to their first position and are looked up once
+     * (the same de-duplication rationale as {@link #degrees(java.util.Collection)}) - zero-filled
+     * when an id is unknown, in first-occurrence order; every list preserves the relation order of
+     * {@link #findRelations(List)} and the map is unmodifiable. Query paths that only propagate
+     * scores across relation endpoints should call this instead of materializing full relation
+     * records; the default implementation projects from {@link #findRelations(List)}, and
+     * graph-database adapters that can run a narrower statement should override it.
+     */
+    default Map<String, List<RelationEndpointRecord>> findRelationEndpoints(List<String> entityIds) {
+        var distinctIds = List.copyOf(new LinkedHashSet<>(Objects.requireNonNull(entityIds, "entityIds")));
+        var relationsByEntityId = findRelations(distinctIds);
+        var endpointsByEntityId = new LinkedHashMap<String, List<RelationEndpointRecord>>();
+        relationsByEntityId.forEach((entityId, relations) -> endpointsByEntityId.put(
+            entityId,
+            relations.stream()
+                .map(relation -> new RelationEndpointRecord(
+                    relation.relationId(), relation.srcId(), relation.tgtId()))
+                .toList()
+        ));
+        return java.util.Collections.unmodifiableMap(endpointsByEntityId);
+    }
+
+    /**
      * Incident-relation count of each id: the size of {@link #findRelations(String)} for that id,
      * i.e. the number of relations holding it as source or target, where a self-loop counts once.
      * Every distinct requested id gets exactly one entry - repeated ids collapse to their first
@@ -304,6 +329,18 @@ public interface GraphStore {
 
         public List<String> filePaths() {
             return RelationCanonicalizer.splitValues(filePath);
+        }
+    }
+
+    /**
+     * Lightweight relation projection for score-propagation paths: only the fields
+     * {@link #findRelationEndpoints(List)} callers need, so stores can answer with a narrow read.
+     */
+    record RelationEndpointRecord(String relationId, String srcId, String tgtId) {
+        public RelationEndpointRecord {
+            relationId = Objects.requireNonNull(relationId, "relationId");
+            srcId = Objects.requireNonNull(srcId, "srcId");
+            tgtId = Objects.requireNonNull(tgtId, "tgtId");
         }
     }
 }

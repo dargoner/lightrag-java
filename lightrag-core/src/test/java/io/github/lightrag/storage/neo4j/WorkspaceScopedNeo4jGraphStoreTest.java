@@ -16,10 +16,13 @@ import org.neo4j.driver.Record;
 import org.neo4j.driver.Result;
 import org.neo4j.driver.SessionConfig;
 import org.neo4j.driver.TransactionContext;
+import org.neo4j.driver.Value;
+import org.neo4j.driver.Values;
 import org.testcontainers.containers.Neo4jContainer;
 import org.testcontainers.junit.jupiter.Container;
 import org.testcontainers.junit.jupiter.Testcontainers;
 
+import java.lang.reflect.InvocationTargetException;
 import java.lang.reflect.Method;
 import java.lang.reflect.Proxy;
 import java.util.ArrayList;
@@ -28,9 +31,11 @@ import java.util.Map;
 import java.util.concurrent.Callable;
 import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.Executors;
+import java.util.concurrent.atomic.AtomicInteger;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
+import static org.assertj.core.api.Assertions.entry;
 
 @Testcontainers
 class WorkspaceScopedNeo4jGraphStoreTest {
@@ -293,11 +298,352 @@ class WorkspaceScopedNeo4jGraphStoreTest {
     }
 
     @Test
+    void workspaceSetStoreReadsEntitiesAndRelationsAcrossEveryWorkspace() {
+        try (var alpha = newStore("alpha");
+             var beta = newStore("beta");
+             var driver = GraphDatabase.driver(
+                 NEO4J.getBoltUrl(),
+                 AuthTokens.basic("neo4j", NEO4J.getAdminPassword())
+             );
+             var workspaceSet = new WorkspaceScopedNeo4jGraphStore(driver, "neo4j", List.of("alpha", "beta"))) {
+            alpha.saveEntities(List.of(entity("entity-1", "Alice"), entity("entity-2", "Alpha Two")));
+            beta.saveEntities(List.of(entity("entity-1", "Bob"), entity("entity-3", "Beta Three")));
+            alpha.saveRelation(relation("relation-a", "entity-1", "entity-2", "Alice knows Alpha Two"));
+            beta.saveRelation(relation("relation-b", "entity-1", "entity-3", "Bob knows Beta Three"));
+
+            assertThat(workspaceSet.loadEntity("entity-1")).get()
+                .extracting(GraphStore.EntityRecord::name)
+                .isEqualTo("Alice");
+            assertThat(workspaceSet.loadEntities(List.of("entity-3", "entity-1", "entity-1", "missing")))
+                .extracting(GraphStore.EntityRecord::id)
+                .containsExactly("entity-1", "entity-3");
+            assertThat(workspaceSet.allEntities())
+                .extracting(GraphStore.EntityRecord::name)
+                .containsExactlyInAnyOrder("Alice", "Alpha Two", "Bob", "Beta Three");
+            assertThat(workspaceSet.searchEntitiesByText("three"))
+                .extracting(GraphStore.EntityRecord::id)
+                .containsExactly("entity-3");
+
+            assertThat(workspaceSet.loadRelation("relation-a")).get()
+                .extracting(GraphStore.RelationRecord::description)
+                .isEqualTo("Alice knows Alpha Two");
+            assertThat(workspaceSet.loadRelations(List.of("relation-b", "missing", "relation-a")))
+                .extracting(GraphStore.RelationRecord::id)
+                .containsExactly("relation-a", "relation-b");
+            assertThat(workspaceSet.findRelations("entity-1"))
+                .extracting(GraphStore.RelationRecord::id)
+                .containsExactly("relation-a", "relation-b");
+            assertThat(workspaceSet.findRelations(List.of("entity-1", "entity-2")))
+                .containsOnlyKeys("entity-1", "entity-2")
+                .satisfies(relationsByEntityId -> {
+                    assertThat(relationsByEntityId.get("entity-1"))
+                        .extracting(GraphStore.RelationRecord::id)
+                        .containsExactly("relation-a", "relation-b");
+                    assertThat(relationsByEntityId.get("entity-2"))
+                        .extracting(GraphStore.RelationRecord::id)
+                        .containsExactly("relation-a");
+                });
+            assertThat(workspaceSet.degrees(List.of("entity-1", "entity-2")))
+                .containsEntry("entity-1", 2)
+                .containsEntry("entity-2", 1);
+        }
+    }
+
+    @Test
+    void nativeDegreesMatchFindRelationsSizesWithinTheWorkspaceOnly() {
+        try (var alpha = newStore("alpha");
+             var beta = newStore("beta")) {
+            alpha.saveEntities(List.of(
+                entity("e1", "Alice"),
+                entity("e2", "Bob"),
+                entity("e3", "Carol"),
+                entity("e4", "Dave")
+            ));
+            alpha.saveRelations(List.of(
+                relation("r1", "e1", "e2", "one"),
+                relation("r2", "e1", "e3", "two"),
+                relation("r3", "e2", "e2", "self loop")
+            ));
+            beta.saveRelation(relation("r1", "e1", "e5", "beta one"));
+
+            var degrees = alpha.degrees(List.of("e2", "ghost", "e1", "e1", "e4"));
+
+            assertThat(degrees).containsExactly(
+                entry("e2", 2),
+                entry("ghost", 0),
+                entry("e1", 2),
+                entry("e4", 0)
+            );
+            assertThat(alpha.degrees(List.of("e1", "e2", "e3", "e4")))
+                .allSatisfy((id, degree) -> assertThat(degree)
+                    .isEqualTo(alpha.findRelations(id).size()));
+            assertThat(alpha.degrees(List.of())).isEmpty();
+            assertThatThrownBy(() -> degrees.put("x", 1))
+                .isInstanceOf(UnsupportedOperationException.class);
+        }
+    }
+
+    @Test
+    void workspaceSetDegreesCountDistinctRelationIdsAcrossWorkspaces() {
+        try (var alpha = newStore("alpha");
+             var beta = newStore("beta");
+             var driver = GraphDatabase.driver(
+                 NEO4J.getBoltUrl(),
+                 AuthTokens.basic("neo4j", NEO4J.getAdminPassword())
+             );
+             var workspaceSet = new WorkspaceScopedNeo4jGraphStore(driver, "neo4j", List.of("alpha", "beta"))) {
+            alpha.saveEntities(List.of(
+                entity("entity-1", "Alice"),
+                entity("entity-2", "Alpha Two"),
+                entity("entity-3", "Alpha Three")
+            ));
+            beta.saveEntities(List.of(
+                entity("entity-1", "Bob"),
+                entity("entity-4", "Beta Four"),
+                entity("entity-5", "Beta Five")
+            ));
+            alpha.saveRelations(List.of(
+                relation("relation-a", "entity-1", "entity-2", "alpha a"),
+                relation("relation-b", "entity-2", "entity-3", "alpha b")
+            ));
+            beta.saveRelations(List.of(
+                relation("relation-a", "entity-1", "entity-4", "beta a"),
+                relation("relation-c", "entity-1", "entity-5", "beta c")
+            ));
+
+            var requested = List.of("entity-1", "entity-2", "missing", "entity-4", "entity-5", "entity-1");
+            var degrees = workspaceSet.degrees(requested);
+
+            // entity-1 sees relation-a in both workspaces, so the distinct count (2) is lower than
+            // the raw incident-row count (3); endpoint-only entities still count their edge.
+            assertThat(degrees).containsExactly(
+                entry("entity-1", 2),
+                entry("entity-2", 2),
+                entry("missing", 0),
+                entry("entity-4", 1),
+                entry("entity-5", 1)
+            );
+            var relationsByEntityId = workspaceSet.findRelations(List.of(
+                "entity-1", "entity-2", "missing", "entity-4", "entity-5"));
+            degrees.forEach((id, degree) -> assertThat(degree)
+                .as("native degree parity for %s", id)
+                .isEqualTo(relationsByEntityId.get(id).size()));
+        }
+    }
+
+    @Test
+    void degreesQueriesCountNativelyAndStayWorkspaceScoped() {
+        var queries = new CopyOnWriteArrayList<String>();
+        try (var store = new WorkspaceScopedNeo4jGraphStore(
+            recordingDriver(queries), "neo4j", new WorkspaceScope("alpha"))) {
+            queries.clear();
+
+            store.degrees(List.of("entity-1", "entity-1", "entity-2"));
+        }
+        assertThat(queries).hasSize(1);
+        assertThat(queries.get(0))
+            .contains("scopedId IN $scopedEntityIds")
+            .contains("count(relation) AS degree")
+            .doesNotContain("DISTINCT");
+
+        var workspaceSetQueries = new CopyOnWriteArrayList<String>();
+        try (var workspaceSet = new WorkspaceScopedNeo4jGraphStore(
+            recordingDriver(workspaceSetQueries), "neo4j", List.of("alpha", "beta"))) {
+            workspaceSetQueries.clear();
+
+            workspaceSet.degrees(List.of("entity-1", "entity-2"));
+        }
+        assertThat(workspaceSetQueries).hasSize(1);
+        assertThat(workspaceSetQueries.get(0))
+            .contains("entity.id IN $entityIds")
+            .contains("count(DISTINCT relation.relation_id) AS degree")
+            .doesNotContain("scopedEntityIds");
+    }
+
+    @Test
+    void degreesFallsBackToRelationMaterializationWhenNativeCountingFails() {
+        var queries = new CopyOnWriteArrayList<String>();
+        try (var store = new WorkspaceScopedNeo4jGraphStore(
+            nativeDegreesFailingDriver(queries), "neo4j", new WorkspaceScope("alpha"))) {
+            queries.clear();
+
+            var degrees = store.degrees(List.of("e1", "e2", "missing", "e1"));
+
+            // The fallback counts materialized relations per distinct id, so e1 and e2 see their
+            // single incident relation, the unknown id zero-fills, and the repeated id collapses
+            // to its first position - the GraphStore.degrees default contract.
+            assertThat(degrees).containsExactly(
+                entry("e1", 1),
+                entry("e2", 1),
+                entry("missing", 0)
+            );
+        }
+        assertThat(queries).hasSize(2);
+        assertThat(queries.get(0)).contains("AS degree");
+        assertThat(queries.get(1)).contains("UNWIND range");
+    }
+
+    @Test
+    void nativeRelationEndpointsMatchTheFindRelationsProjectionWithinTheWorkspaceOnly() {
+        try (var alpha = newStore("alpha");
+             var beta = newStore("beta")) {
+            alpha.saveEntities(List.of(
+                entity("e1", "Alice"),
+                entity("e2", "Bob"),
+                entity("e3", "Carol")
+            ));
+            alpha.saveRelations(List.of(
+                relation("r1", "e1", "e2", "one"),
+                relation("r2", "e1", "e3", "two"),
+                relation("r3", "e2", "e2", "self loop")
+            ));
+            beta.saveRelation(relation("r1", "e1", "e5", "beta one"));
+
+            var endpoints = alpha.findRelationEndpoints(List.of("e1", "e2", "missing", "e1"));
+            var relations = alpha.findRelations(List.of("e1", "e2", "missing"));
+
+            assertThat(endpoints.keySet()).containsExactly("e1", "e2", "missing");
+            relations.forEach((entityId, records) -> assertThat(endpoints.get(entityId))
+                .as("endpoint projection parity for %s", entityId)
+                .containsExactlyElementsOf(records.stream()
+                    .map(relationRecord -> new GraphStore.RelationEndpointRecord(
+                        relationRecord.id(), relationRecord.srcId(), relationRecord.tgtId()))
+                    .toList()));
+            // The repeated id is looked up once: two relations, not one slot per input entry.
+            assertThat(endpoints.get("e1")).containsExactly(
+                new GraphStore.RelationEndpointRecord("r1", "e1", "e2"),
+                new GraphStore.RelationEndpointRecord("r2", "e1", "e3"));
+            assertThat(endpoints.get("missing")).isEmpty();
+            assertThat(alpha.findRelationEndpoints(List.of())).isEmpty();
+            assertThatThrownBy(() -> endpoints.put("x", List.of()))
+                .isInstanceOf(UnsupportedOperationException.class);
+        }
+    }
+
+    @Test
+    void workspaceSetRelationEndpointsDeDuplicateByRelationIdAcrossWorkspaces() {
+        try (var alpha = newStore("alpha");
+             var beta = newStore("beta");
+             var driver = GraphDatabase.driver(
+                 NEO4J.getBoltUrl(),
+                 AuthTokens.basic("neo4j", NEO4J.getAdminPassword())
+             );
+             var workspaceSet = new WorkspaceScopedNeo4jGraphStore(driver, "neo4j", List.of("alpha", "beta"))) {
+            alpha.saveEntities(List.of(
+                entity("entity-1", "Alice"),
+                entity("entity-2", "Alpha Two"),
+                entity("entity-3", "Alpha Three")
+            ));
+            beta.saveEntities(List.of(
+                entity("entity-1", "Bob"),
+                entity("entity-4", "Beta Four")
+            ));
+            alpha.saveRelations(List.of(
+                relation("relation-a", "entity-1", "entity-2", "alpha a"),
+                relation("relation-b", "entity-2", "entity-3", "alpha b")
+            ));
+            beta.saveRelations(List.of(
+                relation("relation-a", "entity-1", "entity-4", "beta a")
+            ));
+
+            var endpoints = workspaceSet.findRelationEndpoints(List.of("entity-1", "entity-2", "missing"));
+            var relations = workspaceSet.findRelations(List.of("entity-1", "entity-2", "missing"));
+
+            // entity-1 carries relation-a in both workspaces: the alpha copy wins, mirroring the
+            // first-win dedup of findRelations(List).
+            assertThat(endpoints.get("entity-1")).containsExactly(
+                new GraphStore.RelationEndpointRecord("relation-a", "entity-1", "entity-2"));
+            relations.forEach((entityId, records) -> assertThat(endpoints.get(entityId))
+                .as("endpoint projection parity for %s", entityId)
+                .containsExactlyElementsOf(records.stream()
+                    .map(relationRecord -> new GraphStore.RelationEndpointRecord(
+                        relationRecord.id(), relationRecord.srcId(), relationRecord.tgtId()))
+                    .toList()));
+            assertThat(endpoints.get("missing")).isEmpty();
+        }
+    }
+
+    @Test
+    void findRelationEndpointsQueriesProjectNarrowlyAndStayWorkspaceScoped() {
+        var queries = new CopyOnWriteArrayList<String>();
+        try (var store = new WorkspaceScopedNeo4jGraphStore(
+            recordingDriver(queries), "neo4j", new WorkspaceScope("alpha"))) {
+            queries.clear();
+
+            store.findRelationEndpoints(List.of("entity-1", "entity-1", "entity-2"));
+        }
+        assertThat(queries).hasSize(1);
+        assertThat(queries.get(0))
+            .contains("scopedId: scopedEntityId")
+            .contains("relation.src_id AS srcId")
+            .contains("relation.tgt_id AS tgtId")
+            .doesNotContain("RETURN entityId, relation\n");
+
+        var workspaceSetQueries = new CopyOnWriteArrayList<String>();
+        try (var workspaceSet = new WorkspaceScopedNeo4jGraphStore(
+            recordingDriver(workspaceSetQueries), "neo4j", List.of("alpha", "beta"))) {
+            workspaceSetQueries.clear();
+
+            workspaceSet.findRelationEndpoints(List.of("entity-1", "entity-2"));
+        }
+        assertThat(workspaceSetQueries).hasSize(1);
+        assertThat(workspaceSetQueries.get(0))
+            .contains("entity.id IN $entityIds")
+            .contains("ORDER BY entityId, relation.workspaceId, relation.relation_id")
+            .contains("relation.relation_id AS relationId")
+            .doesNotContain("RETURN entity.id AS entityId, relation\n");
+    }
+
+    @Test
+    void workspaceSetStoreRejectsSingleWorkspaceOperations() {
+        try (var driver = GraphDatabase.driver(
+            NEO4J.getBoltUrl(),
+            AuthTokens.basic("neo4j", NEO4J.getAdminPassword())
+        );
+             var workspaceSet = new WorkspaceScopedNeo4jGraphStore(driver, "neo4j", List.of("alpha", "beta"))) {
+            assertThatThrownBy(() -> workspaceSet.saveEntity(entity("entity-1", "Alice")))
+                .isInstanceOf(IllegalStateException.class)
+                .hasMessageContaining("saveEntity requires a single-workspace graph store")
+                .hasMessageContaining("covers 2 workspaces");
+            assertThatThrownBy(() -> workspaceSet.saveEntities(List.of(entity("entity-1", "Alice"))))
+                .isInstanceOf(IllegalStateException.class)
+                .hasMessageContaining("saveEntities requires a single-workspace graph store");
+            assertThatThrownBy(() -> workspaceSet.saveRelation(relation("relation-1", "entity-1", "entity-2", "x")))
+                .isInstanceOf(IllegalStateException.class)
+                .hasMessageContaining("saveRelation requires a single-workspace graph store");
+            assertThatThrownBy(() -> workspaceSet.saveRelations(List.of(relation("relation-1", "entity-1", "entity-2", "x"))))
+                .isInstanceOf(IllegalStateException.class)
+                .hasMessageContaining("saveRelations requires a single-workspace graph store");
+            assertThatThrownBy(() -> workspaceSet.deleteEntities(List.of("entity-1")))
+                .isInstanceOf(IllegalStateException.class)
+                .hasMessageContaining("deleteEntities requires a single-workspace graph store");
+            assertThatThrownBy(() -> workspaceSet.deleteRelations(List.of("relation-1")))
+                .isInstanceOf(IllegalStateException.class)
+                .hasMessageContaining("deleteRelations requires a single-workspace graph store");
+            assertThatThrownBy(workspaceSet::captureSnapshot)
+                .isInstanceOf(IllegalStateException.class)
+                .hasMessageContaining("captureSnapshot requires a single-workspace graph store");
+            assertThatThrownBy(() -> workspaceSet.restore(new Neo4jGraphSnapshot(List.of(), List.of())))
+                .isInstanceOf(IllegalStateException.class)
+                .hasMessageContaining("restore requires a single-workspace graph store");
+            assertThatThrownBy(() -> workspaceSet.executeCypher("RETURN 1 AS value", Map.of()))
+                .isInstanceOf(IllegalStateException.class)
+                .hasMessageContaining("executeCypher requires a single-workspace graph store");
+            assertThatThrownBy(() -> workspaceSet.getKnowledgeGraph("entity-1", 1, 10))
+                .isInstanceOf(IllegalStateException.class)
+                .hasMessageContaining("getKnowledgeGraph requires a single-workspace graph store");
+        }
+    }
+
+    @Test
     void workspaceScopedNeo4jGraphStoreProvidesNativeBatchOverrides() throws NoSuchMethodException {
         assertOverrides("saveEntities", List.class);
         assertOverrides("saveRelations", List.class);
         assertOverrides("loadEntities", List.class);
         assertOverrides("loadRelations", List.class);
+        assertOverrides("findRelations", List.class);
+        assertOverrides("findRelationEndpoints", List.class);
+        assertOverrides("degrees", java.util.Collection.class);
         assertOverrides("getKnowledgeGraph", String.class, int.class, int.class);
     }
 
@@ -623,8 +969,122 @@ class WorkspaceScopedNeo4jGraphStoreTest {
         );
     }
 
+    /**
+     * Driver whose native degree-count query fails (statement or server error), while the
+     * relation-materialization query the fallback path issues answers with one incident relation
+     * for {@code e1} and {@code e2} and none for anything else.
+     */
+    private static Driver nativeDegreesFailingDriver(List<String> queries) {
+        var relation = Values.value(Map.of(
+            "relation_id", "r1",
+            "src_id", "e1",
+            "tgt_id", "e2",
+            "keywords", "knows",
+            "description", "e1 knows e2",
+            "weight", 0.9d,
+            "source_id", "chunk-1",
+            "file_path", ""
+        ));
+        var records = List.of(fakeRelationRecord("e1", relation), fakeRelationRecord("e2", relation));
+        var cursor = new AtomicInteger();
+        var fallbackResult = (Result) Proxy.newProxyInstance(
+            Result.class.getClassLoader(),
+            new Class<?>[]{Result.class},
+            (proxy, method, args) -> switch (method.getName()) {
+                case "hasNext" -> cursor.get() < records.size();
+                case "next" -> records.get(cursor.getAndIncrement());
+                case "consume", "close" -> null;
+                default -> unsupported(method.getName());
+            }
+        );
+        // Bootstrap DDL runs through auto-commit session.run(...).consume() on every store
+        // construction; the fake only needs an empty consumable result for that path.
+        var bootstrapResult = (Result) Proxy.newProxyInstance(
+            Result.class.getClassLoader(),
+            new Class<?>[]{Result.class},
+            (proxy, method, args) -> switch (method.getName()) {
+                case "hasNext" -> false;
+                case "list" -> List.of();
+                case "consume", "close" -> null;
+                default -> unsupported(method.getName());
+            }
+        );
+        var tx = (TransactionContext) Proxy.newProxyInstance(
+            TransactionContext.class.getClassLoader(),
+            new Class<?>[]{TransactionContext.class},
+            (proxy, method, args) -> {
+                if ("run".equals(method.getName())) {
+                    var query = (String) args[0];
+                    queries.add(query);
+                    if (query.contains("AS degree")) {
+                        throw new RuntimeException("native degree counting unavailable");
+                    }
+                    return fallbackResult;
+                }
+                return unsupported(method.getName());
+            }
+        );
+        var session = Proxy.newProxyInstance(
+            Driver.class.getClassLoader(),
+            new Class<?>[]{org.neo4j.driver.Session.class},
+            (proxy, method, args) -> {
+                if ("run".equals(method.getName())) {
+                    queries.add((String) args[0]);
+                    return bootstrapResult;
+                }
+                if ("executeRead".equals(method.getName()) || "executeWrite".equals(method.getName())) {
+                    return invokeTransactionCallback(args[0], tx);
+                }
+                if ("close".equals(method.getName())) {
+                    return null;
+                }
+                return unsupported(method.getName());
+            }
+        );
+        return (Driver) Proxy.newProxyInstance(
+            Driver.class.getClassLoader(),
+            new Class<?>[]{Driver.class},
+            (proxy, method, args) -> {
+                if ("verifyConnectivity".equals(method.getName()) || "close".equals(method.getName())) {
+                    return null;
+                }
+                if ("session".equals(method.getName())) {
+                    return session;
+                }
+                return unsupported(method.getName());
+            }
+        );
+    }
+
+    private static Record fakeRelationRecord(String entityId, Value relation) {
+        return (Record) Proxy.newProxyInstance(
+            Record.class.getClassLoader(),
+            new Class<?>[]{Record.class},
+            (proxy, method, args) -> {
+                if ("get".equals(method.getName())) {
+                    return switch ((String) args[0]) {
+                        case "entityId" -> Values.value(entityId);
+                        case "relation" -> relation;
+                        default -> throw new UnsupportedOperationException("Unsupported record key: " + args[0]);
+                    };
+                }
+                return unsupported(method.getName());
+            }
+        );
+    }
+
     private static Object invokeTransactionCallback(Object callback, TransactionContext tx) throws Exception {
-        return callback.getClass().getMethod("execute", TransactionContext.class).invoke(callback, tx);
+        try {
+            return callback.getClass().getMethod("execute", TransactionContext.class).invoke(callback, tx);
+        } catch (InvocationTargetException exception) {
+            // Unwrap the reflective wrapper so failures raised inside the transaction callback
+            // surface the way the real driver surfaces them (the callback's own runtime
+            // exception), keeping failure-injection fakes faithful to production behaviour.
+            if (exception.getCause() instanceof RuntimeException runtimeException) {
+                throw runtimeException;
+            }
+            throw exception;
+        }
     }
 
     private static Object unsupported(String methodName) {

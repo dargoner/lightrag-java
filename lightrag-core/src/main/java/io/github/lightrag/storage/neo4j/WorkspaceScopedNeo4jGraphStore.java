@@ -49,13 +49,14 @@ public class WorkspaceScopedNeo4jGraphStore implements MutableGraphStore, AutoCl
     private final Driver driver;
     private final boolean ownsDriver;
     private final SessionConfig sessionConfig;
+    private final List<String> workspaceIds;
     private final String workspaceId;
 
     public WorkspaceScopedNeo4jGraphStore(Neo4jGraphConfig config, WorkspaceScope scope) {
         this(
             createDriver(config),
             sessionConfig(config),
-            scope,
+            List.of(Objects.requireNonNull(scope, "scope").workspaceId()),
             true
         );
     }
@@ -64,8 +65,37 @@ public class WorkspaceScopedNeo4jGraphStore implements MutableGraphStore, AutoCl
         this(
             driver,
             SessionConfig.forDatabase(requireNonBlank(database, "database")),
-            scope,
+            List.of(Objects.requireNonNull(scope, "scope").workspaceId()),
             false
+        );
+    }
+
+    /**
+     * Workspace-set constructor: reads over the query surface dispatch to IN-batched statements that
+     * cover every workspace in one round trip; writes and single-target helpers (snapshot, delete,
+     * Cypher escape hatch, graph view) require a single workspace and fail loudly on a
+     * multi-workspace store instead of silently addressing the first one.
+     */
+    public WorkspaceScopedNeo4jGraphStore(Driver driver, String database, List<String> workspaceIds) {
+        this(
+            driver,
+            SessionConfig.forDatabase(requireNonBlank(database, "database")),
+            workspaceIds,
+            false
+        );
+    }
+
+    protected WorkspaceScopedNeo4jGraphStore(
+        Driver driver,
+        SessionConfig sessionConfig,
+        WorkspaceScope scope,
+        boolean ownsDriver
+    ) {
+        this(
+            driver,
+            sessionConfig,
+            List.of(Objects.requireNonNull(scope, "scope").workspaceId()),
+            ownsDriver
         );
     }
 
@@ -76,10 +106,15 @@ public class WorkspaceScopedNeo4jGraphStore implements MutableGraphStore, AutoCl
     protected WorkspaceScopedNeo4jGraphStore(
         Driver driver,
         SessionConfig sessionConfig,
-        WorkspaceScope scope,
+        List<String> workspaceIds,
         boolean ownsDriver
     ) {
-        this.workspaceId = Objects.requireNonNull(scope, "scope").workspaceId();
+        var normalized = List.copyOf(new LinkedHashSet<>(Objects.requireNonNull(workspaceIds, "workspaceIds")));
+        if (normalized.isEmpty()) {
+            throw new IllegalArgumentException("workspaceIds must not be empty");
+        }
+        this.workspaceIds = normalized;
+        this.workspaceId = normalized.get(0);
         this.driver = Objects.requireNonNull(driver, "driver");
         this.sessionConfig = Objects.requireNonNull(sessionConfig, "sessionConfig");
         this.ownsDriver = ownsDriver;
@@ -94,8 +129,26 @@ public class WorkspaceScopedNeo4jGraphStore implements MutableGraphStore, AutoCl
         }
     }
 
+    private boolean isMultiWorkspace() {
+        return workspaceIds.size() > 1;
+    }
+
+    /**
+     * Guard for statements that carry a single workspace in the pattern (scoped ids, row deletes,
+     * snapshot restore, Cypher escape hatch): a workspace-set store must not silently target its
+     * first workspace.
+     */
+    private void requireSingleWorkspace(String operation) {
+        if (isMultiWorkspace()) {
+            throw new IllegalStateException(
+                operation + " requires a single-workspace graph store; this store covers "
+                    + workspaceIds.size() + " workspaces");
+        }
+    }
+
     @Override
     public void saveEntity(EntityRecord entity) {
+        requireSingleWorkspace("saveEntity");
         var record = Objects.requireNonNull(entity, "entity");
         write(tx -> {
             saveEntity(tx, record);
@@ -105,6 +158,7 @@ public class WorkspaceScopedNeo4jGraphStore implements MutableGraphStore, AutoCl
 
     @Override
     public void saveRelation(RelationRecord relation) {
+        requireSingleWorkspace("saveRelation");
         var record = Objects.requireNonNull(relation, "relation");
         write(tx -> {
             saveRelation(tx, record);
@@ -114,6 +168,7 @@ public class WorkspaceScopedNeo4jGraphStore implements MutableGraphStore, AutoCl
 
     @Override
     public void saveEntities(List<EntityRecord> entities) {
+        requireSingleWorkspace("saveEntities");
         var records = Objects.requireNonNull(entities, "entities");
         if (records.isEmpty()) {
             return;
@@ -126,6 +181,7 @@ public class WorkspaceScopedNeo4jGraphStore implements MutableGraphStore, AutoCl
 
     @Override
     public void saveRelations(List<RelationRecord> relations) {
+        requireSingleWorkspace("saveRelations");
         var records = Objects.requireNonNull(relations, "relations");
         if (records.isEmpty()) {
             return;
@@ -139,6 +195,27 @@ public class WorkspaceScopedNeo4jGraphStore implements MutableGraphStore, AutoCl
     @Override
     public Optional<EntityRecord> loadEntity(String entityId) {
         var id = Objects.requireNonNull(entityId, "entityId");
+        if (isMultiWorkspace()) {
+            // The same logical id may exist in several workspaces: one IN-batched statement reads
+            // all candidates and the smallest workspace id wins deterministically.
+            return read(tx -> single(
+                tx.run(
+                    """
+                    MATCH (entity:%s {id: $id})
+                    WHERE entity.workspaceId IN $workspaceIds
+                      AND entity.materialized = true
+                    RETURN entity
+                    ORDER BY entity.workspaceId
+                    LIMIT 1
+                    """.formatted(ENTITY_LABEL),
+                    org.neo4j.driver.Values.parameters(
+                        "workspaceIds", workspaceIds,
+                        "id", id
+                    )
+                ),
+                WorkspaceScopedNeo4jGraphStore::toEntity
+            ));
+        }
         return read(tx -> single(
             tx.run(
                 """
@@ -158,6 +235,24 @@ public class WorkspaceScopedNeo4jGraphStore implements MutableGraphStore, AutoCl
     @Override
     public Optional<RelationRecord> loadRelation(String relationId) {
         var id = Objects.requireNonNull(relationId, "relationId");
+        if (isMultiWorkspace()) {
+            return read(tx -> single(
+                tx.run(
+                    """
+                    MATCH ()-[relation:%s {relation_id: $relationId}]->()
+                    WHERE relation.workspaceId IN $workspaceIds
+                    RETURN relation
+                    ORDER BY relation.workspaceId
+                    LIMIT 1
+                    """.formatted(RELATION_TYPE),
+                    org.neo4j.driver.Values.parameters(
+                        "workspaceIds", workspaceIds,
+                        "relationId", id
+                    )
+                ),
+                WorkspaceScopedNeo4jGraphStore::toRelation
+            ));
+        }
         return read(tx -> single(
             tx.run(
                 """
@@ -178,6 +273,38 @@ public class WorkspaceScopedNeo4jGraphStore implements MutableGraphStore, AutoCl
         var ids = Objects.requireNonNull(entityIds, "entityIds");
         if (ids.isEmpty()) {
             return List.of();
+        }
+        if (isMultiWorkspace()) {
+            var startedAt = System.nanoTime();
+            var records = read(tx -> list(
+                tx.run(
+                    """
+                    MATCH (entity:%s)
+                    WHERE entity.workspaceId IN $workspaceIds
+                      AND entity.id IN $entityIds
+                      AND entity.materialized = true
+                    RETURN entity
+                    ORDER BY entity.workspaceId, entity.id
+                    """.formatted(ENTITY_LABEL),
+                    org.neo4j.driver.Values.parameters(
+                        "workspaceIds", workspaceIds,
+                        "entityIds", ids
+                    )
+                ),
+                WorkspaceScopedNeo4jGraphStore::toEntity
+            ));
+            var deduplicated = dedupeById(records, EntityRecord::id);
+            log.info(
+                "Neo4j graph batch loadEntities completed: workspaceCount={}, requestedCount={}, returnedCount={}, elapsedMs={}",
+                workspaceIds == null ? 0 : workspaceIds.size(),
+                ids.size(),
+                deduplicated.size(),
+                elapsedMillis(startedAt)
+            );
+            if (log.isDebugEnabled()) {
+                log.debug("Neo4j graph batch loadEntities workspaces: {}", workspaceIds);
+            }
+            return deduplicated;
         }
         var startedAt = System.nanoTime();
         var scopedIds = ids.stream()
@@ -217,6 +344,37 @@ public class WorkspaceScopedNeo4jGraphStore implements MutableGraphStore, AutoCl
         if (ids.isEmpty()) {
             return List.of();
         }
+        if (isMultiWorkspace()) {
+            var startedAt = System.nanoTime();
+            var records = read(tx -> list(
+                tx.run(
+                    """
+                    MATCH ()-[relation:%s]->()
+                    WHERE relation.workspaceId IN $workspaceIds
+                      AND relation.relation_id IN $relationIds
+                    RETURN relation
+                    ORDER BY relation.workspaceId, relation.relation_id
+                    """.formatted(RELATION_TYPE),
+                    org.neo4j.driver.Values.parameters(
+                        "workspaceIds", workspaceIds,
+                        "relationIds", ids
+                    )
+                ),
+                WorkspaceScopedNeo4jGraphStore::toRelation
+            ));
+            var deduplicated = dedupeById(records, RelationRecord::id);
+            log.info(
+                "Neo4j graph batch loadRelations completed: workspaceCount={}, requestedCount={}, returnedCount={}, elapsedMs={}",
+                workspaceIds == null ? 0 : workspaceIds.size(),
+                ids.size(),
+                deduplicated.size(),
+                elapsedMillis(startedAt)
+            );
+            if (log.isDebugEnabled()) {
+                log.debug("Neo4j graph batch loadRelations workspaces: {}", workspaceIds);
+            }
+            return deduplicated;
+        }
         var startedAt = System.nanoTime();
         var scopedIds = ids.stream()
             .map(this::scopedId)
@@ -251,6 +409,21 @@ public class WorkspaceScopedNeo4jGraphStore implements MutableGraphStore, AutoCl
 
     @Override
     public List<EntityRecord> allEntities() {
+        if (isMultiWorkspace()) {
+            return read(tx -> list(
+                tx.run(
+                    """
+                    MATCH (entity:%s)
+                    WHERE entity.workspaceId IN $workspaceIds
+                      AND entity.materialized = true
+                    RETURN entity
+                    ORDER BY entity.workspaceId, entity.id
+                    """.formatted(ENTITY_LABEL),
+                    org.neo4j.driver.Values.parameters("workspaceIds", workspaceIds)
+                ),
+                WorkspaceScopedNeo4jGraphStore::toEntity
+            ));
+        }
         return read(tx -> list(
             tx.run(
                 """
@@ -274,6 +447,31 @@ public class WorkspaceScopedNeo4jGraphStore implements MutableGraphStore, AutoCl
         var needle = Objects.requireNonNull(query, "query").strip().toLowerCase(Locale.ROOT);
         if (needle.isEmpty()) {
             return List.of();
+        }
+        if (isMultiWorkspace()) {
+            var records = read(tx -> list(
+                tx.run(
+                    """
+                    MATCH (entity:%s)
+                    WHERE entity.workspaceId IN $workspaceIds
+                      AND entity.materialized = true
+                      AND (
+                        toLower(coalesce(entity.name, '')) CONTAINS $query
+                        OR toLower(coalesce(entity.type, '')) CONTAINS $query
+                        OR toLower(coalesce(entity.description, '')) CONTAINS $query
+                        OR any(alias IN coalesce(entity.aliases, []) WHERE toLower(alias) CONTAINS $query)
+                      )
+                    RETURN entity
+                    ORDER BY entity.workspaceId, entity.id
+                    """.formatted(ENTITY_LABEL),
+                    org.neo4j.driver.Values.parameters(
+                        "workspaceIds", workspaceIds,
+                        "query", needle
+                    )
+                ),
+                WorkspaceScopedNeo4jGraphStore::toEntity
+            ));
+            return dedupeById(records, EntityRecord::id);
         }
         return read(tx -> list(
             tx.run(
@@ -300,6 +498,20 @@ public class WorkspaceScopedNeo4jGraphStore implements MutableGraphStore, AutoCl
 
     @Override
     public List<RelationRecord> allRelations() {
+        if (isMultiWorkspace()) {
+            return read(tx -> list(
+                tx.run(
+                    """
+                    MATCH ()-[relation:%s]->()
+                    WHERE relation.workspaceId IN $workspaceIds
+                    RETURN relation
+                    ORDER BY relation.workspaceId, relation.relation_id
+                    """.formatted(RELATION_TYPE),
+                    org.neo4j.driver.Values.parameters("workspaceIds", workspaceIds)
+                ),
+                WorkspaceScopedNeo4jGraphStore::toRelation
+            ));
+        }
         return read(tx -> list(
             tx.run(
                 """
@@ -316,6 +528,37 @@ public class WorkspaceScopedNeo4jGraphStore implements MutableGraphStore, AutoCl
     @Override
     public List<RelationRecord> findRelations(String entityId) {
         var id = Objects.requireNonNull(entityId, "entityId");
+        if (isMultiWorkspace()) {
+            var startedAt = System.nanoTime();
+            var records = read(tx -> list(
+                tx.run(
+                    """
+                    MATCH (entity:%s {id: $entityId})-[relation:%s]-()
+                    WHERE entity.workspaceId IN $workspaceIds
+                      AND relation.workspaceId = entity.workspaceId
+                    RETURN relation
+                    ORDER BY relation.workspaceId, relation.relation_id
+                    """.formatted(ENTITY_LABEL, RELATION_TYPE),
+                    org.neo4j.driver.Values.parameters(
+                        "workspaceIds", workspaceIds,
+                        "entityId", id
+                    )
+                ),
+                WorkspaceScopedNeo4jGraphStore::toRelation
+            ));
+            var deduplicated = dedupeById(records, RelationRecord::id);
+            log.info(
+                "Neo4j graph batch findRelations completed: workspaceCount={}, entityId={}, relationCount={}, elapsedMs={}",
+                workspaceIds == null ? 0 : workspaceIds.size(),
+                id,
+                deduplicated.size(),
+                elapsedMillis(startedAt)
+            );
+            if (log.isDebugEnabled()) {
+                log.debug("Neo4j graph batch findRelations workspaces: {}", workspaceIds);
+            }
+            return deduplicated;
+        }
         var scopedEntityId = scopedId(id);
         var startedAt = System.nanoTime();
         var records = read(tx -> list(
@@ -347,6 +590,54 @@ public class WorkspaceScopedNeo4jGraphStore implements MutableGraphStore, AutoCl
         var ids = List.copyOf(Objects.requireNonNull(entityIds, "entityIds"));
         if (ids.isEmpty()) {
             return Map.of();
+        }
+        if (isMultiWorkspace()) {
+            var startedAt = System.nanoTime();
+            var relationsMap = read(tx -> {
+                var relationsByEntityId = new LinkedHashMap<String, List<RelationRecord>>();
+                for (var entityId : ids) {
+                    relationsByEntityId.put(entityId, new ArrayList<>());
+                }
+                var seenRelationIds = new LinkedHashMap<String, Set<String>>();
+                var queryResult = tx.run(
+                    """
+                    MATCH (entity:%s)-[relation:%s]-()
+                    WHERE entity.workspaceId IN $workspaceIds
+                      AND entity.id IN $entityIds
+                      AND relation.workspaceId = entity.workspaceId
+                    RETURN entity.id AS entityId, relation
+                    ORDER BY entityId, relation.workspaceId, relation.relation_id
+                    """.formatted(ENTITY_LABEL, RELATION_TYPE),
+                    org.neo4j.driver.Values.parameters(
+                        "workspaceIds", workspaceIds,
+                        "entityIds", ids
+                    )
+                );
+                while (queryResult.hasNext()) {
+                    var record = queryResult.next();
+                    var entityId = record.get("entityId").asString();
+                    var relation = toRelation(record);
+                    if (seenRelationIds
+                        .computeIfAbsent(entityId, ignored -> new LinkedHashSet<>())
+                        .add(relation.id())) {
+                        relationsByEntityId.get(entityId).add(relation);
+                    }
+                }
+                var immutable = new LinkedHashMap<String, List<RelationRecord>>();
+                relationsByEntityId.forEach((entityId, relations) -> immutable.put(entityId, List.copyOf(relations)));
+                return Collections.unmodifiableMap(immutable);
+            });
+            log.info(
+                "Neo4j graph batch findRelations completed: workspaceCount={}, requestedCount={}, totalRelationCount={}, elapsedMs={}",
+                workspaceIds == null ? 0 : workspaceIds.size(),
+                ids.size(),
+                relationsMap.values().stream().mapToInt(List::size).sum(),
+                elapsedMillis(startedAt)
+            );
+            if (log.isDebugEnabled()) {
+                log.debug("Neo4j graph batch findRelations workspaces: {}", workspaceIds);
+            }
+            return relationsMap;
         }
         var startedAt = System.nanoTime();
         var scopedIds = ids.stream()
@@ -391,8 +682,211 @@ public class WorkspaceScopedNeo4jGraphStore implements MutableGraphStore, AutoCl
         return relationsMap;
     }
 
+    /**
+     * Native degree count: the same contract as the {@link GraphStore#degrees(Collection)} default
+     * (every distinct requested id gets one entry - repeated ids collapse to their first position -
+     * zero-filled when unknown, in first-occurrence order, unmodifiable), answered with one grouped
+     * count instead of materializing every incident relation.
+     *
+     * <p>Workspace-set stores count distinct relation ids per logical entity id, which mirrors the
+     * first-win dedup {@link #findRelations(List)} applies across workspaces; the single-workspace
+     * path applies no dedup and therefore counts matched relationships directly.</p>
+     */
+    @Override
+    public Map<String, Integer> degrees(Collection<String> entityIds) {
+        var ids = List.copyOf(Objects.requireNonNull(entityIds, "entityIds"));
+        if (ids.isEmpty()) {
+            return Map.of();
+        }
+        var distinctIds = List.copyOf(new LinkedHashSet<>(ids));
+        var startedAt = System.nanoTime();
+        Map<String, Integer> degrees;
+        try {
+            degrees = nativeDegrees(distinctIds);
+        } catch (RuntimeException exception) {
+            // Native counting failed (unsupported query or server error): fall back to the
+            // GraphStore.degrees default semantics - materialize relations per id and count them,
+            // so callers still get results consistent with findRelations.
+            log.warn(
+                "Neo4j graph native degrees failed; falling back to relation materialization: workspaceCount={}, requestedCount={}, cause={}",
+                workspaceIds == null ? 0 : workspaceIds.size(),
+                distinctIds.size(),
+                exception.toString()
+            );
+            var relationsByEntityId = findRelations(distinctIds);
+            var fallback = new LinkedHashMap<String, Integer>();
+            for (var entityId : distinctIds) {
+                fallback.put(entityId, relationsByEntityId.getOrDefault(entityId, List.of()).size());
+            }
+            degrees = Collections.unmodifiableMap(fallback);
+        }
+        log.info(
+            "Neo4j graph degrees completed: workspaceCount={}, requestedCount={}, matchedCount={}, elapsedMs={}",
+            workspaceIds == null ? 0 : workspaceIds.size(),
+            distinctIds.size(),
+            degrees.values().stream().filter(degree -> degree > 0).count(),
+            elapsedMillis(startedAt)
+        );
+        if (log.isDebugEnabled()) {
+            log.debug("Neo4j graph degrees workspaces: {}", workspaceIds);
+        }
+        return degrees;
+    }
+
+    private Map<String, Integer> nativeDegrees(List<String> distinctIds) {
+        return read(tx -> {
+            var counts = new LinkedHashMap<String, Integer>();
+            for (var entityId : distinctIds) {
+                counts.put(entityId, 0);
+            }
+            var queryResult = isMultiWorkspace()
+                ? tx.run(
+                    """
+                    MATCH (entity:%s)-[relation:%s]-()
+                    WHERE entity.workspaceId IN $workspaceIds
+                      AND entity.id IN $entityIds
+                      AND relation.workspaceId = entity.workspaceId
+                    RETURN entity.id AS entityId, count(DISTINCT relation.relation_id) AS degree
+                    """.formatted(ENTITY_LABEL, RELATION_TYPE),
+                    org.neo4j.driver.Values.parameters(
+                        "workspaceIds", workspaceIds,
+                        "entityIds", distinctIds
+                    )
+                )
+                : tx.run(
+                    """
+                    MATCH (entity:%s {workspaceId: $workspaceId})-[relation:%s {workspaceId: $workspaceId}]-()
+                    WHERE entity.scopedId IN $scopedEntityIds
+                    RETURN entity.id AS entityId, count(relation) AS degree
+                    """.formatted(ENTITY_LABEL, RELATION_TYPE),
+                    org.neo4j.driver.Values.parameters(
+                        "workspaceId", workspaceId,
+                        "scopedEntityIds", distinctIds.stream().map(this::scopedId).toList()
+                    )
+                );
+            while (queryResult.hasNext()) {
+                var record = queryResult.next();
+                counts.put(record.get("entityId").asString(), record.get("degree").asInt());
+            }
+            return Collections.unmodifiableMap(counts);
+        });
+    }
+
+    /**
+     * Narrow projection of {@link #findRelations(List)}: the same per-id structure and ordering
+     * (workspace-set stores de-duplicate by relation id with the first workspace winning; the
+     * single-workspace path applies no dedup), but only relation id, source and target cross the
+     * wire, so score-propagation callers skip materializing full relation records. Like
+     * {@link #degrees}, a repeated id is looked up once instead of once per input slot.
+     */
+    @Override
+    public Map<String, List<RelationEndpointRecord>> findRelationEndpoints(List<String> entityIds) {
+        var ids = List.copyOf(Objects.requireNonNull(entityIds, "entityIds"));
+        if (ids.isEmpty()) {
+            return Map.of();
+        }
+        var distinctIds = List.copyOf(new LinkedHashSet<>(ids));
+        if (isMultiWorkspace()) {
+            var startedAt = System.nanoTime();
+            var endpointsMap = read(tx -> {
+                var endpointsByEntityId = new LinkedHashMap<String, List<RelationEndpointRecord>>();
+                for (var entityId : ids) {
+                    endpointsByEntityId.put(entityId, new ArrayList<>());
+                }
+                var seenRelationIds = new LinkedHashMap<String, Set<String>>();
+                var queryResult = tx.run(
+                    """
+                    MATCH (entity:%s)-[relation:%s]-()
+                    WHERE entity.workspaceId IN $workspaceIds
+                      AND entity.id IN $entityIds
+                      AND relation.workspaceId = entity.workspaceId
+                    RETURN entity.id AS entityId, relation.relation_id AS relationId, relation.src_id AS srcId, relation.tgt_id AS tgtId
+                    ORDER BY entityId, relation.workspaceId, relation.relation_id
+                    """.formatted(ENTITY_LABEL, RELATION_TYPE),
+                    org.neo4j.driver.Values.parameters(
+                        "workspaceIds", workspaceIds,
+                        "entityIds", distinctIds
+                    )
+                );
+                while (queryResult.hasNext()) {
+                    var record = queryResult.next();
+                    var entityId = record.get("entityId").asString();
+                    if (seenRelationIds
+                        .computeIfAbsent(entityId, ignored -> new LinkedHashSet<>())
+                        .add(record.get("relationId").asString())) {
+                        endpointsByEntityId.get(entityId).add(new RelationEndpointRecord(
+                            record.get("relationId").asString(),
+                            record.get("srcId").asString(),
+                            record.get("tgtId").asString()
+                        ));
+                    }
+                }
+                var immutable = new LinkedHashMap<String, List<RelationEndpointRecord>>();
+                endpointsByEntityId.forEach((entityId, endpoints) -> immutable.put(entityId, List.copyOf(endpoints)));
+                return Collections.unmodifiableMap(immutable);
+            });
+            log.info(
+                "Neo4j graph findRelationEndpoints completed: workspaceCount={}, requestedCount={}, totalRelationCount={}, elapsedMs={}",
+                workspaceIds == null ? 0 : workspaceIds.size(),
+                ids.size(),
+                endpointsMap.values().stream().mapToInt(List::size).sum(),
+                elapsedMillis(startedAt)
+            );
+            if (log.isDebugEnabled()) {
+                log.debug("Neo4j graph findRelationEndpoints workspaces: {}", workspaceIds);
+            }
+            return endpointsMap;
+        }
+        var startedAt = System.nanoTime();
+        var scopedIds = distinctIds.stream()
+            .map(this::scopedId)
+            .toList();
+        var endpointsMap = read(tx -> {
+            var endpointsByEntityId = new LinkedHashMap<String, List<RelationEndpointRecord>>();
+            for (var entityId : ids) {
+                endpointsByEntityId.put(entityId, new ArrayList<>());
+            }
+            var queryResult = tx.run(
+                """
+                UNWIND range(0, size($entityIds) - 1) AS idx
+                WITH idx, $entityIds[idx] AS entityId, $scopedEntityIds[idx] AS scopedEntityId
+                OPTIONAL MATCH (:Entity {workspaceId: $workspaceId, scopedId: scopedEntityId})-[relation:%s {workspaceId: $workspaceId}]-()
+                WITH entityId, relation
+                WHERE relation IS NOT NULL
+                RETURN entityId, relation.relation_id AS relationId, relation.src_id AS srcId, relation.tgt_id AS tgtId
+                ORDER BY entityId, relation.relation_id
+                """.formatted(RELATION_TYPE),
+                org.neo4j.driver.Values.parameters(
+                    "workspaceId", workspaceId,
+                    "entityIds", distinctIds,
+                    "scopedEntityIds", scopedIds
+                )
+            );
+            while (queryResult.hasNext()) {
+                var record = queryResult.next();
+                endpointsByEntityId.get(record.get("entityId").asString()).add(new RelationEndpointRecord(
+                    record.get("relationId").asString(),
+                    record.get("srcId").asString(),
+                    record.get("tgtId").asString()
+                ));
+            }
+            var immutable = new LinkedHashMap<String, List<RelationEndpointRecord>>();
+            endpointsByEntityId.forEach((entityId, endpoints) -> immutable.put(entityId, List.copyOf(endpoints)));
+            return Collections.unmodifiableMap(immutable);
+        });
+        log.info(
+            "Neo4j graph findRelationEndpoints completed: workspaceId={}, requestedCount={}, totalRelationCount={}, elapsedMs={}",
+            workspaceId,
+            ids.size(),
+            endpointsMap.values().stream().mapToInt(List::size).sum(),
+            elapsedMillis(startedAt)
+        );
+        return endpointsMap;
+    }
+
     @Override
     public KnowledgeGraphView getKnowledgeGraph(String nodeLabel, int maxDepth, int maxNodes) {
+        requireSingleWorkspace("getKnowledgeGraph");
         return GraphViewTraversal.compute(new Neo4jGraphViewSupport(), nodeLabel, maxDepth, maxNodes);
     }
 
@@ -563,6 +1057,7 @@ public class WorkspaceScopedNeo4jGraphStore implements MutableGraphStore, AutoCl
 
     @Override
     public int deleteEntities(List<String> entityIds) {
+        requireSingleWorkspace("deleteEntities");
         var ids = List.copyOf(Objects.requireNonNull(entityIds, "entityIds"));
         if (ids.isEmpty()) {
             return 0;
@@ -598,6 +1093,7 @@ public class WorkspaceScopedNeo4jGraphStore implements MutableGraphStore, AutoCl
 
     @Override
     public int deleteRelations(List<String> relationIds) {
+        requireSingleWorkspace("deleteRelations");
         var ids = List.copyOf(Objects.requireNonNull(relationIds, "relationIds"));
         if (ids.isEmpty()) {
             return 0;
@@ -634,10 +1130,12 @@ public class WorkspaceScopedNeo4jGraphStore implements MutableGraphStore, AutoCl
     }
 
     public Neo4jGraphSnapshot captureSnapshot() {
+        requireSingleWorkspace("captureSnapshot");
         return new Neo4jGraphSnapshot(allEntities(), allRelations());
     }
 
     public void restore(Neo4jGraphSnapshot snapshot) {
+        requireSingleWorkspace("restore");
         var source = Objects.requireNonNull(snapshot, "snapshot");
         write(tx -> {
             tx.run(
@@ -673,6 +1171,7 @@ public class WorkspaceScopedNeo4jGraphStore implements MutableGraphStore, AutoCl
      */
     @Override
     public CypherQueryResult executeCypher(String cypher, Map<String, Object> parameters) {
+        requireSingleWorkspace("executeCypher");
         var statement = Objects.requireNonNull(cypher, "cypher");
         var boundParameters = parameters == null ? Map.<String, Object>of() : parameters;
         var startedAt = System.nanoTime();
@@ -1000,6 +1499,22 @@ public class WorkspaceScopedNeo4jGraphStore implements MutableGraphStore, AutoCl
 
     private String scopedId(String id) {
         return workspaceId + ":" + Objects.requireNonNull(id, "id");
+    }
+
+    /**
+     * Workspace-set reads may surface the same logical id once per workspace; records arrive
+     * ordered by workspace id, so the first occurrence is the deterministic winner.
+     */
+    private static <T> List<T> dedupeById(
+        List<T> records, java.util.function.Function<T, String> idExtractor) {
+        var seen = new LinkedHashSet<String>();
+        var deduplicated = new ArrayList<T>(records.size());
+        for (var record : records) {
+            if (seen.add(idExtractor.apply(record))) {
+                deduplicated.add(record);
+            }
+        }
+        return List.copyOf(deduplicated);
     }
 
     private static EntityRecord toEntity(Record record) {

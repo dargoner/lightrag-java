@@ -160,7 +160,7 @@ class GraphStoreReadSurfaceTest {
     }
 
     @Test
-    void degreesDoNotAmplifyCountsWhenTheBackendRepeatsWorkPerInputSlot() {
+    void degreesAndRelationEndpointsDoNotAmplifyWhenTheBackendRepeatsWorkPerInputSlot() {
         var delegate = new InMemoryGraphStore();
         delegate.saveEntities(List.of(entity("a", "A"), entity("b", "B")));
         delegate.saveRelations(List.of(relation("ab", "a", "b")));
@@ -215,6 +215,26 @@ class GraphStoreReadSurfaceTest {
         };
 
         assertThat(slotPerInput.degrees(List.of("a", "a"))).containsExactly(entry("a", 1));
+        assertThat(slotPerInput.findRelationEndpoints(List.of("a", "a"))).containsExactly(
+            entry("a", List.of(new GraphStore.RelationEndpointRecord("ab", "a", "b"))));
+    }
+
+    @Test
+    void defaultFindRelationEndpointsProjectFindRelationsWithTheSamePerIdShape() {
+        var requested = List.of("beta", "missing", "alpha", "alpha");
+
+        var endpoints = store.findRelationEndpoints(requested);
+        var relations = store.findRelations(List.of("beta", "missing", "alpha"));
+
+        assertThat(endpoints.keySet()).containsExactly("beta", "missing", "alpha");
+        relations.forEach((entityId, records) -> assertThat(endpoints.get(entityId))
+            .containsExactlyElementsOf(records.stream()
+                .map(relation -> new GraphStore.RelationEndpointRecord(
+                    relation.id(), relation.srcId(), relation.tgtId()))
+                .toList()));
+        assertThat(store.findRelationEndpoints(List.of())).isEmpty();
+        assertThatThrownBy(() -> endpoints.put("x", List.of()))
+            .isInstanceOf(UnsupportedOperationException.class);
     }
 
     @Test
