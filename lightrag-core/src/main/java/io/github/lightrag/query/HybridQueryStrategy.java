@@ -2,6 +2,7 @@ package io.github.lightrag.query;
 
 import io.github.lightrag.api.QueryRequest;
 import io.github.lightrag.model.TokenCounter;
+import io.github.lightrag.text.QueryLogSignatures;
 import io.github.lightrag.types.QueryContext;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -64,9 +65,9 @@ public final class HybridQueryStrategy implements QueryStrategy {
         var assembleMs = elapsedMillis(assembleStartedAt);
         var elapsedMs = elapsedMillis(startedAt);
         log.info(
-            "LightRAG hybrid retrieve completed: mode={}, query={}, localMs={}, globalMs={}, assembleMs={}, elapsedMs={}, localEntityCount={}, localRelationCount={}, localChunkCount={}, globalEntityCount={}, globalRelationCount={}, globalChunkCount={}, entityCount={}, relationCount={}, chunkCount={}",
+            "LightRAG hybrid retrieve completed: mode={}, querySignature={}, localMs={}, globalMs={}, assembleMs={}, elapsedMs={}, localEntityCount={}, localRelationCount={}, localChunkCount={}, globalEntityCount={}, globalRelationCount={}, globalChunkCount={}, entityCount={}, relationCount={}, chunkCount={}",
             query.mode(),
-            query.query(),
+            QueryLogSignatures.of(query.query()),
             local.elapsedMs(),
             global.elapsedMs(),
             assembleMs,

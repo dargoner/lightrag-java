@@ -14,6 +14,7 @@ import io.github.lightrag.model.RerankFailureMode;
 import io.github.lightrag.model.RerankModel;
 import io.github.lightrag.model.TokenCounter;
 import io.github.lightrag.synthesis.PathAwareAnswerSynthesizer;
+import io.github.lightrag.text.QueryLogSignatures;
 import io.github.lightrag.types.QueryContext;
 import io.github.lightrag.types.ScoredChunk;
 import io.github.lightrag.types.ScoredEntity;
@@ -559,14 +560,14 @@ public final class QueryEngine {
         }
         var rerankActive = rerankEnabled(resolvedQuery) && !useMultiHop;
         log.info(
-            "LightRAG query resolved: requestedMode={}, resolvedMode={}, query={}, topK={}, chunkTopK={}, hlKeywords={}, llKeywords={}, useMultiHop={}, rerankRequested={}, rerankActive={}",
+            "LightRAG query resolved: requestedMode={}, resolvedMode={}, querySignature={}, topK={}, chunkTopK={}, hlKeywordCount={}, llKeywordCount={}, useMultiHop={}, rerankRequested={}, rerankActive={}",
             query.mode(),
             resolvedQuery.mode(),
-            resolvedQuery.query(),
+            QueryLogSignatures.of(resolvedQuery.query()),
             resolvedQuery.topK(),
             resolvedQuery.chunkTopK(),
-            resolvedQuery.hlKeywords(),
-            resolvedQuery.llKeywords(),
+            QueryLogSignatures.count(resolvedQuery.hlKeywords()),
+            QueryLogSignatures.count(resolvedQuery.llKeywords()),
             useMultiHop,
             resolvedQuery.enableRerank(),
             rerankActive
@@ -636,10 +637,10 @@ public final class QueryEngine {
             assembledContext
         );
         log.info(
-            "LightRAG query engine stages: mode={}, resolvedMode={}, query={}, keywordMs={}, retrieveMs={}, rerankMs={}, assembleMs={}, useMultiHop={}, rerankEnabled={}, entityCount={}, relationCount={}, chunkCount={}, bufferTokens={}, elapsedMs={}",
+            "LightRAG query engine stages: mode={}, resolvedMode={}, querySignature={}, keywordMs={}, retrieveMs={}, rerankMs={}, assembleMs={}, useMultiHop={}, rerankEnabled={}, entityCount={}, relationCount={}, chunkCount={}, bufferTokens={}, elapsedMs={}",
             query.mode(),
             resolvedQuery.mode(),
-            query.query(),
+            QueryLogSignatures.of(query.query()),
             keywordMs,
             retrieveMs,
             rerankMs,

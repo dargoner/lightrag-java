@@ -92,11 +92,22 @@ final class QueryBudgeting {
         // Mirror upstream truncate_list_by_token_size: the budget covers the exact text the
         // caller renders later (every row joined by the "\n" separator), so the separator's own
         // tokens are part of it, and the kept prefix is re-verified against its own join before
-        // returning. Never keeps a partial row.
-        var kept = rendered.size();
-        while (kept > 0 && approximateTokenCount(String.join("\n", rendered.subList(0, kept))) > maxTokens) {
-            kept--;
+        // returning. Never keeps a partial row. Prefix token counts are non-decreasing while the
+        // counter is monotone under appending (see TokenCounter), which every in-repo counter is,
+        // so the longest fitting prefix is found by binary search instead of re-joining the whole
+        // prefix once per dropped row. A custom counter that violates the monotonicity contract
+        // may select a different row than the incremental scan would; the contract is documented
+        // on TokenCounter and checked for the default counter by TokenCounterContractTest.
+        var low = 0;
+        var high = rendered.size();
+        while (low < high) {
+            var mid = (low + high + 1) >>> 1;
+            if (approximateTokenCount(String.join("\n", rendered.subList(0, mid))) <= maxTokens) {
+                low = mid;
+            } else {
+                high = mid - 1;
+            }
         }
-        return List.copyOf(items.subList(0, kept));
+        return List.copyOf(items.subList(0, low));
     }
 }

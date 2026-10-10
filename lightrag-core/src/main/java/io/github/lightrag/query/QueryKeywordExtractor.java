@@ -6,6 +6,7 @@ import io.github.lightrag.api.QueryMode;
 import io.github.lightrag.api.QueryRequest;
 import io.github.lightrag.model.ChatModel;
 import io.github.lightrag.model.ChatRequestOptions;
+import io.github.lightrag.text.QueryLogSignatures;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -89,9 +90,9 @@ final class QueryKeywordExtractor {
         var deterministic = resolveDeterministicKeywords(request);
         if (deterministic != null) {
             log.info(
-                "LightRAG keyword extraction bypassed for short literal query: mode={}, query={}, highLevelCount={}, lowLevelCount={}",
+                "LightRAG keyword extraction bypassed for short literal query: mode={}, querySignature={}, highLevelCount={}, lowLevelCount={}",
                 request.mode(),
-                request.query(),
+                QueryLogSignatures.of(request.query()),
                 deterministic.hlKeywords().size(),
                 deterministic.llKeywords().size()
             );
@@ -107,9 +108,9 @@ final class QueryKeywordExtractor {
         var fallbackApplied = resolved.highLevel().isEmpty() && resolved.lowLevel().isEmpty();
         var dualPathBackfillApplied = !resolved.equals(extracted);
         log.info(
-            "LightRAG keyword extraction completed: mode={}, query={}, elapsedMs={}, rawHighLevelCount={}, rawLowLevelCount={}, resolvedHighLevelCount={}, resolvedLowLevelCount={}, fallbackApplied={}, dualPathBackfillApplied={}",
+            "LightRAG keyword extraction completed: mode={}, querySignature={}, elapsedMs={}, rawHighLevelCount={}, rawLowLevelCount={}, resolvedHighLevelCount={}, resolvedLowLevelCount={}, fallbackApplied={}, dualPathBackfillApplied={}",
             request.mode(),
-            request.query(),
+            QueryLogSignatures.of(request.query()),
             elapsedMs,
             extracted.highLevel().size(),
             extracted.lowLevel().size(),

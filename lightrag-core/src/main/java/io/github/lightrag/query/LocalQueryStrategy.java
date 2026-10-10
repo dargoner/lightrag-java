@@ -7,6 +7,7 @@ import io.github.lightrag.storage.ChunkStore;
 import io.github.lightrag.storage.GraphStore;
 import io.github.lightrag.storage.OneShotRetrievalStore;
 import io.github.lightrag.storage.StorageProvider;
+import io.github.lightrag.text.QueryLogSignatures;
 import io.github.lightrag.types.Chunk;
 import io.github.lightrag.types.Entity;
 import io.github.lightrag.types.QueryContext;
@@ -107,11 +108,11 @@ public final class LocalQueryStrategy implements QueryStrategy {
         var assembleMs = elapsedMillis(assembleStartedAt);
         var elapsedMs = elapsedMillis(startedAt);
         log.info(
-            "LightRAG local retrieve completed: mode={}, query={}, embeddingText={}, llKeywords={}, topK={}, chunkTopK={}, oneShot={}, embedMs={}, vectorSearchMs={}, graphMs={}, chunkMs={}, assembleMs={}, elapsedMs={}, entityCount={}, relationCount={}, chunkCount={}",
+            "LightRAG local retrieve completed: mode={}, querySignature={}, embeddingTextSignature={}, llKeywordCount={}, topK={}, chunkTopK={}, oneShot={}, embedMs={}, vectorSearchMs={}, graphMs={}, chunkMs={}, assembleMs={}, elapsedMs={}, entityCount={}, relationCount={}, chunkCount={}",
             query.mode(),
-            query.query(),
-            embeddingText,
-            query.llKeywords(),
+            QueryLogSignatures.of(query.query()),
+            QueryLogSignatures.of(embeddingText),
+            QueryLogSignatures.count(query.llKeywords()),
             query.topK(),
             query.chunkTopK(),
             retrieval.oneShotUsed(),
@@ -142,13 +143,14 @@ public final class LocalQueryStrategy implements QueryStrategy {
             return new LocalRetrieval(oneShotRetrievalStore.retrieveLocal(entityMatches), true);
         }
 
-        var relationsByEntityId = storageProvider.graphStore().findRelations(List.copyOf(entityScores.keySet()));
+        var endpointsByEntityId = storageProvider.graphStore()
+            .findRelationEndpoints(List.copyOf(entityScores.keySet()));
         for (var entityId : List.copyOf(entityScores.keySet())) {
-            for (var relationRecord : relationsByEntityId.getOrDefault(entityId, List.of())) {
+            for (var endpoint : endpointsByEntityId.getOrDefault(entityId, List.of())) {
                 var relationScore = entityScores.getOrDefault(entityId, 0.0d);
-                relationScores.merge(relationRecord.id(), relationScore, Math::max);
-                entityScores.merge(relationRecord.srcId(), relationScore, Math::max);
-                entityScores.merge(relationRecord.tgtId(), relationScore, Math::max);
+                relationScores.merge(endpoint.relationId(), relationScore, Math::max);
+                entityScores.merge(endpoint.srcId(), relationScore, Math::max);
+                entityScores.merge(endpoint.tgtId(), relationScore, Math::max);
             }
         }
 

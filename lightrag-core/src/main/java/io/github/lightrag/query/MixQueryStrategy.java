@@ -7,6 +7,7 @@ import io.github.lightrag.storage.BatchVectorStore;
 import io.github.lightrag.storage.ChunkStore;
 import io.github.lightrag.storage.OneShotRetrievalStore;
 import io.github.lightrag.storage.StorageProvider;
+import io.github.lightrag.text.QueryLogSignatures;
 import io.github.lightrag.types.Chunk;
 import io.github.lightrag.types.QueryContext;
 import io.github.lightrag.types.ScoredChunk;
@@ -84,9 +85,9 @@ public final class MixQueryStrategy implements QueryStrategy {
         var assembledContext = contextAssembler.assemble(context);
         var assembleMs = elapsedMillis(assembleStartedAt);
         log.info(
-            "LightRAG mix retrieve completed: mode={}, query={}, topK={}, chunkTopK={}, directOneShot={}, hybridMs={}, embedMs={}, chunkVectorSearchMs={}, mergeFilterMs={}, assembleMs={}, elapsedMs={}, entityCount={}, relationCount={}, chunkCount={}",
+            "LightRAG mix retrieve completed: mode={}, querySignature={}, topK={}, chunkTopK={}, directOneShot={}, hybridMs={}, embedMs={}, chunkVectorSearchMs={}, mergeFilterMs={}, assembleMs={}, elapsedMs={}, entityCount={}, relationCount={}, chunkCount={}",
             query.mode(),
-            query.query(),
+            QueryLogSignatures.of(query.query()),
             query.topK(),
             query.chunkTopK(),
             directOneShot,
@@ -157,9 +158,9 @@ public final class MixQueryStrategy implements QueryStrategy {
         var assembledContext = contextAssembler.assemble(context);
         var assembleMs = elapsedMillis(assembleStartedAt);
         log.info(
-            "LightRAG mix retrieve completed: mode={}, query={}, topK={}, chunkTopK={}, oneShotMix={}, directOneShot={}, embedMs={}, vectorSearchMs={}, graphMs={}, mergeFilterMs={}, assembleMs={}, elapsedMs={}, entityCount={}, relationCount={}, chunkCount={}",
+            "LightRAG mix retrieve completed: mode={}, querySignature={}, topK={}, chunkTopK={}, oneShotMix={}, directOneShot={}, embedMs={}, vectorSearchMs={}, graphMs={}, mergeFilterMs={}, assembleMs={}, elapsedMs={}, entityCount={}, relationCount={}, chunkCount={}",
             query.mode(),
-            query.query(),
+            QueryLogSignatures.of(query.query()),
             query.topK(),
             query.chunkTopK(),
             true,

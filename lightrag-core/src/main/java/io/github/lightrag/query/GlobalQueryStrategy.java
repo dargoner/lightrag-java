@@ -7,6 +7,7 @@ import io.github.lightrag.storage.ChunkStore;
 import io.github.lightrag.storage.GraphStore;
 import io.github.lightrag.storage.OneShotRetrievalStore;
 import io.github.lightrag.storage.StorageProvider;
+import io.github.lightrag.text.QueryLogSignatures;
 import io.github.lightrag.types.Chunk;
 import io.github.lightrag.types.Entity;
 import io.github.lightrag.types.QueryContext;
@@ -101,11 +102,11 @@ public final class GlobalQueryStrategy implements QueryStrategy {
         var assembleMs = elapsedMillis(assembleStartedAt);
         var elapsedMs = elapsedMillis(startedAt);
         log.info(
-            "LightRAG global retrieve completed: mode={}, query={}, embeddingText={}, hlKeywords={}, topK={}, chunkTopK={}, oneShot={}, embedMs={}, vectorSearchMs={}, graphMs={}, chunkMs={}, assembleMs={}, elapsedMs={}, entityCount={}, relationCount={}, chunkCount={}",
+            "LightRAG global retrieve completed: mode={}, querySignature={}, embeddingTextSignature={}, hlKeywordCount={}, topK={}, chunkTopK={}, oneShot={}, embedMs={}, vectorSearchMs={}, graphMs={}, chunkMs={}, assembleMs={}, elapsedMs={}, entityCount={}, relationCount={}, chunkCount={}",
             query.mode(),
-            query.query(),
-            embeddingText,
-            query.hlKeywords(),
+            QueryLogSignatures.of(query.query()),
+            QueryLogSignatures.of(embeddingText),
+            QueryLogSignatures.count(query.hlKeywords()),
             query.topK(),
             query.chunkTopK(),
             retrieval.oneShotUsed(),

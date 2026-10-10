@@ -4,6 +4,7 @@ import io.github.lightrag.storage.BatchVectorStore;
 import io.github.lightrag.storage.FilteredVectorStore;
 import io.github.lightrag.storage.HybridVectorStore;
 import io.github.lightrag.storage.VectorStore;
+import io.github.lightrag.text.QueryLogSignatures;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -54,14 +55,14 @@ final class VectorSearches {
         var normalizedFilter = Objects.requireNonNull(metadataFilter, "metadataFilter");
         if (!(store instanceof HybridVectorStore hybridVectorStore)) {
             log.info(
-                "LightRAG vector search dispatch: storeType={}, namespace={}, mode={}, topK={}, vectorDims={}, queryText={}, keywords={}, metadataFilter={}",
+                "LightRAG vector search dispatch: storeType={}, namespace={}, mode={}, topK={}, vectorDims={}, queryTextSignature={}, keywordCount={}, metadataFilter={}",
                 store.getClass().getSimpleName(),
                 normalizedNamespace,
                 "SEMANTIC",
                 topK,
                 normalizedVector.size(),
-                queryText == null ? "" : queryText,
-                normalizedKeywords,
+                QueryLogSignatures.of(queryText),
+                QueryLogSignatures.count(normalizedKeywords),
                 !normalizedFilter.isEmpty()
             );
             if (store instanceof FilteredVectorStore filteredVectorStore && !normalizedFilter.isEmpty()) {
@@ -71,14 +72,14 @@ final class VectorSearches {
         }
         var mode = searchMode(normalizedVector, normalizedKeywords);
         log.info(
-            "LightRAG vector search dispatch: storeType={}, namespace={}, mode={}, topK={}, vectorDims={}, queryText={}, keywords={}, metadataFilter={}",
+            "LightRAG vector search dispatch: storeType={}, namespace={}, mode={}, topK={}, vectorDims={}, queryTextSignature={}, keywordCount={}, metadataFilter={}",
             store.getClass().getSimpleName(),
             normalizedNamespace,
             mode,
             topK,
             normalizedVector.size(),
-            queryText == null ? "" : queryText,
-            normalizedKeywords,
+            QueryLogSignatures.of(queryText),
+            QueryLogSignatures.count(normalizedKeywords),
             !normalizedFilter.isEmpty()
         );
         var request = new HybridVectorStore.SearchRequest(
