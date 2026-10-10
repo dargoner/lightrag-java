@@ -10,6 +10,7 @@ import java.util.List;
 import java.util.Map;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 class MilvusVectorStoreTest {
     @Test
@@ -265,6 +266,94 @@ class MilvusVectorStoreTest {
         assertThat(store.list("chunks")).containsExactly(
             new VectorStore.VectorRecord("chunk-2", List.of(0.0d, 1.0d, 0.0d))
         );
+    }
+
+    @Test
+    void workspaceSetStoreSearchesAndListsWithAnInFilter() {
+        var adapter = new FakeMilvusClientAdapter();
+        adapter.semanticResults = List.of(new VectorStore.VectorMatch("chunk-2", 0.91d));
+        var store = new MilvusVectorStore(adapter, testConfig(), List.of("alpha", "beta"));
+
+        var matches = store.search("chunks", List.of(0.3d, 0.2d, 0.1d), 5);
+        store.list("entities");
+
+        assertThat(matches).containsExactly(new VectorStore.VectorMatch("chunk-2", 0.91d));
+        assertThat(adapter.lastSemanticRequest.filter())
+            .isEqualTo("workspace_id in [\"alpha\", \"beta\"] && record_type == \"chunks\"");
+        assertThat(adapter.lastListRequest.filter())
+            .isEqualTo("workspace_id in [\"alpha\", \"beta\"] && record_type == \"entities\"");
+    }
+
+    @Test
+    void workspaceSetStoreListsRowsFromEveryWorkspace() {
+        var adapter = new FakeMilvusClientAdapter();
+        new MilvusVectorStore(adapter, testConfig(), "alpha").saveAll(
+            "chunks",
+            List.of(new VectorStore.VectorRecord("chunk-2", List.of(0.0d, 1.0d, 0.0d)))
+        );
+        new MilvusVectorStore(adapter, testConfig(), "beta").saveAll(
+            "chunks",
+            List.of(new VectorStore.VectorRecord("chunk-1", List.of(1.0d, 0.0d, 0.0d)))
+        );
+        var store = new MilvusVectorStore(adapter, testConfig(), List.of("alpha", "beta"));
+
+        assertThat(store.list("chunks")).containsExactly(
+            new VectorStore.VectorRecord("chunk-1", List.of(1.0d, 0.0d, 0.0d)),
+            new VectorStore.VectorRecord("chunk-2", List.of(0.0d, 1.0d, 0.0d))
+        );
+    }
+
+    @Test
+    void workspaceSetStoreRejectsRowAddressedOperations() {
+        var adapter = new FakeMilvusClientAdapter();
+        var store = new MilvusVectorStore(adapter, testConfig(), List.of("alpha", "beta"));
+        var record = enriched("chunk-1", "body");
+
+        assertThatThrownBy(() -> store.saveAllEnriched("chunks", List.of(record)))
+            .isInstanceOf(IllegalStateException.class)
+            .hasMessageContaining("saveAllEnriched requires a single-workspace Milvus vector store")
+            .hasMessageContaining("covers 2 workspaces");
+        assertThatThrownBy(() -> store.deleteNamespace("chunks"))
+            .isInstanceOf(IllegalStateException.class)
+            .hasMessageContaining("deleteNamespace requires a single-workspace Milvus vector store");
+        assertThatThrownBy(() -> store.deleteIds("chunks", List.of("chunk-1")))
+            .isInstanceOf(IllegalStateException.class)
+            .hasMessageContaining("deleteIds requires a single-workspace Milvus vector store");
+        assertThatThrownBy(() -> store.readRows("chunks", List.of("chunk-1")))
+            .isInstanceOf(IllegalStateException.class)
+            .hasMessageContaining("readRows requires a single-workspace Milvus vector store");
+        assertThatThrownBy(() -> store.writeRows("chunks", List.of(new MilvusClientAdapter.StoredVectorRow(
+            "pk-1",
+            "chunk-1",
+            "alpha",
+            "chunks",
+            "chunk-1",
+            List.of(1.0d, 0.0d, 0.0d),
+            "body",
+            List.of(),
+            "body",
+            "",
+            "",
+            ""
+        ))))
+            .isInstanceOf(IllegalStateException.class)
+            .hasMessageContaining("writeRows requires a single-workspace Milvus vector store");
+        assertThat(adapter.upsertedRows).isEmpty();
+        assertThat(adapter.rowReadRequests).isEmpty();
+    }
+
+    @Test
+    void workspaceSetStoreDeduplicatesWorkspacesAndRejectsEmptyLists() {
+        var adapter = new FakeMilvusClientAdapter();
+        var store = new MilvusVectorStore(adapter, testConfig(), List.of("alpha", "alpha", "beta"));
+
+        store.list("chunks");
+
+        assertThat(adapter.lastListRequest.filter())
+            .isEqualTo("workspace_id in [\"alpha\", \"beta\"] && record_type == \"chunks\"");
+        assertThatThrownBy(() -> new MilvusVectorStore(adapter, testConfig(), List.of()))
+            .isInstanceOf(IllegalArgumentException.class)
+            .hasMessageContaining("workspaceIds must not be empty");
     }
 
     @Test
@@ -654,7 +743,11 @@ class MilvusVectorStoreTest {
             var clauses = filter.split("&&");
             for (var clause : clauses) {
                 var trimmed = clause.trim();
-                if (trimmed.startsWith("workspace_id == \"")) {
+                if (trimmed.startsWith("workspace_id in [")) {
+                    if (!matchesInFilter(row.workspaceId(), trimmed)) {
+                        return false;
+                    }
+                } else if (trimmed.startsWith("workspace_id == \"")) {
                     if (!row.workspaceId().equals(extractQuotedValue(trimmed))) {
                         return false;
                     }

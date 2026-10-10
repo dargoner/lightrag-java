@@ -45,6 +45,7 @@ import java.nio.file.Path;
 import java.util.Comparator;
 import java.util.EnumMap;
 import java.util.LinkedHashMap;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.NoSuchElementException;
@@ -576,6 +577,37 @@ public final class LightRag implements AutoCloseable {
     public QueryResult query(String workspaceId, QueryRequest request) {
         var scope = resolveScope(workspaceId);
         return newQueryEngine(resolveProvider(scope)).query(request);
+    }
+
+    /**
+     * Answers one retrieval over a set of workspaces as a single pipeline: keywords, query
+     * embeddings, store reads and reranking run once, with each store read IN-batched across the
+     * workspace set. A single-element set behaves exactly like {@link #query(String, QueryRequest)}.
+     * Workspace-set reads require a workspace storage provider that supports
+     * {@link io.github.lightrag.storage.WorkspaceStorageProvider#forWorkspaces(java.util.List)};
+     * providers without batch support throw {@link UnsupportedOperationException} and callers fall
+     * back to per-workspace queries.
+     */
+    public QueryResult queryForWorkspaces(List<String> workspaceIds, QueryRequest request) {
+        // Validate the caller's list directly: List.copyOf would reject a null element with a bare
+        // NullPointerException before the blank-id contract below can report it as an argument error.
+        var ids = Objects.requireNonNull(workspaceIds, "workspaceIds");
+        if (ids.isEmpty()) {
+            throw new IllegalArgumentException("workspaceIds must not be empty");
+        }
+        var normalized = new LinkedHashSet<String>();
+        for (var id : ids) {
+            if (id == null || id.isBlank()) {
+                throw new IllegalArgumentException("workspaceIds must not contain blank ids");
+            }
+            normalized.add(id.strip());
+        }
+        var scopes = normalized.stream().map(WorkspaceScope::new).toList();
+        var provider = Objects.requireNonNull(
+            config.workspaceStorageProvider().forWorkspaces(scopes),
+            "workspaceStorageProvider.forWorkspaces"
+        );
+        return newQueryEngine(provider).query(request);
     }
 
     public StructuredQueryResult queryStructured(String workspaceId, QueryRequest request) {

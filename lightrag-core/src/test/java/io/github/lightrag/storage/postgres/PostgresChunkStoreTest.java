@@ -10,6 +10,7 @@ import org.testcontainers.junit.jupiter.Testcontainers;
 import org.testcontainers.utility.DockerImageName;
 
 import java.sql.DriverManager;
+import java.util.List;
 import java.util.Map;
 import java.util.UUID;
 
@@ -69,6 +70,64 @@ class PostgresChunkStoreTest {
             resources.store().save(first);
 
             assertThat(resources.store().listByDocument("doc-1")).containsExactly(first, laterSameOrder, second);
+        }
+    }
+
+    @Test
+    void workspaceSetStoreLoadsChunksAcrossEveryWorkspaceWithDeterministicFirstWinner() {
+        var config = newConfig();
+        var dataSource = newDataSource(config);
+        try (dataSource) {
+            new PostgresSchemaManager(dataSource, config).bootstrap();
+            var alpha = new PostgresChunkStore(dataSource, config, List.of("alpha"));
+            var beta = new PostgresChunkStore(dataSource, config, List.of("beta"));
+            var workspaceSet = new PostgresChunkStore(dataSource, config, List.of("alpha", "beta"));
+
+            alpha.save(new ChunkStore.ChunkRecord("chunk-1", "doc-1", "Alpha First", 10, 0, Map.of()));
+            beta.save(new ChunkStore.ChunkRecord("chunk-1", "doc-1", "Beta First", 10, 0, Map.of()));
+            beta.save(new ChunkStore.ChunkRecord("chunk-2", "doc-2", "Beta Second", 8, 1, Map.of()));
+
+            // the same logical id in several workspaces resolves to the smallest workspace id
+            assertThat(workspaceSet.load("chunk-1")).get()
+                .extracting(ChunkStore.ChunkRecord::text)
+                .isEqualTo("Alpha First");
+            assertThat(workspaceSet.load("chunk-3")).isEmpty();
+
+            var loaded = workspaceSet.loadAll(List.of("chunk-2", "chunk-1", "chunk-3", "chunk-1"));
+            assertThat(loaded).containsOnlyKeys("chunk-1", "chunk-2");
+            assertThat(loaded.get("chunk-1").text()).isEqualTo("Alpha First");
+            assertThat(loaded.get("chunk-2").text()).isEqualTo("Beta Second");
+
+            // single-workspace stores keep their own slices untouched
+            assertThat(alpha.load("chunk-2")).isEmpty();
+            assertThat(beta.load("chunk-1")).get()
+                .extracting(ChunkStore.ChunkRecord::text)
+                .isEqualTo("Beta First");
+        }
+    }
+
+    @Test
+    void workspaceSetStoreRejectsSingleWorkspaceOperationsAndEmptyWorkspaceLists() {
+        var config = newConfig();
+        var dataSource = newDataSource(config);
+        try (dataSource) {
+            new PostgresSchemaManager(dataSource, config).bootstrap();
+            var workspaceSet = new PostgresChunkStore(dataSource, config, List.of("alpha", "beta"));
+            var chunk = new ChunkStore.ChunkRecord("chunk-1", "doc-1", "First chunk", 10, 0, Map.of());
+
+            assertThatThrownBy(() -> workspaceSet.save(chunk))
+                .isInstanceOf(IllegalStateException.class)
+                .hasMessageContaining("save requires a single-workspace chunk store")
+                .hasMessageContaining("covers 2 workspaces");
+            assertThatThrownBy(workspaceSet::list)
+                .isInstanceOf(IllegalStateException.class)
+                .hasMessageContaining("list requires a single-workspace chunk store");
+            assertThatThrownBy(() -> workspaceSet.listByDocument("doc-1"))
+                .isInstanceOf(IllegalStateException.class)
+                .hasMessageContaining("listByDocument requires a single-workspace chunk store");
+            assertThatThrownBy(() -> new PostgresChunkStore(dataSource, config, List.of()))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("workspaceIds must not be empty");
         }
     }
 

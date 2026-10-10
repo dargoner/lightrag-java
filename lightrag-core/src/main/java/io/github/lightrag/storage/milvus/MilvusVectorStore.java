@@ -2,6 +2,7 @@ package io.github.lightrag.storage.milvus;
 
 import io.github.lightrag.storage.HybridVectorStore;
 import io.github.lightrag.storage.VectorStore;
+import io.github.lightrag.text.QueryLogSignatures;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -31,7 +32,7 @@ public final class MilvusVectorStore implements HybridVectorStore, AutoCloseable
 
     private final MilvusClientAdapter clientAdapter;
     private final MilvusVectorConfig config;
-    private final String workspaceId;
+    private final List<String> workspaceIds;
     private final Set<String> ensuredCollections = ConcurrentHashMap.newKeySet();
 
     public MilvusVectorStore(MilvusVectorConfig config) {
@@ -47,9 +48,23 @@ public final class MilvusVectorStore implements HybridVectorStore, AutoCloseable
     }
 
     public MilvusVectorStore(MilvusClientAdapter clientAdapter, MilvusVectorConfig config, String workspaceId) {
+        this(clientAdapter, config, List.of(workspaceId));
+    }
+
+    /**
+     * Workspace-set store: searches and namespace listings match every workspace at once with a
+     * {@code workspace_id in [...]} filter. Row-addressed operations (enriched writes, point reads,
+     * id/namespace deletes) address single-workspace technical keys and reject multi-workspace
+     * stores.
+     */
+    public MilvusVectorStore(MilvusClientAdapter clientAdapter, MilvusVectorConfig config, List<String> workspaceIds) {
         this.clientAdapter = Objects.requireNonNull(clientAdapter, "clientAdapter");
         this.config = Objects.requireNonNull(config, "config");
-        this.workspaceId = Objects.requireNonNull(workspaceId, "workspaceId");
+        var normalized = List.copyOf(new LinkedHashSet<>(Objects.requireNonNull(workspaceIds, "workspaceIds")));
+        if (normalized.isEmpty()) {
+            throw new IllegalArgumentException("workspaceIds must not be empty");
+        }
+        this.workspaceIds = normalized;
     }
 
     @Override
@@ -69,10 +84,11 @@ public final class MilvusVectorStore implements HybridVectorStore, AutoCloseable
         if (values.isEmpty()) {
             return;
         }
+        var singleWorkspaceId = singleWorkspaceId("saveAllEnriched");
         var normalizedNamespace = normalizeNamespace(namespace);
         var collectionName = collectionName();
         ensureCollection(namespace, collectionName);
-        clientAdapter.upsert(collectionName, values.stream().map(record -> toStoredRow(normalizedNamespace, record)).toList());
+        clientAdapter.upsert(collectionName, values.stream().map(record -> toStoredRow(singleWorkspaceId, normalizedNamespace, record)).toList());
     }
 
     @Override
@@ -125,14 +141,14 @@ public final class MilvusVectorStore implements HybridVectorStore, AutoCloseable
                     ));
                 }
                 log.info(
-                    "LightRAG Milvus hybrid search: collection={}, namespace={}, topK={}, ranker={}, rrfK={}, queryText={}, keywords={}",
+                    "LightRAG Milvus hybrid search: collection={}, namespace={}, topK={}, ranker={}, rrfK={}, queryTextSignature={}, keywordCount={}",
                     collectionName,
                     normalizedNamespace,
                     searchRequest.topK(),
                     hybridRankerType(),
                     config.hybridRrfK(),
-                    queryText,
-                    searchRequest.keywords()
+                    QueryLogSignatures.of(queryText),
+                    QueryLogSignatures.count(searchRequest.keywords())
                 );
                 yield clientAdapter.hybridSearch(new MilvusClientAdapter.HybridSearchRequest(
                     collectionName,
@@ -161,6 +177,7 @@ public final class MilvusVectorStore implements HybridVectorStore, AutoCloseable
     }
 
     public void deleteNamespace(String namespace) {
+        singleWorkspaceId("deleteNamespace");
         clientAdapter.deleteAll(new MilvusClientAdapter.DeleteRequest(collectionName(), filter(normalizeNamespace(namespace))));
     }
 
@@ -169,9 +186,10 @@ public final class MilvusVectorStore implements HybridVectorStore, AutoCloseable
         if (values.isEmpty()) {
             return;
         }
+        var singleWorkspaceId = singleWorkspaceId("deleteIds");
         var normalizedNamespace = normalizeNamespace(namespace);
         var idFilter = values.stream()
-            .map(value -> technicalPrimaryKey(workspaceId, normalizedNamespace, value))
+            .map(value -> technicalPrimaryKey(singleWorkspaceId, normalizedNamespace, value))
             .map(value -> "\"" + escapeFilterLiteral(value) + "\"")
             .collect(java.util.stream.Collectors.joining(", "));
         clientAdapter.deleteAll(new MilvusClientAdapter.DeleteRequest(
@@ -201,13 +219,14 @@ public final class MilvusVectorStore implements HybridVectorStore, AutoCloseable
         if (values.isEmpty()) {
             return List.of();
         }
+        var singleWorkspaceId = singleWorkspaceId("readRows");
         var normalizedNamespace = normalizeNamespace(namespace);
         var uniqueIds = new ArrayList<>(new LinkedHashSet<>(values));
         var rowsByVectorId = new LinkedHashMap<String, MilvusClientAdapter.StoredVectorRow>();
         for (int from = 0; from < uniqueIds.size(); from += READ_ROWS_ID_BATCH_SIZE) {
             var batch = uniqueIds.subList(from, Math.min(from + READ_ROWS_ID_BATCH_SIZE, uniqueIds.size()));
             var idFilter = batch.stream()
-                .map(value -> technicalPrimaryKey(workspaceId, normalizedNamespace, value))
+                .map(value -> technicalPrimaryKey(singleWorkspaceId, normalizedNamespace, value))
                 .map(value -> "\"" + escapeFilterLiteral(value) + "\"")
                 .collect(java.util.stream.Collectors.joining(", "));
             for (var row : clientAdapter.readRows(new MilvusClientAdapter.RowReadRequest(
@@ -215,9 +234,9 @@ public final class MilvusVectorStore implements HybridVectorStore, AutoCloseable
                 filter(normalizedNamespace) + " && pk_id in [" + idFilter + "]"
             ))) {
                 rowsByVectorId.put(row.vectorId(), new MilvusClientAdapter.StoredVectorRow(
-                    technicalPrimaryKey(workspaceId, normalizedNamespace, row.vectorId()),
+                    technicalPrimaryKey(singleWorkspaceId, normalizedNamespace, row.vectorId()),
                     row.vectorId(),
-                    workspaceId,
+                    singleWorkspaceId,
                     normalizedNamespace,
                     row.vectorId(),
                     row.denseVector(),
@@ -244,6 +263,7 @@ public final class MilvusVectorStore implements HybridVectorStore, AutoCloseable
         if (rows.isEmpty()) {
             return;
         }
+        singleWorkspaceId("writeRows");
         var normalizedNamespace = normalizeNamespace(namespace);
         var collectionName = collectionName();
         ensureCollection(normalizedNamespace, collectionName);
@@ -261,7 +281,7 @@ public final class MilvusVectorStore implements HybridVectorStore, AutoCloseable
         }
     }
 
-    private MilvusClientAdapter.StoredVectorRow toStoredRow(String namespace, EnrichedVectorRecord record) {
+    private MilvusClientAdapter.StoredVectorRow toStoredRow(String workspaceId, String namespace, EnrichedVectorRecord record) {
         validateVector(record.vector());
         return new MilvusClientAdapter.StoredVectorRow(
             technicalPrimaryKey(workspaceId, namespace, record.id()),
@@ -288,7 +308,31 @@ public final class MilvusVectorStore implements HybridVectorStore, AutoCloseable
     }
 
     private String filter(String namespace) {
-        return "workspace_id == \"" + escapeFilterLiteral(workspaceId) + "\" && record_type == \"" + escapeFilterLiteral(namespace) + "\"";
+        return workspaceFilter() + " && record_type == \"" + escapeFilterLiteral(namespace) + "\"";
+    }
+
+    private String workspaceFilter() {
+        if (workspaceIds.size() == 1) {
+            return "workspace_id == \"" + escapeFilterLiteral(workspaceIds.get(0)) + "\"";
+        }
+        return "workspace_id in ["
+            + workspaceIds.stream()
+                .map(value -> "\"" + escapeFilterLiteral(value) + "\"")
+                .collect(java.util.stream.Collectors.joining(", "))
+            + "]";
+    }
+
+    /**
+     * Row-addressed operations write the workspace into the technical key/row and therefore require
+     * exactly one workspace; multi-workspace stores fail loudly instead of picking one.
+     */
+    private String singleWorkspaceId(String operation) {
+        if (workspaceIds.size() == 1) {
+            return workspaceIds.get(0);
+        }
+        throw new IllegalStateException(
+            operation + " requires a single-workspace Milvus vector store; this store covers "
+                + workspaceIds.size() + " workspaces");
     }
 
     private static String escapeFilterLiteral(String value) {
