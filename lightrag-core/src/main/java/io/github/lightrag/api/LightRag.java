@@ -7,6 +7,7 @@ import io.github.lightrag.indexing.DescriptionSummarizer;
 import io.github.lightrag.indexing.DocumentParsingOrchestrator;
 import io.github.lightrag.indexing.GraphMaterializationPipeline;
 import io.github.lightrag.indexing.GraphManagementPipeline;
+import io.github.lightrag.indexing.GraphVectorIndexer;
 import io.github.lightrag.indexing.IndexingProgressListener;
 import io.github.lightrag.indexing.IndexingPipeline;
 import io.github.lightrag.indexing.StorageSnapshots;
@@ -18,6 +19,7 @@ import io.github.lightrag.model.HeuristicTokenCounter;
 import io.github.lightrag.model.LlmConcurrencyBudget;
 import io.github.lightrag.model.RerankFailureMode;
 import io.github.lightrag.model.TokenCounter;
+import io.github.lightrag.persistence.ContentExport;
 import io.github.lightrag.query.ContextAssembler;
 import io.github.lightrag.query.DefaultPathRetriever;
 import io.github.lightrag.query.DefaultPathScorer;
@@ -33,7 +35,12 @@ import io.github.lightrag.query.RuleBasedQueryIntentClassifier;
 import io.github.lightrag.synthesis.PathAwareAnswerSynthesizer;
 import io.github.lightrag.storage.AtomicStorageProvider;
 import io.github.lightrag.storage.DocumentStatusStore;
+import io.github.lightrag.storage.EmbeddingSpaceStore;
+import io.github.lightrag.storage.NoopVectorStore;
+import io.github.lightrag.storage.SnapshotStore;
+import io.github.lightrag.storage.StorageProvider;
 import io.github.lightrag.storage.TaskDocumentStore;
+import io.github.lightrag.storage.VectorStore;
 import io.github.lightrag.task.TaskExecutionService;
 import io.github.lightrag.task.TaskMetadataReporter;
 import io.github.lightrag.task.WorkspaceConcurrencyMode;
@@ -41,7 +48,10 @@ import io.github.lightrag.types.Document;
 import io.github.lightrag.types.PreChunkedChunk;
 import io.github.lightrag.types.RawDocumentSource;
 
+import java.io.InputStream;
+import java.io.OutputStream;
 import java.nio.file.Path;
+import java.time.Instant;
 import java.util.Comparator;
 import java.util.EnumMap;
 import java.util.LinkedHashMap;
@@ -823,6 +833,253 @@ public final class LightRag implements AutoCloseable {
             storageProvider.restore(storageProvider.snapshotStore().load(snapshotPath));
             return null;
         });
+    }
+
+    /**
+     * Exports the workspace content (documents, chunks, entities, relations, document statuses and the derived
+     * graph bookkeeping) to a self-contained single-file JSON artifact without vectors: importing rebuilds them
+     * with the embedding model configured on the importing instance, so the artifact carries no dependency on
+     * the exporting side's embedding space and can travel over any byte channel. The same artifact is available
+     * as {@link #exportData(String)} bytes and on a caller-owned stream via {@link #exportData(String, OutputStream)}.
+     */
+    public void exportData(String workspaceId, Path path) {
+        ContentExport.write(Objects.requireNonNull(path, "path"), captureContentSnapshot(workspaceId));
+    }
+
+    /** Exports the workspace content as the bytes of the artifact described by {@link #exportData(String, Path)}. */
+    public byte[] exportData(String workspaceId) {
+        return ContentExport.writeBytes(captureContentSnapshot(workspaceId));
+    }
+
+    /** Streams the artifact described by {@link #exportData(String, Path)} to a caller-owned stream. */
+    public void exportData(String workspaceId, OutputStream outputStream) {
+        ContentExport.write(Objects.requireNonNull(outputStream, "outputStream"), captureContentSnapshot(workspaceId));
+    }
+
+    /**
+     * Imports an artifact produced by {@link #exportData(String, Path)}: the workspace content is replaced, then
+     * chunk, entity and relation vectors are rebuilt from that content with the configured embedding model and
+     * the embedding space marker is refreshed to the space of the rebuilt vectors.
+     */
+    public void importData(String workspaceId, Path path) {
+        importData(workspaceId, path, IndexingProgressListener.noop());
+    }
+
+    /**
+     * Imports the artifact described by {@link #importData(String, Path)} while reporting progress to the given
+     * listener: callbacks run synchronously on the calling thread while the import holds the workspace gate and are
+     * subject to the {@link IndexingProgressListener} reentrancy contract. The stages cover the content restore
+     * ({@link TaskStage#SNAPSHOT_LOADING}), the vector rebuilds ({@link TaskStage#VECTOR_INDEXING}, one started and
+     * succeeded pair per namespace; skipped when the vector store is disabled) and the final marker refresh
+     * ({@link TaskStage#FINALIZING}).
+     */
+    public void importData(String workspaceId, Path path, IndexingProgressListener progressListener) {
+        importSnapshot(
+            workspaceId,
+            ContentExport.read(Objects.requireNonNull(path, "path")),
+            Objects.requireNonNull(progressListener, "progressListener")
+        );
+    }
+
+    /** Imports the artifact carried by the given bytes; see {@link #importData(String, Path)}. */
+    public void importData(String workspaceId, byte[] data) {
+        importData(workspaceId, data, IndexingProgressListener.noop());
+    }
+
+    /** Imports the artifact carried by the given bytes and reports progress; see {@link #importData(String, Path, IndexingProgressListener)}. */
+    public void importData(String workspaceId, byte[] data, IndexingProgressListener progressListener) {
+        importSnapshot(
+            workspaceId,
+            ContentExport.read(Objects.requireNonNull(data, "data")),
+            Objects.requireNonNull(progressListener, "progressListener")
+        );
+    }
+
+    /** Imports the artifact read from a caller-owned stream; see {@link #importData(String, Path)}. */
+    public void importData(String workspaceId, InputStream inputStream) {
+        importData(workspaceId, inputStream, IndexingProgressListener.noop());
+    }
+
+    /** Imports the artifact read from a caller-owned stream and reports progress; see {@link #importData(String, Path, IndexingProgressListener)}. */
+    public void importData(String workspaceId, InputStream inputStream, IndexingProgressListener progressListener) {
+        importSnapshot(
+            workspaceId,
+            ContentExport.read(Objects.requireNonNull(inputStream, "inputStream")),
+            Objects.requireNonNull(progressListener, "progressListener")
+        );
+    }
+
+    /** Submits the import described by {@link #importData(String, Path)} as a background task. */
+    public String submitImport(String workspaceId, Path path) {
+        return submitImport(workspaceId, path, TaskSubmitOptions.defaults());
+    }
+
+    /**
+     * Submits the import as a background task and returns its task id: the artifact is read and validated on the
+     * calling thread, so an unreadable or unsupported artifact fails immediately without creating a task, then the
+     * import runs like {@link #importData(String, Path)} on a task thread, replacing the workspace content and
+     * rebuilding its vectors. Task records and {@link TaskEventListener} events carry the same stages as the
+     * listener overloads plus the submitted/completed task lifecycle.
+     */
+    public String submitImport(String workspaceId, Path path, TaskSubmitOptions options) {
+        return submitImportSnapshot(
+            workspaceId,
+            ContentExport.read(Objects.requireNonNull(path, "path")),
+            Objects.requireNonNull(options, "options")
+        );
+    }
+
+    /** Submits the import of the artifact carried by the given bytes as a background task; see {@link #submitImport(String, Path, TaskSubmitOptions)}. */
+    public String submitImport(String workspaceId, byte[] data) {
+        return submitImport(workspaceId, data, TaskSubmitOptions.defaults());
+    }
+
+    /** Submits the import of the artifact carried by the given bytes as a background task; see {@link #submitImport(String, Path, TaskSubmitOptions)}. */
+    public String submitImport(String workspaceId, byte[] data, TaskSubmitOptions options) {
+        return submitImportSnapshot(
+            workspaceId,
+            ContentExport.read(Objects.requireNonNull(data, "data")),
+            Objects.requireNonNull(options, "options")
+        );
+    }
+
+    /** Submits the import of the artifact read from a caller-owned stream as a background task; see {@link #submitImport(String, Path, TaskSubmitOptions)}. */
+    public String submitImport(String workspaceId, InputStream inputStream) {
+        return submitImport(workspaceId, inputStream, TaskSubmitOptions.defaults());
+    }
+
+    /** Submits the import of the artifact read from a caller-owned stream as a background task; see {@link #submitImport(String, Path, TaskSubmitOptions)}. */
+    public String submitImport(String workspaceId, InputStream inputStream, TaskSubmitOptions options) {
+        return submitImportSnapshot(
+            workspaceId,
+            ContentExport.read(Objects.requireNonNull(inputStream, "inputStream")),
+            Objects.requireNonNull(options, "options")
+        );
+    }
+
+    private SnapshotStore.Snapshot captureContentSnapshot(String workspaceId) {
+        var scope = resolveScope(workspaceId);
+        return runInWorkspace(scope, storageProvider -> withoutVectors(StorageSnapshots.capture(storageProvider)));
+    }
+
+    private void importSnapshot(String workspaceId, SnapshotStore.Snapshot snapshot, IndexingProgressListener progressListener) {
+        var scope = resolveScope(workspaceId);
+        runInWorkspace(scope, storageProvider -> {
+            importContent(storageProvider, snapshot, progressListener);
+            return null;
+        });
+    }
+
+    private String submitImportSnapshot(String workspaceId, SnapshotStore.Snapshot snapshot, TaskSubmitOptions options) {
+        var scope = resolveScope(workspaceId);
+        return taskExecutionService.submit(
+            scope.workspaceId(),
+            TaskType.IMPORT_CONTENT,
+            pipelineMetadata(scope, Map.of()),
+            options.listeners(),
+            progressListener -> importContent(resolveProvider(scope), snapshot, progressListener)
+        );
+    }
+
+    private void importContent(
+        AtomicStorageProvider storageProvider,
+        SnapshotStore.Snapshot snapshot,
+        IndexingProgressListener progressListener
+    ) {
+        progressListener.onStageStarted(TaskStage.SNAPSHOT_LOADING, "restoring workspace content from import");
+        storageProvider.restore(snapshot);
+        progressListener.onStageSucceeded(
+            TaskStage.SNAPSHOT_LOADING,
+            "restored %d documents, %d chunks, %d entities, %d relations".formatted(
+                snapshot.documents().size(),
+                snapshot.chunks().size(),
+                snapshot.entities().size(),
+                snapshot.relations().size()
+            )
+        );
+        rebuildVectorsFromContent(storageProvider, progressListener);
+    }
+
+    private static SnapshotStore.Snapshot withoutVectors(SnapshotStore.Snapshot snapshot) {
+        return new SnapshotStore.Snapshot(
+            snapshot.documents(),
+            snapshot.chunks(),
+            snapshot.entities(),
+            snapshot.relations(),
+            Map.of(),
+            snapshot.documentStatuses(),
+            snapshot.documentGraphSnapshots(),
+            snapshot.chunkGraphSnapshots(),
+            snapshot.documentGraphJournals(),
+            snapshot.chunkGraphJournals()
+        );
+    }
+
+    private void rebuildVectorsFromContent(
+        AtomicStorageProvider storageProvider,
+        IndexingProgressListener progressListener
+    ) {
+        if (storageProvider.vectorStore() instanceof NoopVectorStore) {
+            progressListener.onStageSkipped(
+                TaskStage.VECTOR_INDEXING,
+                "vector store is disabled; imported content is kept without vectors"
+            );
+            return;
+        }
+        var chunks = storageProvider.chunkStore().list().stream().map(GraphVectorIndexer::toChunk).toList();
+        var entities = storageProvider.graphStore().allEntities().stream().map(GraphVectorIndexer::toEntity).toList();
+        var relations = storageProvider.graphStore().allRelations().stream().map(GraphVectorIndexer::toRelation).toList();
+        var embeddingModel = limitedEmbeddingModel(LlmConcurrencyBudget.EmbeddingPriority.LOW);
+        var vectorStore = storageProvider.vectorStore();
+
+        progressListener.onStageStarted(TaskStage.VECTOR_INDEXING, "embedding %d chunk vectors".formatted(chunks.size()));
+        var chunkVectors = GraphVectorIndexer.chunkVectors(embeddingModel, embeddingBatchSize, chunks);
+        GraphVectorIndexer.saveChunkVectors(chunks, chunkVectors, vectorStore);
+        progressListener.onStageSucceeded(TaskStage.VECTOR_INDEXING, "embedded %d chunk vectors".formatted(chunkVectors.size()));
+
+        progressListener.onStageStarted(TaskStage.VECTOR_INDEXING, "embedding %d entity vectors".formatted(entities.size()));
+        var entityVectors = GraphVectorIndexer.entityVectors(embeddingModel, embeddingBatchSize, entities);
+        GraphVectorIndexer.saveEntityVectors(entities, entityVectors, vectorStore);
+        progressListener.onStageSucceeded(TaskStage.VECTOR_INDEXING, "embedded %d entity vectors".formatted(entityVectors.size()));
+
+        progressListener.onStageStarted(TaskStage.VECTOR_INDEXING, "embedding %d relation vectors".formatted(relations.size()));
+        var relationVectors = GraphVectorIndexer.relationVectors(embeddingModel, embeddingBatchSize, relations);
+        GraphVectorIndexer.saveRelationVectors(relations, relationVectors, vectorStore);
+        progressListener.onStageSucceeded(TaskStage.VECTOR_INDEXING, "embedded %d relation vectors".formatted(relationVectors.size()));
+
+        progressListener.onStageStarted(TaskStage.FINALIZING, "finalizing import");
+        refreshEmbeddingSpaceMarker(storageProvider, embeddingModel, chunkVectors, entityVectors, relationVectors);
+        progressListener.onStageSucceeded(TaskStage.FINALIZING, "import finalized");
+    }
+
+    @SafeVarargs
+    private static void refreshEmbeddingSpaceMarker(
+        AtomicStorageProvider storageProvider,
+        EmbeddingModel embeddingModel,
+        List<VectorStore.VectorRecord>... batches
+    ) {
+        EmbeddingSpaceStore spaceStore;
+        try {
+            spaceStore = storageProvider.embeddingSpaceStore();
+        } catch (UnsupportedOperationException exception) {
+            if (!Objects.equals(exception.getMessage(), StorageProvider.EMBEDDING_SPACE_STORE_UNSUPPORTED_MESSAGE)) {
+                throw exception;
+            }
+            return;
+        }
+        var sample = java.util.Arrays.stream(batches).filter(batch -> !batch.isEmpty()).findFirst().orElse(List.of());
+        if (sample.isEmpty()) {
+            // The imported content produced no vectors, so a stale marker from the replaced workspace must not
+            // survive and refuse the next ingest of a different model.
+            spaceStore.delete();
+            return;
+        }
+        var identity = embeddingModel.cacheIdentity();
+        spaceStore.save(new EmbeddingSpaceStore.Marker(
+            identity == null || identity.isBlank() ? "unknown" : identity,
+            sample.get(0).vector().size(),
+            Instant.now().toString()
+        ));
     }
 
     LightRagConfig config() {

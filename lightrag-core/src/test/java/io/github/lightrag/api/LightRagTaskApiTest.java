@@ -602,7 +602,8 @@ class LightRagTaskApiTest {
         assertThat(newlyAddedTaskTypes).containsExactlyInAnyOrder(
             TaskType.RESUME_DOCUMENT_INGEST,
             TaskType.MATERIALIZE_DOCUMENT_GRAPH,
-            TaskType.MATERIALIZE_CHUNK_GRAPH
+            TaskType.MATERIALIZE_CHUNK_GRAPH,
+            TaskType.IMPORT_CONTENT
         );
 
         var newlyAddedTaskStages = EnumSet.allOf(TaskStage.class);

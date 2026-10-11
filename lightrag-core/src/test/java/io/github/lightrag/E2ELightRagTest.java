@@ -21,19 +21,27 @@ import io.github.lightrag.api.QueryResult;
 import io.github.lightrag.api.StructuredQueryResult;
 import io.github.lightrag.api.TaskStatus;
 import io.github.lightrag.api.TaskSnapshot;
+import io.github.lightrag.api.TaskEvent;
+import io.github.lightrag.api.TaskEventType;
+import io.github.lightrag.api.TaskStage;
+import io.github.lightrag.api.TaskStageSnapshot;
 import io.github.lightrag.api.TaskType;
 import io.github.lightrag.api.ChunkExtractStatus;
+import io.github.lightrag.exception.StorageException;
 import io.github.lightrag.indexing.DeletionPipeline;
 import io.github.lightrag.indexing.FixedWindowChunker;
 import io.github.lightrag.indexing.GraphChunkAttribution;
+import io.github.lightrag.indexing.IndexingProgressListener;
 import io.github.lightrag.indexing.RelationCanonicalizer;
 import io.github.lightrag.model.ChatModel;
 import io.github.lightrag.model.EmbeddingModel;
 import io.github.lightrag.model.RerankModel;
+import io.github.lightrag.persistence.ContentExport;
 import io.github.lightrag.persistence.FileSnapshotStore;
 import io.github.lightrag.storage.ChunkStore;
 import io.github.lightrag.storage.DocumentStore;
 import io.github.lightrag.storage.DocumentGraphSnapshotStore;
+import io.github.lightrag.storage.EmbeddingSpaceStore;
 import io.github.lightrag.storage.GraphStore;
 import io.github.lightrag.storage.InMemoryStorageProvider;
 import io.github.lightrag.storage.SnapshotStore;
@@ -52,9 +60,13 @@ import org.junit.jupiter.api.io.TempDir;
 import org.testcontainers.containers.PostgreSQLContainer;
 import org.testcontainers.utility.DockerImageName;
 
+import java.io.ByteArrayInputStream;
+import java.io.ByteArrayOutputStream;
+import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.time.Instant;
+import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
 
@@ -275,6 +287,333 @@ class E2ELightRagTest {
         assertThat(storage.chunkStore().load("doc-seed:0")).isPresent();
         assertThat(storage.graphStore().loadEntity("seed")).isPresent();
         assertThat(rag.listDocumentStatuses(WORKSPACE)).isEmpty();
+    }
+
+    @Test
+    void exportDataWritesSingleFileContentSnapshotWithoutVectors() throws Exception {
+        var storage = InMemoryStorageProvider.create(new FileSnapshotStore());
+        var exportPath = tempDir.resolve("doc-1.export.json");
+        var rag = LightRag.builder()
+            .chatModel(new FakeChatModel())
+            .embeddingModel(new FakeEmbeddingModel())
+            .storage(storage)
+            .build();
+        rag.ingest(WORKSPACE, List.of(new Document("doc-1", "Title", "Alice works with Bob", Map.of())));
+
+        rag.exportData(WORKSPACE, exportPath);
+
+        assertThat(Files.exists(exportPath)).isTrue();
+        assertThat(Files.exists(tempDir.resolve("doc-1.export.payload.json"))).isFalse();
+        assertThat(Files.readString(exportPath))
+            .contains("\"schemaVersion\":1")
+            .contains("\"vectors\":{}");
+        var snapshot = ContentExport.read(Files.readAllBytes(exportPath));
+        assertThat(snapshot.documents()).hasSize(1);
+        assertThat(snapshot.chunks()).hasSize(1);
+        assertThat(snapshot.entities()).hasSize(2);
+        assertThat(snapshot.relations()).hasSize(1);
+        assertThat(snapshot.vectors()).isEmpty();
+        assertThat(storage.vectorStore().list("chunks"))
+            .extracting(VectorStore.VectorRecord::id)
+            .containsExactly("doc-1:0");
+    }
+
+    @Test
+    void importDataRebuildsContentAndVectorsIntoFreshWorkspace() {
+        var source = InMemoryStorageProvider.create(new FileSnapshotStore());
+        var exportPath = tempDir.resolve("doc-1.export.json");
+        var sourceRag = LightRag.builder()
+            .chatModel(new FakeChatModel())
+            .embeddingModel(new FakeEmbeddingModel())
+            .storage(source)
+            .build();
+        sourceRag.ingest(WORKSPACE, List.of(new Document("doc-1", "Title", "Alice works with Bob", Map.of())));
+        sourceRag.exportData(WORKSPACE, exportPath);
+
+        var target = InMemoryStorageProvider.create(new FileSnapshotStore());
+        var targetRag = LightRag.builder()
+            .chatModel(new FakeChatModel())
+            .embeddingModel(new FakeEmbeddingModel())
+            .storage(target)
+            .build();
+
+        targetRag.importData(WORKSPACE, exportPath);
+
+        assertThat(target.documentStore().load("doc-1")).isPresent();
+        assertThat(target.chunkStore().list())
+            .extracting(ChunkStore.ChunkRecord::id)
+            .containsExactly("doc-1:0");
+        assertThat(target.graphStore().allEntities())
+            .extracting(GraphStore.EntityRecord::id)
+            .containsExactly("alice", "bob");
+        assertThat(target.graphStore().allRelations())
+            .extracting(GraphStore.RelationRecord::id)
+            .containsExactly(relationId("alice", "bob"));
+        assertThat(target.vectorStore().list("chunks")).isEqualTo(source.vectorStore().list("chunks"));
+        assertThat(target.vectorStore().list("entities")).isEqualTo(source.vectorStore().list("entities"));
+        assertThat(target.vectorStore().list("relations")).isEqualTo(source.vectorStore().list("relations"));
+        assertThat(target.embeddingSpaceStore().load()).hasValueSatisfying(marker -> {
+            assertThat(marker.modelIdentity()).isEqualTo("unknown");
+            assertThat(marker.dimensions()).isEqualTo(2);
+        });
+    }
+
+    @Test
+    void importDataReplacesExistingContentAndVectors() {
+        var source = InMemoryStorageProvider.create(new FileSnapshotStore());
+        var exportPath = tempDir.resolve("doc-1.export.json");
+        var sourceRag = LightRag.builder()
+            .chatModel(new FakeChatModel())
+            .embeddingModel(new FakeEmbeddingModel())
+            .storage(source)
+            .build();
+        sourceRag.ingest(WORKSPACE, List.of(new Document("doc-1", "Title", "Alice works with Bob", Map.of())));
+        sourceRag.exportData(WORKSPACE, exportPath);
+
+        var target = InMemoryStorageProvider.create(new FileSnapshotStore());
+        var targetRag = LightRag.builder()
+            .chatModel(new FakeChatModel())
+            .embeddingModel(new FakeEmbeddingModel())
+            .storage(target)
+            .build();
+        targetRag.ingest(WORKSPACE, List.of(new Document("doc-old", "Old", "Bob reports to Carol", Map.of())));
+        assertThat(target.documentStore().load("doc-old")).isPresent();
+
+        targetRag.importData(WORKSPACE, exportPath);
+
+        assertThat(target.documentStore().load("doc-old")).isEmpty();
+        assertThat(target.documentStore().list())
+            .extracting(DocumentStore.DocumentRecord::id)
+            .containsExactly("doc-1");
+        assertThat(target.chunkStore().list())
+            .extracting(ChunkStore.ChunkRecord::id)
+            .containsExactly("doc-1:0");
+        assertThat(target.graphStore().allEntities())
+            .extracting(GraphStore.EntityRecord::id)
+            .containsExactly("alice", "bob");
+        assertThat(target.graphStore().allRelations())
+            .extracting(GraphStore.RelationRecord::id)
+            .containsExactly(relationId("alice", "bob"));
+        assertThat(target.vectorStore().list("entities"))
+            .extracting(VectorStore.VectorRecord::id)
+            .containsExactly("alice", "bob");
+        assertThat(target.vectorStore().list("relations")).isEqualTo(source.vectorStore().list("relations"));
+    }
+
+    @Test
+    void importDataRefreshesEmbeddingSpaceMarkerSoSubsequentIngestIsAccepted() {
+        var source = InMemoryStorageProvider.create(new FileSnapshotStore());
+        var exportPath = tempDir.resolve("doc-1.export.json");
+        var sourceRag = LightRag.builder()
+            .chatModel(new FakeChatModel())
+            .embeddingModel(new FakeEmbeddingModel())
+            .storage(source)
+            .build();
+        sourceRag.ingest(WORKSPACE, List.of(new Document("doc-1", "Title", "Alice works with Bob", Map.of())));
+        sourceRag.exportData(WORKSPACE, exportPath);
+
+        var target = InMemoryStorageProvider.create(new FileSnapshotStore());
+        target.embeddingSpaceStore().save(new EmbeddingSpaceStore.Marker("foreign-model", 2, "2026-01-01T00:00:00Z"));
+        var targetRag = LightRag.builder()
+            .chatModel(new FakeChatModel())
+            .embeddingModel(new FakeEmbeddingModel())
+            .storage(target)
+            .build();
+
+        targetRag.importData(WORKSPACE, exportPath);
+
+        assertThat(target.embeddingSpaceStore().load())
+            .hasValueSatisfying(marker -> assertThat(marker.modelIdentity()).isEqualTo("unknown"));
+        targetRag.ingest(WORKSPACE, List.of(new Document("doc-2", "Second", "Alice works with Bob", Map.of())));
+        assertThat(target.documentStore().load("doc-2")).isPresent();
+    }
+
+    @Test
+    void exportDataBytesImportRoundTripNeedsNoSnapshotStore() {
+        var source = InMemoryStorageProvider.create();
+        var sourceRag = LightRag.builder()
+            .chatModel(new FakeChatModel())
+            .embeddingModel(new FakeEmbeddingModel())
+            .storage(source)
+            .build();
+        sourceRag.ingest(WORKSPACE, List.of(new Document("doc-1", "Title", "Alice works with Bob", Map.of())));
+
+        var artifact = sourceRag.exportData(WORKSPACE);
+
+        assertThat(new String(artifact, StandardCharsets.UTF_8)).startsWith("{\"schemaVersion\":1");
+
+        var target = InMemoryStorageProvider.create();
+        var targetRag = LightRag.builder()
+            .chatModel(new FakeChatModel())
+            .embeddingModel(new FakeEmbeddingModel())
+            .storage(target)
+            .build();
+        targetRag.importData(WORKSPACE, artifact);
+
+        assertThat(target.documentStore().load("doc-1")).isPresent();
+        assertThat(target.graphStore().allEntities())
+            .extracting(GraphStore.EntityRecord::id)
+            .containsExactly("alice", "bob");
+        assertThat(target.vectorStore().list("chunks")).isEqualTo(source.vectorStore().list("chunks"));
+        assertThat(target.vectorStore().list("relations")).isEqualTo(source.vectorStore().list("relations"));
+        assertThat(target.embeddingSpaceStore().load()).hasValueSatisfying(marker -> {
+            assertThat(marker.modelIdentity()).isEqualTo("unknown");
+            assertThat(marker.dimensions()).isEqualTo(2);
+        });
+    }
+
+    @Test
+    void exportDataAndImportDataRoundTripThroughStreams() {
+        var source = InMemoryStorageProvider.create();
+        var sourceRag = LightRag.builder()
+            .chatModel(new FakeChatModel())
+            .embeddingModel(new FakeEmbeddingModel())
+            .storage(source)
+            .build();
+        sourceRag.ingest(WORKSPACE, List.of(new Document("doc-1", "Title", "Alice works with Bob", Map.of())));
+
+        var artifact = new ByteArrayOutputStream();
+        sourceRag.exportData(WORKSPACE, artifact);
+
+        var target = InMemoryStorageProvider.create();
+        var targetRag = LightRag.builder()
+            .chatModel(new FakeChatModel())
+            .embeddingModel(new FakeEmbeddingModel())
+            .storage(target)
+            .build();
+        targetRag.importData(WORKSPACE, new ByteArrayInputStream(artifact.toByteArray()));
+
+        assertThat(target.documentStore().load("doc-1")).isPresent();
+        assertThat(target.chunkStore().list())
+            .extracting(ChunkStore.ChunkRecord::id)
+            .containsExactly("doc-1:0");
+        assertThat(target.vectorStore().list("entities")).isEqualTo(source.vectorStore().list("entities"));
+    }
+
+    @Test
+    void importDataRejectsUnsupportedContentExportSchemaVersions() {
+        var storage = InMemoryStorageProvider.create();
+        var rag = LightRag.builder()
+            .chatModel(new FakeChatModel())
+            .embeddingModel(new FakeEmbeddingModel())
+            .storage(storage)
+            .build();
+        var artifact = """
+            {"schemaVersion":99,"createdAt":"2026-10-11T00:00:00Z","payload":{"documents":[],"chunks":[],"entities":[],"relations":[],"vectors":{}}}
+            """;
+
+        assertThatThrownBy(() -> rag.importData(WORKSPACE, artifact.getBytes(StandardCharsets.UTF_8)))
+            .isInstanceOf(StorageException.class)
+            .hasMessageContaining("schemaVersion");
+        assertThatThrownBy(() -> rag.submitImport(WORKSPACE, artifact.getBytes(StandardCharsets.UTF_8)))
+            .isInstanceOf(StorageException.class)
+            .hasMessageContaining("schemaVersion");
+    }
+
+    @Test
+    void importDataReportsStageProgressThroughListener() {
+        var source = InMemoryStorageProvider.create();
+        var sourceRag = LightRag.builder()
+            .chatModel(new FakeChatModel())
+            .embeddingModel(new FakeEmbeddingModel())
+            .storage(source)
+            .build();
+        sourceRag.ingest(WORKSPACE, List.of(new Document("doc-1", "Title", "Alice works with Bob", Map.of())));
+        var artifact = sourceRag.exportData(WORKSPACE);
+
+        var target = InMemoryStorageProvider.create();
+        var targetRag = LightRag.builder()
+            .chatModel(new FakeChatModel())
+            .embeddingModel(new FakeEmbeddingModel())
+            .storage(target)
+            .build();
+        var listener = new RecordingStageListener();
+
+        targetRag.importData(WORKSPACE, artifact, listener);
+
+        assertThat(listener.events()).containsExactly(
+            "started SNAPSHOT_LOADING restoring workspace content from import",
+            "succeeded SNAPSHOT_LOADING restored 1 documents, 1 chunks, 2 entities, 1 relations",
+            "started VECTOR_INDEXING embedding 1 chunk vectors",
+            "succeeded VECTOR_INDEXING embedded 1 chunk vectors",
+            "started VECTOR_INDEXING embedding 2 entity vectors",
+            "succeeded VECTOR_INDEXING embedded 2 entity vectors",
+            "started VECTOR_INDEXING embedding 1 relation vectors",
+            "succeeded VECTOR_INDEXING embedded 1 relation vectors",
+            "started FINALIZING finalizing import",
+            "succeeded FINALIZING import finalized"
+        );
+        assertThat(target.vectorStore().list("chunks")).isEqualTo(source.vectorStore().list("chunks"));
+    }
+
+    @Test
+    void importDataSkipsVectorRebuildWhenVectorStoreIsDisabled() {
+        var source = InMemoryStorageProvider.create();
+        var sourceRag = LightRag.builder()
+            .chatModel(new FakeChatModel())
+            .embeddingModel(new FakeEmbeddingModel())
+            .storage(source)
+            .build();
+        sourceRag.ingest(WORKSPACE, List.of(new Document("doc-1", "Title", "Alice works with Bob", Map.of())));
+        var artifact = sourceRag.exportData(WORKSPACE);
+
+        var target = InMemoryStorageProvider.create();
+        var targetRag = LightRag.builder()
+            .chatModel(new FakeChatModel())
+            .embeddingModel(new FakeEmbeddingModel())
+            .storage(target)
+            .noopVectorStore(true)
+            .build();
+        var listener = new RecordingStageListener();
+
+        targetRag.importData(WORKSPACE, artifact, listener);
+
+        assertThat(listener.events()).containsExactly(
+            "started SNAPSHOT_LOADING restoring workspace content from import",
+            "succeeded SNAPSHOT_LOADING restored 1 documents, 1 chunks, 2 entities, 1 relations",
+            "skipped VECTOR_INDEXING vector store is disabled; imported content is kept without vectors"
+        );
+        assertThat(target.documentStore().load("doc-1")).isPresent();
+        assertThat(target.chunkStore().list())
+            .extracting(ChunkStore.ChunkRecord::id)
+            .containsExactly("doc-1:0");
+    }
+
+    @Test
+    void submitImportRunsThroughAsyncTaskPipelineAndPublishesStageEvents() throws Exception {
+        var source = InMemoryStorageProvider.create();
+        var sourceRag = LightRag.builder()
+            .chatModel(new FakeChatModel())
+            .embeddingModel(new FakeEmbeddingModel())
+            .storage(source)
+            .build();
+        sourceRag.ingest(WORKSPACE, List.of(new Document("doc-1", "Title", "Alice works with Bob", Map.of())));
+        var artifact = sourceRag.exportData(WORKSPACE);
+
+        var target = InMemoryStorageProvider.create();
+        var events = new ArrayList<TaskEvent>();
+        var targetRag = LightRag.builder()
+            .chatModel(new FakeChatModel())
+            .embeddingModel(new FakeEmbeddingModel())
+            .storage(target)
+            .taskEventListener(events::add)
+            .build();
+
+        var taskId = targetRag.submitImport(WORKSPACE, artifact);
+        var task = awaitTerminalTask(targetRag, taskId);
+
+        assertThat(task.taskType()).isEqualTo(TaskType.IMPORT_CONTENT);
+        assertThat(task.status()).isEqualTo(TaskStatus.SUCCEEDED);
+        assertThat(task.stages())
+            .extracting(TaskStageSnapshot::stage)
+            .contains(TaskStage.SNAPSHOT_LOADING, TaskStage.VECTOR_INDEXING, TaskStage.FINALIZING);
+        assertThat(target.documentStore().load("doc-1")).isPresent();
+        assertThat(target.chunkStore().list())
+            .extracting(ChunkStore.ChunkRecord::id)
+            .containsExactly("doc-1:0");
+        assertThat(target.vectorStore().list("entities")).isEqualTo(source.vectorStore().list("entities"));
+        assertThat(events.stream().map(TaskEvent::eventType).toList())
+            .contains(TaskEventType.TASK_SUBMITTED);
     }
 
     @Test
@@ -4308,6 +4647,29 @@ class E2ELightRagTest {
             Thread.sleep(20L);
         }
         throw new AssertionError("task did not finish: " + taskId);
+    }
+
+    private static final class RecordingStageListener implements IndexingProgressListener {
+        private final List<String> events = new ArrayList<>();
+
+        List<String> events() {
+            return events;
+        }
+
+        @Override
+        public void onStageStarted(TaskStage stage, String message) {
+            events.add("started " + stage + " " + message);
+        }
+
+        @Override
+        public void onStageSucceeded(TaskStage stage, String message) {
+            events.add("succeeded " + stage + " " + message);
+        }
+
+        @Override
+        public void onStageSkipped(TaskStage stage, String message) {
+            events.add("skipped " + stage + " " + message);
+        }
     }
 
     private static final class AtomicOnlyStorageProvider implements io.github.lightrag.storage.AtomicStorageProvider {

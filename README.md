@@ -1105,6 +1105,27 @@ Runtime snapshots are now workspace-explicit:
 
 With the PostgreSQL and PostgreSQL+Neo4j backends, snapshots remain delegated to the configured `SnapshotStore`. PostgreSQL is the primary durable store for online data and document statuses, while snapshot files are still used only when you explicitly load or autosave snapshots through the existing API.
 
+### Content Export and Import
+
+`saveSnapshot`/`restoreSnapshot` move the full store state, vectors included. When the exporting and importing environments use different embedding models, or the artifact has to travel through a third-party system, use the content-oriented pair instead:
+
+```java
+rag.exportData("default", Path.of("exports", "repository.content.json")); // single file
+byte[] artifact = rag.exportData("default");                              // bytes
+rag.exportData("default", outputStream);                                  // any byte channel
+
+rag.importData("default", Path.of("exports", "repository.content.json"));
+rag.importData("default", artifact);
+rag.importData("default", inputStream);
+rag.importData("default", artifact, progressListener);                    // synchronous, with stage callbacks
+var taskId = rag.submitImport("default", artifact);                       // background task
+```
+
+- The artifact is one self-contained JSON document (`{"schemaVersion":1,"createdAt":...,"payload":{...}}`) carrying documents, chunks, entities, relations, document statuses, and the derived graph bookkeeping — never vectors. It needs no shared filesystem and no configured `SnapshotStore`, so it can travel over HTTP, object storage, or a message queue. Streams passed by the caller are flushed but never closed.
+- `importData(...)` replaces the workspace content, rebuilds the chunk, entity, and relation vectors from that content with the configured embedding model, and refreshes the embedding space marker to the rebuilt space. Importing into a workspace whose recorded embedding space came from another model is therefore supported; importing content that produces no vectors clears the marker.
+- Each import form also has a listener overload reporting stages on the calling thread while the import holds the workspace gate: `SNAPSHOT_LOADING` (content restore), `VECTOR_INDEXING` (one pass per rebuilt namespace; skipped when the vector store is disabled) and `FINALIZING` (marker refresh). `submitImport(...)` runs the same import as a background task — the artifact is read and validated before submission, so a bad artifact fails immediately without creating a task — and publishes the same stages plus the task lifecycle through `TaskEventListener`s.
+- Unsupported `schemaVersion` values are rejected with a `StorageException` instead of being interpreted.
+
 ## Indexing and Retrieval Tuning
 
 The builder now exposes a small set of indexing and retrieval tuning controls without changing the public query request contract:
