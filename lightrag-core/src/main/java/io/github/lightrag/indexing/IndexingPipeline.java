@@ -21,6 +21,7 @@ import io.github.lightrag.indexing.refinement.ExtractionRefinementPipeline;
 import io.github.lightrag.indexing.refinement.PrimaryChunkExtraction;
 import io.github.lightrag.model.ChatModel;
 import io.github.lightrag.model.EmbeddingModel;
+import io.github.lightrag.ontology.OntologyExtractionOverlay;
 import io.github.lightrag.storage.AtomicStorageProvider;
 import io.github.lightrag.storage.ChunkStore;
 import io.github.lightrag.storage.DocumentGraphJournalStore;
@@ -87,6 +88,7 @@ public final class IndexingPipeline {
     private final int maxFilePaths;
     private final KgExtractionValidator kgExtractionValidator;
     private final boolean sectionContextEnabled;
+    private final OntologyExtractionOverlay ontologyExtractionOverlay;
     private final Object storageMutationMonitor = new Object();
 
     public IndexingPipeline(
@@ -606,8 +608,79 @@ public final class IndexingPipeline {
         KgExtractionValidator kgExtractionValidator,
         boolean sectionContextEnabled
     ) {
+        this(
+            extractionModel,
+            summaryModel,
+            embeddingModel,
+            storageProvider,
+            snapshotPath,
+            chunker,
+            documentParsingOrchestrator,
+            embeddingBatchSize,
+            maxParallelInsert,
+            chunkExtractParallelism,
+            entityExtractMaxGleaning,
+            maxExtractInputTokens,
+            entityExtractionLanguage,
+            entityTypes,
+            graphExtractionEnabled,
+            relationTypes,
+            graphExtractionExamples,
+            embeddingSemanticMergeEnabled,
+            embeddingSemanticMergeThreshold,
+            extractionRefinementOptions,
+            progressListener,
+            descriptionSummarizer,
+            maxSourceIdsPerEntity,
+            maxSourceIdsPerRelation,
+            sourceIdsLimitMethod,
+            maxFilePaths,
+            entityExtractMaxRecords,
+            entityExtractMaxEntities,
+            kgExtractionValidator,
+            sectionContextEnabled,
+            OntologyExtractionOverlay.empty()
+        );
+    }
+
+    public IndexingPipeline(
+        ChatModel extractionModel,
+        ChatModel summaryModel,
+        EmbeddingModel embeddingModel,
+        AtomicStorageProvider storageProvider,
+        Path snapshotPath,
+        Chunker chunker,
+        DocumentParsingOrchestrator documentParsingOrchestrator,
+        int embeddingBatchSize,
+        int maxParallelInsert,
+        int chunkExtractParallelism,
+        int entityExtractMaxGleaning,
+        int maxExtractInputTokens,
+        String entityExtractionLanguage,
+        List<String> entityTypes,
+        boolean graphExtractionEnabled,
+        List<String> relationTypes,
+        List<GraphExtractionExample> graphExtractionExamples,
+        boolean embeddingSemanticMergeEnabled,
+        double embeddingSemanticMergeThreshold,
+        ExtractionRefinementOptions extractionRefinementOptions,
+        IndexingProgressListener progressListener,
+        DescriptionSummarizer descriptionSummarizer,
+        int maxSourceIdsPerEntity,
+        int maxSourceIdsPerRelation,
+        SourceIdLimits.Method sourceIdsLimitMethod,
+        int maxFilePaths,
+        int entityExtractMaxRecords,
+        int entityExtractMaxEntities,
+        KgExtractionValidator kgExtractionValidator,
+        boolean sectionContextEnabled,
+        OntologyExtractionOverlay ontologyExtractionOverlay
+    ) {
         this.kgExtractionValidator = kgExtractionValidator;
         this.sectionContextEnabled = sectionContextEnabled;
+        this.ontologyExtractionOverlay = ontologyExtractionOverlay == null
+            ? OntologyExtractionOverlay.empty()
+            : ontologyExtractionOverlay;
         this.entityExtractMaxRecords = entityExtractMaxRecords >= 1
             ? entityExtractMaxRecords
             : KnowledgeExtractor.DEFAULT_MAX_EXTRACTION_RECORDS;
@@ -669,7 +742,8 @@ public final class IndexingPipeline {
             this.entityExtractMaxRecords,
             this.entityExtractMaxEntities,
             this.kgExtractionValidator,
-            this.sectionContextEnabled
+            this.sectionContextEnabled,
+            this.ontologyExtractionOverlay
         );
         this.graphAssembler = new GraphAssembler();
         this.extractionRefinementPipeline = new ExtractionRefinementPipeline(
@@ -1250,6 +1324,7 @@ public final class IndexingPipeline {
             refined = extractionRefinementPipeline.refine(primaryExtractions);
             progressListener.onStageSucceeded(io.github.lightrag.api.TaskStage.REFINEMENT_EXTRACTION, "contextual refinement completed");
         }
+        refined = validateRefinedExtractions(refined, chunks);
         if (publishChunkEvents) {
             var chunksById = chunks.stream().collect(java.util.stream.Collectors.toMap(
                 io.github.lightrag.types.Chunk::id,
@@ -1269,6 +1344,37 @@ public final class IndexingPipeline {
             }
         }
         return refined;
+    }
+
+    private List<GraphAssembler.ChunkExtraction> validateRefinedExtractions(
+        List<GraphAssembler.ChunkExtraction> refined,
+        List<io.github.lightrag.types.Chunk> chunks
+    ) {
+        if (kgExtractionValidator == null) {
+            return refined;
+        }
+        var textByChunkId = chunks.stream()
+            .collect(java.util.stream.Collectors.toMap(
+                io.github.lightrag.types.Chunk::id,
+                io.github.lightrag.types.Chunk::text,
+                (left, right) -> left,
+                java.util.LinkedHashMap::new
+            ));
+        List<GraphAssembler.ChunkExtraction> validated = new ArrayList<>(refined.size());
+        for (GraphAssembler.ChunkExtraction extraction : refined) {
+            var result = kgExtractionValidator.validate(
+                extraction.chunkId(),
+                textByChunkId.getOrDefault(extraction.chunkId(), ""),
+                extraction.extraction()
+            );
+            validated.add(new GraphAssembler.ChunkExtraction(
+                extraction.chunkId(),
+                result,
+                extraction.llmCacheIds(),
+                extraction.filePath()
+            ));
+        }
+        return List.copyOf(validated);
     }
 
     private List<PrimaryChunkExtraction> extractPrimarySequentially(List<io.github.lightrag.types.Chunk> chunks, boolean publishChunkEvents) {

@@ -9,6 +9,12 @@ import io.github.lightrag.indexing.refinement.RefinedRelationPatch;
 import io.github.lightrag.indexing.refinement.RefinementScope;
 import io.github.lightrag.indexing.refinement.RefinementWindow;
 import io.github.lightrag.model.ChatModel;
+import io.github.lightrag.ontology.ExtractionMode;
+import io.github.lightrag.ontology.Ontology;
+import io.github.lightrag.ontology.OntologyEntityType;
+import io.github.lightrag.ontology.OntologyExtractionOverlay;
+import io.github.lightrag.ontology.OntologyPattern;
+import io.github.lightrag.ontology.OntologyRelationType;
 import io.github.lightrag.types.Chunk;
 import io.github.lightrag.types.ExtractedEntity;
 import io.github.lightrag.types.ExtractedRelation;
@@ -788,7 +794,7 @@ class KnowledgeExtractorTest {
 
         assertThat(chatModel.requests()).hasSize(1);
         assertThat(chatModel.requests().get(0).systemPrompt())
-            .contains("Allowed relationship keywords/types are: Author, Alias")
+            .contains("Preferred relationship keywords/types are: Author, Alias")
             .contains("Knowledge-base Graph Examples")
             .contains("Alice wrote Retrieval Notes.")
             .contains("Alice -> Retrieval Notes type: Author")
@@ -1142,6 +1148,137 @@ class KnowledgeExtractorTest {
         );
         assertThat(result.warnings()).containsExactly(
             "knowledge extraction response field 'entities' is not an array; treating it as empty"
+        );
+    }
+
+    @Test
+    void strictModeRemovesOtherAndUnknownFromEntityTypesAndRejectsFallback() {
+        var chatModel = new RecordingChatModel("""
+            {
+              "entities": [],
+              "relations": []
+            }
+            """);
+        var overlay = new OntologyExtractionOverlay(Map.of(), Map.of(), ExtractionMode.STRICT);
+        var extractor = new KnowledgeExtractor(
+            chatModel,
+            0,
+            10_000,
+            "English",
+            List.of("Person", "Organization", "Other", "Unknown"),
+            List.of("works at"),
+            List.of(),
+            false,
+            100,
+            40,
+            null,
+            true,
+            overlay
+        );
+
+        extractor.extract(chunk("Alice works at Acme"));
+
+        var prompt = chatModel.requests().get(0).systemPrompt();
+        assertThat(prompt)
+            .contains("STRICT ONTOLOGY MODE")
+            .contains("Person, Organization")
+            .contains("Do not use a fallback type")
+            .contains("Allowed relationship keywords/types are: works at")
+            .doesNotContain("Other, Unknown")
+            .doesNotContain("PREFER ONTOLOGY MODE");
+    }
+
+    @Test
+    void preferModeAllowsOtherFallbackAndRendersPreferredPatterns() {
+        var chatModel = new RecordingChatModel("""
+            {
+              "entities": [],
+              "relations": []
+            }
+            """);
+        var ontology = sampleOntology();
+        var overlay = OntologyExtractionOverlay.from(ontology, ExtractionMode.PREFER);
+        var extractor = new KnowledgeExtractor(
+            chatModel,
+            0,
+            10_000,
+            "English",
+            List.of("Person", "Organization"),
+            List.of("works at"),
+            List.of(),
+            false,
+            100,
+            40,
+            null,
+            true,
+            overlay
+        );
+
+        extractor.extract(chunk("Alice works at Acme"));
+
+        var prompt = chatModel.requests().get(0).systemPrompt();
+        assertThat(prompt)
+            .contains("PREFER ONTOLOGY MODE")
+            .contains("If none of the provided entity types apply, use \"Other\"")
+            .contains("Preferred relationship keywords/types are: works at")
+            .contains("Preferred Relationship Patterns:")
+            .contains("Person -> Organization")
+            .doesNotContain("STRICT ONTOLOGY MODE");
+    }
+
+    @Test
+    void openModeOmitsPatternsAndUsesSoftRelationGuidance() {
+        var chatModel = new RecordingChatModel("""
+            {
+              "entities": [],
+              "relations": []
+            }
+            """);
+        var ontology = sampleOntology();
+        var overlay = OntologyExtractionOverlay.from(ontology, ExtractionMode.OPEN);
+        var extractor = new KnowledgeExtractor(
+            chatModel,
+            0,
+            10_000,
+            "English",
+            List.of("Person", "Organization"),
+            List.of("works at"),
+            List.of(),
+            false,
+            100,
+            40,
+            null,
+            true,
+            overlay
+        );
+
+        extractor.extract(chunk("Alice works at Acme"));
+
+        var prompt = chatModel.requests().get(0).systemPrompt();
+        assertThat(prompt)
+            .contains("If none of the provided entity types apply, use \"Other\"")
+            .contains("Common relationship keywords/types (soft guidance): works at")
+            .doesNotContain("STRICT ONTOLOGY MODE")
+            .doesNotContain("PREFER ONTOLOGY MODE")
+            .doesNotContain("Ontology Relationship Patterns:")
+            .doesNotContain("Preferred Relationship Patterns:");
+    }
+
+    private static Ontology sampleOntology() {
+        return new Ontology(
+            List.of(
+                new OntologyEntityType("Person", "A person", List.of(), null),
+                new OntologyEntityType("Organization", "An organization", List.of(), null)
+            ),
+            List.of(new OntologyRelationType(
+                "works at",
+                "employment",
+                List.of(new OntologyPattern("Person", "Organization")),
+                List.of(),
+                null
+            )),
+            null,
+            Map.of()
         );
     }
 

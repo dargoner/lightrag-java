@@ -22,6 +22,9 @@ import io.github.lightrag.model.ChatModel.ChatRequest;
 import io.github.lightrag.model.ChatRequestOptions;
 import io.github.lightrag.model.HeuristicTokenCounter;
 import io.github.lightrag.model.TokenCounter;
+import io.github.lightrag.ontology.ExtractionMode;
+import io.github.lightrag.ontology.OntologyExtractionOverlay;
+import io.github.lightrag.ontology.OntologyPattern;
 import io.github.lightrag.types.Chunk;
 import io.github.lightrag.types.ExtractedEntity;
 import io.github.lightrag.types.ExtractedRelation;
@@ -67,7 +70,7 @@ public final class KnowledgeExtractor {
              - "aliases": optional list of aliases, abbreviations, or alternate names only when explicitly supported by the text
            - Only include aliases when they are strict synonyms for the same entity, such as abbreviations, acronyms, full-name variants, or alternate spellings.
            - Do not use aliases for categories, subtypes, examples, materials, counterparties, institutions, account variants, process steps, or entities connected by an explicit relationship.
-           - If none of the provided entity types apply, use "Other".
+           %3$s
            - Ensure consistent naming across the entire extraction.
            - If the entity name is case-insensitive, normalize it in title case.
 
@@ -109,9 +112,9 @@ public final class KnowledgeExtractor {
            - All string values must be properly escaped JSON strings (escape `"` as `\\"`, escape backslashes as `\\\\`, and newlines as `\\n`).
            - Any LaTeX quoted inside a string value must use double-escaped backslashes (write `\\frac` as `\\\\frac` in the JSON).
            - Use empty arrays when nothing is found.
-           - Output at most %4$d total records across entities and relations in this response.
-           - Output at most %5$d entity objects in this response.
-           - Output all entity and relation text in %3$s.
+           - Output at most %5$d total records across entities and relations in this response.
+           - Output at most %6$d entity objects in this response.
+           - Output all entity and relation text in %4$s.
            - Proper nouns should remain in their original language when translation would be ambiguous or unnatural.
            - When the user prompt includes a `---Section Context---` heading path, use it only as background to disambiguate references; never extract entities or relations from the heading text itself, and do not mention the headings unless they also appear in the input text.
            - Write descriptions in the third person.
@@ -173,6 +176,7 @@ public final class KnowledgeExtractor {
     private final List<String> relationTypes;
     private final List<GraphExtractionExample> examples;
     private final boolean allowDeterministicAttributionFallback;
+    private final OntologyExtractionOverlay ontologyExtractionOverlay;
 
     public KnowledgeExtractor(ChatModel chatModel) {
         this(
@@ -285,6 +289,38 @@ public final class KnowledgeExtractor {
         KgExtractionValidator kgExtractionValidator,
         boolean sectionContextEnabled
     ) {
+        this(
+            chatModel,
+            entityExtractMaxGleaning,
+            maxExtractInputTokens,
+            language,
+            entityTypes,
+            relationTypes,
+            examples,
+            allowDeterministicAttributionFallback,
+            entityExtractMaxRecords,
+            entityExtractMaxEntities,
+            kgExtractionValidator,
+            sectionContextEnabled,
+            OntologyExtractionOverlay.empty()
+        );
+    }
+
+    public KnowledgeExtractor(
+        ChatModel chatModel,
+        int entityExtractMaxGleaning,
+        int maxExtractInputTokens,
+        String language,
+        List<String> entityTypes,
+        List<String> relationTypes,
+        List<GraphExtractionExample> examples,
+        boolean allowDeterministicAttributionFallback,
+        int entityExtractMaxRecords,
+        int entityExtractMaxEntities,
+        KgExtractionValidator kgExtractionValidator,
+        boolean sectionContextEnabled,
+        OntologyExtractionOverlay ontologyExtractionOverlay
+    ) {
         this.chatModel = Objects.requireNonNull(chatModel, "chatModel");
         if (entityExtractMaxGleaning < 0) {
             throw new IllegalArgumentException("entityExtractMaxGleaning must not be negative");
@@ -319,6 +355,9 @@ public final class KnowledgeExtractor {
                 .toList();
         this.examples = examples == null ? List.of() : List.copyOf(examples);
         this.allowDeterministicAttributionFallback = allowDeterministicAttributionFallback;
+        this.ontologyExtractionOverlay = ontologyExtractionOverlay == null
+            ? OntologyExtractionOverlay.empty()
+            : ontologyExtractionOverlay;
     }
 
     public ExtractionResult extract(Chunk chunk) {
@@ -819,23 +858,79 @@ public final class KnowledgeExtractor {
 
     private String buildSystemPrompt() {
         return SYSTEM_PROMPT_TEMPLATE.formatted(
-            String.join(", ", entityTypes),
+            String.join(", ", entityTypesForPrompt()),
             renderGraphExtractionGuidance(),
+            renderEntityTypeFallbackInstruction(),
             language,
             entityExtractMaxRecords,
             entityExtractMaxEntities
         );
     }
 
-    private String renderGraphExtractionGuidance() {
-        if (relationTypes.isEmpty() && examples.isEmpty()) {
-            return "";
+    private List<String> entityTypesForPrompt() {
+        if (ontologyExtractionOverlay.mode() != ExtractionMode.STRICT) {
+            return entityTypes;
         }
+        return entityTypes.stream()
+            .filter(type -> {
+                String normalized = type.strip().toLowerCase(java.util.Locale.ROOT);
+                return !"other".equals(normalized) && !"unknown".equals(normalized);
+            })
+            .toList();
+    }
+
+    private String renderEntityTypeFallbackInstruction() {
+        return ontologyExtractionOverlay.mode() == ExtractionMode.STRICT
+            ? "- Do not use a fallback type; only the listed entity types are permitted."
+            : "- If none of the provided entity types apply, use \"Other\".";
+    }
+
+    private String renderGraphExtractionGuidance() {
         var guidance = new StringBuilder();
+        ExtractionMode mode = ontologyExtractionOverlay.mode();
+        if (mode == ExtractionMode.STRICT) {
+            guidance.append("\n           - STRICT ONTOLOGY MODE: Extract only entity types, relationship keywords, and patterns declared below.");
+            guidance.append(" Reject any entity type or relationship that is not explicitly listed in the ontology.");
+        } else if (mode == ExtractionMode.PREFER) {
+            guidance.append("\n           - PREFER ONTOLOGY MODE: Prefer the entity types, relationship keywords, and patterns declared below.");
+            guidance.append(" If the text clearly describes something outside the ontology, you may use \"Other\" for entity types or an unknown relationship keyword.");
+        }
         if (!relationTypes.isEmpty()) {
-            guidance.append("\n           - Allowed relationship keywords/types are: ")
-                .append(String.join(", ", relationTypes))
-                .append(". Select relationship_keywords from this list and skip relationships that do not fit.");
+            if (mode == ExtractionMode.STRICT) {
+                guidance.append("\n           - Allowed relationship keywords/types are: ")
+                    .append(String.join(", ", relationTypes))
+                    .append(". Select relationship_keywords from this list and skip relationships that do not fit.");
+            } else if (mode == ExtractionMode.PREFER) {
+                guidance.append("\n           - Preferred relationship keywords/types are: ")
+                    .append(String.join(", ", relationTypes))
+                    .append(". Prefer these keywords when they fit, but you may still use an unknown keyword if the text clearly supports it.");
+            } else {
+                guidance.append("\n           - Common relationship keywords/types (soft guidance): ")
+                    .append(String.join(", ", relationTypes))
+                    .append(". You may use any relationship keyword clearly supported by the text.");
+            }
+        }
+        if (mode != ExtractionMode.OPEN && !ontologyExtractionOverlay.patterns().isEmpty()) {
+            guidance.append("\n\n        ")
+                .append(mode == ExtractionMode.STRICT ? "Ontology Relationship Patterns:" : "Preferred Relationship Patterns:");
+            for (var entry : ontologyExtractionOverlay.patterns().entrySet()) {
+                guidance.append("\n           - ").append(entry.getKey()).append(" may occur between:");
+                for (OntologyPattern pattern : entry.getValue()) {
+                    guidance.append("\n             - ")
+                        .append(pattern.sourceLabel())
+                        .append(" -> ")
+                        .append(pattern.targetLabel());
+                }
+            }
+            guidance.append("\n           - Patterns are directional guidance; if direction is not explicitly stated in the text, both directions are acceptable.");
+        }
+        if (!ontologyExtractionOverlay.attributeBlocks().isEmpty()) {
+            guidance.append("\n\n        Ontology Attributes:");
+            for (var block : ontologyExtractionOverlay.attributeBlocks().values()) {
+                for (String line : block.split("\n", -1)) {
+                    guidance.append("\n           ").append(line);
+                }
+            }
         }
         if (!examples.isEmpty()) {
             guidance.append("\n\n        Knowledge-base Graph Examples:");

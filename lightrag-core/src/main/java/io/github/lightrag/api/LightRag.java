@@ -19,6 +19,14 @@ import io.github.lightrag.model.HeuristicTokenCounter;
 import io.github.lightrag.model.LlmConcurrencyBudget;
 import io.github.lightrag.model.RerankFailureMode;
 import io.github.lightrag.model.TokenCounter;
+import io.github.lightrag.ontology.ExtractionMode;
+import io.github.lightrag.ontology.Ontology;
+import io.github.lightrag.ontology.OntologyConformanceValidator;
+import io.github.lightrag.ontology.OntologyEntityType;
+import io.github.lightrag.ontology.OntologyExtractionOverlay;
+import io.github.lightrag.ontology.OntologyJsonCodec;
+import io.github.lightrag.ontology.OntologyRelationType;
+import io.github.lightrag.ontology.OntologyTaskContext;
 import io.github.lightrag.persistence.ContentExport;
 import io.github.lightrag.query.ContextAssembler;
 import io.github.lightrag.query.DefaultPathRetriever;
@@ -47,6 +55,8 @@ import io.github.lightrag.task.WorkspaceConcurrencyMode;
 import io.github.lightrag.types.Document;
 import io.github.lightrag.types.PreChunkedChunk;
 import io.github.lightrag.types.RawDocumentSource;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 import java.io.InputStream;
 import java.io.OutputStream;
@@ -66,6 +76,8 @@ import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.function.Function;
 
 public final class LightRag implements AutoCloseable {
+    private static final Logger log = LoggerFactory.getLogger(LightRag.class);
+
     private final LightRagConfig config;
     private final Chunker chunker;
     private final boolean automaticQueryKeywordExtraction;
@@ -281,8 +293,9 @@ public final class LightRag implements AutoCloseable {
             options,
             modeForDocumentCount(documentCount),
             Map.of("documentCount", Integer.toString(documentCount)),
-            (scope, progressListener) -> newIndexingPipeline(scope, resolveProvider(scope), progressListener)
-                .ingest(normalizedRequest.documents())
+            (scope, progressListener, ontologyContext) -> newIndexingPipeline(
+                scope, resolveProvider(scope), progressListener, ontologyContext
+            ).ingest(normalizedRequest.documents())
         );
     }
 
@@ -301,8 +314,9 @@ public final class LightRag implements AutoCloseable {
                 "documentCount", Integer.toString(documentCount),
                 "chunkCount", Integer.toString(normalizedRequest.chunks().size())
             ),
-            (scope, progressListener) -> newIndexingPipeline(scope, resolveProvider(scope), progressListener)
-                .ingestPreChunkedChunks(normalizedRequest.chunks())
+            (scope, progressListener, ontologyContext) -> newIndexingPipeline(
+                scope, resolveProvider(scope), progressListener, ontologyContext
+            ).ingestPreChunkedChunks(normalizedRequest.chunks())
         );
     }
 
@@ -324,13 +338,14 @@ public final class LightRag implements AutoCloseable {
         var submitOptions = Objects.requireNonNull(options, "options");
         var taskWork = Objects.requireNonNull(work, "work");
         var scope = resolveScope(workspaceId);
+        var ontologyContext = bindTaskContext(scope, resolveOntologyTaskContext(scope, submitOptions));
         return taskExecutionService.submit(
             scope.workspaceId(),
             TaskType.INGEST_DOCUMENTS,
-            pipelineMetadata(scope, metadata),
+            pipelineMetadata(scope, metadata, ontologyContext),
             mode,
             submitOptions.listeners(),
-            progressListener -> taskWork.run(scope, progressListener)
+            progressListener -> taskWork.run(scope, progressListener, ontologyContext)
         );
     }
 
@@ -355,14 +370,15 @@ public final class LightRag implements AutoCloseable {
         var resolvedOptions = Objects.requireNonNull(options, "options");
         var taskSubmitOptions = Objects.requireNonNull(submitOptions, "submitOptions");
         var scope = resolveScope(workspaceId);
+        var ontologyContext = bindTaskContext(scope, resolveOntologyTaskContext(scope, taskSubmitOptions));
         return taskExecutionService.submit(
             scope.workspaceId(),
             TaskType.INGEST_SOURCES,
-            pipelineMetadata(scope, Map.of("sourceCount", Integer.toString(normalizedSources.size()))),
+            pipelineMetadata(scope, Map.of("sourceCount", Integer.toString(normalizedSources.size())), ontologyContext),
             modeForDocumentCount(normalizedSources.size()),
             taskSubmitOptions.listeners(),
             progressListener -> {
-                newIndexingPipeline(scope, resolveProvider(scope), progressListener)
+                newIndexingPipeline(scope, resolveProvider(scope), progressListener, ontologyContext)
                     .ingestSources(normalizedSources, resolvedOptions);
             }
         );
@@ -375,13 +391,15 @@ public final class LightRag implements AutoCloseable {
     public String submitRebuild(String workspaceId, TaskSubmitOptions options) {
         var submitOptions = Objects.requireNonNull(options, "options");
         var scope = resolveScope(workspaceId);
+        var ontologyContext = bindTaskContext(scope, resolveOntologyTaskContext(scope, submitOptions));
         return taskExecutionService.submit(
             scope.workspaceId(),
             TaskType.REBUILD_GRAPH,
-            pipelineMetadata(scope, Map.of()),
+            pipelineMetadata(scope, Map.of(), ontologyContext),
             submitOptions.listeners(),
             progressListener -> {
-                newDeletionPipeline(scope, resolveProvider(scope), progressListener).rebuildAllDocuments();
+                newDeletionPipeline(scope, resolveProvider(scope), progressListener, ontologyContext)
+                    .rebuildAllDocuments();
             }
         );
     }
@@ -400,17 +418,19 @@ public final class LightRag implements AutoCloseable {
         var resolvedDeleteOptions = Objects.requireNonNull(deleteOptions, "deleteOptions");
         var resolvedSubmitOptions = Objects.requireNonNull(submitOptions, "submitOptions");
         var scope = resolveScope(workspaceId);
+        var ontologyContext = bindTaskContext(scope, resolveOntologyTaskContext(scope, resolvedSubmitOptions));
         return taskExecutionService.submit(
             scope.workspaceId(),
             TaskType.DELETE_DOCUMENT,
             pipelineMetadata(scope, Map.of(
                 "documentId", normalizedDocumentId,
                 "deleteLlmCache", Boolean.toString(resolvedDeleteOptions.deleteLlmCache())
-            )),
+            ), ontologyContext),
             resolvedSubmitOptions.listeners(),
             progressListener -> {
-                newDeletionPipeline(scope, resolveProvider(scope), progressListener)
+                newDeletionPipeline(scope, resolveProvider(scope), progressListener, ontologyContext)
                     .deleteByDocumentId(normalizedDocumentId, resolvedDeleteOptions);
+                graphExtractionOptionsProvider.markOntologyDirty(scope);
             }
         );
     }
@@ -445,22 +465,30 @@ public final class LightRag implements AutoCloseable {
 
     public GraphEntity createEntity(String workspaceId, CreateEntityRequest request) {
         var scope = resolveScope(workspaceId);
-        return runInWorkspace(scope, provider -> newGraphManagementPipeline(scope, provider).createEntity(request));
+        var result = runInWorkspace(scope, provider -> newGraphManagementPipeline(scope, provider).createEntity(request));
+        graphExtractionOptionsProvider.markOntologyDirty(scope);
+        return result;
     }
 
     public GraphRelation createRelation(String workspaceId, CreateRelationRequest request) {
         var scope = resolveScope(workspaceId);
-        return runInWorkspace(scope, provider -> newGraphManagementPipeline(scope, provider).createRelation(request));
+        var result = runInWorkspace(scope, provider -> newGraphManagementPipeline(scope, provider).createRelation(request));
+        graphExtractionOptionsProvider.markOntologyDirty(scope);
+        return result;
     }
 
     public GraphEntity editEntity(String workspaceId, EditEntityRequest request) {
         var scope = resolveScope(workspaceId);
-        return runInWorkspace(scope, provider -> newGraphManagementPipeline(scope, provider).editEntity(request));
+        var result = runInWorkspace(scope, provider -> newGraphManagementPipeline(scope, provider).editEntity(request));
+        graphExtractionOptionsProvider.markOntologyDirty(scope);
+        return result;
     }
 
     public GraphRelation updateRelation(String workspaceId, UpdateRelationRequest request) {
         var scope = resolveScope(workspaceId);
-        return runInWorkspace(scope, provider -> newGraphManagementPipeline(scope, provider).updateRelation(request));
+        var result = runInWorkspace(scope, provider -> newGraphManagementPipeline(scope, provider).updateRelation(request));
+        graphExtractionOptionsProvider.markOntologyDirty(scope);
+        return result;
     }
 
     public void deleteRelation(String workspaceId, DeleteRelationRequest request) {
@@ -469,11 +497,14 @@ public final class LightRag implements AutoCloseable {
             newGraphManagementPipeline(scope, provider).deleteRelation(request);
             return null;
         });
+        graphExtractionOptionsProvider.markOntologyDirty(scope);
     }
 
     public GraphEntity mergeEntities(String workspaceId, MergeEntitiesRequest request) {
         var scope = resolveScope(workspaceId);
-        return runInWorkspace(scope, provider -> newGraphManagementPipeline(scope, provider).mergeEntities(request));
+        var result = runInWorkspace(scope, provider -> newGraphManagementPipeline(scope, provider).mergeEntities(request));
+        graphExtractionOptionsProvider.markOntologyDirty(scope);
+        return result;
     }
 
     /** All entity ids in the workspace graph, sorted by code point. */
@@ -513,7 +544,9 @@ public final class LightRag implements AutoCloseable {
      */
     public DeletionResult deleteByEntity(String workspaceId, String entityName) {
         var scope = resolveScope(workspaceId);
-        return runInWorkspace(scope, provider -> newDeletionPipeline(scope, provider).deleteByEntity(entityName));
+        var result = runInWorkspace(scope, provider -> newDeletionPipeline(scope, provider).deleteByEntity(entityName));
+        graphExtractionOptionsProvider.markOntologyDirty(scope);
+        return result;
     }
 
     /**
@@ -522,10 +555,12 @@ public final class LightRag implements AutoCloseable {
      */
     public DeletionResult deleteByRelation(String workspaceId, String sourceEntityName, String targetEntityName) {
         var scope = resolveScope(workspaceId);
-        return runInWorkspace(
+        var result = runInWorkspace(
             scope,
             provider -> newDeletionPipeline(scope, provider).deleteByRelation(sourceEntityName, targetEntityName)
         );
+        graphExtractionOptionsProvider.markOntologyDirty(scope);
+        return result;
     }
 
     /**
@@ -538,15 +573,25 @@ public final class LightRag implements AutoCloseable {
 
     public DeletionResult deleteByDocumentId(String workspaceId, String documentId, DeleteDocumentOptions options) {
         var scope = resolveScope(workspaceId);
-        return runInWorkspace(scope, provider -> newDeletionPipeline(scope, provider).deleteByDocumentId(documentId, options));
+        var result = runInWorkspace(scope, provider -> newDeletionPipeline(scope, provider).deleteByDocumentId(documentId, options));
+        graphExtractionOptionsProvider.markOntologyDirty(scope);
+        return result;
     }
 
     public DocumentIngestResumeResult resumeDocumentIngest(String workspaceId, String documentId) {
         var scope = resolveScope(workspaceId);
+        var ontologyContext = bindTaskContext(scope, resolveContextFromTaskHistory(scope, documentId));
         return runInWorkspace(
             scope,
             WorkspaceConcurrencyMode.DOCUMENT_SCOPED,
-            provider -> resumeDocumentIngest(scope, provider, documentId, IndexingProgressListener.noop(), TaskMetadataReporter.noop())
+            provider -> resumeDocumentIngest(
+                scope,
+                provider,
+                documentId,
+                IndexingProgressListener.noop(),
+                TaskMetadataReporter.noop(),
+                ontologyContext
+            )
         );
     }
 
@@ -558,10 +603,17 @@ public final class LightRag implements AutoCloseable {
         var normalizedDocumentId = requireNonBlank(documentId, "documentId");
         var submitOptions = Objects.requireNonNull(options, "options");
         var scope = resolveScope(workspaceId);
+        var requestedContext = submitOptions.ontologyContext();
+        var ontologyContext = bindTaskContext(
+            scope,
+            requestedContext.isEmpty()
+                ? resolveContextFromTaskHistory(scope, normalizedDocumentId)
+                : requestedContext
+        );
         return taskExecutionService.submit(
             scope.workspaceId(),
             TaskType.RESUME_DOCUMENT_INGEST,
-            pipelineMetadata(scope, Map.of("documentId", normalizedDocumentId)),
+            pipelineMetadata(scope, Map.of("documentId", normalizedDocumentId), ontologyContext),
             WorkspaceConcurrencyMode.DOCUMENT_SCOPED,
             submitOptions.listeners(),
             progressListener -> resumeDocumentIngest(
@@ -571,7 +623,8 @@ public final class LightRag implements AutoCloseable {
                 progressListener,
                 progressListener instanceof TaskMetadataReporter metadataReporter
                     ? metadataReporter
-                    : TaskMetadataReporter.noop()
+                    : TaskMetadataReporter.noop(),
+                ontologyContext
             )
         );
     }
@@ -694,7 +747,16 @@ public final class LightRag implements AutoCloseable {
         String documentId,
         GraphMaterializationMode mode
     ) {
-        return materializeDocumentGraph(workspaceId, documentId, mode, null);
+        return materializeDocumentGraph(workspaceId, documentId, mode, TaskSubmitOptions.defaults());
+    }
+
+    public DocumentGraphMaterializationResult materializeDocumentGraph(
+        String workspaceId,
+        String documentId,
+        GraphMaterializationMode mode,
+        TaskSubmitOptions options
+    ) {
+        return materializeDocumentGraph(workspaceId, documentId, mode, null, options);
     }
 
     /**
@@ -710,12 +772,29 @@ public final class LightRag implements AutoCloseable {
         GraphMaterializationMode mode,
         CancellationCheckpoint cancellationCheckpoint
     ) {
+        return materializeDocumentGraph(workspaceId, documentId, mode, cancellationCheckpoint, TaskSubmitOptions.defaults());
+    }
+
+    public DocumentGraphMaterializationResult materializeDocumentGraph(
+        String workspaceId,
+        String documentId,
+        GraphMaterializationMode mode,
+        CancellationCheckpoint cancellationCheckpoint,
+        TaskSubmitOptions options
+    ) {
         var scope = resolveScope(workspaceId);
+        var ontologyContext = bindTaskContext(scope, resolveOntologyTaskContext(scope, options));
         return runInWorkspace(
             scope,
             WorkspaceConcurrencyMode.DOCUMENT_SCOPED,
-            provider -> newGraphMaterializationPipeline(scope, provider, cancellationCheckpoint)
-                .materialize(documentId, mode)
+            provider -> newGraphMaterializationPipeline(
+                scope,
+                provider,
+                IndexingProgressListener.noop(),
+                TaskMetadataReporter.noop(),
+                cancellationCheckpoint,
+                ontologyContext
+            ).materialize(documentId, mode)
         );
     }
 
@@ -730,20 +809,54 @@ public final class LightRag implements AutoCloseable {
     }
 
     public ChunkGraphMaterializationResult resumeChunkGraph(String workspaceId, String documentId, String chunkId) {
+        return resumeChunkGraph(workspaceId, documentId, chunkId, TaskSubmitOptions.defaults());
+    }
+
+    public ChunkGraphMaterializationResult resumeChunkGraph(
+        String workspaceId,
+        String documentId,
+        String chunkId,
+        TaskSubmitOptions options
+    ) {
         var scope = resolveScope(workspaceId);
+        var ontologyContext = bindTaskContext(scope, resolveOntologyTaskContext(scope, options));
         return runInWorkspace(
             scope,
             WorkspaceConcurrencyMode.DOCUMENT_SCOPED,
-            provider -> newGraphMaterializationPipeline(scope, provider).resumeChunk(documentId, chunkId)
+            provider -> newGraphMaterializationPipeline(
+                scope,
+                provider,
+                IndexingProgressListener.noop(),
+                TaskMetadataReporter.noop(),
+                null,
+                ontologyContext
+            ).resumeChunk(documentId, chunkId)
         );
     }
 
     public ChunkGraphMaterializationResult repairChunkGraph(String workspaceId, String documentId, String chunkId) {
+        return repairChunkGraph(workspaceId, documentId, chunkId, TaskSubmitOptions.defaults());
+    }
+
+    public ChunkGraphMaterializationResult repairChunkGraph(
+        String workspaceId,
+        String documentId,
+        String chunkId,
+        TaskSubmitOptions options
+    ) {
         var scope = resolveScope(workspaceId);
+        var ontologyContext = bindTaskContext(scope, resolveOntologyTaskContext(scope, options));
         return runInWorkspace(
             scope,
             WorkspaceConcurrencyMode.DOCUMENT_SCOPED,
-            provider -> newGraphMaterializationPipeline(scope, provider).repairChunk(documentId, chunkId)
+            provider -> newGraphMaterializationPipeline(
+                scope,
+                provider,
+                IndexingProgressListener.noop(),
+                TaskMetadataReporter.noop(),
+                null,
+                ontologyContext
+            ).repairChunk(documentId, chunkId)
         );
     }
 
@@ -752,18 +865,29 @@ public final class LightRag implements AutoCloseable {
         String documentId,
         GraphMaterializationMode mode
     ) {
+        return submitDocumentGraphMaterialization(workspaceId, documentId, mode, TaskSubmitOptions.defaults());
+    }
+
+    public String submitDocumentGraphMaterialization(
+        String workspaceId,
+        String documentId,
+        GraphMaterializationMode mode,
+        TaskSubmitOptions options
+    ) {
         var scope = resolveScope(workspaceId);
         var normalizedDocumentId = Objects.requireNonNull(documentId, "documentId");
         var requestedMode = Objects.requireNonNull(mode, "mode");
+        var submitOptions = Objects.requireNonNull(options, "options");
+        var ontologyContext = bindTaskContext(scope, resolveOntologyTaskContext(scope, submitOptions));
         return taskExecutionService.submit(
             scope.workspaceId(),
             TaskType.MATERIALIZE_DOCUMENT_GRAPH,
             pipelineMetadata(scope, Map.of(
                 "documentId", normalizedDocumentId,
                 "requestedMode", requestedMode.name()
-            )),
+            ), ontologyContext),
             WorkspaceConcurrencyMode.DOCUMENT_SCOPED,
-            List.of(),
+            submitOptions.listeners(),
             progressListener -> {
                 newGraphMaterializationPipeline(
                     scope,
@@ -771,7 +895,9 @@ public final class LightRag implements AutoCloseable {
                     progressListener,
                     progressListener instanceof TaskMetadataReporter metadataReporter
                         ? metadataReporter
-                        : TaskMetadataReporter.noop()
+                        : TaskMetadataReporter.noop(),
+                    null,
+                    ontologyContext
                 ).materialize(normalizedDocumentId, requestedMode);
             }
         );
@@ -783,10 +909,22 @@ public final class LightRag implements AutoCloseable {
         String chunkId,
         GraphChunkAction action
     ) {
+        return submitChunkGraphMaterialization(workspaceId, documentId, chunkId, action, TaskSubmitOptions.defaults());
+    }
+
+    public String submitChunkGraphMaterialization(
+        String workspaceId,
+        String documentId,
+        String chunkId,
+        GraphChunkAction action,
+        TaskSubmitOptions options
+    ) {
         var scope = resolveScope(workspaceId);
         var normalizedDocumentId = Objects.requireNonNull(documentId, "documentId");
         var normalizedChunkId = Objects.requireNonNull(chunkId, "chunkId");
         var requestedAction = Objects.requireNonNull(action, "action");
+        var submitOptions = Objects.requireNonNull(options, "options");
+        var ontologyContext = bindTaskContext(scope, resolveOntologyTaskContext(scope, submitOptions));
         return taskExecutionService.submit(
             scope.workspaceId(),
             TaskType.MATERIALIZE_CHUNK_GRAPH,
@@ -794,9 +932,9 @@ public final class LightRag implements AutoCloseable {
                 "documentId", normalizedDocumentId,
                 "chunkId", normalizedChunkId,
                 "requestedAction", requestedAction.name()
-            )),
+            ), ontologyContext),
             WorkspaceConcurrencyMode.DOCUMENT_SCOPED,
-            List.of(),
+            submitOptions.listeners(),
             progressListener -> {
                 var pipeline = newGraphMaterializationPipeline(
                     scope,
@@ -804,7 +942,9 @@ public final class LightRag implements AutoCloseable {
                     progressListener,
                     progressListener instanceof TaskMetadataReporter metadataReporter
                         ? metadataReporter
-                        : TaskMetadataReporter.noop()
+                        : TaskMetadataReporter.noop(),
+                    null,
+                    ontologyContext
                 );
                 if (requestedAction == GraphChunkAction.REPAIR) {
                     pipeline.repairChunk(normalizedDocumentId, normalizedChunkId);
@@ -831,6 +971,7 @@ public final class LightRag implements AutoCloseable {
         var snapshotPath = Objects.requireNonNull(path, "path");
         runInWorkspace(scope, storageProvider -> {
             storageProvider.restore(storageProvider.snapshotStore().load(snapshotPath));
+            graphExtractionOptionsProvider.markOntologyDirty(scope);
             return null;
         });
     }
@@ -965,29 +1106,32 @@ public final class LightRag implements AutoCloseable {
     private void importSnapshot(String workspaceId, SnapshotStore.Snapshot snapshot, IndexingProgressListener progressListener) {
         var scope = resolveScope(workspaceId);
         runInWorkspace(scope, storageProvider -> {
-            importContent(storageProvider, snapshot, progressListener);
+            importContent(storageProvider, snapshot, progressListener, scope);
             return null;
         });
     }
 
     private String submitImportSnapshot(String workspaceId, SnapshotStore.Snapshot snapshot, TaskSubmitOptions options) {
         var scope = resolveScope(workspaceId);
+        var ontologyContext = bindTaskContext(scope, resolveOntologyTaskContext(scope, options));
         return taskExecutionService.submit(
             scope.workspaceId(),
             TaskType.IMPORT_CONTENT,
-            pipelineMetadata(scope, Map.of()),
+            pipelineMetadata(scope, Map.of(), ontologyContext),
             options.listeners(),
-            progressListener -> importContent(resolveProvider(scope), snapshot, progressListener)
+            progressListener -> importContent(resolveProvider(scope), snapshot, progressListener, scope)
         );
     }
 
     private void importContent(
         AtomicStorageProvider storageProvider,
         SnapshotStore.Snapshot snapshot,
-        IndexingProgressListener progressListener
+        IndexingProgressListener progressListener,
+        WorkspaceScope scope
     ) {
         progressListener.onStageStarted(TaskStage.SNAPSHOT_LOADING, "restoring workspace content from import");
         storageProvider.restore(snapshot);
+        graphExtractionOptionsProvider.markOntologyDirty(scope);
         progressListener.onStageSucceeded(
             TaskStage.SNAPSHOT_LOADING,
             "restored %d documents, %d chunks, %d entities, %d relations".formatted(
@@ -1240,7 +1384,12 @@ public final class LightRag implements AutoCloseable {
     }
 
     private IndexingPipeline newIndexingPipeline(WorkspaceScope scope, AtomicStorageProvider storageProvider) {
-        return newIndexingPipeline(scope, storageProvider, IndexingProgressListener.noop());
+        return newIndexingPipeline(
+            scope,
+            storageProvider,
+            IndexingProgressListener.noop(),
+            bindTaskContext(scope, OntologyTaskContext.empty())
+        );
     }
 
     private IndexingPipeline newIndexingPipeline(
@@ -1248,8 +1397,34 @@ public final class LightRag implements AutoCloseable {
         AtomicStorageProvider storageProvider,
         IndexingProgressListener progressListener
     ) {
+        return newIndexingPipeline(
+            scope,
+            storageProvider,
+            progressListener,
+            bindTaskContext(scope, OntologyTaskContext.empty())
+        );
+    }
+
+    private IndexingPipeline newIndexingPipeline(
+        WorkspaceScope scope,
+        AtomicStorageProvider storageProvider,
+        IndexingProgressListener progressListener,
+        OntologyTaskContext ontologyContext
+    ) {
         var llmCacheStore = storageProvider.llmCacheStore();
-        var graphExtractionOptions = resolveGraphExtractionOptions(scope);
+        var graphExtractionOptions = ontologyContext.graphExtractionOptions();
+        var ontologyExtractionOverlay = ontologyContext.overlay();
+        var kgExtractionValidator = ontologyContext.validator() != null
+            ? ontologyContext.validator()
+            : config.kgExtractionValidator();
+        if (graphExtractionOptions.resolvedEnabled()
+            && ontologyExtractionOverlay.mode() == ExtractionMode.STRICT
+            && kgExtractionValidator == null) {
+            throw new IllegalStateException(
+                "ontology extraction is configured in STRICT mode but no ontology is bound for workspace "
+                    + scope.workspaceId() + "; submit the task with an ontology task context"
+            );
+        }
         return new IndexingPipeline(
             cachedModel("extract", config.extractionModel(), llmCacheStore),
             cachedModel("summary", config.summaryModel(), llmCacheStore),
@@ -1279,13 +1454,19 @@ public final class LightRag implements AutoCloseable {
             config.maxFilePaths(),
             graphExtractionOptions.resolvedEntityExtractMaxRecords(),
             graphExtractionOptions.resolvedEntityExtractMaxEntities(),
-            config.kgExtractionValidator(),
-            config.sectionContextEnabled()
+            kgExtractionValidator,
+            config.sectionContextEnabled(),
+            ontologyExtractionOverlay
         );
     }
 
     private DeletionPipeline newDeletionPipeline(WorkspaceScope scope, AtomicStorageProvider storageProvider) {
-        return newDeletionPipeline(scope, storageProvider, IndexingProgressListener.noop());
+        return newDeletionPipeline(
+            scope,
+            storageProvider,
+            IndexingProgressListener.noop(),
+            bindTaskContext(scope, OntologyTaskContext.empty())
+        );
     }
 
     private DeletionPipeline newDeletionPipeline(
@@ -1293,15 +1474,44 @@ public final class LightRag implements AutoCloseable {
         AtomicStorageProvider storageProvider,
         IndexingProgressListener progressListener
     ) {
-        return new DeletionPipeline(storageProvider, newIndexingPipeline(scope, storageProvider, progressListener), config.snapshotPath());
+        return newDeletionPipeline(scope, storageProvider, progressListener, bindTaskContext(scope, OntologyTaskContext.empty()));
+    }
+
+    private DeletionPipeline newDeletionPipeline(
+        WorkspaceScope scope,
+        AtomicStorageProvider storageProvider,
+        IndexingProgressListener progressListener,
+        OntologyTaskContext ontologyContext
+    ) {
+        return new DeletionPipeline(
+            storageProvider,
+            newIndexingPipeline(scope, storageProvider, progressListener, ontologyContext),
+            config.snapshotPath()
+        );
     }
 
     private GraphManagementPipeline newGraphManagementPipeline(WorkspaceScope scope, AtomicStorageProvider storageProvider) {
-        return new GraphManagementPipeline(storageProvider, newIndexingPipeline(scope, storageProvider), config.snapshotPath());
+        return new GraphManagementPipeline(
+            storageProvider,
+            newIndexingPipeline(
+                scope,
+                storageProvider,
+                IndexingProgressListener.noop(),
+                bindTaskContext(scope, OntologyTaskContext.empty())
+            ),
+            config.snapshotPath()
+        );
     }
 
     private GraphMaterializationPipeline newGraphMaterializationPipeline(WorkspaceScope scope, AtomicStorageProvider storageProvider) {
-        return newGraphMaterializationPipeline(scope, storageProvider, (CancellationCheckpoint) null);
+        return newGraphMaterializationPipeline(
+            scope,
+            storageProvider,
+            IndexingProgressListener.noop(),
+            TaskMetadataReporter.noop(),
+            null,
+            bindTaskContext(scope, OntologyTaskContext.empty())
+        );
     }
 
     private GraphMaterializationPipeline newGraphMaterializationPipeline(
@@ -1314,7 +1524,8 @@ public final class LightRag implements AutoCloseable {
             storageProvider,
             IndexingProgressListener.noop(),
             TaskMetadataReporter.noop(),
-            cancellationCheckpoint
+            cancellationCheckpoint,
+            bindTaskContext(scope, OntologyTaskContext.empty())
         );
     }
 
@@ -1324,7 +1535,14 @@ public final class LightRag implements AutoCloseable {
         IndexingProgressListener progressListener,
         TaskMetadataReporter metadataReporter
     ) {
-        return newGraphMaterializationPipeline(scope, storageProvider, progressListener, metadataReporter, null);
+        return newGraphMaterializationPipeline(
+            scope,
+            storageProvider,
+            progressListener,
+            metadataReporter,
+            null,
+            bindTaskContext(scope, OntologyTaskContext.empty())
+        );
     }
 
     private GraphMaterializationPipeline newGraphMaterializationPipeline(
@@ -1334,10 +1552,38 @@ public final class LightRag implements AutoCloseable {
         TaskMetadataReporter metadataReporter,
         CancellationCheckpoint cancellationCheckpoint
     ) {
+        return newGraphMaterializationPipeline(
+            scope,
+            storageProvider,
+            progressListener,
+            metadataReporter,
+            cancellationCheckpoint,
+            bindTaskContext(scope, OntologyTaskContext.empty())
+        );
+    }
+
+    private GraphMaterializationPipeline newGraphMaterializationPipeline(
+        WorkspaceScope scope,
+        AtomicStorageProvider storageProvider,
+        IndexingProgressListener progressListener,
+        TaskMetadataReporter metadataReporter,
+        CancellationCheckpoint cancellationCheckpoint,
+        OntologyTaskContext ontologyContext
+    ) {
         var llmCacheStore = storageProvider.llmCacheStore();
-        var graphExtractionOptions = resolveGraphExtractionOptions(scope);
+        var graphExtractionOptions = ontologyContext.graphExtractionOptions();
         if (!graphExtractionOptions.resolvedEnabled()) {
             throw new IllegalStateException("knowledge graph extraction is disabled for workspace " + scope.workspaceId());
+        }
+        var ontologyExtractionOverlay = ontologyContext.overlay();
+        var kgExtractionValidator = ontologyContext.validator() != null
+            ? ontologyContext.validator()
+            : config.kgExtractionValidator();
+        if (ontologyExtractionOverlay.mode() == ExtractionMode.STRICT && kgExtractionValidator == null) {
+            throw new IllegalStateException(
+                "ontology extraction is configured in STRICT mode but no ontology is bound for workspace "
+                    + scope.workspaceId() + "; submit the task with an ontology task context"
+            );
         }
         return new GraphMaterializationPipeline(
             cachedModel("extract", config.extractionModel(), llmCacheStore),
@@ -1362,8 +1608,9 @@ public final class LightRag implements AutoCloseable {
             config.maxFilePaths(),
             graphExtractionOptions.resolvedEntityExtractMaxRecords(),
             graphExtractionOptions.resolvedEntityExtractMaxEntities(),
-            config.kgExtractionValidator(),
-            config.sectionContextEnabled()
+            kgExtractionValidator,
+            config.sectionContextEnabled(),
+            ontologyExtractionOverlay
         );
     }
 
@@ -1372,15 +1619,19 @@ public final class LightRag implements AutoCloseable {
         AtomicStorageProvider provider,
         String documentId,
         IndexingProgressListener progressListener,
-        TaskMetadataReporter metadataReporter
+        TaskMetadataReporter metadataReporter,
+        OntologyTaskContext ontologyContext
     ) {
         var normalizedDocumentId = requireNonBlank(documentId, "documentId");
-        var graphEnabled = resolveGraphExtractionOptions(scope).resolvedEnabled()
+        var graphOptions = ontologyContext.graphExtractionOptions();
+        var graphEnabled = graphOptions.resolvedEnabled()
             && !documentSkipsKnowledgeGraph(provider, normalizedDocumentId);
         var graphStatus = GraphMaterializationStatus.MISSING;
 
         if (graphEnabled) {
-            var graphPipeline = newGraphMaterializationPipeline(scope, provider, progressListener, metadataReporter);
+            var graphPipeline = newGraphMaterializationPipeline(
+                scope, provider, progressListener, metadataReporter, null, ontologyContext
+            );
             var inspection = graphPipeline.inspect(normalizedDocumentId);
             graphStatus = inspection.graphStatus();
             if (inspection.graphStatus() != GraphMaterializationStatus.MERGED && inspection.repairable()) {
@@ -1416,12 +1667,14 @@ public final class LightRag implements AutoCloseable {
             .orElseThrow(() -> new NoSuchElementException(
                 "cannot resume document ingest because stored document does not exist: " + normalizedDocumentId
             ));
-        newIndexingPipeline(scope, provider, progressListener).ingest(List.of(source));
+        newIndexingPipeline(scope, provider, progressListener, ontologyContext).ingest(List.of(source));
         var finalStatus = provider.documentStatusStore().load(normalizedDocumentId)
             .map(io.github.lightrag.storage.DocumentStatusStore.StatusRecord::status)
             .orElse(DocumentStatus.FAILED);
         var finalGraphStatus = graphEnabled
-            ? newGraphMaterializationPipeline(scope, provider, IndexingProgressListener.noop(), TaskMetadataReporter.noop())
+            ? newGraphMaterializationPipeline(
+                scope, provider, IndexingProgressListener.noop(), TaskMetadataReporter.noop(), null, ontologyContext
+            )
                 .inspect(normalizedDocumentId)
                 .graphStatus()
             : GraphMaterializationStatus.MISSING;
@@ -1458,8 +1711,97 @@ public final class LightRag implements AutoCloseable {
             .mergeOver(GraphExtractionOptions.defaults());
     }
 
-    private Map<String, String> pipelineMetadata(WorkspaceScope scope, Map<String, String> baseMetadata) {
-        var graphOptions = resolveGraphExtractionOptions(scope);
+    private OntologyExtractionOverlay resolveOntologyExtractionOverlay(WorkspaceScope scope) {
+        var normalizedScope = Objects.requireNonNull(scope, "scope");
+        return Objects.requireNonNull(
+                graphExtractionOptionsProvider.ontologyExtractionOverlay(normalizedScope),
+                "graphExtractionOptionsProvider.ontologyExtractionOverlay"
+            )
+            .orElse(OntologyExtractionOverlay.empty());
+    }
+
+    private OntologyTaskContext resolveOntologyTaskContext(WorkspaceScope scope, TaskSubmitOptions options) {
+        var normalizedScope = Objects.requireNonNull(scope, "scope");
+        var normalizedOptions = Objects.requireNonNull(options, "options");
+        if (!normalizedOptions.ontologyContext().isEmpty()) {
+            return normalizedOptions.ontologyContext();
+        }
+        return OntologyTaskContext.empty();
+    }
+
+    private OntologyTaskContext bindTaskContext(WorkspaceScope scope, OntologyTaskContext context) {
+        if (!context.isEmpty()) {
+            return context;
+        }
+        return new OntologyTaskContext(
+            resolveGraphExtractionOptions(scope),
+            new Ontology(null, null, null, null),
+            resolveOntologyExtractionOverlay(scope),
+            false
+        );
+    }
+
+    private static final String ONTOLOGY_CONTEXT_METADATA_KEY = "lightrag.ontology.resolutionContext";
+
+    private OntologyTaskContext resolveContextFromTaskHistory(WorkspaceScope scope, String documentId) {
+        var provider = resolveProvider(scope);
+        var selectedTask = taskExecutionService.listTasks(scope.workspaceId()).stream()
+            .filter(task -> isAssociatedWithDocument(provider, task, documentId))
+            .max(Comparator
+                .comparing(TaskSnapshot::requestedAt, Comparator.nullsFirst(Comparator.naturalOrder()))
+                .thenComparing(TaskSnapshot::taskId))
+            .orElse(null);
+        if (selectedTask == null) {
+            return OntologyTaskContext.empty();
+        }
+        var metadata = selectedTask.metadata();
+        if (!metadata.containsKey(ONTOLOGY_CONTEXT_METADATA_KEY)) {
+            // Tasks submitted before the context feature carry no snapshot; fall back to legacy binding.
+            return OntologyTaskContext.empty();
+        }
+        String contextJson = metadata.get(ONTOLOGY_CONTEXT_METADATA_KEY);
+        if (contextJson == null || contextJson.isBlank()) {
+            throw new IllegalStateException(
+                "Stored ontology resolution context for document " + documentId
+                    + " in workspace " + scope.workspaceId() + " is corrupt: context payload is blank"
+            );
+        }
+        try {
+            return OntologyJsonCodec.readContext(contextJson);
+        } catch (RuntimeException exception) {
+            throw new IllegalStateException(
+                "Stored ontology resolution context for document " + documentId
+                    + " in workspace " + scope.workspaceId() + " is corrupt: " + exception.getMessage(),
+                exception
+            );
+        }
+    }
+
+    private static boolean isAssociatedWithDocument(
+        AtomicStorageProvider provider,
+        TaskSnapshot task,
+        String documentId
+    ) {
+        if (documentId.equals(task.metadata().get("documentId"))) {
+            return true;
+        }
+        try {
+            return provider.taskDocumentStore().load(task.taskId(), documentId).isPresent();
+        } catch (UnsupportedOperationException exception) {
+            if (StorageProvider.TASK_DOCUMENT_STORE_UNSUPPORTED_MESSAGE.equals(exception.getMessage())
+                || "taskDocumentStore is not available in this relational adapter".equals(exception.getMessage())) {
+                return false;
+            }
+            throw exception;
+        }
+    }
+
+    private Map<String, String> pipelineMetadata(
+        WorkspaceScope scope,
+        Map<String, String> baseMetadata,
+        OntologyTaskContext ontologyContext
+    ) {
+        var graphOptions = ontologyContext.graphExtractionOptions();
         var metadata = new LinkedHashMap<String, String>(Objects.requireNonNull(baseMetadata, "baseMetadata"));
         metadata.put("maxParallelInsert", Integer.toString(maxParallelInsert));
         metadata.put("maxConcurrentDocumentTasks", Integer.toString(maxConcurrentDocumentTasks));
@@ -1474,6 +1816,8 @@ public final class LightRag implements AutoCloseable {
         metadata.put("relationTypeCount", Integer.toString(graphOptions.resolvedRelationTypes().size()));
         metadata.put("graphExtractionExampleCount", Integer.toString(graphOptions.resolvedExamples().size()));
         metadata.put("embeddingSemanticMergeEnabled", Boolean.toString(embeddingSemanticMergeEnabled));
+        metadata.put("ontologyContextFingerprint", ontologyContext.fingerprint());
+        metadata.put("lightrag.ontology.resolutionContext", OntologyJsonCodec.writeContext(ontologyContext));
         return Map.copyOf(metadata);
     }
 
@@ -1541,7 +1885,7 @@ public final class LightRag implements AutoCloseable {
 
     @FunctionalInterface
     private interface IngestTaskWork {
-        void run(WorkspaceScope scope, IndexingProgressListener progressListener);
+        void run(WorkspaceScope scope, IndexingProgressListener progressListener, OntologyTaskContext ontologyContext);
     }
 
     private static DocumentProcessingStatus toDocumentProcessingStatus(

@@ -26,6 +26,7 @@ import io.github.lightrag.indexing.refinement.ExtractionRefinementPipeline;
 import io.github.lightrag.indexing.refinement.PrimaryChunkExtraction;
 import io.github.lightrag.model.ChatModel;
 import io.github.lightrag.model.EmbeddingModel;
+import io.github.lightrag.ontology.OntologyExtractionOverlay;
 import io.github.lightrag.storage.AtomicStorageProvider;
 import io.github.lightrag.storage.DocumentGraphJournalStore;
 import io.github.lightrag.storage.DocumentGraphSnapshotStore;
@@ -120,6 +121,7 @@ public final class GraphMaterializationPipeline {
     private final int entityExtractMaxEntities;
     private final KgExtractionValidator kgExtractionValidator;
     private final boolean sectionContextEnabled;
+    private final OntologyExtractionOverlay ontologyExtractionOverlay;
 
     public GraphMaterializationPipeline(
         ChatModel extractionModel,
@@ -389,8 +391,67 @@ public final class GraphMaterializationPipeline {
         KgExtractionValidator kgExtractionValidator,
         boolean sectionContextEnabled
     ) {
+        this(
+            extractionModel,
+            embeddingModel,
+            storageProvider,
+            extractionRefinementOptions,
+            snapshotPath,
+            metadataReporter,
+            progressListener,
+            chunkExtractParallelism,
+            entityExtractMaxGleaning,
+            maxExtractInputTokens,
+            entityExtractionLanguage,
+            entityTypes,
+            relationTypes,
+            graphExtractionExamples,
+            cancellationCheckpoint,
+            descriptionSummarizer,
+            maxSourceIdsPerEntity,
+            maxSourceIdsPerRelation,
+            sourceIdsLimitMethod,
+            maxFilePaths,
+            entityExtractMaxRecords,
+            entityExtractMaxEntities,
+            kgExtractionValidator,
+            sectionContextEnabled,
+            OntologyExtractionOverlay.empty()
+        );
+    }
+
+    public GraphMaterializationPipeline(
+        ChatModel extractionModel,
+        EmbeddingModel embeddingModel,
+        AtomicStorageProvider storageProvider,
+        ExtractionRefinementOptions extractionRefinementOptions,
+        Path snapshotPath,
+        TaskMetadataReporter metadataReporter,
+        IndexingProgressListener progressListener,
+        int chunkExtractParallelism,
+        int entityExtractMaxGleaning,
+        int maxExtractInputTokens,
+        String entityExtractionLanguage,
+        List<String> entityTypes,
+        List<String> relationTypes,
+        List<GraphExtractionExample> graphExtractionExamples,
+        CancellationCheckpoint cancellationCheckpoint,
+        DescriptionSummarizer descriptionSummarizer,
+        int maxSourceIdsPerEntity,
+        int maxSourceIdsPerRelation,
+        SourceIdLimits.Method sourceIdsLimitMethod,
+        int maxFilePaths,
+        int entityExtractMaxRecords,
+        int entityExtractMaxEntities,
+        KgExtractionValidator kgExtractionValidator,
+        boolean sectionContextEnabled,
+        OntologyExtractionOverlay ontologyExtractionOverlay
+    ) {
         this.kgExtractionValidator = kgExtractionValidator;
         this.sectionContextEnabled = sectionContextEnabled;
+        this.ontologyExtractionOverlay = ontologyExtractionOverlay == null
+            ? OntologyExtractionOverlay.empty()
+            : ontologyExtractionOverlay;
         this.entityExtractMaxRecords = entityExtractMaxRecords >= 1
             ? entityExtractMaxRecords
             : KnowledgeExtractor.DEFAULT_MAX_EXTRACTION_RECORDS;
@@ -429,7 +490,8 @@ public final class GraphMaterializationPipeline {
             this.entityExtractMaxRecords,
             this.entityExtractMaxEntities,
             this.kgExtractionValidator,
-            this.sectionContextEnabled
+            this.sectionContextEnabled,
+            this.ontologyExtractionOverlay
         );
         this.embeddingBatcher = new EmbeddingBatcher(Objects.requireNonNull(embeddingModel, "embeddingModel"), Integer.MAX_VALUE);
         this.graphAssembler = new GraphAssembler();
@@ -943,6 +1005,7 @@ public final class GraphMaterializationPipeline {
             : extractPrimaryConcurrently(chunks);
         long extractedAt = System.nanoTime();
         var refined = extractionRefinementPipeline.refine(primaryExtractions);
+        refined = validateRefinedExtractions(refined, chunks);
         long refinedAt = System.nanoTime();
         log.info(
             "LightRAG graph refineExtractions completed: chunks={}, extractionMs={}, refinementMs={}, totalMs={}",
@@ -952,6 +1015,37 @@ public final class GraphMaterializationPipeline {
             elapsedMillis(started, refinedAt)
         );
         return refined;
+    }
+
+    private List<GraphAssembler.ChunkExtraction> validateRefinedExtractions(
+        List<GraphAssembler.ChunkExtraction> refined,
+        List<Chunk> chunks
+    ) {
+        if (kgExtractionValidator == null) {
+            return refined;
+        }
+        var textByChunkId = chunks.stream()
+            .collect(java.util.stream.Collectors.toMap(
+                Chunk::id,
+                Chunk::text,
+                (left, right) -> left,
+                java.util.LinkedHashMap::new
+            ));
+        List<GraphAssembler.ChunkExtraction> validated = new ArrayList<>(refined.size());
+        for (GraphAssembler.ChunkExtraction extraction : refined) {
+            var result = kgExtractionValidator.validate(
+                extraction.chunkId(),
+                textByChunkId.getOrDefault(extraction.chunkId(), ""),
+                extraction.extraction()
+            );
+            validated.add(new GraphAssembler.ChunkExtraction(
+                extraction.chunkId(),
+                result,
+                extraction.llmCacheIds(),
+                extraction.filePath()
+            ));
+        }
+        return List.copyOf(validated);
     }
 
     private List<PrimaryChunkExtraction> extractPrimarySequentially(List<Chunk> chunks) {
