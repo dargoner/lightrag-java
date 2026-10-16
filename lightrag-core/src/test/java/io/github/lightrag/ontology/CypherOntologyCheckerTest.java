@@ -1334,15 +1334,23 @@ class CypherOntologyCheckerTest {
     }
 
     @Test
-    void handlesAliasRebindingAndOrdering() {
-        CypherOntologyChecker.CheckResult rebinding = check(
-            "MATCH (n:Entity) WITH n.type AS x WITH 5 AS x WHERE x = 5 RETURN x");
-        CypherOntologyChecker.CheckResult laterBinding = check(
-            "MATCH (n:Entity) WHERE x = 'Employee' WITH n.type AS x RETURN x");
+    void handlesRebindingWithoutPollutingEarlierComparisons() {
+        // Right-hand expressions of one WITH read the input scope: the second
+        // item still copies the incoming type alias even though an earlier
+        // item of the same WITH rebinds x.
+        CypherOntologyChecker.CheckResult sameClause = check(
+            "MATCH (n:Entity) WITH n.type AS x WITH 5 AS x, x AS y"
+                + " WHERE y = 'Employee' RETURN y");
+        // The earlier comparison on x stays a type condition: an earlier
+        // comparison is not polluted by a later separate-WITH rebinding.
+        CypherOntologyChecker.CheckResult laterRebinding = check(
+            "MATCH (n:Entity) WITH n.type AS x WHERE x = 'Employee'"
+                + " WITH 5 AS x RETURN x");
 
-        assertThat(rebinding.ok()).isTrue();
-        assertThat(rebinding.unverified()).isEmpty();
-        assertThat(laterBinding.ok()).isTrue();
+        assertThat(sameClause.ok()).isFalse();
+        assertThat(sameClause.unknownTypeValues()).containsExactly("Employee");
+        assertThat(laterRebinding.ok()).isFalse();
+        assertThat(laterRebinding.unknownTypeValues()).containsExactly("Employee");
     }
 
     @Test
@@ -1350,6 +1358,111 @@ class CypherOntologyCheckerTest {
         CypherOntologyChecker.CheckResult result = check(
             "MATCH (n:Entity)\nWHERE EXISTS {\n  WITH n.type + '' AS t\n"
                 + "  WHERE true = true\n  RETURN t\n}\nRETURN n");
+
+        assertThat(result.ok()).isTrue();
+        assertThat(result.unverified()).isEmpty();
+    }
+
+    @Test
+    void rejectsTypeAliasCopiedInSameWithDespiteEarlierRebinding() {
+        CypherOntologyChecker.CheckResult result = check(
+            "MATCH (n:Entity)\nWITH n.type AS x\nWITH 5 AS x, x AS y\n"
+                + "WHERE y = 'Employee'\nRETURN y");
+
+        assertThat(result.ok()).isFalse();
+        assertThat(result.unknownTypeValues()).containsExactly("Employee");
+    }
+
+    @Test
+    void rejectsGroupedSubscriptAndBacktickAliasSources() {
+        CypherOntologyChecker.CheckResult subscript = check(
+            "MATCH (n:Entity) WITH (n['type']) AS x WHERE x = 'Employee' RETURN x");
+        CypherOntologyChecker.CheckResult backtick = check(
+            "MATCH (n:Entity) WITH (n.`type`) AS x WHERE x = 'Employee' RETURN x");
+
+        assertThat(subscript.ok()).isFalse();
+        assertThat(subscript.unknownTypeValues()).containsExactly("Employee");
+        assertThat(backtick.ok()).isFalse();
+        assertThat(backtick.unknownTypeValues()).containsExactly("Employee");
+    }
+
+    @Test
+    void keepsBacktickedPropertyAccessesAndRejectsBacktickedAliasUsages() {
+        CypherOntologyChecker.CheckResult property = check(
+            "MATCH (n:Entity) WITH n, n.type AS x WHERE n.`x` = 'Employee' RETURN n");
+        CypherOntologyChecker.CheckResult variable = check(
+            "MATCH (n:Entity) WITH n.type AS x WHERE `x` = 'Employee' RETURN x");
+
+        assertThat(property.ok()).isTrue();
+        assertThat(property.unknownTypeValues()).isEmpty();
+        assertThat(variable.ok()).isFalse();
+        assertThat(variable.unknownTypeValues()).containsExactly("Employee");
+    }
+
+    @Test
+    void keepsCompoundSubscriptProjectionsValid() {
+        CypherOntologyChecker.CheckResult result = check(
+            "WITH [1,2] AS nodes\nRETURN nodes[-1 + 0] AS last");
+
+        assertThat(result.ok()).isTrue();
+        assertThat(result.unverified()).isEmpty();
+    }
+
+    @Test
+    void rejectsCompoundSubscriptsDeeperInChains() {
+        CypherOntologyChecker.CheckResult result = check(
+            "MATCH (n:Entity)\nWITH [[n]] AS nodes\n"
+                + "WHERE nodes[0][-1 + 0].type = 'Employee'\nRETURN nodes");
+
+        assertThat(result.ok()).isFalse();
+        assertThat(result.unverified()).contains(
+            "type condition is not statically verifiable: compound subscript expression");
+    }
+
+    @Test
+    void rejectsHostFunctionBehindGroupingParentheses() {
+        CypherOntologyChecker.CheckResult access = check(
+            "MATCH (n:Entity)\nWHERE coalesce('', (n.type)) = 'Person'\nRETURN n");
+        CypherOntologyChecker.CheckResult alias = check(
+            "MATCH (n:Entity)\nWITH n.type AS x\n"
+                + "WHERE coalesce('', (x)) = 'Person'\nRETURN x");
+
+        assertThat(access.ok()).isFalse();
+        assertThat(access.unverified()).contains(
+            "type condition is not statically verifiable: unsupported function 'coalesce'");
+        assertThat(alias.ok()).isFalse();
+        assertThat(alias.unverified()).contains(
+            "type condition is not statically verifiable: unsupported function 'coalesce'");
+    }
+
+    @Test
+    void keepsCaseMapKeyAndAttributeProjectionsValid() {
+        CypherOntologyChecker.CheckResult result = check(
+            "MATCH (n:Entity)\n"
+                + "RETURN n.type + CASE WHEN true THEN {case:''}.case ELSE '' END AS t");
+
+        assertThat(result.ok()).isTrue();
+        assertThat(result.unverified()).isEmpty();
+    }
+
+    @Test
+    void rejectsComparisonAfterCaseMapEndKey() {
+        CypherOntologyChecker.CheckResult result = check(
+            "MATCH (n:Entity)\n"
+                + "WHERE n.type + CASE WHEN true THEN {end:''}.end ELSE '' END = 'Employee'\n"
+                + "RETURN n");
+
+        assertThat(result.ok()).isFalse();
+        assertThat(result.unverified()).contains(
+            "type condition is not statically verifiable: compound expression involving"
+                + " the type property");
+    }
+
+    @Test
+    void keepsGroupedExistsSubqueryProjectionsValid() {
+        CypherOntologyChecker.CheckResult result = check(
+            "MATCH (n:Entity)\nWHERE (EXISTS {\n  WITH n.type + '' AS t\n"
+                + "  WHERE true = true\n  RETURN t\n})\nRETURN n");
 
         assertThat(result.ok()).isTrue();
         assertThat(result.unverified()).isEmpty();
