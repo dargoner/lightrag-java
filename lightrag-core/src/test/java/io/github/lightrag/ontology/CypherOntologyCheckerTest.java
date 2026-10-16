@@ -694,6 +694,209 @@ class CypherOntologyCheckerTest {
         assertThat(result.unverified()).contains("write or unsupported keyword: INSERT");
     }
 
+    @Test
+    void rejectsTypeValueAfterUnicodeEscapedBacktickVariable() {
+        CypherOntologyChecker.CheckResult result = check(
+            "MATCH (n:Entity) WHERE `n\\u0060.type = 'Employee' RETURN n");
+
+        assertThat(result.ok()).isFalse();
+        assertThat(result.unknownTypeValues()).containsExactly("Employee");
+        assertThat(result.unverified()).isEmpty();
+    }
+
+    @Test
+    void rejectsUnicodeEscapedBacktickLabel() {
+        CypherOntologyChecker.CheckResult result = check(
+            "MATCH (n:`Forbidden\\u0060) RETURN n");
+
+        assertThat(result.ok()).isFalse();
+        assertThat(result.unknownLabels()).containsExactly("Forbidden");
+    }
+
+    @Test
+    void rejectsWriteKeywordAfterCarriageReturnComment() {
+        CypherOntologyChecker.CheckResult result = check(
+            "MATCH (n:Entity) //x\rCREATE (:Entity)\nRETURN n");
+
+        assertThat(result.ok()).isFalse();
+        assertThat(result.unverified()).contains("write or unsupported keyword: CREATE");
+    }
+
+    @Test
+    void rejectsWriteKeywordAfterEscapedLineTerminatorInComment() {
+        CypherOntologyChecker.CheckResult result = check(
+            "MATCH (n:Entity) //\\u000a CREATE (:Entity)\nRETURN n");
+
+        assertThat(result.ok()).isFalse();
+        assertThat(result.unverified()).contains("write or unsupported keyword: CREATE");
+    }
+
+    @Test
+    void rejectsWriteKeywordAfterEscapedBackslashInString() {
+        CypherOntologyChecker.CheckResult result = check(
+            "WITH 'x\\u005c\\' AS x CREATE (:Entity) //'\nRETURN x");
+
+        assertThat(result.ok()).isFalse();
+        assertThat(result.unverified()).contains("write or unsupported keyword: CREATE");
+    }
+
+    @Test
+    void rejectsWriteKeywordAfterEscapedBlockCommentEnd() {
+        CypherOntologyChecker.CheckResult slashEscape = check(
+            "MATCH (n:Entity) /* x *\\u002f CREATE (:Entity) RETURN n");
+        CypherOntologyChecker.CheckResult starEscape = check(
+            "MATCH (n:Entity) /* x \\u002a/ CREATE (:Entity) RETURN n");
+
+        assertThat(slashEscape.ok()).isFalse();
+        assertThat(slashEscape.unverified()).contains("write or unsupported keyword: CREATE");
+        assertThat(starEscape.ok()).isFalse();
+        assertThat(starEscape.unverified()).contains("write or unsupported keyword: CREATE");
+    }
+
+    @Test
+    void verifiesTypeMapsInComplexPatternHeaders() {
+        CypherOntologyChecker.CheckResult backtick = check(
+            "MATCH (`n-x`:Entity {type: 'Employee'}) RETURN n");
+        CypherOntologyChecker.CheckResult union = check(
+            "MATCH (n:Entity|Entity {type: 'Employee'}) RETURN n");
+        CypherOntologyChecker.CheckResult grouped = check(
+            "MATCH (n:(Entity) {type: 'Employee'}) RETURN n");
+
+        assertThat(backtick.ok()).isFalse();
+        assertThat(backtick.unknownTypeValues()).containsExactly("Employee");
+        assertThat(union.ok()).isFalse();
+        assertThat(union.unknownTypeValues()).containsExactly("Employee");
+        assertThat(grouped.ok()).isFalse();
+        assertThat(grouped.unknownTypeValues()).containsExactly("Employee");
+    }
+
+    @Test
+    void rejectsGroupedLabelExpressionTails() {
+        CypherOntologyChecker.CheckResult result = check(
+            "MATCH (n:(Entity)|Forbidden) RETURN n");
+
+        assertThat(result.ok()).isFalse();
+        assertThat(result.unknownLabels()).containsExactly("Forbidden");
+    }
+
+    @Test
+    void rejectsNegatedLabelGroups() {
+        CypherOntologyChecker.CheckResult result = check(
+            "MATCH (n:Entity|!(Entity|Forbidden)) RETURN n");
+
+        assertThat(result.ok()).isFalse();
+        assertThat(result.unknownLabels()).containsExactly("Forbidden");
+    }
+
+    @Test
+    void rejectsAmpersandLabelExpressions() {
+        CypherOntologyChecker.CheckResult result = check(
+            "MATCH (n:Entity&Forbidden) RETURN n");
+
+        assertThat(result.ok()).isFalse();
+        assertThat(result.unknownLabels()).containsExactly("Forbidden");
+    }
+
+    @Test
+    void rejectsUnionLabelPredicateOutsidePattern() {
+        CypherOntologyChecker.CheckResult result = check(
+            "MATCH (n:Entity) WHERE n:Entity|Forbidden RETURN n");
+
+        assertThat(result.ok()).isFalse();
+        assertThat(result.unknownLabels()).containsExactly("Forbidden");
+        assertThat(result.warnings()).contains(
+            "label ':Forbidden' appears outside a node or relationship pattern");
+    }
+
+    @Test
+    void rejectsDynamicLabels() {
+        CypherOntologyChecker.CheckResult node = check(
+            "MATCH (n:$('Forbidden')) RETURN n");
+        CypherOntologyChecker.CheckResult relationship = check(
+            "MATCH ()-[r:$('FORBIDDEN')]->() RETURN r");
+
+        assertThat(node.ok()).isFalse();
+        assertThat(node.unverified()).contains("dynamic label is not statically verifiable");
+        assertThat(relationship.ok()).isFalse();
+        assertThat(relationship.unverified())
+            .contains("dynamic label is not statically verifiable");
+    }
+
+    @Test
+    void rejectsCompoundAfterWrappedCall() {
+        CypherOntologyChecker.CheckResult result = check(
+            "MATCH (n:Entity) WHERE coalesce(n.type, '') + '' = 'Employee' RETURN n");
+
+        assertThat(result.ok()).isFalse();
+        assertThat(result.unverified()).contains(
+            "type condition is not statically verifiable: compound expression involving"
+                + " the type property");
+    }
+
+    @Test
+    void rejectsCompoundBeforeTypeAccess() {
+        CypherOntologyChecker.CheckResult result = check(
+            "MATCH (n:Entity) WHERE 'Per' + n.type = 'Person' RETURN n");
+
+        assertThat(result.ok()).isFalse();
+        assertThat(result.unverified()).contains(
+            "type condition is not statically verifiable: compound expression involving"
+                + " the type property");
+    }
+
+    @Test
+    void treatsCypherWhitespaceAsWhitespace() {
+        CypherOntologyChecker.CheckResult rejected = check(
+            "MATCH (n:Entity) WHERE n.type\u202F=\u202F'Employee' RETURN n");
+        CypherOntologyChecker.CheckResult accepted = check(
+            "MATCH (n:Entity) WHERE n.type\u202F=\u202F'Person' RETURN n");
+
+        assertThat(rejected.ok()).isFalse();
+        assertThat(rejected.unknownTypeValues()).containsExactly("Employee");
+        assertThat(accepted.ok()).isTrue();
+    }
+
+    @Test
+    void rejectsGroupedBaseAccesses() {
+        CypherOntologyChecker.CheckResult result = check(
+            "MATCH (n:Entity) WHERE (n).type = 'Employee' RETURN n");
+
+        assertThat(result.ok()).isFalse();
+        assertThat(result.unknownTypeValues()).containsExactly("Employee");
+    }
+
+    @Test
+    void rejectsCompoundSubscripts() {
+        CypherOntologyChecker.CheckResult result = check(
+            "MATCH (n:Entity) WHERE n['ty' + 'pe'] = 'Employee' RETURN n");
+
+        assertThat(result.ok()).isFalse();
+        assertThat(result.unverified()).contains(
+            "type condition is not statically verifiable: compound subscript expression");
+    }
+
+    @Test
+    void keepsCompoundProjectionsValid() {
+        CypherOntologyChecker.CheckResult result = check(
+            "MATCH (n:Entity) RETURN n.type + '' AS t");
+
+        assertThat(result.ok()).isTrue();
+        assertThat(result.unverified()).isEmpty();
+    }
+
+    @Test
+    void keepsParenWrappedMapsAndCallArgumentsValid() {
+        CypherOntologyChecker.CheckResult mapProjection = check(
+            "MATCH (n:Entity) RETURN ({type: 'Employee'}) AS data");
+        CypherOntologyChecker.CheckResult callArgument = check(
+            "MATCH (n:Entity) RETURN count({type: 'Employee'})");
+
+        assertThat(mapProjection.ok()).isTrue();
+        assertThat(mapProjection.unknownTypeValues()).isEmpty();
+        assertThat(callArgument.ok()).isTrue();
+        assertThat(callArgument.unknownTypeValues()).isEmpty();
+    }
+
     private static CypherOntologyChecker.CheckResult check(String cypher) {
         return CypherOntologyChecker.check(cypher, Map.of(), ALLOWLIST, NEO4J_PROFILE);
     }
