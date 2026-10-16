@@ -1414,9 +1414,7 @@ public final class LightRag implements AutoCloseable {
         var llmCacheStore = storageProvider.llmCacheStore();
         var graphExtractionOptions = ontologyContext.graphExtractionOptions();
         var ontologyExtractionOverlay = ontologyContext.overlay();
-        var kgExtractionValidator = ontologyContext.validator() != null
-            ? ontologyContext.validator()
-            : config.kgExtractionValidator();
+        var kgExtractionValidator = resolveKgExtractionValidator(scope, ontologyContext);
         if (graphExtractionOptions.resolvedEnabled()
             && ontologyExtractionOverlay.mode() == ExtractionMode.STRICT
             && kgExtractionValidator == null) {
@@ -1576,9 +1574,7 @@ public final class LightRag implements AutoCloseable {
             throw new IllegalStateException("knowledge graph extraction is disabled for workspace " + scope.workspaceId());
         }
         var ontologyExtractionOverlay = ontologyContext.overlay();
-        var kgExtractionValidator = ontologyContext.validator() != null
-            ? ontologyContext.validator()
-            : config.kgExtractionValidator();
+        var kgExtractionValidator = resolveKgExtractionValidator(scope, ontologyContext);
         if (ontologyExtractionOverlay.mode() == ExtractionMode.STRICT && kgExtractionValidator == null) {
             throw new IllegalStateException(
                 "ontology extraction is configured in STRICT mode but no ontology is bound for workspace "
@@ -1738,6 +1734,18 @@ public final class LightRag implements AutoCloseable {
             new Ontology(null, null, null, null),
             resolveOntologyExtractionOverlay(scope),
             false
+        );
+    }
+
+    private KgExtractionValidator resolveKgExtractionValidator(WorkspaceScope scope, OntologyTaskContext context) {
+        var ontology = context.ontology();
+        if (ontology.entityTypes().isEmpty() && ontology.relationTypes().isEmpty()) {
+            return config.kgExtractionValidator();
+        }
+        return new OntologyConformanceValidator(
+            ontology,
+            unmatched -> graphExtractionOptionsProvider.onOntologyUnmatched(scope, context, unmatched),
+            context.dropOnUnknownKeyword()
         );
     }
 

@@ -1,6 +1,8 @@
 package io.github.lightrag.api;
 
 import io.github.lightrag.ontology.OntologyExtractionOverlay;
+import io.github.lightrag.ontology.OntologyTaskContext;
+import io.github.lightrag.ontology.UnmatchedLabel;
 
 import java.util.Objects;
 import java.util.Optional;
@@ -30,6 +32,23 @@ public interface GraphExtractionOptionsProvider {
      * @param scope the workspace scope
      */
     default void markOntologyDirty(WorkspaceScope scope) {
+        // no-op by default
+    }
+
+    /**
+     * Notifies the provider about a label that did not conform to the ontology
+     * snapshot bound to the running pipeline.
+     *
+     * <p>The callback receives the final context actually used by the pipeline,
+     * including contexts restored from stored task metadata, so hosts can attribute
+     * unmatched labels to the exact ontology snapshot. The default implementation is
+     * a no-op.
+     *
+     * @param scope     the workspace scope
+     * @param context   the ontology task context used by the pipeline
+     * @param unmatched the unmatched label
+     */
+    default void onOntologyUnmatched(WorkspaceScope scope, OntologyTaskContext context, UnmatchedLabel unmatched) {
         // no-op by default
     }
 
