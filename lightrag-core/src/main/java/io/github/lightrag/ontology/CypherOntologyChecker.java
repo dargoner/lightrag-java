@@ -76,6 +76,15 @@ public final class CypherOntologyChecker {
     /** Wrappers that do not change which values can match under the case-insensitive allowlist. */
     private static final Set<String> TRANSPARENT_WRAPPERS = Set.of("TOLOWER", "TOUPPER");
 
+    /**
+     * Clause and connective keywords that end an expression at parenthesis
+     * depth zero, so a compound chain terminated by one of these is a
+     * projection and not a type condition.
+     */
+    private static final Set<String> EXPRESSION_BOUNDARY_KEYWORDS = Set.of(
+        "AS", "WHERE", "RETURN", "WITH", "ORDER", "SKIP", "LIMIT", "UNION", "YIELD",
+        "UNWIND", "MATCH", "OPTIONAL", "CALL", "AND", "OR", "XOR", "WHEN", "THEN", "ELSE", "END");
+
     private CypherOntologyChecker() {}
 
     /**
@@ -256,7 +265,9 @@ public final class CypherOntologyChecker {
                         };
                     if (context == '(' || context == '[') {
                         int groupStart = skipWhitespace(structure, i + 1);
-                        if (groupStart < length && structure.charAt(groupStart) == '!') {
+                        while (groupStart < length
+                            && (structure.charAt(groupStart) == '!'
+                                || structure.charAt(groupStart) == '%')) {
                             groupStart = skipWhitespace(structure, groupStart + 1);
                         }
                         if (groupStart < length && structure.charAt(groupStart) == '(') {
@@ -325,11 +336,13 @@ public final class CypherOntologyChecker {
                 return consumed;
             }
             int next = skipWhitespace(structure, separator + 1);
-            if (next < length && structure.charAt(next) == ':') {
-                next = skipWhitespace(structure, next + 1);
-            }
-            if (next < length && structure.charAt(next) == '!') {
-                next = skipWhitespace(structure, next + 1);
+            while (next < length) {
+                char marker = structure.charAt(next);
+                if (marker == ':' || marker == '!' || marker == '%') {
+                    next = skipWhitespace(structure, next + 1);
+                    continue;
+                }
+                break;
             }
             if (next < length && structure.charAt(next) == '(') {
                 int groupEnd = scanLabelGroup(structure, next, branch, unverified);
@@ -376,9 +389,14 @@ public final class CypherOntologyChecker {
             if (current == ')') {
                 return cursor;
             }
-            if (current == '|' || current == ':' || current == '!' || current == '&') {
+            if (current == '|' || current == ':' || current == '!' || current == '&'
+                || current == '%') {
                 cursor++;
                 continue;
+            }
+            if (current == '$') {
+                unverified.add("dynamic label is not statically verifiable");
+                return openParen;
             }
             if (current == '(') {
                 int nestedEnd = scanLabelGroup(structure, cursor, branch, unverified);
@@ -400,8 +418,9 @@ public final class CypherOntologyChecker {
 
     private static int labelStart(String structure, int colon) {
         int start = skipWhitespace(structure, colon + 1);
-        if (start < structure.length() && structure.charAt(start) == '!') {
-            start++;
+        while (start < structure.length()
+            && (structure.charAt(start) == '!' || structure.charAt(start) == '%')) {
+            start = skipWhitespace(structure, start + 1);
         }
         return start;
     }
@@ -475,24 +494,25 @@ public final class CypherOntologyChecker {
         if (first == '`') {
             int cursor = start + 1;
             while (cursor < length) {
+                int unit = backtickUnitLength(values, cursor);
+                if (unit > 0) {
+                    int next = backtickUnitLength(values, cursor + unit);
+                    if (next > 0) {
+                        // A backtick followed by another backtick (raw or
+                        // pre-decoded) is the doubled form: an escaped
+                        // backtick inside the identifier.
+                        cursor += unit + next;
+                        continue;
+                    }
+                    return cursor + unit;
+                }
                 if (values.charAt(cursor) == '\\' && cursor + 6 <= length
                     && values.charAt(cursor + 1) == 'u') {
                     int code = hexCode(values, cursor + 2, cursor + 6);
-                    if (code == '`') {
-                        // the backend pre-decodes \u0060 to a closing backtick
-                        return cursor + 6;
-                    }
                     if (code >= 0) {
                         cursor += 6;
                         continue;
                     }
-                }
-                if (values.charAt(cursor) == '`') {
-                    if (cursor + 1 < length && values.charAt(cursor + 1) == '`') {
-                        cursor += 2;
-                        continue;
-                    }
-                    return cursor + 1;
                 }
                 cursor++;
             }
@@ -508,6 +528,26 @@ public final class CypherOntologyChecker {
         return cursor;
     }
 
+    /**
+     * Length of a backtick token unit starting at {@code position}: 1 for a raw
+     * backtick, 6 for a pre-decoded {@code \u0060} escape, 0 when no backtick
+     * starts there.
+     */
+    private static int backtickUnitLength(String values, int position) {
+        if (position < 0 || position >= values.length()) {
+            return 0;
+        }
+        if (values.charAt(position) == '`') {
+            return 1;
+        }
+        if (values.charAt(position) == '\\' && position + 6 <= values.length()
+            && values.charAt(position + 1) == 'u'
+            && hexCode(values, position + 2, position + 6) == '`') {
+            return 6;
+        }
+        return 0;
+    }
+
     private static String tokenContent(String values, int start, int end) {
         if (values.charAt(start) == '`') {
             int contentEnd = values.charAt(end - 1) == '`' ? end - 1 : end - 6;
@@ -518,24 +558,35 @@ public final class CypherOntologyChecker {
 
     /** Decodes doubled backticks and unicode escapes inside a quoted identifier. */
     private static String decodeBacktickContent(String raw) {
-        StringBuilder decoded = new StringBuilder(raw.length());
+        // The backend pre-decodes unicode escapes before lexing, so a decoded
+        // backtick joins an adjacent backtick into the doubled escape form;
+        // decoding therefore happens in two passes over the decoded text.
+        StringBuilder preDecoded = new StringBuilder(raw.length());
         int cursor = 0;
         int length = raw.length();
         while (cursor < length) {
             char current = raw.charAt(cursor);
-            if (current == '`' && cursor + 1 < length && raw.charAt(cursor + 1) == '`') {
-                decoded.append('`');
-                cursor += 2;
-                continue;
-            }
             if (current == '\\' && cursor + 1 < length && raw.charAt(cursor + 1) == 'u'
                 && cursor + 6 <= length) {
                 int code = hexCode(raw, cursor + 2, cursor + 6);
                 if (code >= 0) {
-                    decoded.append((char) code);
+                    preDecoded.append((char) code);
                     cursor += 6;
                     continue;
                 }
+            }
+            preDecoded.append(current);
+            cursor++;
+        }
+        StringBuilder decoded = new StringBuilder(preDecoded.length());
+        cursor = 0;
+        while (cursor < preDecoded.length()) {
+            char current = preDecoded.charAt(cursor);
+            if (current == '`' && cursor + 1 < preDecoded.length()
+                && preDecoded.charAt(cursor + 1) == '`') {
+                decoded.append('`');
+                cursor += 2;
+                continue;
             }
             decoded.append(current);
             cursor++;
@@ -671,7 +722,7 @@ public final class CypherOntologyChecker {
             }
             empty = false;
             if (current == ':' || current == '!' || current == '|' || current == '&'
-                || current == '(' || current == ')') {
+                || current == '%' || current == '(' || current == ')') {
                 cursor++;
                 continue;
             }
@@ -696,7 +747,13 @@ public final class CypherOntologyChecker {
         if (!empty) {
             return true;
         }
+        // An empty header is a pattern only when the word before the paren is
+        // a pattern-introducing clause keyword; grouping parens in between
+        // ({@code RETURN (({...}))}) are walked over first.
         int before = skipWhitespaceBackwards(values, openParen - 1);
+        while (before >= 0 && values.charAt(before) == '(') {
+            before = skipWhitespaceBackwards(values, before - 1);
+        }
         if (before < 0 || !isIdentifierChar(values.charAt(before))) {
             return true;
         }
@@ -835,9 +892,10 @@ public final class CypherOntologyChecker {
     /**
      * Matches a type-property access starting at {@code start}: {@code v.prop},
      * {@code `v`.prop}, {@code (v).prop} (whitespace around the dot tolerated),
-     * or a literal subscript {@code v['prop']}. Dynamic subscripts cannot be
-     * attributed and return -1; a subscript containing more than one token is
-     * reported as unverifiable, since it may fold to the type property.
+     * or a literal subscript {@code v['prop']}. A keyword token before {@code [}
+     * introduces a list literal, not a subscript. Dynamic subscripts on a
+     * variable are reported as unverifiable since they may fold to the type
+     * property; plain integer indexes name no property and are ignored.
      */
     private static int matchTypeAccess(
         String values,
@@ -847,6 +905,10 @@ public final class CypherOntologyChecker {
         LinkedHashSet<String> unverified
     ) {
         int length = values.length();
+        if (start > 0 && isIdentifierChar(values.charAt(start - 1))) {
+            // Mid-token probe: the same access is matched from the token's true start.
+            return -1;
+        }
         int tokenEnd = readTokenEnd(values, start);
         if (tokenEnd < 0) {
             return -1;
@@ -870,9 +932,23 @@ public final class CypherOntologyChecker {
                 : -1;
         }
         if (next == '[') {
+            // Only a variable-like token can be subscripted; a keyword such as
+            // RETURN or IN introduces a plain list literal instead.
+            if (values.charAt(start) != '`') {
+                String token = tokenContent(values, start, tokenEnd).toUpperCase();
+                if (NON_FUNCTION_WORDS.contains(token) || SUBQUERY_KEYWORDS.contains(token)) {
+                    return -1;
+                }
+            }
             int literalStart = skipWhitespace(values, cursor + 1);
             Literal literal = literalAt(literals, literalStart);
             if (literal == null || literal.start() != literalStart) {
+                if (isIntegerLiteral(values, literalStart)) {
+                    // a plain list index such as "list[0]" names no property
+                    return -1;
+                }
+                unverified.add(
+                    "type condition is not statically verifiable: compound subscript expression");
                 return -1;
             }
             int close = skipWhitespace(values, literal.end());
@@ -884,6 +960,19 @@ public final class CypherOntologyChecker {
             return property.equals(literal.value()) ? close + 1 : -1;
         }
         return -1;
+    }
+
+    /** True when a plain non-negative integer literal starts at {@code position}. */
+    private static boolean isIntegerLiteral(String values, int position) {
+        int length = values.length();
+        if (position < 0 || position >= length || !Character.isDigit(values.charAt(position))) {
+            return false;
+        }
+        int cursor = position;
+        while (cursor < length && Character.isDigit(values.charAt(cursor))) {
+            cursor++;
+        }
+        return true;
     }
 
     private static void inspectTypeAccess(
@@ -902,7 +991,9 @@ public final class CypherOntologyChecker {
         // Whitespace between a function name and its '(' is legal Cypher.
         int wrapperEnd = skipWhitespaceBackwards(values, accessStart - 1);
         List<String> wrappers = new ArrayList<>();
+        int openParens = 0;
         while (wrapperEnd >= 0 && values.charAt(wrapperEnd) == '(') {
+            openParens++;
             int nameEnd = skipWhitespaceBackwards(values, wrapperEnd - 1) + 1;
             int nameStart = identifierStartBefore(values, nameEnd);
             if (nameStart >= 0) {
@@ -919,8 +1010,10 @@ public final class CypherOntologyChecker {
         // Step over the matching closing parentheses on the right.
         int right = skipWhitespace(values, accessEnd);
         while (right < length && values.charAt(right) == ')') {
+            openParens--;
             right = skipWhitespace(values, right + 1);
         }
+        int chainDepth = Math.max(openParens, 0);
         boolean compoundBefore =
             wrapperEnd >= 0 && isCompoundContinuation(values.charAt(wrapperEnd));
 
@@ -956,7 +1049,7 @@ public final class CypherOntologyChecker {
                 // "n.type + '' = ..."; a chain that reaches a comparison is a
                 // condition and cannot be statically resolved, while the same
                 // chain projected ("RETURN n.type + '' AS t") is harmless.
-                if (chainReachesComparison(values, literals, right)) {
+                if (chainReachesComparison(values, literals, right, chainDepth)) {
                     resolved = true;
                     unverified.add(
                         "type condition is not statically verifiable: compound expression"
@@ -972,7 +1065,9 @@ public final class CypherOntologyChecker {
                     afterCall = skipWhitespace(values, afterCall + 1);
                 }
                 if (afterCall >= 0 && afterCall < length
-                    && chainReachesComparison(values, literals, afterCall)) {
+                    && chainReachesComparison(
+                        values, literals, afterCall,
+                        chainDepth + parenBalance(values, literals, right, afterCall))) {
                     resolved = true;
                     if (isCompoundContinuation(values.charAt(afterCall))) {
                         unverified.add(
@@ -1182,14 +1277,44 @@ public final class CypherOntologyChecker {
      * ends in a comparison. A chain that is compared ({@code n.type + '' = 'x'})
      * is a condition, while a chain that is projected
      * ({@code RETURN n.type + '' AS t}) carries no type condition.
+     *
+     * <p>{@code initialDepth} carries the number of parentheses still open at
+     * {@code from}: commas at depth zero separate projections and terminate the
+     * chain, while deeper commas separate call arguments and the chain
+     * continues. Clause keywords at depth zero ({@code AS}, {@code WHERE}, ...)
+     * also terminate the chain as a projection boundary.
      */
     private static boolean chainReachesComparison(
-        String values, List<Literal> literals, int from) {
+        String values, List<Literal> literals, int from, int initialDepth) {
         int length = values.length();
         int cursor = from;
+        int depth = initialDepth;
         while (cursor < length) {
             char current = values.charAt(cursor);
             if (isCypherWhitespace(current)) {
+                cursor++;
+                continue;
+            }
+            if (current == '(') {
+                depth++;
+                cursor++;
+                continue;
+            }
+            if (current == ')') {
+                if (depth == 0) {
+                    return false;
+                }
+                depth--;
+                cursor++;
+                continue;
+            }
+            if (current == ';') {
+                return false;
+            }
+            if (current == ',') {
+                if (depth == 0) {
+                    return false;
+                }
                 cursor++;
                 continue;
             }
@@ -1200,7 +1325,7 @@ public final class CypherOntologyChecker {
                 || isWordAt(values, cursor, "ENDS")) {
                 return true;
             }
-            if (current == ',' || current == ';') {
+            if (depth == 0 && isExpressionBoundaryAt(values, cursor)) {
                 return false;
             }
             Literal literal = literalAt(literals, cursor);
@@ -1224,6 +1349,48 @@ public final class CypherOntologyChecker {
             cursor++;
         }
         return false;
+    }
+
+    /** True when a clause or connective keyword ending an expression starts at {@code position}. */
+    private static boolean isExpressionBoundaryAt(String values, int position) {
+        int tokenEnd = readTokenEnd(values, position);
+        if (tokenEnd <= 0 || values.charAt(position) == '`') {
+            return false;
+        }
+        return EXPRESSION_BOUNDARY_KEYWORDS.contains(
+            values.substring(position, tokenEnd).toUpperCase());
+    }
+
+    /**
+     * Net open-parenthesis balance across {@code (from, to)}, ignoring string
+     * literals and backtick-quoted identifiers.
+     */
+    private static int parenBalance(String values, List<Literal> literals, int from, int to) {
+        int balance = 0;
+        int cursor = from;
+        int limit = Math.min(to, values.length());
+        while (cursor < limit) {
+            Literal literal = literalAt(literals, cursor);
+            if (literal != null && literal.start() == cursor) {
+                cursor = literal.end();
+                continue;
+            }
+            char current = values.charAt(cursor);
+            if (current == '`') {
+                int tokenEnd = readTokenEnd(values, cursor);
+                if (tokenEnd > 0) {
+                    cursor = tokenEnd;
+                    continue;
+                }
+            }
+            if (current == '(') {
+                balance++;
+            } else if (current == ')') {
+                balance--;
+            }
+            cursor++;
+        }
+        return balance;
     }
 
     private static void verifyValue(
@@ -1421,7 +1588,7 @@ public final class CypherOntologyChecker {
 
     private static void appendDecoded(String text, int start, int end, StringBuilder value) {
         if (end > start + 1) {
-            value.append((char) hexCode(text, start + 2, start + 6));
+            value.append(decodeEscape((char) hexCode(text, start + 2, start + 6)));
         } else {
             value.append(decodeEscape(text.charAt(start)));
         }
@@ -1504,10 +1671,13 @@ public final class CypherOntologyChecker {
         return Character.isWhitespace(value) || Character.isSpaceChar(value) || value == '\u0085';
     }
 
-    /** Line terminators that end a line comment. */
+    /**
+     * Line terminators that end a line comment: Cypher 5 defines
+     * {@code SINGLE_LINE_COMMENT} to end only at CR or LF, so separators such
+     * as U+2028 stay inside the comment.
+     */
     private static boolean isLineTerminator(char value) {
-        return value == '\n' || value == '\r' || value == '\u0085'
-            || value == '\u2028' || value == '\u2029';
+        return value == '\n' || value == '\r';
     }
 
     /**
@@ -1609,8 +1779,23 @@ public final class CypherOntologyChecker {
                 values.append('`');
                 int cursor = i + 1;
                 while (cursor < length) {
-                    char inner = text.charAt(cursor);
-                    if (inner == '\\' && cursor + 1 < length
+                    int unit = backtickUnitLength(text, cursor);
+                    if (unit > 0) {
+                        int next = backtickUnitLength(text, cursor + unit);
+                        int consumed = next > 0 ? unit + next : unit;
+                        for (int k = cursor; k < cursor + consumed; k++) {
+                            inBacktick[k] = true;
+                            structure.append(text.charAt(k));
+                            values.append(text.charAt(k));
+                        }
+                        cursor += consumed;
+                        if (next == 0) {
+                            // a lone backtick (raw or pre-decoded) ends the identifier
+                            break;
+                        }
+                        continue;
+                    }
+                    if (text.charAt(cursor) == '\\' && cursor + 1 < length
                         && text.charAt(cursor + 1) == 'u' && cursor + 6 <= length) {
                         int code = hexCode(text, cursor + 2, cursor + 6);
                         if (code >= 0) {
@@ -1620,31 +1805,12 @@ public final class CypherOntologyChecker {
                                 values.append(text.charAt(k));
                             }
                             cursor += 6;
-                            if ((char) code == '`') {
-                                // pre-decoded backtick ends the identifier
-                                break;
-                            }
                             continue;
                         }
-                    }
-                    if (inner == '`') {
-                        if (cursor + 1 < length && text.charAt(cursor + 1) == '`') {
-                            inBacktick[cursor] = true;
-                            inBacktick[cursor + 1] = true;
-                            structure.append("``");
-                            values.append("``");
-                            cursor += 2;
-                            continue;
-                        }
-                        inBacktick[cursor] = true;
-                        structure.append('`');
-                        values.append('`');
-                        cursor++;
-                        break;
                     }
                     inBacktick[cursor] = true;
-                    structure.append(inner);
-                    values.append(inner);
+                    structure.append(text.charAt(cursor));
+                    values.append(text.charAt(cursor));
                     cursor++;
                 }
                 i = cursor;
