@@ -17,8 +17,10 @@ import java.util.regex.Pattern;
  * scoped to an applied ontology snapshot plus a physical graph descriptor.
  *
  * <p>Checks, in order: (1) read-only - write or unsupported keywords
- * (CREATE/MERGE/SET/DELETE/REMOVE/DROP/DETACH/FOREACH/CALL/LOAD/APOC) are
- * rejected; (2) the query must contain a RETURN clause; (3) physical label
+ * (CREATE/MERGE/SET/DELETE/REMOVE/DROP/DETACH/FOREACH/CALL/LOAD/INSERT/APOC)
+ * are rejected; unicode escapes in code position are rejected as well, since
+ * the backend pre-decodes them before lexing and they could split keywords or
+ * re-open tokens; (2) the query must contain a RETURN clause; (3) physical label
  * whitelist - every {@code :Label} scanned outside string literals and
  * comments must be in {@link PhysicalGraphProfile#nodeLabels()} or
  * {@link PhysicalGraphProfile#relationshipTypes()} depending on the
@@ -47,7 +49,8 @@ import java.util.regex.Pattern;
 public final class CypherOntologyChecker {
 
     private static final String[] WRITE_KEYWORDS = {
-        "CREATE", "MERGE", "SET", "DELETE", "REMOVE", "DROP", "DETACH", "FOREACH", "CALL", "LOAD"
+        "CREATE", "MERGE", "SET", "DELETE", "REMOVE", "DROP", "DETACH", "FOREACH", "CALL", "LOAD",
+        "INSERT"
     };
 
     private static final Pattern APOC = Pattern.compile("(?<![A-Za-z0-9_$])apoc\\s*\\.", Pattern.CASE_INSENSITIVE);
@@ -123,6 +126,7 @@ public final class CypherOntologyChecker {
         LinkedHashSet<String> warnings = new LinkedHashSet<>();
 
         checkReadOnly(masks, unverified);
+        checkUnicodeEscapesOutsideTokens(text, masks, unverified);
         if (firstMatchOutsideBackticks(RETURN_CLAUSE, masks) == null) {
             unverified.add("query must contain a RETURN clause");
         }
@@ -179,6 +183,31 @@ public final class CypherOntologyChecker {
         }
     }
 
+    /**
+     * Rejects unicode escapes (&#92;uXXXX) outside string literals and quoted
+     * identifiers. The backend pre-decodes such escapes before lexing, so a
+     * code-position escape can split a keyword ({@code CRE&#92;u0041TE}) or turn
+     * into an unattributable delimiter; nothing of that shape is verifiable.
+     */
+    private static void checkUnicodeEscapesOutsideTokens(
+        String text, Masks masks, LinkedHashSet<String> unverified) {
+        boolean[] inString = masks.inString();
+        boolean[] inBacktick = masks.inBacktick();
+        String values = masks.values();
+        int length = text.length();
+        for (int i = 0; i + 5 < length; i++) {
+            if (inString[i] || inBacktick[i] || values.charAt(i) != '\\') {
+                continue;
+            }
+            if (text.charAt(i + 1) == 'u' && hexCode(text, i + 2, i + 6) >= 0) {
+                unverified.add(
+                    "unicode escape outside a string literal or quoted identifier is not"
+                        + " statically verifiable");
+                return;
+            }
+        }
+    }
+
     private static void scanLabels(
         Masks masks,
         PhysicalGraphProfile profile,
@@ -203,13 +232,29 @@ public final class CypherOntologyChecker {
                 case ']' -> popIf(brackets, '[');
                 case '}' -> popIf(brackets, '{');
                 case ':' -> {
+                    Brace enclosing = brackets.peek();
+                    char context = enclosing == null ? ' ' : enclosing.kind();
+                    if (context == '(' || context == '[') {
+                        int groupStart = skipWhitespace(structure, i + 1);
+                        if (groupStart < length && structure.charAt(groupStart) == '!') {
+                            groupStart = skipWhitespace(structure, groupStart + 1);
+                        }
+                        if (groupStart < length && structure.charAt(groupStart) == '(') {
+                            int groupEnd = context == '('
+                                ? scanLabelGroup(structure, groupStart, profile.nodeLabels(), unknownLabels)
+                                : scanLabelGroup(
+                                    structure, groupStart, profile.relationshipTypes(), unknownRelTypes);
+                            if (groupEnd > groupStart) {
+                                i = groupEnd;
+                                continue;
+                            }
+                        }
+                    }
                     LabelRead label = readLabel(structure, labelStart(structure, i));
                     if (label == null) {
                         continue;
                     }
                     i = label.end() - 1;
-                    Brace enclosing = brackets.peek();
-                    char context = enclosing == null ? ' ' : enclosing.kind();
                     if (context == '{' && !enclosing.subquery()) {
                         // map literal key, not a pattern label
                         continue;
@@ -220,12 +265,14 @@ public final class CypherOntologyChecker {
                         if (!profile.relationshipTypes().contains(label.raw())) {
                             unknownRelTypes.add(label.raw());
                         }
-                        i = scanUnionRelTypes(
-                            structure, label, profile, unknownRelTypes, i);
+                        i = scanUnionLabels(
+                            structure, label, profile.relationshipTypes(), unknownRelTypes, i);
                     } else if (context == '(') {
                         if (!profile.nodeLabels().contains(label.raw())) {
                             unknownLabels.add(label.raw());
                         }
+                        i = scanUnionLabels(
+                            structure, label, profile.nodeLabels(), unknownLabels, i);
                     } else {
                         checkOutsidePattern(label.raw(), profile, unknownLabels, warnings);
                     }
@@ -238,14 +285,15 @@ public final class CypherOntologyChecker {
     }
 
     /**
-     * Reads a relationship type alternation such as {@code r:RELATION|FORBIDDEN},
-     * checking every branch. Returns the index of the last consumed character.
+     * Reads a label alternation such as {@code :Entity|Forbidden} or
+     * {@code :RELATION|FORBIDDEN}, checking every branch against the allowed
+     * set. Returns the index of the last consumed character.
      */
-    private static int scanUnionRelTypes(
+    private static int scanUnionLabels(
         String structure,
         LabelRead first,
-        PhysicalGraphProfile profile,
-        LinkedHashSet<String> unknownRelTypes,
+        Set<String> allowed,
+        LinkedHashSet<String> unknown,
         int consumed
     ) {
         int cursor = first.end();
@@ -255,6 +303,15 @@ public final class CypherOntologyChecker {
                 return consumed;
             }
             int next = skipWhitespace(structure, pipe + 1);
+            if (next < structure.length() && structure.charAt(next) == '(') {
+                int groupEnd = scanLabelGroup(structure, next, allowed, unknown);
+                if (groupEnd <= next) {
+                    return consumed;
+                }
+                cursor = groupEnd + 1;
+                consumed = groupEnd;
+                continue;
+            }
             if (next < structure.length() && structure.charAt(next) == ':') {
                 next = skipWhitespace(structure, next + 1);
             }
@@ -265,12 +322,46 @@ public final class CypherOntologyChecker {
             if (label == null) {
                 return consumed;
             }
-            if (!profile.relationshipTypes().contains(label.raw())) {
-                unknownRelTypes.add(label.raw());
+            if (!allowed.contains(label.raw())) {
+                unknown.add(label.raw());
             }
             cursor = label.end();
             consumed = label.end() - 1;
         }
+    }
+
+    /**
+     * Reads a parenthesized label expression such as {@code :(RELATION|FORBIDDEN)},
+     * checking every branch. Returns the index of the closing parenthesis, or
+     * {@code openParen} when the group cannot be parsed.
+     */
+    private static int scanLabelGroup(
+        String structure, int openParen, Set<String> allowed, LinkedHashSet<String> unknown) {
+        int length = structure.length();
+        int cursor = openParen + 1;
+        while (cursor < length) {
+            cursor = skipWhitespace(structure, cursor);
+            if (cursor >= length) {
+                return openParen;
+            }
+            char current = structure.charAt(cursor);
+            if (current == ')') {
+                return cursor;
+            }
+            if (current == '|' || current == ':' || current == '!') {
+                cursor++;
+                continue;
+            }
+            LabelRead label = readLabel(structure, cursor);
+            if (label == null) {
+                return openParen;
+            }
+            if (!allowed.contains(label.raw())) {
+                unknown.add(label.raw());
+            }
+            cursor = label.end();
+        }
+        return openParen;
     }
 
     private static int labelStart(String structure, int colon) {
@@ -296,19 +387,24 @@ public final class CypherOntologyChecker {
 
     /**
      * A {@code &#123;} brace opening a subquery body (e.g. {@code EXISTS &#123; MATCH ... &#125;})
-     * rather than a map literal. Decided by the first word inside: a subquery clause
-     * keyword not followed by {@code :} (which would make it a map key).
+     * rather than a map literal. A leading {@code (} is a pattern, never a map
+     * literal; otherwise the first word decides: a subquery clause keyword that
+     * is not used as a map key (a key may have whitespace before its colon).
      */
     private static boolean isSubqueryBrace(String structure, int afterBrace) {
         int cursor = skipWhitespace(structure, afterBrace);
-        Matcher matcher = IDENTIFIER.matcher(structure);
-        if (cursor >= structure.length()
-            || !matcher.find(cursor)
-            || matcher.start() != cursor) {
+        if (cursor >= structure.length()) {
             return false;
         }
-        int end = matcher.end();
-        if (end < structure.length() && structure.charAt(end) == ':') {
+        if (structure.charAt(cursor) == '(') {
+            return true;
+        }
+        Matcher matcher = IDENTIFIER.matcher(structure);
+        if (!matcher.find(cursor) || matcher.start() != cursor) {
+            return false;
+        }
+        int after = skipWhitespace(structure, matcher.end());
+        if (after < structure.length() && structure.charAt(after) == ':') {
             return false;
         }
         return SUBQUERY_KEYWORDS.contains(matcher.group().toUpperCase());
@@ -325,22 +421,11 @@ public final class CypherOntologyChecker {
     private record LabelRead(String raw, int end) {}
 
     private static LabelRead readLabel(String structure, int start) {
-        int length = structure.length();
-        if (start >= length) {
+        int end = readTokenEnd(structure, start);
+        if (end < 0) {
             return null;
         }
-        if (structure.charAt(start) == '`') {
-            int end = structure.indexOf('`', start + 1);
-            if (end < 0) {
-                return null;
-            }
-            return new LabelRead(structure.substring(start + 1, end), end + 1);
-        }
-        Matcher matcher = IDENTIFIER.matcher(structure);
-        if (matcher.find(start) && matcher.start() == start) {
-            return new LabelRead(matcher.group(), matcher.end());
-        }
-        return null;
+        return new LabelRead(tokenContent(structure, start, end), end);
     }
 
     /**
@@ -379,9 +464,36 @@ public final class CypherOntologyChecker {
 
     private static String tokenContent(String values, int start, int end) {
         if (values.charAt(start) == '`') {
-            return values.substring(start + 1, end - 1).replace("``", "`");
+            return decodeBacktickContent(values.substring(start + 1, end - 1));
         }
         return values.substring(start, end);
+    }
+
+    /** Decodes doubled backticks and unicode escapes inside a quoted identifier. */
+    private static String decodeBacktickContent(String raw) {
+        StringBuilder decoded = new StringBuilder(raw.length());
+        int cursor = 0;
+        int length = raw.length();
+        while (cursor < length) {
+            char current = raw.charAt(cursor);
+            if (current == '`' && cursor + 1 < length && raw.charAt(cursor + 1) == '`') {
+                decoded.append('`');
+                cursor += 2;
+                continue;
+            }
+            if (current == '\\' && cursor + 1 < length && raw.charAt(cursor + 1) == 'u'
+                && cursor + 6 <= length) {
+                int code = hexCode(raw, cursor + 2, cursor + 6);
+                if (code >= 0) {
+                    decoded.append((char) code);
+                    cursor += 6;
+                    continue;
+                }
+            }
+            decoded.append(current);
+            cursor++;
+        }
+        return decoded.toString();
     }
 
     /** True when {@code i} is the opening backtick of a backtick-quoted token. */
@@ -446,7 +558,7 @@ public final class CypherOntologyChecker {
         String values = masks.values();
         boolean[] inString = masks.inString();
         boolean[] inBacktick = masks.inBacktick();
-        Deque<Character> brackets = new ArrayDeque<>();
+        Deque<Bracket> brackets = new ArrayDeque<>();
         int length = values.length();
         for (int i = 0; i < length; i++) {
             if (inString[i] || (inBacktick[i] && !isBacktickTokenStart(values, inBacktick, i))) {
@@ -454,25 +566,73 @@ public final class CypherOntologyChecker {
             }
             char current = values.charAt(i);
             switch (current) {
-                case '(' -> brackets.push('(');
-                case '[' -> brackets.push('[');
+                case '(' -> brackets.push(new Bracket('(', i));
+                case '[' -> brackets.push(new Bracket('[', i));
                 case '{' -> {
-                    boolean patternMap = brackets.peek() != null
-                        && (brackets.peek() == '(' || brackets.peek() == '[')
-                        && !isSubqueryBrace(values, i + 1);
-                    if (patternMap) {
+                    Bracket enclosing = brackets.peek();
+                    if (isPatternMapBrace(values, enclosing, i)) {
                         i = scanMapEntries(
                             masks, literals, i, parameters, allowlist,
                             unknownTypeValues, unverified);
                     }
                 }
-                case ')' -> popIfChar(brackets, '(');
-                case ']' -> popIfChar(brackets, '[');
+                case ')' -> popIfBracket(brackets, '(');
+                case ']' -> popIfBracket(brackets, '[');
                 default -> {
                     // only braces open maps and patterns
                 }
             }
         }
+    }
+
+    private record Bracket(char kind, int position) {}
+
+    /**
+     * A {@code &#123;} brace directly inside a node paren or a relationship
+     * bracket is a pattern property map and its entries are filters; the same
+     * brace inside a function call, a grouping paren or a list literal is
+     * plain data and carries no type condition.
+     */
+    private static boolean isPatternMapBrace(String values, Bracket enclosing, int brace) {
+        if (enclosing == null || isSubqueryBrace(values, brace + 1)) {
+            return false;
+        }
+        if (enclosing.kind() == '[') {
+            int before = skipWhitespaceBackwards(values, enclosing.position() - 1);
+            return before >= 0 && values.charAt(before) == '-';
+        }
+        return isPatternParen(values, enclosing.position(), brace);
+    }
+
+    /**
+     * True when the parentheses opening at {@code openParen} hold a node
+     * pattern header (variable and labels only) rather than a function call or
+     * a grouping expression. An empty header is a pattern only when the word
+     * before the paren is a clause keyword, so that anonymous patterns such as
+     * {@code MATCH (&#123;type: '...'&#125;)} are still checked.
+     */
+    private static boolean isPatternParen(String values, int openParen, int brace) {
+        boolean empty = true;
+        for (int cursor = openParen + 1; cursor < brace; cursor++) {
+            char current = values.charAt(cursor);
+            if (Character.isWhitespace(current)) {
+                continue;
+            }
+            empty = false;
+            if (!isIdentifierChar(current) && current != ':' && current != '!' && current != '`') {
+                return false;
+            }
+        }
+        if (!empty) {
+            return true;
+        }
+        int before = skipWhitespaceBackwards(values, openParen - 1);
+        if (before < 0 || !isIdentifierChar(values.charAt(before))) {
+            return true;
+        }
+        int nameStart = identifierStartBefore(values, before + 1);
+        String name = values.substring(nameStart, before + 1).toUpperCase();
+        return NON_FUNCTION_WORDS.contains(name);
     }
 
     /**
@@ -496,6 +656,17 @@ public final class CypherOntologyChecker {
         while (cursor < length) {
             Literal literal = literalAt(literals, cursor);
             if (literal != null && literal.start() == cursor) {
+                if (depth == 0
+                    && (values.charAt(cursor) == '\'' || values.charAt(cursor) == '"')) {
+                    int after = skipWhitespace(values, literal.end());
+                    if (after < length && values.charAt(after) == ':'
+                        && property.equals(literal.value())) {
+                        verifyOperand(
+                            values, literals, skipWhitespace(values, after + 1),
+                            "map property value", parameters, allowlist,
+                            unknownTypeValues, unverified);
+                    }
+                }
                 cursor = literal.end();
                 continue;
             }
@@ -534,8 +705,8 @@ public final class CypherOntologyChecker {
         return length - 1;
     }
 
-    private static void popIfChar(Deque<Character> brackets, char expected) {
-        if (brackets.peek() != null && brackets.peek() == expected) {
+    private static void popIfBracket(Deque<Bracket> brackets, char expected) {
+        if (brackets.peek() != null && brackets.peek().kind() == expected) {
             brackets.pop();
         }
     }
@@ -626,12 +797,14 @@ public final class CypherOntologyChecker {
         int length = values.length();
 
         // Walk out of any grouping / function parentheses wrapping the access.
+        // Whitespace between a function name and its '(' is legal Cypher.
         int wrapperEnd = skipWhitespaceBackwards(values, accessStart - 1);
         List<String> wrappers = new ArrayList<>();
         while (wrapperEnd >= 0 && values.charAt(wrapperEnd) == '(') {
-            int nameStart = identifierStartBefore(values, wrapperEnd);
+            int nameEnd = skipWhitespaceBackwards(values, wrapperEnd - 1) + 1;
+            int nameStart = identifierStartBefore(values, nameEnd);
             if (nameStart >= 0) {
-                String name = values.substring(nameStart, wrapperEnd);
+                String name = values.substring(nameStart, nameEnd);
                 if (!NON_FUNCTION_WORDS.contains(name.toUpperCase())) {
                     wrappers.add(name.toUpperCase());
                 }
@@ -674,11 +847,21 @@ public final class CypherOntologyChecker {
                 unverified.add(
                     "type condition is not statically verifiable: unsupported operator '"
                         + readWord(values, right) + "'");
+            } else if (isCompoundContinuation(current)) {
+                // The access feeds a compound expression such as
+                // "n.type + '' = ..."; the comparison cannot be statically resolved.
+                resolved = true;
+                unverified.add(
+                    "type condition is not statically verifiable: compound expression"
+                        + " involving the type property");
             } else if (current == ',' && !wrappers.isEmpty()) {
                 // The access is a non-final argument of a wrapping call; the
                 // enclosing call cannot be statically resolved.
                 int callEnd = callEndAfter(values, literals, right);
                 int afterCall = callEnd < 0 ? -1 : skipWhitespace(values, callEnd + 1);
+                while (afterCall >= 0 && afterCall < length && values.charAt(afterCall) == ')') {
+                    afterCall = skipWhitespace(values, afterCall + 1);
+                }
                 if (afterCall >= 0 && afterCall < length
                     && (isOperatorChar(values.charAt(afterCall))
                         || isWordAt(values, afterCall, "IN")
@@ -874,8 +1057,8 @@ public final class CypherOntologyChecker {
     }
 
     private static boolean isCompoundContinuation(char value) {
-        return value == '+' || value == '-' || value == '*' || value == '/'
-            || value == '%' || value == '[';
+        return value == '+' || value == '-' || value == '*' || value == '/' || value == '%'
+            || value == '[' || value == '|';
     }
 
     private static void verifyValue(
@@ -1147,6 +1330,24 @@ public final class CypherOntologyChecker {
                 while (cursor < length) {
                     char inner = text.charAt(cursor);
                     if (inner == '\\' && cursor + 1 < length) {
+                        int code = -1;
+                        if (text.charAt(cursor + 1) == 'u' && cursor + 6 <= length) {
+                            code = hexCode(text, cursor + 2, cursor + 6);
+                        }
+                        if (code >= 0) {
+                            // The backend pre-decodes unicode escapes before
+                            // lexing, so a decoded quote is a real delimiter.
+                            for (int k = cursor; k < cursor + 6; k++) {
+                                inString[k] = true;
+                                structure.append(' ');
+                                values.append(text.charAt(k));
+                            }
+                            cursor += 6;
+                            if ((char) code == quote) {
+                                break;
+                            }
+                            continue;
+                        }
                         inString[cursor] = true;
                         inString[cursor + 1] = true;
                         structure.append("  ");
@@ -1186,6 +1387,23 @@ public final class CypherOntologyChecker {
                 int cursor = i + 1;
                 while (cursor < length) {
                     char inner = text.charAt(cursor);
+                    if (inner == '\\' && cursor + 1 < length
+                        && text.charAt(cursor + 1) == 'u' && cursor + 6 <= length) {
+                        int code = hexCode(text, cursor + 2, cursor + 6);
+                        if (code >= 0) {
+                            for (int k = cursor; k < cursor + 6; k++) {
+                                inBacktick[k] = true;
+                                structure.append(text.charAt(k));
+                                values.append(text.charAt(k));
+                            }
+                            cursor += 6;
+                            if ((char) code == '`') {
+                                // pre-decoded backtick ends the identifier
+                                break;
+                            }
+                            continue;
+                        }
+                    }
                     if (inner == '`') {
                         if (cursor + 1 < length && text.charAt(cursor + 1) == '`') {
                             inBacktick[cursor] = true;
