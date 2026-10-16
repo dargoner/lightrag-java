@@ -975,7 +975,7 @@ class CypherOntologyCheckerTest {
         CypherOntologyChecker.CheckResult compound = check(
             "MATCH (n:Entity) WHERE n[('ty' + 'pe')] = 'Employee' RETURN n");
         CypherOntologyChecker.CheckResult plainIndex = check(
-            "MATCH (n:Entity) RETURN nodes[0] AS first");
+            "WITH [1, 2] AS nodes RETURN nodes[0] AS first");
 
         assertThat(compound.ok()).isFalse();
         assertThat(compound.unverified()).contains(
@@ -1009,7 +1009,7 @@ class CypherOntologyCheckerTest {
     @Test
     void identifiesProjectionBoundariesAndNestedDataMaps() {
         CypherOntologyChecker.CheckResult projection = check(
-            "WITH n.type + '' AS t WHERE true = true RETURN t");
+            "MATCH (n:Entity) WITH n.type + '' AS t WHERE true = true RETURN t");
         CypherOntologyChecker.CheckResult nestedData = check(
             "MATCH (n:Entity) RETURN (({type: 'Employee'})) AS data");
 
@@ -1017,6 +1017,146 @@ class CypherOntologyCheckerTest {
         assertThat(projection.unverified()).isEmpty();
         assertThat(nestedData.ok()).isTrue();
         assertThat(nestedData.unknownTypeValues()).isEmpty();
+    }
+
+    @Test
+    void rejectsKeywordLikeVariableSubscript() {
+        CypherOntologyChecker.CheckResult result = check(
+            "MATCH (end:Entity) WHERE end['type'] = 'Employee' RETURN end");
+
+        assertThat(result.ok()).isFalse();
+        assertThat(result.unknownTypeValues()).containsExactly("Employee");
+    }
+
+    @Test
+    void rejectsBacktickVariableDirectlyAfterKeyword() {
+        CypherOntologyChecker.CheckResult result = check(
+            "MATCH (`n`:Entity) WHERE`n`.type = 'Employee' RETURN `n`");
+
+        assertThat(result.ok()).isFalse();
+        assertThat(result.unknownTypeValues()).containsExactly("Employee");
+    }
+
+    @Test
+    void rejectsKeywordLikeAttributesAndCaseInsideChains() {
+        CypherOntologyChecker.CheckResult attribute = check(
+            "MATCH (n:Entity) WHERE n.type + n.end = 'Employee' RETURN n");
+        CypherOntologyChecker.CheckResult caseChain = check(
+            "MATCH (n:Entity) WHERE n.type + CASE WHEN true THEN '' ELSE '' END"
+                + " = 'Employee' RETURN n");
+
+        assertThat(attribute.ok()).isFalse();
+        assertThat(attribute.unverified()).contains(
+            "type condition is not statically verifiable: compound expression involving"
+                + " the type property");
+        assertThat(caseChain.ok()).isFalse();
+        assertThat(caseChain.unverified()).contains(
+            "type condition is not statically verifiable: compound expression involving"
+                + " the type property");
+    }
+
+    @Test
+    void rejectsCompoundComparisonsAcrossOuterSiblings() {
+        CypherOntologyChecker.CheckResult nonFirstArgument = check(
+            "MATCH (n:Entity) WHERE coalesce(null, n.type + '', '') = 'Employee' RETURN n");
+        CypherOntologyChecker.CheckResult listElement = check(
+            "MATCH (n:Entity) WHERE [n.type + '', 'unused'][0] = 'Employee' RETURN n");
+
+        assertThat(nonFirstArgument.ok()).isFalse();
+        assertThat(nonFirstArgument.unverified()).contains(
+            "type condition is not statically verifiable: compound expression involving"
+                + " the type property");
+        assertThat(listElement.ok()).isFalse();
+        assertThat(listElement.unverified()).contains(
+            "type condition is not statically verifiable: compound expression involving"
+                + " the type property");
+    }
+
+    @Test
+    void rejectsMarkerSeparatedAndIsLabelExpressions() {
+        CypherOntologyChecker.CheckResult percentTail = check(
+            "MATCH (n:%|Forbidden) RETURN n");
+        CypherOntologyChecker.CheckResult markerBetween = check(
+            "MATCH (n:Entity|%|Forbidden) RETURN n");
+        CypherOntologyChecker.CheckResult isLabel = check(
+            "MATCH (n IS Forbidden) RETURN n");
+
+        assertThat(percentTail.ok()).isFalse();
+        assertThat(percentTail.unknownLabels()).containsExactly("Forbidden");
+        assertThat(markerBetween.ok()).isFalse();
+        assertThat(markerBetween.unknownLabels()).containsExactly("Forbidden");
+        assertThat(isLabel.ok()).isFalse();
+        assertThat(isLabel.unknownLabels()).containsExactly("Forbidden");
+    }
+
+    @Test
+    void rejectsComparisonsOnTypeAliases() {
+        CypherOntologyChecker.CheckResult result = check(
+            "MATCH (n:Entity) WITH n.type AS x WHERE x = 'Employee' RETURN x");
+
+        assertThat(result.ok()).isFalse();
+        assertThat(result.unknownTypeValues()).containsExactly("Employee");
+    }
+
+    @Test
+    void keepsTypeAliasProjectionsValid() {
+        CypherOntologyChecker.CheckResult projection = check(
+            "MATCH (n:Entity) WITH n.type AS x RETURN x");
+        CypherOntologyChecker.CheckResult allowlisted = check(
+            "MATCH (n:Entity) WITH n.type AS x WHERE x IN ['Person'] RETURN x");
+        CypherOntologyChecker.CheckResult aliasOfAlias = check(
+            "MATCH (n:Entity) WITH n.type AS x WHERE x = 'Employee' RETURN x AS type");
+
+        assertThat(projection.ok()).isTrue();
+        assertThat(projection.unverified()).isEmpty();
+        assertThat(allowlisted.ok()).isTrue();
+        assertThat(aliasOfAlias.ok()).isFalse();
+        assertThat(aliasOfAlias.unknownTypeValues()).containsExactly("Employee");
+    }
+
+    @Test
+    void rejectsTypeAccessAfterIntegerIndex() {
+        CypherOntologyChecker.CheckResult result = check(
+            "MATCH (n:Entity) WITH collect(n) AS nodes WHERE nodes[0].type = 'Employee'"
+                + " RETURN nodes");
+
+        assertThat(result.ok()).isFalse();
+        assertThat(result.unknownTypeValues()).containsExactly("Employee");
+    }
+
+    @Test
+    void keepsWrappedProjectionsAndSiblingArgumentsValid() {
+        CypherOntologyChecker.CheckResult wrappedProjection = check(
+            "MATCH (n:Entity) RETURN coalesce(n.type + '', toString(1 = 1)) AS t");
+        CypherOntologyChecker.CheckResult nonFirstProjection = check(
+            "MATCH (n:Entity) RETURN coalesce(null, n.type, 'x') AS c");
+        CypherOntologyChecker.CheckResult negativeIndex = check(
+            "WITH [1, 2] AS nodes RETURN nodes[-1] AS last");
+
+        assertThat(wrappedProjection.ok()).isTrue();
+        assertThat(wrappedProjection.unverified()).isEmpty();
+        assertThat(nonFirstProjection.ok()).isTrue();
+        assertThat(nonFirstProjection.unverified()).isEmpty();
+        assertThat(negativeIndex.ok()).isTrue();
+        assertThat(negativeIndex.unverified()).isEmpty();
+    }
+
+    @Test
+    void keepsPercentLabelsAndNullComparisonsValid() {
+        CypherOntologyChecker.CheckResult anyLabel = check(
+            "MATCH (n:%) RETURN n");
+        CypherOntologyChecker.CheckResult isNull = check(
+            "MATCH (n:Entity) WHERE n.name IS NULL RETURN n");
+        CypherOntologyChecker.CheckResult isNotNull = check(
+            "MATCH (n:Entity) WHERE n.name IS NOT NULL RETURN n");
+        CypherOntologyChecker.CheckResult moduloMap = check(
+            "WITH 10 AS x RETURN (x % {type: 'Employee', divisor: 3}.divisor) AS remainder");
+
+        assertThat(anyLabel.ok()).isTrue();
+        assertThat(isNull.ok()).isTrue();
+        assertThat(isNotNull.ok()).isTrue();
+        assertThat(moduloMap.ok()).isTrue();
+        assertThat(moduloMap.unknownTypeValues()).isEmpty();
     }
 
     private static CypherOntologyChecker.CheckResult check(String cypher) {

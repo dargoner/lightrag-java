@@ -152,6 +152,8 @@ public final class CypherOntologyChecker {
             masks, literals, params, allowlist, unknownTypeValues, unverified);
         scanTypeConditions(
             masks, literals, params, allowlist, unknownTypeValues, unverified);
+        scanTypeAliasUsages(
+            masks, literals, params, allowlist, unknownTypeValues, unverified);
 
         boolean ok = unknownLabels.isEmpty()
             && unknownRelTypes.isEmpty()
@@ -252,35 +254,18 @@ public final class CypherOntologyChecker {
                 case ':' -> {
                     Brace enclosing = brackets.peek();
                     char context = enclosing == null ? ' ' : enclosing.kind();
-                    Consumer<String> branch = context == '['
-                        ? raw -> {
-                            if (!profile.relationshipTypes().contains(raw)) {
-                                unknownRelTypes.add(raw);
-                            }
-                        }
-                        : raw -> {
-                            if (!profile.nodeLabels().contains(raw)) {
-                                unknownLabels.add(raw);
-                            }
-                        };
-                    if (context == '(' || context == '[') {
-                        int groupStart = skipWhitespace(structure, i + 1);
-                        while (groupStart < length
-                            && (structure.charAt(groupStart) == '!'
-                                || structure.charAt(groupStart) == '%')) {
-                            groupStart = skipWhitespace(structure, groupStart + 1);
-                        }
-                        if (groupStart < length && structure.charAt(groupStart) == '(') {
-                            int groupEnd =
-                                scanLabelGroup(structure, groupStart, branch, unverified);
-                            if (groupEnd > groupStart) {
-                                i = scanUnionLabels(
-                                    structure, groupEnd + 1, branch, groupEnd, unverified);
-                                continue;
-                            }
+                    Consumer<String> branch =
+                        labelBranch(context, profile, unknownLabels, unknownRelTypes);
+                    int start = labelStart(structure, i);
+                    if ((context == '(' || context == '[')
+                        && start < length && structure.charAt(start) == '(') {
+                        int groupEnd = scanLabelGroup(structure, start, branch, unverified);
+                        if (groupEnd > start) {
+                            i = scanUnionLabels(
+                                structure, groupEnd + 1, branch, groupEnd, unverified);
+                            continue;
                         }
                     }
-                    int start = labelStart(structure, i);
                     LabelRead label = readLabel(structure, start);
                     if (label == null) {
                         if ((context != '{' || enclosing.subquery())
@@ -306,10 +291,90 @@ public final class CypherOntologyChecker {
                     }
                 }
                 default -> {
-                    // ordering and other characters carry no labels
+                    i = scanIsLabelAt(
+                        structure, i, brackets, profile, unknownLabels, unknownRelTypes,
+                        unverified);
                 }
             }
         }
+    }
+
+    /**
+     * Handles an {@code IS} keyword at {@code position} as a label predicate
+     * ({@code n IS Forbidden}), so its label expression is checked like any
+     * pattern label. Comparison forms ({@code IS (NOT) NULL},
+     * {@code IS TYPED STRING}, {@code IS NORMALIZED}) carry no label and are
+     * skipped. Returns the last consumed character.
+     */
+    private static int scanIsLabelAt(
+        String structure,
+        int position,
+        Deque<Brace> brackets,
+        PhysicalGraphProfile profile,
+        LinkedHashSet<String> unknownLabels,
+        LinkedHashSet<String> unknownRelTypes,
+        LinkedHashSet<String> unverified
+    ) {
+        if (structure.charAt(position) != 'I' && structure.charAt(position) != 'i') {
+            return position;
+        }
+        if (position > 0 && isIdentifierChar(structure.charAt(position - 1))) {
+            // Mid-token probe ("this", "axis"): the same word is handled from
+            // its true start.
+            return position;
+        }
+        int tokenEnd = readTokenEnd(structure, position);
+        if (tokenEnd < 0 || !structure.substring(position, tokenEnd).equalsIgnoreCase("IS")) {
+            return position;
+        }
+        int length = structure.length();
+        int next = skipWhitespace(structure, tokenEnd);
+        while (next < length && isLabelMarker(structure.charAt(next))) {
+            next = skipWhitespace(structure, next + 1);
+        }
+        if (next >= length) {
+            return position;
+        }
+        Brace enclosing = brackets.peek();
+        char context = enclosing == null ? ' ' : enclosing.kind();
+        Consumer<String> branch = labelBranch(context, profile, unknownLabels, unknownRelTypes);
+        if (structure.charAt(next) == '(') {
+            int groupEnd = scanLabelGroup(structure, next, branch, unverified);
+            if (groupEnd <= next) {
+                return position;
+            }
+            return scanUnionLabels(structure, groupEnd + 1, branch, groupEnd, unverified);
+        }
+        LabelRead label = readLabel(structure, next);
+        if (label == null) {
+            return position;
+        }
+        String upper = label.raw().toUpperCase();
+        if ("NULL".equals(upper) || "NOT".equals(upper) || "TYPED".equals(upper)
+            || "NORMALIZED".equals(upper)) {
+            return position;
+        }
+        branch.accept(label.raw());
+        return scanUnionLabels(structure, label.end(), branch, label.end() - 1, unverified);
+    }
+
+    private static Consumer<String> labelBranch(
+        char context,
+        PhysicalGraphProfile profile,
+        LinkedHashSet<String> unknownLabels,
+        LinkedHashSet<String> unknownRelTypes
+    ) {
+        return context == '['
+            ? raw -> {
+                if (!profile.relationshipTypes().contains(raw)) {
+                    unknownRelTypes.add(raw);
+                }
+            }
+            : raw -> {
+                if (!profile.nodeLabels().contains(raw)) {
+                    unknownLabels.add(raw);
+                }
+            };
     }
 
     /**
@@ -338,11 +403,18 @@ public final class CypherOntologyChecker {
             int next = skipWhitespace(structure, separator + 1);
             while (next < length) {
                 char marker = structure.charAt(next);
-                if (marker == ':' || marker == '!' || marker == '%') {
+                if (isLabelMarker(marker)) {
                     next = skipWhitespace(structure, next + 1);
                     continue;
                 }
                 break;
+            }
+            if (next < length
+                && (structure.charAt(next) == '|' || structure.charAt(next) == '&')) {
+                // Markers such as "%" (any-label) sit between two separators;
+                // the trailing separator still starts a union branch.
+                cursor = next;
+                continue;
             }
             if (next < length && structure.charAt(next) == '(') {
                 int groupEnd = scanLabelGroup(structure, next, branch, unverified);
@@ -418,11 +490,15 @@ public final class CypherOntologyChecker {
 
     private static int labelStart(String structure, int colon) {
         int start = skipWhitespace(structure, colon + 1);
-        while (start < structure.length()
-            && (structure.charAt(start) == '!' || structure.charAt(start) == '%')) {
+        while (start < structure.length() && isLabelMarker(structure.charAt(start))) {
             start = skipWhitespace(structure, start + 1);
         }
         return start;
+    }
+
+    /** Punctuation preceding or separating label names in a label expression. */
+    private static boolean isLabelMarker(char value) {
+        return value == '!' || value == '%' || value == '|' || value == '&';
     }
 
     private static void checkOutsidePattern(
@@ -615,31 +691,6 @@ public final class CypherOntologyChecker {
         return cursor + 1;
     }
 
-    /** Position of the {@code )} closing the call containing {@code position}; -1 when unbalanced. */
-    private static int callEndAfter(String values, List<Literal> literals, int position) {
-        int length = values.length();
-        int depth = 0;
-        int cursor = position;
-        while (cursor < length) {
-            Literal literal = literalAt(literals, cursor);
-            if (literal != null && literal.start() == cursor) {
-                cursor = literal.end();
-                continue;
-            }
-            char current = values.charAt(cursor);
-            if (current == '(') {
-                depth++;
-            } else if (current == ')') {
-                if (depth == 0) {
-                    return cursor;
-                }
-                depth--;
-            }
-            cursor++;
-        }
-        return -1;
-    }
-
     /**
      * Verifies type-property values set inside a node or relationship pattern
      * map (e.g. {@code (n:Entity {type: 'Person'})}), which are equality
@@ -722,7 +773,17 @@ public final class CypherOntologyChecker {
             }
             empty = false;
             if (current == ':' || current == '!' || current == '|' || current == '&'
-                || current == '%' || current == '(' || current == ')') {
+                || current == '(' || current == ')') {
+                cursor++;
+                continue;
+            }
+            if (current == '%') {
+                // % is a label atom inside a label expression only; after a
+                // value it is the modulo operator and the paren is no pattern.
+                int before = skipWhitespaceBackwards(values, cursor - 1);
+                if (before < 0 || !isLabelExpressionChar(values.charAt(before))) {
+                    return false;
+                }
                 cursor++;
                 continue;
             }
@@ -760,6 +821,11 @@ public final class CypherOntologyChecker {
         int nameStart = identifierStartBefore(values, before + 1);
         String name = values.substring(nameStart, before + 1).toUpperCase();
         return PATTERN_HEAD_KEYWORDS.contains(name);
+    }
+
+    /** Punctuation making a following {@code %} a label atom, not the modulo operator. */
+    private static boolean isLabelExpressionChar(char value) {
+        return value == ':' || value == '!' || value == '|' || value == '&' || value == '(';
     }
 
     /** End of the string literal starting at {@code start}; -1 when unterminated. */
@@ -890,6 +956,174 @@ public final class CypherOntologyChecker {
     }
 
     /**
+     * Collects names bound to the type property through a projection alias
+     * ({@code WITH n.type AS x}) and checks comparisons on those names, since
+     * {@code WHERE x = 'Employee'} constrains the type property exactly like
+     * a direct access.
+     */
+    private static void scanTypeAliasUsages(
+        Masks masks,
+        List<Literal> literals,
+        Map<String, Object> parameters,
+        CypherOntologyAllowlist allowlist,
+        LinkedHashSet<String> unknownTypeValues,
+        LinkedHashSet<String> unverified
+    ) {
+        String values = masks.values();
+        boolean[] inString = masks.inString();
+        boolean[] inBacktick = masks.inBacktick();
+        List<String> aliases = collectTypeAliases(
+            values, masks.typePropertyName(), inString, inBacktick);
+        if (aliases.isEmpty()) {
+            return;
+        }
+        int length = values.length();
+        for (int i = 0; i < length; i++) {
+            if (inString[i] || (inBacktick[i] && !isBacktickTokenStart(values, inBacktick, i))) {
+                continue;
+            }
+            int tokenEnd = readTokenEnd(values, i);
+            if (tokenEnd < 0 || !aliases.contains(tokenContent(values, i, tokenEnd))) {
+                continue;
+            }
+            if (i > 0) {
+                char before = values.charAt(i - 1);
+                if (before == '.' || before == '$' || isIdentifierChar(before)) {
+                    // an attribute name or a mid-token probe, not the variable
+                    continue;
+                }
+            }
+            // The scan must advance past the alias token even when the usage
+            // inspection consumes nothing (bare alias at the statement end).
+            int consumed = inspectAliasUsage(
+                values, literals, i, tokenEnd, parameters, allowlist,
+                unknownTypeValues, unverified);
+            i = Math.max(consumed, tokenEnd) - 1;
+        }
+    }
+
+    /**
+     * Names bound to the type property by an {@code AS} projection alias such
+     * as {@code n.type AS x}, including aliases of those aliases.
+     */
+    private static List<String> collectTypeAliases(
+        String values,
+        String property,
+        boolean[] inString,
+        boolean[] inBacktick
+    ) {
+        int length = values.length();
+        List<String> aliases = new ArrayList<>();
+        for (int i = 0; i < length; i++) {
+            if (inString[i] || (inBacktick[i] && !isBacktickTokenStart(values, inBacktick, i))) {
+                continue;
+            }
+            if (!isWordAt(values, i, "AS")) {
+                continue;
+            }
+            int nameStart = skipWhitespace(values, i + 2);
+            int nameEnd = readTokenEnd(values, nameStart);
+            if (nameEnd < 0) {
+                continue;
+            }
+            if (isTypeAliasSource(values, property, aliases, i)) {
+                aliases.add(tokenContent(values, nameStart, nameEnd));
+            }
+            i = nameEnd - 1;
+        }
+        return aliases;
+    }
+
+    /** True when the expression projected by the AS at {@code asPosition} is the type property. */
+    private static boolean isTypeAliasSource(
+        String values, String property, List<String> aliases, int asPosition) {
+        int before = skipWhitespaceBackwards(values, asPosition - 1);
+        while (before >= 0 && values.charAt(before) == ')') {
+            before = skipWhitespaceBackwards(values, before - 1);
+        }
+        int nameEnd = before + 1;
+        int nameStart = identifierStartBefore(values, nameEnd);
+        if (nameStart < 0) {
+            return false;
+        }
+        String name = values.substring(nameStart, nameEnd);
+        if (aliases.contains(name)) {
+            return true;
+        }
+        if (!property.equals(name)) {
+            return false;
+        }
+        int dot = skipWhitespaceBackwards(values, nameStart - 1);
+        return dot >= 0 && values.charAt(dot) == '.';
+    }
+
+    /**
+     * Checks one alias occurrence: {@code alias = <operand>},
+     * {@code <operand> = alias} and {@code alias IN <list>} are type
+     * conditions, and a compound chain feeding a comparison is unverifiable.
+     * Returns the last consumed position.
+     */
+    private static int inspectAliasUsage(
+        String values,
+        List<Literal> literals,
+        int start,
+        int tokenEnd,
+        Map<String, Object> parameters,
+        CypherOntologyAllowlist allowlist,
+        LinkedHashSet<String> unknownTypeValues,
+        LinkedHashSet<String> unverified
+    ) {
+        int length = values.length();
+        int right = skipWhitespace(values, tokenEnd);
+        if (right < length) {
+            char current = values.charAt(right);
+            if (isOperatorChar(current)) {
+                String operator = readOperator(values, right);
+                if ("=".equals(operator)) {
+                    verifyOperand(
+                        values, literals, skipWhitespace(values, right + operator.length()),
+                        "right-hand side", parameters, allowlist, unknownTypeValues, unverified);
+                } else {
+                    unverified.add(
+                        "type condition is not statically verifiable: unsupported operator '"
+                            + operator + "'");
+                }
+                return right;
+            }
+            if (isWordAt(values, right, "IN")) {
+                verifyInOperand(
+                    values, literals, skipWhitespace(values, right + 2),
+                    parameters, allowlist, unknownTypeValues, unverified);
+                return right + 1;
+            }
+            if (isCompoundContinuation(current)
+                && chainReachesComparison(
+                    values, literals, right, enclosingDepthAt(values, literals, start))) {
+                unverified.add(
+                    "type condition is not statically verifiable: compound expression"
+                        + " involving the type property");
+                return right;
+            }
+        }
+        int left = skipWhitespaceBackwards(values, start - 1);
+        if (left >= 0 && isOperatorChar(values.charAt(left))) {
+            String operator = readOperatorBackwards(values, left);
+            if ("=".equals(operator)) {
+                int operandEnd = skipWhitespaceBackwards(values, left - operator.length());
+                verifyOperand(
+                    values, literals, operandStart(values, operandEnd),
+                    "left-hand side", parameters, allowlist, unknownTypeValues, unverified);
+            } else {
+                unverified.add(
+                    "type condition is not statically verifiable: unsupported operator '"
+                        + operator + "'");
+            }
+            return left;
+        }
+        return tokenEnd - 1;
+    }
+
+    /**
      * Matches a type-property access starting at {@code start}: {@code v.prop},
      * {@code `v`.prop}, {@code (v).prop} (whitespace around the dot tolerated),
      * or a literal subscript {@code v['prop']}. A keyword token before {@code [}
@@ -905,8 +1139,10 @@ public final class CypherOntologyChecker {
         LinkedHashSet<String> unverified
     ) {
         int length = values.length();
-        if (start > 0 && isIdentifierChar(values.charAt(start - 1))) {
+        if (start > 0 && values.charAt(start) != '`'
+            && isIdentifierChar(values.charAt(start - 1))) {
             // Mid-token probe: the same access is matched from the token's true start.
+            // A backtick always opens a token, even directly after a keyword.
             return -1;
         }
         int tokenEnd = readTokenEnd(values, start);
@@ -933,10 +1169,12 @@ public final class CypherOntologyChecker {
         }
         if (next == '[') {
             // Only a variable-like token can be subscripted; a keyword such as
-            // RETURN or IN introduces a plain list literal instead.
+            // RETURN or IN introduces a plain list literal instead. END is
+            // exempt because it is also a legal variable name.
             if (values.charAt(start) != '`') {
                 String token = tokenContent(values, start, tokenEnd).toUpperCase();
-                if (NON_FUNCTION_WORDS.contains(token) || SUBQUERY_KEYWORDS.contains(token)) {
+                if ((NON_FUNCTION_WORDS.contains(token) || SUBQUERY_KEYWORDS.contains(token))
+                    && !"END".equals(token)) {
                     return -1;
                 }
             }
@@ -944,8 +1182,10 @@ public final class CypherOntologyChecker {
             Literal literal = literalAt(literals, literalStart);
             if (literal == null || literal.start() != literalStart) {
                 if (isIntegerLiteral(values, literalStart)) {
-                    // a plain list index such as "list[0]" names no property
-                    return -1;
+                    // A plain list index such as "list[0]" names no property,
+                    // but the chain may continue ("nodes[0].type").
+                    int indexEnd = integerIndexEnd(values, literalStart);
+                    return indexEnd < 0 ? -1 : afterIndexChain(values, indexEnd, property);
                 }
                 unverified.add(
                     "type condition is not statically verifiable: compound subscript expression");
@@ -962,17 +1202,73 @@ public final class CypherOntologyChecker {
         return -1;
     }
 
-    /** True when a plain non-negative integer literal starts at {@code position}. */
+    /** True when a plain (optionally signed) integer literal starts at {@code position}. */
     private static boolean isIntegerLiteral(String values, int position) {
         int length = values.length();
-        if (position < 0 || position >= length || !Character.isDigit(values.charAt(position))) {
+        if (position < 0 || position >= length) {
             return false;
         }
         int cursor = position;
+        char first = values.charAt(cursor);
+        if (first == '-' || first == '+') {
+            cursor++;
+        }
+        return cursor < length && Character.isDigit(values.charAt(cursor));
+    }
+
+    /**
+     * End (exclusive) of the {@code ]} closing an integer index starting at
+     * {@code position}; -1 when the index is malformed or unterminated.
+     */
+    private static int integerIndexEnd(String values, int position) {
+        int length = values.length();
+        if (!isIntegerLiteral(values, position)) {
+            return -1;
+        }
+        int cursor = position;
+        if (values.charAt(cursor) == '-' || values.charAt(cursor) == '+') {
+            cursor++;
+        }
         while (cursor < length && Character.isDigit(values.charAt(cursor))) {
             cursor++;
         }
-        return true;
+        int close = skipWhitespace(values, cursor);
+        return close < length && values.charAt(close) == ']' ? close + 1 : -1;
+    }
+
+    /**
+     * Continues a subscript chain after an integer index such as
+     * {@code nodes[0]}: further integer indexes keep walking, while a
+     * {@code .prop} access yields the property end when it names the type
+     * property and -1 otherwise. Anything else ends the chain unnamed.
+     */
+    private static int afterIndexChain(String values, int from, String property) {
+        int length = values.length();
+        int cursor = skipWhitespace(values, from);
+        while (cursor < length) {
+            char current = values.charAt(cursor);
+            if (current == '.') {
+                int propertyStart = skipWhitespace(values, cursor + 1);
+                int propertyEnd = readTokenEnd(values, propertyStart);
+                if (propertyEnd < 0) {
+                    return -1;
+                }
+                return property.equals(tokenContent(values, propertyStart, propertyEnd))
+                    ? propertyEnd
+                    : -1;
+            }
+            if (current == '[') {
+                int indexStart = skipWhitespace(values, cursor + 1);
+                int indexEnd = integerIndexEnd(values, indexStart);
+                if (indexEnd < 0) {
+                    return -1;
+                }
+                cursor = skipWhitespace(values, indexEnd);
+                continue;
+            }
+            return -1;
+        }
+        return -1;
     }
 
     private static void inspectTypeAccess(
@@ -991,9 +1287,7 @@ public final class CypherOntologyChecker {
         // Whitespace between a function name and its '(' is legal Cypher.
         int wrapperEnd = skipWhitespaceBackwards(values, accessStart - 1);
         List<String> wrappers = new ArrayList<>();
-        int openParens = 0;
         while (wrapperEnd >= 0 && values.charAt(wrapperEnd) == '(') {
-            openParens++;
             int nameEnd = skipWhitespaceBackwards(values, wrapperEnd - 1) + 1;
             int nameStart = identifierStartBefore(values, nameEnd);
             if (nameStart >= 0) {
@@ -1009,11 +1303,16 @@ public final class CypherOntologyChecker {
 
         // Step over the matching closing parentheses on the right.
         int right = skipWhitespace(values, accessEnd);
+        int closeSteps = 0;
         while (right < length && values.charAt(right) == ')') {
-            openParens--;
+            closeSteps++;
             right = skipWhitespace(values, right + 1);
         }
-        int chainDepth = Math.max(openParens, 0);
+        // The chain scan needs the real nesting depth at the access so that a
+        // comma separating outer arguments (not just directly wrapped ones)
+        // does not truncate it.
+        int chainDepth = Math.max(
+            enclosingDepthAt(values, literals, accessStart) - closeSteps, 0);
         boolean compoundBefore =
             wrapperEnd >= 0 && isCompoundContinuation(values.charAt(wrapperEnd));
 
@@ -1055,21 +1354,18 @@ public final class CypherOntologyChecker {
                         "type condition is not statically verifiable: compound expression"
                             + " involving the type property");
                 }
-            } else if (current == ',' && !wrappers.isEmpty()) {
-                // The access is a non-final argument of a wrapping call; the
-                // enclosing call cannot be statically resolved when it feeds a
-                // comparison, while a projected call argument is harmless.
-                int callEnd = callEndAfter(values, literals, right);
-                int afterCall = callEnd < 0 ? -1 : skipWhitespace(values, callEnd + 1);
-                while (afterCall >= 0 && afterCall < length && values.charAt(afterCall) == ')') {
-                    afterCall = skipWhitespace(values, afterCall + 1);
-                }
-                if (afterCall >= 0 && afterCall < length
-                    && chainReachesComparison(
-                        values, literals, afterCall,
-                        chainDepth + parenBalance(values, literals, right, afterCall))) {
+            } else if (current == ',' && chainDepth > 0) {
+                // The access is a non-final argument or element of an enclosing
+                // call or list; the enclosing expression cannot be statically
+                // resolved when it feeds a comparison, while a projected
+                // argument is harmless.
+                if (chainReachesComparison(values, literals, right, chainDepth)) {
                     resolved = true;
-                    if (isCompoundContinuation(values.charAt(afterCall))) {
+                    int afterHost = skipSiblingRegion(values, literals, right + 1);
+                    int afterHostChar = afterHost < 0 ? -1 : skipWhitespace(values, afterHost);
+                    boolean compoundFollows = afterHostChar >= 0 && afterHostChar < length
+                        && isCompoundContinuation(values.charAt(afterHostChar));
+                    if (compoundFollows || wrappers.isEmpty()) {
                         unverified.add(
                             "type condition is not statically verifiable: compound expression"
                                 + " involving the type property");
@@ -1278,11 +1574,15 @@ public final class CypherOntologyChecker {
      * is a condition, while a chain that is projected
      * ({@code RETURN n.type + '' AS t}) carries no type condition.
      *
-     * <p>{@code initialDepth} carries the number of parentheses still open at
-     * {@code from}: commas at depth zero separate projections and terminate the
-     * chain, while deeper commas separate call arguments and the chain
-     * continues. Clause keywords at depth zero ({@code AS}, {@code WHERE}, ...)
-     * also terminate the chain as a projection boundary.
+     * <p>{@code initialDepth} carries the number of brackets still open at
+     * {@code from}. A comma at depth zero separates projections and terminates
+     * the chain, while a deeper comma separates arguments or elements of an
+     * enclosing expression: the remaining siblings are skipped and the scan
+     * continues after the enclosing bracket, so that
+     * {@code substring(n.type + '', 0, 8) = 'x'} still reaches its comparison.
+     * Clause keywords at depth zero ({@code AS}, {@code WHERE}, ...) also
+     * terminate the chain as a projection boundary, unless they are part of an
+     * expression (an attribute name or a CASE construct).
      */
     private static boolean chainReachesComparison(
         String values, List<Literal> literals, int from, int initialDepth) {
@@ -1295,12 +1595,12 @@ public final class CypherOntologyChecker {
                 cursor++;
                 continue;
             }
-            if (current == '(') {
+            if (current == '(' || current == '[' || current == '{') {
                 depth++;
                 cursor++;
                 continue;
             }
-            if (current == ')') {
+            if (current == ')' || current == ']' || current == '}') {
                 if (depth == 0) {
                     return false;
                 }
@@ -1315,7 +1615,20 @@ public final class CypherOntologyChecker {
                 if (depth == 0) {
                     return false;
                 }
-                cursor++;
+                int afterSiblings = skipSiblingRegion(values, literals, cursor + 1);
+                if (afterSiblings < 0) {
+                    return false;
+                }
+                depth--;
+                cursor = afterSiblings;
+                continue;
+            }
+            if (isWordAt(values, cursor, "CASE")) {
+                int afterCase = skipCaseExpression(values, literals, cursor);
+                if (afterCase < 0) {
+                    return false;
+                }
+                cursor = afterCase;
                 continue;
             }
             if (isOperatorChar(current)
@@ -1351,25 +1664,81 @@ public final class CypherOntologyChecker {
         return false;
     }
 
-    /** True when a clause or connective keyword ending an expression starts at {@code position}. */
+    /**
+     * True when a clause or connective keyword ending an expression starts at
+     * {@code position}. A keyword used as an attribute name ({@code n.end}) or
+     * adjacent to an operator ({@code end = 5}) belongs to the expression and
+     * is not a boundary.
+     */
     private static boolean isExpressionBoundaryAt(String values, int position) {
         int tokenEnd = readTokenEnd(values, position);
         if (tokenEnd <= 0 || values.charAt(position) == '`') {
             return false;
         }
-        return EXPRESSION_BOUNDARY_KEYWORDS.contains(
-            values.substring(position, tokenEnd).toUpperCase());
+        String token = values.substring(position, tokenEnd).toUpperCase();
+        if (!EXPRESSION_BOUNDARY_KEYWORDS.contains(token)) {
+            return false;
+        }
+        int before = skipWhitespaceBackwards(values, position - 1);
+        if (before >= 0
+            && (values.charAt(before) == '.' || isCompoundContinuation(values.charAt(before)))) {
+            return false;
+        }
+        int after = skipWhitespace(values, tokenEnd);
+        if (after < values.length()
+            && (isOperatorChar(values.charAt(after)) || values.charAt(after) == '.')) {
+            return false;
+        }
+        return true;
     }
 
     /**
-     * Net open-parenthesis balance across {@code (from, to)}, ignoring string
-     * literals and backtick-quoted identifiers.
+     * Skips the siblings and the closing bracket of the bracket level a comma
+     * at {@code from - 1} belongs to: scanning resumes at the first position
+     * after the bracket that closes the comma's level ({@code )}, {@code ]} or
+     * {@code }}); -1 when unbalanced.
      */
-    private static int parenBalance(String values, List<Literal> literals, int from, int to) {
-        int balance = 0;
+    private static int skipSiblingRegion(String values, List<Literal> literals, int from) {
+        int length = values.length();
         int cursor = from;
-        int limit = Math.min(to, values.length());
-        while (cursor < limit) {
+        int depth = 0;
+        while (cursor < length) {
+            Literal literal = literalAt(literals, cursor);
+            if (literal != null && literal.start() == cursor) {
+                cursor = literal.end();
+                continue;
+            }
+            char current = values.charAt(cursor);
+            if (current == '`') {
+                int tokenEnd = readTokenEnd(values, cursor);
+                if (tokenEnd > 0) {
+                    cursor = tokenEnd;
+                    continue;
+                }
+            }
+            if (current == '(' || current == '[' || current == '{') {
+                depth++;
+            } else if (current == ')' || current == ']' || current == '}') {
+                if (depth == 0) {
+                    return cursor + 1;
+                }
+                depth--;
+            }
+            cursor++;
+        }
+        return -1;
+    }
+
+    /**
+     * Position right after the {@code END} closing the CASE construct starting
+     * at {@code caseStart}; -1 when the construct is unterminated.
+     */
+    private static int skipCaseExpression(String values, List<Literal> literals, int caseStart) {
+        int length = values.length();
+        int cursor = caseStart;
+        int bracketDepth = 0;
+        int caseDepth = 0;
+        while (cursor < length) {
             Literal literal = literalAt(literals, cursor);
             if (literal != null && literal.start() == cursor) {
                 cursor = literal.end();
@@ -1384,13 +1753,62 @@ public final class CypherOntologyChecker {
                 }
             }
             if (current == '(') {
-                balance++;
-            } else if (current == ')') {
-                balance--;
+                bracketDepth++;
+                cursor++;
+                continue;
+            }
+            if (current == ')') {
+                bracketDepth--;
+                cursor++;
+                continue;
+            }
+            if (bracketDepth == 0 && isWordAt(values, cursor, "CASE")) {
+                caseDepth++;
+                cursor += 4;
+                continue;
+            }
+            if (bracketDepth == 0 && isWordAt(values, cursor, "END")) {
+                caseDepth--;
+                if (caseDepth == 0) {
+                    return cursor + 3;
+                }
+                cursor += 3;
+                continue;
             }
             cursor++;
         }
-        return balance;
+        return -1;
+    }
+
+    /** Number of brackets still open just before {@code position}. */
+    private static int enclosingDepthAt(String values, List<Literal> literals, int position) {
+        int length = values.length();
+        int cursor = 0;
+        int limit = Math.min(position, length);
+        int depth = 0;
+        while (cursor < limit) {
+            Literal literal = literalAt(literals, cursor);
+            if (literal != null && literal.start() == cursor) {
+                cursor = literal.end();
+                continue;
+            }
+            char current = values.charAt(cursor);
+            if (current == '`') {
+                int tokenEnd = readTokenEnd(values, cursor);
+                if (tokenEnd > 0) {
+                    cursor = tokenEnd;
+                    continue;
+                }
+            }
+            if (current == '(' || current == '[' || current == '{') {
+                depth++;
+            } else if ((current == ')' || current == ']' || current == '}')
+                && depth > 0) {
+                depth--;
+            }
+            cursor++;
+        }
+        return depth;
     }
 
     private static void verifyValue(
