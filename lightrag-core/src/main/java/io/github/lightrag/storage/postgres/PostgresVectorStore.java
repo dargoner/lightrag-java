@@ -4,8 +4,10 @@ import com.pgvector.PGvector;
 import io.github.lightrag.storage.VectorStore;
 
 import javax.sql.DataSource;
+import java.sql.PreparedStatement;
 import java.sql.ResultSet;
 import java.sql.SQLException;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Objects;
 
@@ -13,6 +15,7 @@ public final class PostgresVectorStore implements VectorStore {
     private final JdbcConnectionAccess connectionAccess;
     private final String tableName;
     private final int vectorDimensions;
+    private final List<String> workspaceIds;
     private final String workspaceId;
 
     public PostgresVectorStore(DataSource dataSource, PostgresStorageConfig config) {
@@ -20,15 +23,57 @@ public final class PostgresVectorStore implements VectorStore {
     }
 
     public PostgresVectorStore(DataSource dataSource, PostgresStorageConfig config, String workspaceId) {
-        this(JdbcConnectionAccess.forDataSource(dataSource), config, workspaceId);
+        this(JdbcConnectionAccess.forDataSource(dataSource), config, List.of(workspaceId));
+    }
+
+    /**
+     * Workspace-set constructor: searches and listings read every workspace in one IN-filtered
+     * statement; writes require a single workspace and fail loudly on a multi-workspace store.
+     */
+    public PostgresVectorStore(DataSource dataSource, PostgresStorageConfig config, List<String> workspaceIds) {
+        this(JdbcConnectionAccess.forDataSource(dataSource), config, workspaceIds);
     }
 
     PostgresVectorStore(JdbcConnectionAccess connectionAccess, PostgresStorageConfig config, String workspaceId) {
+        this(connectionAccess, config, List.of(workspaceId));
+    }
+
+    PostgresVectorStore(JdbcConnectionAccess connectionAccess, PostgresStorageConfig config, List<String> workspaceIds) {
+        var normalized = List.copyOf(new LinkedHashSet<>(Objects.requireNonNull(workspaceIds, "workspaceIds")));
+        if (normalized.isEmpty()) {
+            throw new IllegalArgumentException("workspaceIds must not be empty");
+        }
         this.connectionAccess = Objects.requireNonNull(connectionAccess, "connectionAccess");
         var storageConfig = Objects.requireNonNull(config, "config");
         this.tableName = storageConfig.qualifiedTableName("vectors");
         this.vectorDimensions = storageConfig.vectorDimensions();
-        this.workspaceId = Objects.requireNonNull(workspaceId, "workspaceId");
+        this.workspaceIds = normalized;
+        this.workspaceId = normalized.get(0);
+    }
+
+    private boolean isMultiWorkspace() {
+        return workspaceIds.size() > 1;
+    }
+
+    private void requireSingleWorkspace(String operation) {
+        if (isMultiWorkspace()) {
+            throw new IllegalStateException(
+                operation + " requires a single-workspace vector store; this store covers "
+                    + workspaceIds.size() + " workspaces");
+        }
+    }
+
+    private static String placeholders(int count) {
+        return java.util.stream.IntStream.range(0, count)
+            .mapToObj(index -> "?")
+            .collect(java.util.stream.Collectors.joining(", "));
+    }
+
+    private int bindWorkspaces(PreparedStatement statement, int parameterIndex) throws SQLException {
+        for (var workspace : workspaceIds) {
+            statement.setString(parameterIndex++, workspace);
+        }
+        return parameterIndex;
     }
 
     @Override
@@ -38,6 +83,7 @@ public final class PostgresVectorStore implements VectorStore {
         if (vectors.isEmpty()) {
             return;
         }
+        requireSingleWorkspace("saveAll");
 
         connectionAccess.withConnection(connection -> {
             PGvector.registerTypes(connection);
@@ -81,17 +127,17 @@ public final class PostgresVectorStore implements VectorStore {
                 """
                 SELECT vector_id, -(embedding <#> ?) AS score
                 FROM %s
-                WHERE workspace_id = ?
+                WHERE workspace_id IN (%s)
                   AND namespace = ?
                 ORDER BY embedding <#> ?, vector_id
                 LIMIT ?
-                """.formatted(tableName)
+                """.formatted(tableName, placeholders(workspaceIds.size()))
             )) {
                 statement.setObject(1, query);
-                statement.setString(2, workspaceId);
-                statement.setString(3, targetNamespace);
-                statement.setObject(4, query);
-                statement.setInt(5, topK);
+                int parameterIndex = bindWorkspaces(statement, 2);
+                statement.setString(parameterIndex++, targetNamespace);
+                statement.setObject(parameterIndex++, query);
+                statement.setInt(parameterIndex, topK);
 
                 try (var resultSet = statement.executeQuery()) {
                     var matches = new java.util.ArrayList<VectorMatch>();
@@ -116,13 +162,13 @@ public final class PostgresVectorStore implements VectorStore {
                 """
                 SELECT vector_id, embedding
                 FROM %s
-                WHERE workspace_id = ?
+                WHERE workspace_id IN (%s)
                   AND namespace = ?
                 ORDER BY vector_id
-                """.formatted(tableName)
+                """.formatted(tableName, placeholders(workspaceIds.size()))
             )) {
-                statement.setString(1, workspaceId);
-                statement.setString(2, targetNamespace);
+                int parameterIndex = bindWorkspaces(statement, 1);
+                statement.setString(parameterIndex, targetNamespace);
                 try (var resultSet = statement.executeQuery()) {
                     var vectors = new java.util.ArrayList<VectorRecord>();
                     while (resultSet.next()) {
@@ -141,6 +187,7 @@ public final class PostgresVectorStore implements VectorStore {
         if (ids.isEmpty()) {
             return;
         }
+        requireSingleWorkspace("deleteIds");
 
         connectionAccess.withConnection(connection -> {
             var placeholders = String.join(", ", java.util.Collections.nCopies(ids.size(), "?"));
@@ -167,6 +214,7 @@ public final class PostgresVectorStore implements VectorStore {
     @Override
     public void deleteNamespace(String namespace) {
         var targetNamespace = Objects.requireNonNull(namespace, "namespace");
+        requireSingleWorkspace("deleteNamespace");
         connectionAccess.withConnection(connection -> {
             try (var statement = connection.prepareStatement(
                 """
@@ -196,13 +244,13 @@ public final class PostgresVectorStore implements VectorStore {
             """
             SELECT 1
             FROM %s
-            WHERE workspace_id = ?
+            WHERE workspace_id IN (%s)
               AND namespace = ?
             LIMIT 1
-            """.formatted(tableName)
+            """.formatted(tableName, placeholders(workspaceIds.size()))
         )) {
-            statement.setString(1, workspaceId);
-            statement.setString(2, namespace);
+            int parameterIndex = bindWorkspaces(statement, 1);
+            statement.setString(parameterIndex, namespace);
             try (var resultSet = statement.executeQuery()) {
                 return resultSet.next();
             }

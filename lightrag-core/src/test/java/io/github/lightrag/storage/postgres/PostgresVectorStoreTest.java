@@ -175,6 +175,54 @@ class PostgresVectorStoreTest {
     }
 
     @Test
+    void readsVectorsAcrossWorkspacesWhenConfiguredWithWorkspaceSet() {
+        var config = newConfig();
+        try (var resources = newStoreResources(config)) {
+            resources.store().saveAll(
+                "chunks",
+                List.of(new VectorStore.VectorRecord("chunk-1", List.of(1.0d, 0.0d, 0.0d)))
+            );
+            new PostgresVectorStore(resources.dataSource(), config, "workspace-b").saveAll(
+                "chunks",
+                List.of(new VectorStore.VectorRecord("chunk-2", List.of(0.0d, 1.0d, 0.0d)))
+            );
+            var workspaceSet = new PostgresVectorStore(
+                resources.dataSource(), config, List.of("default", "workspace-b"));
+
+            assertThat(workspaceSet.list("chunks")).containsExactly(
+                new VectorStore.VectorRecord("chunk-1", List.of(1.0d, 0.0d, 0.0d)),
+                new VectorStore.VectorRecord("chunk-2", List.of(0.0d, 1.0d, 0.0d))
+            );
+            assertThat(workspaceSet.search("chunks", List.of(1.0d, 0.0d, 0.0d), 2)).containsExactly(
+                new VectorStore.VectorMatch("chunk-1", 1.0d),
+                new VectorStore.VectorMatch("chunk-2", 0.0d)
+            );
+        }
+    }
+
+    @Test
+    void rejectsWritesOnMultiWorkspaceStore() {
+        var config = newConfig();
+        try (var resources = newStoreResources(config)) {
+            var workspaceSet = new PostgresVectorStore(
+                resources.dataSource(), config, List.of("workspace-a", "workspace-b"));
+
+            assertThatThrownBy(() -> workspaceSet.saveAll(
+                "chunks",
+                List.of(new VectorStore.VectorRecord("chunk-1", List.of(1.0d, 0.0d, 0.0d)))
+            ))
+                .isInstanceOf(IllegalStateException.class)
+                .hasMessageContaining("single-workspace");
+            assertThatThrownBy(() -> workspaceSet.deleteIds("chunks", List.of("chunk-1")))
+                .isInstanceOf(IllegalStateException.class)
+                .hasMessageContaining("single-workspace");
+            assertThatThrownBy(() -> workspaceSet.deleteNamespace("chunks"))
+                .isInstanceOf(IllegalStateException.class)
+                .hasMessageContaining("single-workspace");
+        }
+    }
+
+    @Test
     void createsHnswIndexOnTheEmbeddingColumn() {
         var config = newConfig();
         try (var resources = newStoreResources(config)) {
