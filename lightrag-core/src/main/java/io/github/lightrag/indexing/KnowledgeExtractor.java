@@ -75,7 +75,8 @@ public final class KnowledgeExtractor {
            - If the entity name is case-insensitive, normalize it in title case.
 
         2. Relationship Extraction:
-           - Identify direct, clearly stated, and meaningful relationships between previously extracted entities.
+           - Extract every direct, clearly stated, and meaningful relationship between previously extracted entities.
+           - Do not stop early or keep only the most central relationships; dense passages may legitimately produce many relationships. Prefer completeness, but never infer a relationship that the text does not state.
            - Treat relationships as undirected unless direction is explicitly stated.
            - Do not output duplicate relationships.
            - If a statement implies an n-ary relationship, decompose it into the most reasonable binary relationships.
@@ -121,7 +122,7 @@ public final class KnowledgeExtractor {
            - Avoid vague pronouns such as "this article", "this paper", "it", "they", "he", or "she" when the concrete entity can be named explicitly.
 
         4. Quality Rules:
-           - Prioritize the entities and relationships most central to the meaning of the text.
+           - Extract all relationships explicitly supported by the text; prioritize completeness over brevity, but do not invent relationships.
            - Only output relationship objects whose source_entity and target_entity are both included in the entities list of this response.
            - Prefer complete, well-formed JSON over partial or malformed output.
            - Do not include explanation, markdown, or code fences.

@@ -318,4 +318,141 @@ class OntologyConformanceValidatorTest {
             u.kind() == UnmatchedLabel.Kind.RELATION
                 && u.reason() == UnmatchedLabel.Reason.DANGLING_ENDPOINT);
     }
+
+    @Test
+    void preferKeepsPatternMismatchAndReportsIt() {
+        var unmatched = new ArrayList<UnmatchedLabel>();
+        var validator = new OntologyConformanceValidator(
+            ONTOLOGY, unmatched::add, false, ExtractionMode.PREFER);
+        var result = validator.validate(
+            "c1",
+            "text",
+            new ExtractionResult(
+                List.of(
+                    new ExtractedEntity("Acme", "Organization", "", List.of()),
+                    new ExtractedEntity("Beta", "Organization", "", List.of())
+                ),
+                List.of(new ExtractedRelation("Acme", "Beta", "works at", "", 1.0)),
+                List.of()
+            )
+        );
+
+        assertThat(result.relations()).hasSize(1);
+        assertThat(unmatched).anyMatch(u ->
+            u.kind() == UnmatchedLabel.Kind.RELATION
+                && u.reason() == UnmatchedLabel.Reason.PATTERN_MISMATCH);
+    }
+
+    @Test
+    void preferCoercesUnknownEntityTypeToOtherAndKeepsIncidentRelation() {
+        var validator = new OntologyConformanceValidator(
+            ONTOLOGY, ignored -> {}, false, ExtractionMode.PREFER);
+        var result = validator.validate(
+            "c1",
+            "text",
+            new ExtractionResult(
+                List.of(
+                    new ExtractedEntity("Alice", "Person", "", List.of()),
+                    new ExtractedEntity("Unknown", "UnknownType", "", List.of())
+                ),
+                List.of(new ExtractedRelation("Alice", "Unknown", "works at", "", 1.0)),
+                List.of()
+            )
+        );
+
+        assertThat(result.entities()).extracting(ExtractedEntity::name)
+            .containsExactly("Alice", "Unknown");
+        assertThat(result.entities()).extracting(ExtractedEntity::type)
+            .containsExactly("Person", "Other");
+        assertThat(result.relations()).hasSize(1);
+    }
+
+    @Test
+    void preferKeepsRelationWithOnlyUnknownKeywords() {
+        var validator = new OntologyConformanceValidator(
+            ONTOLOGY, ignored -> {}, false, ExtractionMode.PREFER);
+        var result = validator.validate(
+            "c1",
+            "text",
+            new ExtractionResult(
+                List.of(
+                    new ExtractedEntity("Alice", "Person", "", List.of()),
+                    new ExtractedEntity("Acme", "Organization", "", List.of())
+                ),
+                List.of(new ExtractedRelation("Alice", "Acme", "mentions", "", 1.0)),
+                List.of()
+            )
+        );
+
+        assertThat(result.relations()).hasSize(1);
+    }
+
+    @Test
+    void keepsRelationWhenAnyMatchingRelationTypePatternMatches() {
+        Ontology ontology = new Ontology(
+            List.of(
+                new OntologyEntityType("Person", "A person", List.of(), null),
+                new OntologyEntityType("Organization", "An organization", List.of(), null)
+            ),
+            List.of(
+                new OntologyRelationType(
+                    "works at",
+                    "employment",
+                    List.of(new OntologyPattern("Person", "Organization")),
+                    List.of(),
+                    null
+                ),
+                new OntologyRelationType(
+                    "owns",
+                    "ownership",
+                    List.of(new OntologyPattern("Organization", "Organization")),
+                    List.of(),
+                    null
+                )
+            ),
+            null,
+            java.util.Map.of()
+        );
+        var unmatched = new ArrayList<UnmatchedLabel>();
+        var validator = new OntologyConformanceValidator(ontology, unmatched::add, false);
+        var result = validator.validate(
+            "c1",
+            "text",
+            new ExtractionResult(
+                List.of(
+                    new ExtractedEntity("Alice", "Person", "", List.of()),
+                    new ExtractedEntity("Acme", "Organization", "", List.of())
+                ),
+                List.of(new ExtractedRelation("Alice", "Acme", "works at, owns", "", 1.0)),
+                List.of()
+            )
+        );
+
+        assertThat(result.relations()).hasSize(1);
+        assertThat(unmatched).noneMatch(u ->
+            u.reason() == UnmatchedLabel.Reason.PATTERN_MISMATCH);
+    }
+
+    @Test
+    void openReturnsExtractionUnchanged() {
+        var unmatched = new ArrayList<UnmatchedLabel>();
+        var validator = new OntologyConformanceValidator(
+            ONTOLOGY, unmatched::add, false, ExtractionMode.OPEN);
+        var result = validator.validate(
+            "c1",
+            "text",
+            new ExtractionResult(
+                List.of(
+                    new ExtractedEntity("Alice", "Person", "", List.of()),
+                    new ExtractedEntity("Unknown", "UnknownType", "", List.of())
+                ),
+                List.of(new ExtractedRelation("Alice", "Unknown", "mentions", "", 1.0)),
+                List.of()
+            )
+        );
+
+        assertThat(result.entities()).hasSize(2);
+        assertThat(result.relations()).hasSize(1);
+        assertThat(unmatched).isEmpty();
+    }
 }

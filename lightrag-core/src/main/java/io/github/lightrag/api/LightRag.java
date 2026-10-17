@@ -673,6 +673,34 @@ public final class LightRag implements AutoCloseable {
         return newQueryEngine(provider).query(request);
     }
 
+    /**
+     * Structured variant of {@link #queryForWorkspaces(List, QueryRequest)} that returns the
+     * matched entities, relations, and chunks alongside the assembled context. Workspace-set
+     * reads use the same provider contract and fallback rules as {@code queryForWorkspaces}.
+     */
+    public StructuredQueryResult queryStructuredForWorkspaces(
+        List<String> workspaceIds,
+        QueryRequest request
+    ) {
+        var ids = Objects.requireNonNull(workspaceIds, "workspaceIds");
+        if (ids.isEmpty()) {
+            throw new IllegalArgumentException("workspaceIds must not be empty");
+        }
+        var normalized = new LinkedHashSet<String>();
+        for (var id : ids) {
+            if (id == null || id.isBlank()) {
+                throw new IllegalArgumentException("workspaceIds must not contain blank ids");
+            }
+            normalized.add(id.strip());
+        }
+        var scopes = normalized.stream().map(WorkspaceScope::new).toList();
+        var provider = Objects.requireNonNull(
+            config.workspaceStorageProvider().forWorkspaces(scopes),
+            "workspaceStorageProvider.forWorkspaces"
+        );
+        return newQueryEngine(provider).queryStructured(request);
+    }
+
     public StructuredQueryResult queryStructured(String workspaceId, QueryRequest request) {
         var scope = resolveScope(workspaceId);
         return newQueryEngine(resolveProvider(scope)).queryStructured(request);
@@ -1745,7 +1773,8 @@ public final class LightRag implements AutoCloseable {
         return new OntologyConformanceValidator(
             ontology,
             unmatched -> graphExtractionOptionsProvider.onOntologyUnmatched(scope, context, unmatched),
-            context.dropOnUnknownKeyword()
+            context.dropOnUnknownKeyword(),
+            context.overlay().mode()
         );
     }
 

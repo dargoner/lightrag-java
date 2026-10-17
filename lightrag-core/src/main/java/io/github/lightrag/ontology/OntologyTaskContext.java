@@ -59,7 +59,12 @@ public record OntologyTaskContext(
         if (ontology.entityTypes().isEmpty() && ontology.relationTypes().isEmpty()) {
             return null;
         }
-        return new OntologyConformanceValidator(ontology, dropOnUnknownKeyword);
+        return new OntologyConformanceValidator(
+            ontology,
+            ignored -> {},
+            dropOnUnknownKeyword,
+            overlay.mode()
+        );
     }
 
     /** Returns a content fingerprint for the snapshot. */

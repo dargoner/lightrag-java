@@ -1031,6 +1031,12 @@ public final class GraphMaterializationPipeline {
                 (left, right) -> left,
                 java.util.LinkedHashMap::new
             ));
+        long entitiesBefore = refined.stream()
+            .mapToLong(extraction -> extraction.extraction().entities().size())
+            .sum();
+        long relationsBefore = refined.stream()
+            .mapToLong(extraction -> extraction.extraction().relations().size())
+            .sum();
         List<GraphAssembler.ChunkExtraction> validated = new ArrayList<>(refined.size());
         for (GraphAssembler.ChunkExtraction extraction : refined) {
             var result = kgExtractionValidator.validate(
@@ -1045,6 +1051,21 @@ public final class GraphMaterializationPipeline {
                 extraction.filePath()
             ));
         }
+        long entitiesAfter = validated.stream()
+            .mapToLong(extraction -> extraction.extraction().entities().size())
+            .sum();
+        long relationsAfter = validated.stream()
+            .mapToLong(extraction -> extraction.extraction().relations().size())
+            .sum();
+        log.info(
+            "LightRAG ontology validation completed: chunks={}, entitiesBefore={}, entitiesAfter={},"
+                + " relationsBefore={}, relationsAfter={}",
+            refined.size(),
+            entitiesBefore,
+            entitiesAfter,
+            relationsBefore,
+            relationsAfter
+        );
         return List.copyOf(validated);
     }
 

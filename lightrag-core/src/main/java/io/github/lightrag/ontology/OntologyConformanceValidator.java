@@ -18,12 +18,15 @@ import java.util.stream.Collectors;
 /**
  * Filters extracted entities and relations against an ontology.
  *
- * <p>Entities whose type is not declared in the ontology are dropped unless
- * their type is the fallback {@code Other}. Relations are validated with the
- * universal predicate from the ontology plan: every relation keyword that hits
- * a declared relation type must satisfy that type's directed patterns
- * (tolerating both directions), and purely unknown keywords are dropped.
- * Dropping an entity also drops any relations incident on it.
+ * <p>Entities whose type is not declared in the ontology are dropped in
+ * {@link ExtractionMode#STRICT} and coerced to the fallback {@code Other} in
+ * {@link ExtractionMode#PREFER}. Relations are validated with the universal
+ * predicate from the ontology plan: every relation keyword that hits a declared
+ * relation type must satisfy that type's patterns (tolerating both directions).
+ * A relation is rejected only when none of its matching pattern-bearing relation
+ * types accepts the endpoint pair. STRICT drops non-conforming relations; PREFER
+ * keeps evidence-backed relations and reports them through the unmatched
+ * consumer; OPEN returns the extraction unchanged.
  */
 public final class OntologyConformanceValidator implements KgExtractionValidator {
 
@@ -32,15 +35,16 @@ public final class OntologyConformanceValidator implements KgExtractionValidator
     private final Ontology ontology;
     private final Consumer<UnmatchedLabel> unmatchedConsumer;
     private final boolean dropOnUnknownKeyword;
+    private final ExtractionMode mode;
     private final Set<String> entityTypeIds;
     private final Map<String, OntologyRelationType> relationTypesById;
 
     public OntologyConformanceValidator(Ontology ontology) {
-        this(ontology, ignored -> {}, false);
+        this(ontology, ignored -> {}, false, ExtractionMode.STRICT);
     }
 
     public OntologyConformanceValidator(Ontology ontology, boolean dropOnUnknownKeyword) {
-        this(ontology, ignored -> {}, dropOnUnknownKeyword);
+        this(ontology, ignored -> {}, dropOnUnknownKeyword, ExtractionMode.STRICT);
     }
 
     public OntologyConformanceValidator(
@@ -48,9 +52,19 @@ public final class OntologyConformanceValidator implements KgExtractionValidator
         Consumer<UnmatchedLabel> unmatchedConsumer,
         boolean dropOnUnknownKeyword
     ) {
+        this(ontology, unmatchedConsumer, dropOnUnknownKeyword, ExtractionMode.STRICT);
+    }
+
+    public OntologyConformanceValidator(
+        Ontology ontology,
+        Consumer<UnmatchedLabel> unmatchedConsumer,
+        boolean dropOnUnknownKeyword,
+        ExtractionMode mode
+    ) {
         this.ontology = Objects.requireNonNull(ontology, "ontology");
         this.unmatchedConsumer = unmatchedConsumer == null ? ignored -> {} : unmatchedConsumer;
         this.dropOnUnknownKeyword = dropOnUnknownKeyword;
+        this.mode = mode == null ? ExtractionMode.STRICT : mode;
         this.entityTypeIds = ontology.entityTypes().stream()
             .map(OntologyEntityType::identityId)
             .collect(Collectors.toUnmodifiableSet());
@@ -66,20 +80,32 @@ public final class OntologyConformanceValidator implements KgExtractionValidator
     public ExtractionResult validate(String chunkId, String chunkText, ExtractionResult extracted) {
         Objects.requireNonNull(chunkId, "chunkId");
         Objects.requireNonNull(extracted, "extracted");
+        if (mode == ExtractionMode.OPEN) {
+            return extracted;
+        }
 
         var validEntities = new ArrayList<ExtractedEntity>();
         var droppedEntityNames = new HashSet<String>();
         for (ExtractedEntity entity : extracted.entities()) {
             if (isKnownEntityType(entity.type())) {
                 validEntities.add(entity);
+                continue;
+            }
+            unmatchedConsumer.accept(new UnmatchedLabel(
+                UnmatchedLabel.Kind.ENTITY,
+                entity.type(),
+                chunkId,
+                UnmatchedLabel.Reason.UNKNOWN_ENTITY_TYPE
+            ));
+            if (mode == ExtractionMode.PREFER) {
+                validEntities.add(new ExtractedEntity(
+                    entity.name(),
+                    FALLBACK_TYPE,
+                    entity.description(),
+                    entity.aliases()
+                ));
             } else {
                 droppedEntityNames.add(entity.name());
-                unmatchedConsumer.accept(new UnmatchedLabel(
-                    UnmatchedLabel.Kind.ENTITY,
-                    entity.type(),
-                    chunkId,
-                    UnmatchedLabel.Reason.UNKNOWN_ENTITY_TYPE
-                ));
             }
         }
 
@@ -183,26 +209,36 @@ public final class OntologyConformanceValidator implements KgExtractionValidator
                 chunkId,
                 UnmatchedLabel.Reason.UNKNOWN_RELATION_TYPE
             ));
-            return RelationValidation.invalid();
+            return mode == ExtractionMode.PREFER
+                ? RelationValidation.valid()
+                : RelationValidation.invalid();
         }
 
         if (hasUnknownKeyword && dropOnUnknownKeyword) {
             return RelationValidation.invalid();
         }
 
+        boolean patternConstrained = false;
+        boolean patternMatched = false;
         for (String typeId : matchedTypeIds) {
             OntologyRelationType relationType = relationTypesById.get(typeId);
-            if (relationType == null) {
+            if (relationType == null || relationType.patterns().isEmpty()) {
                 continue;
             }
-            if (!relationType.patterns().isEmpty()
-                && !OntologyGovernance.relationTypeMatchesPatterns(relationType, sourceTypeId, targetTypeId)) {
-                unmatchedConsumer.accept(new UnmatchedLabel(
-                    UnmatchedLabel.Kind.RELATION,
-                    relation.keywords(),
-                    chunkId,
-                    UnmatchedLabel.Reason.PATTERN_MISMATCH
-                ));
+            patternConstrained = true;
+            if (OntologyGovernance.relationTypeMatchesPatterns(relationType, sourceTypeId, targetTypeId)) {
+                patternMatched = true;
+                break;
+            }
+        }
+        if (patternConstrained && !patternMatched) {
+            unmatchedConsumer.accept(new UnmatchedLabel(
+                UnmatchedLabel.Kind.RELATION,
+                relation.keywords(),
+                chunkId,
+                UnmatchedLabel.Reason.PATTERN_MISMATCH
+            ));
+            if (mode != ExtractionMode.PREFER) {
                 return RelationValidation.invalid();
             }
         }
