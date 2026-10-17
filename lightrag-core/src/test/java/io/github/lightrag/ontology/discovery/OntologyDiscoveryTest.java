@@ -28,6 +28,83 @@ class OntologyDiscoveryTest {
 
         assertThat(result.draft().entityTypes()).isEmpty();
         assertThat(result.draft().relationTypes()).isEmpty();
+        assertThat(result.observation().candidateChunkCount()).isZero();
+        assertThat(result.observation().sampleCount()).isZero();
+        assertThat(result.observation().supports()).isEmpty();
+    }
+
+    @Test
+    void recordsDistinctChunkAndDocumentSupportPerCandidate() {
+        var proposal1 = """
+            {
+              "entityTypes": [
+                {
+                  "label": "Person",
+                  "properties": [{"name": "name", "type": "string"}]
+                }
+              ],
+              "relationTypes": []
+            }
+            """;
+        var proposal2 = """
+            {
+              "entityTypes": [
+                {
+                  "label": "Person",
+                  "properties": [{"name": "name", "type": "string"}]
+                },
+                {"label": "Organization", "properties": []}
+              ],
+              "relationTypes": [
+                {
+                  "label": "works at",
+                  "patterns": [{"sourceLabel": "Person", "targetLabel": "Organization"}],
+                  "properties": [{"name": "since", "type": "date"}]
+                }
+              ]
+            }
+            """;
+        var chunks = List.of(
+            new Chunk("c1", "doc1", "Alice works at Acme.", 5, 0, Map.of()),
+            new Chunk("c2", "doc1", "Bob works at Beta.", 5, 1, Map.of()),
+            new Chunk("c3", "doc2", "Carol works at Gamma.", 5, 2, Map.of())
+        );
+        var request = new DiscoveryRequest(
+            new StubChatModel(List.of(proposal1, proposal2)),
+            chunks,
+            new DiscoveryRequest.DiscoveryOptions(10, 10, 5, 2, 0, 0L)
+        );
+
+        var observation =
+            new OntologyDiscovery()
+                .execute(request, DiscoverySampleStrategy.firstN())
+                .observation();
+
+        assertThat(observation.candidateChunkCount()).isEqualTo(3);
+        assertThat(observation.sampleCount()).isEqualTo(2);
+        assertThat(observation.sampledDocCount()).isEqualTo(1);
+        assertThat(observation.supports())
+            .filteredOn(item -> "ENTITY".equals(item.kind()) && "person".equals(item.identityKey()))
+            .singleElement()
+            .satisfies(item -> {
+                assertThat(item.supportCount()).isEqualTo(2);
+                assertThat(item.supportDocCount()).isEqualTo(1);
+                assertThat(item.chunkIds()).containsExactly("c1", "c2");
+            });
+        assertThat(observation.supports())
+            .filteredOn(item -> "RELATION".equals(item.kind()))
+            .singleElement()
+            .satisfies(item -> assertThat(item.supportCount()).isEqualTo(1));
+        assertThat(observation.supports())
+            .filteredOn(item -> "PROPERTY".equals(item.kind()) && "RELATION".equals(item.ownerKind()))
+            .singleElement()
+            .satisfies(item -> {
+                assertThat(item.ownerKey()).isEqualTo("works at");
+                assertThat(item.identityKey()).isEqualTo("since");
+            });
+        assertThat(observation.supportsOfKind("PATTERN"))
+            .singleElement()
+            .satisfies(item -> assertThat(item.identityKey()).isEqualTo("person→organization"));
     }
 
     @Test

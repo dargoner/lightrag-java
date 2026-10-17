@@ -7,10 +7,13 @@ import com.fasterxml.jackson.databind.node.ObjectNode;
 import io.github.lightrag.model.ChatModel;
 import io.github.lightrag.model.ChatModel.ChatRequest;
 import io.github.lightrag.model.ChatRequestOptions;
+import io.github.lightrag.ontology.Identity;
 import io.github.lightrag.ontology.Ontology;
 import io.github.lightrag.ontology.OntologyEntityType;
 import io.github.lightrag.ontology.OntologyGovernance;
 import io.github.lightrag.ontology.OntologyJsonCodec;
+import io.github.lightrag.ontology.OntologyPattern;
+import io.github.lightrag.ontology.OntologyProperty;
 import io.github.lightrag.ontology.OntologyRelationType;
 import io.github.lightrag.ontology.OntologyStructureValidator;
 import io.github.lightrag.types.Chunk;
@@ -18,6 +21,7 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import java.util.ArrayList;
+import java.util.Comparator;
 import java.util.HashMap;
 import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
@@ -128,7 +132,13 @@ public final class OntologyDiscovery {
 
         List<Chunk> sample = strategy.select(request.chunks(), request.options().sampleSize());
         if (sample.isEmpty()) {
-            return DiscoveryResult.empty();
+            return new DiscoveryResult(
+                new Ontology(List.of(), List.of(), null, Map.of()),
+                List.of(),
+                List.of(),
+                "",
+                new DiscoveryObservation(request.chunks().size(), 0, 0, List.of())
+            );
         }
 
         String systemPrompt = SYSTEM_PROMPT.formatted(
@@ -142,10 +152,13 @@ public final class OntologyDiscovery {
         List<String> failures = new ArrayList<>();
         Set<String> conflicts = new LinkedHashSet<>();
         Ontology baseOntology = request.baseOntology();
+        ObservationCollector collector =
+            new ObservationCollector(request.chunks().size(), sample);
         for (Chunk chunk : sample) {
             checkCancellation();
             ProposalResult proposal = proposeWithRetry(systemPrompt, chunk, request);
             if (proposal.ontology().isPresent()) {
+                collector.record(chunk, proposal.ontology().get());
                 Ontology incremental = incrementalDraft(proposal.ontology().get(), baseOntology, conflicts);
                 if (!incremental.entityTypes().isEmpty() || !incremental.relationTypes().isEmpty()) {
                     merged = merged == null ? incremental : merged.merge(incremental);
@@ -176,14 +189,165 @@ public final class OntologyDiscovery {
         }
 
         log.info(
-            "Ontology discovery completed: sampleChunks={}, parseableProposals={}, entityTypes={}, relationTypes={}",
+            "Ontology discovery completed: candidateChunks={}, sampleChunks={}, sampledDocs={},"
+                + " parseableProposals={}, entityTypes={}, relationTypes={}, candidates={}",
+            request.chunks().size(),
             sample.size(),
+            collector.sampledDocCount(),
             parsedCount,
             merged.entityTypes().size(),
-            merged.relationTypes().size()
+            merged.relationTypes().size(),
+            collector.candidateCount()
         );
         String fingerprint = sampleFingerprint(request.options().seed(), sample, strategy.strategyId());
-        return new DiscoveryResult(merged, failures, List.copyOf(conflicts), fingerprint);
+        return new DiscoveryResult(
+            merged,
+            failures,
+            List.copyOf(conflicts),
+            fingerprint,
+            collector.build()
+        );
+    }
+
+    /** Collects distinct chunk/document support for every candidate proposed by parseable chunks. */
+    private static final class ObservationCollector {
+
+        private final int candidateChunkCount;
+        private final List<Chunk> sample;
+        private final Map<String, CandidateAccumulator> accumulators = new LinkedHashMap<>();
+
+        private ObservationCollector(int candidateChunkCount, List<Chunk> sample) {
+            this.candidateChunkCount = candidateChunkCount;
+            this.sample = sample;
+        }
+
+        private void record(Chunk chunk, Ontology proposal) {
+            for (OntologyEntityType entity : proposal.entityTypes()) {
+                add("ENTITY", "", "", entity.identityId(), entity.label(), chunk);
+                for (OntologyProperty property : entity.properties()) {
+                    add(
+                        "PROPERTY",
+                        "ENTITY",
+                        entity.identityId(),
+                        property.identityId(),
+                        property.name(),
+                        chunk
+                    );
+                }
+            }
+            for (OntologyRelationType relation : proposal.relationTypes()) {
+                add("RELATION", "", "", relation.identityId(), relation.label(), chunk);
+                for (OntologyProperty property : relation.properties()) {
+                    add(
+                        "PROPERTY",
+                        "RELATION",
+                        relation.identityId(),
+                        property.identityId(),
+                        property.name(),
+                        chunk
+                    );
+                }
+                for (OntologyPattern pattern : relation.patterns()) {
+                    String source = Identity.identityId(pattern.sourceLabel());
+                    String target = Identity.identityId(pattern.targetLabel());
+                    add(
+                        "PATTERN",
+                        "RELATION",
+                        relation.identityId(),
+                        source + "→" + target,
+                        pattern.sourceLabel() + " → " + pattern.targetLabel(),
+                        chunk
+                    );
+                }
+            }
+        }
+
+        private void add(
+            String kind,
+            String ownerKind,
+            String ownerKey,
+            String identityKey,
+            String label,
+            Chunk chunk
+        ) {
+            String key = kind + '\u0001' + ownerKind + '\u0001' + ownerKey + '\u0001' + identityKey;
+            accumulators
+                .computeIfAbsent(
+                    key,
+                    ignored -> new CandidateAccumulator(kind, ownerKind, ownerKey, identityKey, label)
+                )
+                .record(chunk);
+        }
+
+        private int sampledDocCount() {
+            return (int) sample.stream().map(Chunk::documentId).distinct().count();
+        }
+
+        private int candidateCount() {
+            return accumulators.size();
+        }
+
+        private DiscoveryObservation build() {
+            List<CandidateSupport> supports = accumulators.values().stream()
+                .map(CandidateAccumulator::toSupport)
+                .sorted(
+                    Comparator.comparingInt(CandidateSupport::supportCount).reversed()
+                        .thenComparing(Comparator.comparingInt(CandidateSupport::supportDocCount).reversed())
+                        .thenComparing(CandidateSupport::kind)
+                        .thenComparing(CandidateSupport::identityKey)
+                )
+                .toList();
+            return new DiscoveryObservation(
+                candidateChunkCount,
+                sample.size(),
+                sampledDocCount(),
+                supports
+            );
+        }
+    }
+
+    private static final class CandidateAccumulator {
+
+        private final String kind;
+        private final String ownerKind;
+        private final String ownerKey;
+        private final String identityKey;
+        private final String label;
+        private final Set<String> chunkIds = new LinkedHashSet<>();
+        private final Set<String> documentIds = new LinkedHashSet<>();
+
+        private CandidateAccumulator(
+            String kind,
+            String ownerKind,
+            String ownerKey,
+            String identityKey,
+            String label
+        ) {
+            this.kind = kind;
+            this.ownerKind = ownerKind;
+            this.ownerKey = ownerKey;
+            this.identityKey = identityKey;
+            this.label = label;
+        }
+
+        private void record(Chunk chunk) {
+            chunkIds.add(chunk.id());
+            documentIds.add(chunk.documentId());
+        }
+
+        private CandidateSupport toSupport() {
+            return new CandidateSupport(
+                kind,
+                ownerKind,
+                ownerKey,
+                identityKey,
+                label,
+                chunkIds.size(),
+                documentIds.size(),
+                List.copyOf(chunkIds),
+                List.copyOf(documentIds)
+            );
+        }
     }
 
     private static Ontology incrementalDraft(Ontology proposal, Ontology baseOntology, Set<String> conflicts) {
