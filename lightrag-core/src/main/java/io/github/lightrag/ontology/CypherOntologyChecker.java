@@ -187,7 +187,7 @@ public final class CypherOntologyChecker {
         return null;
     }
 
-    private static void checkReadOnly(Masks masks, LinkedHashSet<String> unverified) {
+    static void checkReadOnly(Masks masks, LinkedHashSet<String> unverified) {
         String structure = masks.structure();
         boolean[] inBacktick = masks.inBacktick();
         for (String keyword : WRITE_KEYWORDS) {
@@ -216,7 +216,7 @@ public final class CypherOntologyChecker {
      * code-position escape can split a keyword ({@code CRE&#92;u0041TE}) or turn
      * into an unattributable delimiter; nothing of that shape is verifiable.
      */
-    private static void checkUnicodeEscapesOutsideTokens(
+    static void checkUnicodeEscapesOutsideTokens(
         String text, Masks masks, LinkedHashSet<String> unverified) {
         boolean[] inString = masks.inString();
         boolean[] inBacktick = masks.inBacktick();
@@ -2463,11 +2463,11 @@ public final class CypherOntologyChecker {
      * @param inBacktick      true at positions inside backtick-quoted identifiers
      * @param typePropertyName profile type property name carried for the access scan
      */
-    private record Masks(
+    record Masks(
         String structure, String values, boolean[] inString, boolean[] inBacktick,
         String typePropertyName) {}
 
-    private static Masks maskFor(String text, String typePropertyName) {
+    static Masks maskFor(String text, String typePropertyName) {
         int length = text.length();
         StringBuilder structure = new StringBuilder(length);
         StringBuilder values = new StringBuilder(length);
