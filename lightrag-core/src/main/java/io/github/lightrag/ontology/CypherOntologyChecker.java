@@ -31,7 +31,13 @@ import java.util.regex.Pattern;
  * such as {@code (n:Entity {type: 'Person'})}) must resolve to allowed values
  * of {@link CypherOntologyAllowlist} (string literals and {@code $parameter}
  * values are both resolved; parameters must be supplied; compound operands
- * and unsupported wrapper functions are rejected as unverifiable).
+ * and unsupported wrapper functions are rejected as unverifiable). Fuzzy
+ * predicates on the type property ({@code CONTAINS}, {@code STARTS WITH},
+ * {@code ENDS WITH}) are verified the same way: the operand must match at
+ * least one allowed type value under the operator, so ontology vocabulary can
+ * broaden a type condition without escaping the allowlist; an operand
+ * matching no allowed value is an unknown type value, and a blank operand
+ * (which would match every stored value) is unverifiable.
  *
  * <p>The implementation is deliberately lexical rather than a full Cypher
  * parser. A type condition that cannot be statically resolved (function or
@@ -1606,9 +1612,17 @@ public final class CypherOntologyChecker {
                 || isWordAt(values, right, "STARTS")
                 || isWordAt(values, right, "ENDS")) {
                 resolved = true;
-                unverified.add(
-                    "type condition is not statically verifiable: unsupported operator '"
-                        + readWord(values, right) + "'");
+                String operator = readFuzzyOperator(values, right);
+                int operand = fuzzyOperandStart(values, right);
+                if (operator == null || operand < 0) {
+                    unverified.add(
+                        "type condition is not statically verifiable: unsupported operator '"
+                            + readWord(values, right) + "'");
+                } else {
+                    verifyFuzzyOperand(
+                        values, literals, operand, "right-hand side", operator,
+                        parameters, allowlist, unknownTypeValues, unverified);
+                }
             } else if (isCompoundContinuation(current)) {
                 // The access feeds a compound expression such as
                 // "n.type + '' = ..."; a chain that reaches a comparison is a
@@ -1839,6 +1853,164 @@ public final class CypherOntologyChecker {
     private static boolean hasCompoundContinuationBefore(String values, int start) {
         int cursor = skipWhitespaceBackwards(values, start - 1);
         return cursor >= 0 && isCompoundContinuation(values.charAt(cursor));
+    }
+
+    /**
+     * Fuzzy operator name at {@code position}: {@code CONTAINS},
+     * {@code STARTS WITH} or {@code ENDS WITH}; null when a two-word operator
+     * is missing its {@code WITH}.
+     */
+    private static String readFuzzyOperator(String values, int position) {
+        if (isWordAt(values, position, "CONTAINS")) {
+            return "CONTAINS";
+        }
+        String word = isWordAt(values, position, "STARTS") ? "STARTS"
+            : isWordAt(values, position, "ENDS") ? "ENDS" : null;
+        if (word == null) {
+            return null;
+        }
+        int with = skipWhitespace(values, position + word.length());
+        return isWordAt(values, with, "WITH") ? word + " WITH" : null;
+    }
+
+    /**
+     * Position of the fuzzy predicate operand after the operator at
+     * {@code position}; -1 when the operator is malformed or the operand is
+     * missing.
+     */
+    private static int fuzzyOperandStart(String values, int position) {
+        int afterOperator;
+        if (isWordAt(values, position, "CONTAINS")) {
+            afterOperator = position + "CONTAINS".length();
+        } else if (isWordAt(values, position, "STARTS") || isWordAt(values, position, "ENDS")) {
+            boolean starts = isWordAt(values, position, "STARTS");
+            int with = skipWhitespace(
+                values, position + (starts ? "STARTS".length() : "ENDS".length()));
+            if (!isWordAt(values, with, "WITH")) {
+                return -1;
+            }
+            afterOperator = with + "WITH".length();
+        } else {
+            return -1;
+        }
+        if (afterOperator >= values.length()) {
+            return -1;
+        }
+        return skipWhitespace(values, afterOperator);
+    }
+
+    /**
+     * Verifies a fuzzy type predicate against the allowlist: the operand must
+     * be a string literal or parameter that matches at least one allowed type
+     * value under the operator. A non-matching operand is an unknown business
+     * type value; a blank operand would match every stored value and is
+     * reported as unverifiable.
+     */
+    private static void verifyFuzzyOperand(
+        String values,
+        List<Literal> literals,
+        int position,
+        String side,
+        String operator,
+        Map<String, Object> parameters,
+        CypherOntologyAllowlist allowlist,
+        LinkedHashSet<String> unknownTypeValues,
+        LinkedHashSet<String> unverified
+    ) {
+        if (position < 0 || position >= values.length()) {
+            unverified.add(
+                "type condition is not statically verifiable: " + side
+                    + " is missing for " + operator);
+            return;
+        }
+        char first = values.charAt(position);
+        if (first == '\'' || first == '"') {
+            Literal literal = literalAt(literals, position);
+            if (literal == null) {
+                unverified.add(
+                    "type condition is not statically verifiable: " + side
+                        + " string literal is not terminated");
+                return;
+            }
+            if (hasCompoundContinuationAfter(values, literal.end())
+                || hasCompoundContinuationBefore(values, literal.start())) {
+                unverified.add(
+                    "type condition is not statically verifiable: compound expression on the "
+                        + side);
+                return;
+            }
+            verifyFuzzyValue(literal.value(), operator, allowlist, unknownTypeValues, unverified);
+            return;
+        }
+        if (first == '$') {
+            String name = readParameterName(values, position);
+            if (name == null) {
+                unverified.add(
+                    "type condition is not statically verifiable: malformed parameter on the "
+                        + side);
+                return;
+            }
+            if (hasCompoundContinuationAfter(values, position + 1 + name.length())
+                || hasCompoundContinuationBefore(values, position)) {
+                unverified.add(
+                    "type condition is not statically verifiable: compound expression on the "
+                        + side);
+                return;
+            }
+            if (!parameters.containsKey(name)) {
+                unverified.add("parameter '$" + name + "' is not provided");
+                return;
+            }
+            Object value = parameters.get(name);
+            if (value == null) {
+                unverified.add("parameter '$" + name + "' is null");
+                return;
+            }
+            if (value instanceof String text) {
+                verifyFuzzyValue(text, operator, allowlist, unknownTypeValues, unverified);
+                return;
+            }
+            unverified.add(
+                "type condition is not statically verifiable: parameter '$" + name
+                    + "' value is not a string");
+            return;
+        }
+        unverified.add(
+            "type condition is not statically verifiable: " + side
+                + " is not a string literal or parameter");
+    }
+
+    private static void verifyFuzzyValue(
+        String value,
+        String operator,
+        CypherOntologyAllowlist allowlist,
+        LinkedHashSet<String> unknownTypeValues,
+        LinkedHashSet<String> unverified
+    ) {
+        String needle;
+        try {
+            needle = Identity.identityId(value == null ? "" : value);
+        } catch (IllegalArgumentException blank) {
+            unverified.add(
+                "type condition is not statically verifiable: blank " + operator
+                    + " operand matches every type value");
+            return;
+        }
+        for (String allowed : allowlist.typeValues()) {
+            if (fuzzyMatches(allowed, needle, operator)) {
+                return;
+            }
+        }
+        unknownTypeValues.add(value);
+    }
+
+    private static boolean fuzzyMatches(String allowed, String needle, String operator) {
+        return switch (operator) {
+            case "CONTAINS" -> allowed.contains(needle);
+            case "STARTS WITH" -> allowed.startsWith(needle);
+            case "ENDS WITH" -> allowed.endsWith(needle);
+            default -> false;
+        };
     }
 
     private static boolean isCompoundContinuation(char value) {

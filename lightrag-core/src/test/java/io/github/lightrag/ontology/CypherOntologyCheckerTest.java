@@ -155,6 +155,62 @@ class CypherOntologyCheckerTest {
     }
 
     @Test
+    void acceptsFuzzyTypePredicatesMatchingAllowlistVocabulary() {
+        assertThat(check(
+            "MATCH (n:Entity) WHERE n.type CONTAINS 'pers' RETURN n.name").ok())
+            .isTrue();
+        assertThat(check(
+            "MATCH (n:Entity) WHERE toLower(n.type) STARTS WITH 'org' RETURN n.name").ok())
+            .isTrue();
+        assertThat(check(
+            "MATCH (n:Entity) WHERE n.type ENDS WITH 'tion' RETURN n.name").ok())
+            .isTrue();
+    }
+
+    @Test
+    void acceptsFuzzyTypePredicateWithParameterOperand() {
+        CypherOntologyChecker.CheckResult result = CypherOntologyChecker.check(
+            "MATCH (n:Entity) WHERE n.type CONTAINS $type RETURN n.name",
+            Map.of("type", "erson"),
+            ALLOWLIST,
+            NEO4J_PROFILE
+        );
+
+        assertThat(result.ok()).isTrue();
+    }
+
+    @Test
+    void rejectsFuzzyTypePredicateMatchingNoAllowlistValue() {
+        CypherOntologyChecker.CheckResult result = check(
+            "MATCH (n:Entity) WHERE n.type CONTAINS 'Employee' RETURN n.name");
+
+        assertThat(result.ok()).isFalse();
+        assertThat(result.unknownTypeValues()).containsExactly("Employee");
+    }
+
+    @Test
+    void flagsBlankFuzzyTypeOperand() {
+        CypherOntologyChecker.CheckResult result = check(
+            "MATCH (n:Entity) WHERE n.type STARTS WITH '' RETURN n.name");
+
+        assertThat(result.ok()).isFalse();
+        assertThat(result.unverified())
+            .contains("type condition is not statically verifiable: blank STARTS WITH"
+                + " operand matches every type value");
+    }
+
+    @Test
+    void rejectsMalformedTwoWordFuzzyOperator() {
+        CypherOntologyChecker.CheckResult result = check(
+            "MATCH (n:Entity) WHERE n.type STARTS 'per' RETURN n.name");
+
+        assertThat(result.ok()).isFalse();
+        assertThat(result.unverified())
+            .contains("type condition is not statically verifiable: unsupported operator"
+                + " 'STARTS'");
+    }
+
+    @Test
     void acceptsReversedEquality() {
         CypherOntologyChecker.CheckResult result = check(
             "MATCH (n:Entity) WHERE 'Person' = n.type RETURN n.name");
