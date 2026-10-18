@@ -54,6 +54,11 @@ public final class OntologyDiscovery {
         ---Instructions---
         1. Entity Types:
            - Identify the most important entity types in the text.
+           - Distinguish reusable object types from literal values: dates, amounts, numeric ranges,
+             names, identifiers, and other bare literals are usually properties or descriptions of
+             the owning object, not independent entity types.
+           - Avoid overly generic labels (for example "Data", "Information", "Thing", "Unit")
+             unless the text defines them as a distinct reusable concept.
            - For each entity type, return:
              - "label": the type label, concise and specific
              - "description": what the type means in this domain
@@ -61,6 +66,8 @@ public final class OntologyDiscovery {
 
         2. Relation Types:
            - Identify direct, meaningful relationship types between the entity types.
+           - Prefer concise, reusable relation types over sentence-like or instance-specific labels
+             (for example avoid labels containing specific dates, amounts, or one-off actions).
            - For each relation type, return:
              - "label": the relation type label
              - "description": what the relation means

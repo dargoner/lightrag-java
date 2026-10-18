@@ -455,6 +455,8 @@ class OntologyDiscoveryTest {
 
         assertThat(chatModel.requests.get(0).systemPrompt())
             .contains("same language as the input text")
+            .contains("Distinguish reusable object types from literal values")
+            .contains("Prefer concise, reusable relation types")
             .contains("Existing Ontology Vocabulary")
             .contains("缴存人")
             .contains("申请");
