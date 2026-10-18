@@ -73,7 +73,17 @@ public final class OntologyDiscovery {
              - "type": one of string, integer, float, boolean, date, list
              - "description": optional explanation
 
-        4. Output Rules:
+        4. Language Rules:
+           - Write every label, description, and property name in the same language as the input text.
+           - If the input text is predominantly Chinese, all labels and property names must be Chinese;
+             never emit English synonyms or translations of Chinese concepts.
+           - Reuse a baseline label verbatim only when it names exactly the same concept as the text.
+           - The baseline is a starting point, not a ceiling: when the text describes a concept that
+             is more specific than any baseline label, propose a new label for it in the source language.
+           - Always propose the entity and relation types that the text actually expresses. Do not
+             return empty arrays just because the baseline already covers part of the text.
+
+        5. Output Rules:
            - Return JSON only.
            - Use this exact top-level shape:
              {
@@ -102,7 +112,7 @@ public final class OntologyDiscovery {
            - Do not include explanation, markdown, or code fences.
            - Do not invent types not supported by the text.
            - Keep the ontology small and focused: at most %1$d entity types, %2$d relation types, and %3$d properties per type.
-        """;
+        %4$s""";
 
     private static final String USER_PROMPT_TEMPLATE = """
         ---Task---
@@ -113,6 +123,17 @@ public final class OntologyDiscovery {
 
         ---Output JSON---
         """;
+
+    /** Maximum number of characters of baseline vocabulary injected into the system prompt. */
+    private static final int MAX_BASELINE_VOCABULARY_CHARS = 4000;
+
+    /** Failure marker used to route retries to a language-correction instruction. */
+    private static final String LANGUAGE_VIOLATION_MARKER =
+        "labels must be written in the same language as the input text";
+
+    /** Failure marker used to route retries to a non-empty-proposal instruction. */
+    private static final String EMPTY_PROPOSAL_MARKER =
+        "the proposal contained no entity or relation types";
 
     /** Returns a draft ontology using the default stratified-by-document sampling strategy. */
     public DiscoveryResult execute(DiscoveryRequest request) {
@@ -144,7 +165,8 @@ public final class OntologyDiscovery {
         String systemPrompt = SYSTEM_PROMPT.formatted(
             request.options().maxEntitiesPerChunk(),
             request.options().maxRelationsPerChunk(),
-            request.options().maxPropertiesPerType()
+            request.options().maxPropertiesPerType(),
+            baselineVocabulary(request.baseOntology())
         );
 
         Ontology merged = null;
@@ -479,6 +501,185 @@ public final class OntologyDiscovery {
         }
     }
 
+    /**
+     * Builds a compact baseline vocabulary block so the model can reuse existing
+     * labels instead of inventing or translating synonyms. The block is capped to
+     * keep the prompt bounded for large baselines.
+     */
+    private static String baselineVocabulary(Ontology baseOntology) {
+        if (baseOntology == null) {
+            return "";
+        }
+        List<String> entityLabels = baseOntology.entityTypes().stream()
+            .map(OntologyEntityType::label)
+            .filter(label -> label != null && !label.isBlank())
+            .distinct()
+            .toList();
+        List<String> relationLabels = baseOntology.relationTypes().stream()
+            .map(OntologyRelationType::label)
+            .filter(label -> label != null && !label.isBlank())
+            .distinct()
+            .toList();
+        if (entityLabels.isEmpty() && relationLabels.isEmpty()) {
+            return "";
+        }
+        StringBuilder block = new StringBuilder();
+        block.append("\n---Existing Ontology Vocabulary---\n");
+        block.append("Reuse these exact labels only when the input text refers to exactly the same concept.")
+            .append(" Do not translate, rename, or restate them.")
+            .append(" Propose more specific concepts as new labels in the input language.\n");
+        appendVocabularyLine(block, "Entity types", entityLabels);
+        appendVocabularyLine(block, "Relation types", relationLabels);
+        return block.toString();
+    }
+
+    private static void appendVocabularyLine(StringBuilder block, String heading, List<String> labels) {
+        if (labels.isEmpty()) {
+            return;
+        }
+        String prefix = heading + ": ";
+        if (block.length() + prefix.length() >= MAX_BASELINE_VOCABULARY_CHARS) {
+            return;
+        }
+        block.append(prefix);
+        int appended = 0;
+        for (String label : labels) {
+            String piece = (appended == 0 ? "" : ", ") + label;
+            if (block.length() + piece.length() > MAX_BASELINE_VOCABULARY_CHARS) {
+                block.append(appended == 0 ? "…" : ", …");
+                break;
+            }
+            block.append(piece);
+            appended++;
+        }
+        block.append('\n');
+    }
+
+    /**
+     * Rejects proposals whose entity or relation labels do not use the script of a
+     * CJK-dominant source chunk. Baseline labels are always allowed so a mixed-language
+     * baseline stays consistent, and acronyms such as "API" remain valid labels.
+     */
+    private static Optional<String> languageViolation(
+        Ontology proposal,
+        String sourceText,
+        Ontology baseOntology
+    ) {
+        if (!isCjkDominant(sourceText)) {
+            return Optional.empty();
+        }
+        Set<String> baselineLabels = new LinkedHashSet<>();
+        if (baseOntology != null) {
+            for (OntologyEntityType entity : baseOntology.entityTypes()) {
+                baselineLabels.add(Identity.identityId(entity.label()));
+            }
+            for (OntologyRelationType relation : baseOntology.relationTypes()) {
+                baselineLabels.add(Identity.identityId(relation.label()));
+            }
+        }
+        List<String> offending = new ArrayList<>();
+        for (OntologyEntityType entity : proposal.entityTypes()) {
+            if (!isSourceLanguageLabel(entity.label(), baselineLabels)) {
+                offending.add(entity.label());
+            }
+        }
+        for (OntologyRelationType relation : proposal.relationTypes()) {
+            if (!isSourceLanguageLabel(relation.label(), baselineLabels)) {
+                offending.add(relation.label());
+            }
+        }
+        if (offending.isEmpty()) {
+            return Optional.empty();
+        }
+        int shown = Math.min(offending.size(), 8);
+        return Optional.of(
+            LANGUAGE_VIOLATION_MARKER
+                + " (the input is predominantly Chinese); translate these labels into Chinese: "
+                + String.join(", ", offending.subList(0, shown))
+                + (offending.size() > shown ? ", …" : "")
+        );
+    }
+
+    private static boolean isSourceLanguageLabel(String label, Set<String> baselineLabels) {
+        if (label == null || label.isBlank()) {
+            return true;
+        }
+        return containsCjk(label)
+            || isAcronym(label)
+            || baselineLabels.contains(Identity.identityId(label));
+    }
+
+    private static boolean isCjkDominant(String text) {
+        if (text == null) {
+            return false;
+        }
+        int cjk = 0;
+        int latin = 0;
+        for (int index = 0; index < text.length(); ) {
+            int codePoint = text.codePointAt(index);
+            index += Character.charCount(codePoint);
+            if (isCjkCodePoint(codePoint)) {
+                cjk++;
+            } else if ((codePoint >= 'A' && codePoint <= 'Z') || (codePoint >= 'a' && codePoint <= 'z')) {
+                latin++;
+            }
+        }
+        return cjk > 0 && cjk >= latin;
+    }
+
+    private static boolean containsCjk(String label) {
+        for (int index = 0; index < label.length(); ) {
+            int codePoint = label.codePointAt(index);
+            index += Character.charCount(codePoint);
+            if (isCjkCodePoint(codePoint)) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    private static boolean isCjkCodePoint(int codePoint) {
+        Character.UnicodeScript script = Character.UnicodeScript.of(codePoint);
+        return script == Character.UnicodeScript.HAN
+            || script == Character.UnicodeScript.HIRAGANA
+            || script == Character.UnicodeScript.KATAKANA
+            || script == Character.UnicodeScript.HANGUL;
+    }
+
+    private static boolean isAcronym(String label) {
+        boolean hasLetter = false;
+        for (int index = 0; index < label.length(); index++) {
+            char current = label.charAt(index);
+            if (Character.isLetter(current)) {
+                hasLetter = true;
+                if (!Character.isUpperCase(current)) {
+                    return false;
+                }
+            } else if (!Character.isDigit(current)
+                && !Character.isWhitespace(current)
+                && current != '-'
+                && current != '_') {
+                return false;
+            }
+        }
+        return hasLetter;
+    }
+
+    private static boolean isEmptyProposal(String response) {
+        String json = extractJsonObject(response);
+        if (json == null || json.isBlank()) {
+            return false;
+        }
+        try {
+            JsonNode root = OBJECT_MAPPER.readTree(json);
+            JsonNode entities = root.path("entityTypes");
+            JsonNode relations = root.path("relationTypes");
+            return entities.isArray() && relations.isArray() && entities.isEmpty() && relations.isEmpty();
+        } catch (JsonProcessingException exception) {
+            return false;
+        }
+    }
+
     private ProposalResult proposeWithRetry(String systemPrompt, Chunk chunk, DiscoveryRequest request) {
         int maxRetries = request.options().maxRetries();
         long retryDelayMillis = request.options().retryDelayMillis();
@@ -487,7 +688,14 @@ public final class OntologyDiscovery {
         ProposalResult lastResult = null;
         for (int attempt = 0; attempt <= maxRetries; attempt++) {
             checkCancellation();
-            lastResult = propose(systemPrompt, userPrompt, history, chunk, request.chatModel());
+            lastResult = propose(
+                systemPrompt,
+                userPrompt,
+                history,
+                chunk,
+                request.chatModel(),
+                request.baseOntology()
+            );
             if (lastResult.ontology().isPresent()) {
                 return lastResult;
             }
@@ -497,9 +705,20 @@ public final class OntologyDiscovery {
             if (reason == null || reason.isEmpty()) {
                 reason = "unparseable or invalid response";
             }
-            userPrompt = "Your previous response could not be parsed as the required ontology JSON ("
-                + reason
-                + "). Please correct it and return only valid JSON matching the schema.";
+            if (reason.contains(LANGUAGE_VIOLATION_MARKER)) {
+                userPrompt = "Your previous response was rejected because " + reason
+                    + ". Rewrite every entity type and relation type label in the language of the input text"
+                    + " (Simplified Chinese for Chinese input), then return only valid JSON matching the schema.";
+            } else if (reason.contains(EMPTY_PROPOSAL_MARKER)) {
+                userPrompt = "Your previous response was rejected because it contained no entity or relation types."
+                    + " Propose at least one entity type and one relation type supported by the input text."
+                    + " Reuse a baseline label only for an exact concept match; otherwise propose a more specific"
+                    + " new label in the language of the input text, and return only valid JSON matching the schema.";
+            } else {
+                userPrompt = "Your previous response could not be parsed as the required ontology JSON ("
+                    + reason
+                    + "). Please correct it and return only valid JSON matching the schema.";
+            }
             if (attempt < maxRetries && retryDelayMillis > 0) {
                 try {
                     Thread.sleep(retryDelayMillis);
@@ -523,16 +742,27 @@ public final class OntologyDiscovery {
         String userPrompt,
         List<ChatModel.ChatRequest.ConversationMessage> history,
         Chunk chunk,
-        ChatModel chatModel
+        ChatModel chatModel,
+        Ontology baseOntology
     ) {
         try {
             String response = chatModel.generate(
                 new ChatRequest(systemPrompt, userPrompt, history, ChatRequestOptions.JSON_OBJECT)
             );
             Optional<Ontology> proposal = parseProposal(response);
-            return proposal
-                .map(ontology -> new ProposalResult(Optional.of(ontology), null, response))
-                .orElseGet(() -> new ProposalResult(Optional.empty(), chunk.id() + ": unparseable proposal", response));
+            if (proposal.isEmpty()) {
+                String failure = isEmptyProposal(response) ? EMPTY_PROPOSAL_MARKER : "unparseable proposal";
+                return new ProposalResult(Optional.empty(), chunk.id() + ": " + failure, response);
+            }
+            Optional<String> languageViolation = languageViolation(proposal.get(), chunk.text(), baseOntology);
+            if (languageViolation.isPresent()) {
+                return new ProposalResult(
+                    Optional.empty(),
+                    chunk.id() + ": " + languageViolation.get(),
+                    response
+                );
+            }
+            return new ProposalResult(Optional.of(proposal.get()), null, response);
         } catch (RuntimeException exception) {
             if (exception instanceof java.util.concurrent.CancellationException) {
                 throw exception;

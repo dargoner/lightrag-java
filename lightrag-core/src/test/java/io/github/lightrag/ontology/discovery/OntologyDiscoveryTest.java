@@ -403,6 +403,157 @@ class OntologyDiscoveryTest {
     }
 
     @Test
+    void retriesEmptyProposalWithNonEmptyInstruction() {
+        var validProposal = """
+            {
+              "entityTypes": [
+                {"label": "借款人", "description": "申请贷款的个人", "properties": []}
+              ],
+              "relationTypes": []
+            }
+            """;
+        var chatModel = new StubChatModel(List.of("{\"entityTypes\":[],\"relationTypes\":[]}", validProposal));
+        var request = new DiscoveryRequest(
+            chatModel,
+            List.of(new Chunk("c1", "doc1", "借款人申请住房公积金贷款。", 10, 0, Map.of())),
+            new DiscoveryRequest.DiscoveryOptions(10, 10, 5, 1, 1, 0L)
+        );
+
+        var result = new OntologyDiscovery().execute(request);
+
+        assertThat(result.draft().entityTypes()).hasSize(1);
+        assertThat(chatModel.requests).hasSize(2);
+        assertThat(chatModel.requests.get(1).userPrompt())
+            .contains("contained no entity or relation types");
+    }
+
+    @Test
+    void injectsLanguageRuleAndBaselineVocabularyIntoSystemPrompt() {
+        var proposal = """
+            {
+              "entityTypes": [
+                {"label": "借款人", "description": "申请贷款的个人", "properties": []}
+              ],
+              "relationTypes": []
+            }
+            """;
+        var baseOntology = new Ontology(
+            List.of(new OntologyEntityType("缴存人", "缴存职工", List.of(), null)),
+            List.of(new OntologyRelationType("申请", "提出申请", List.of(), List.of(), null)),
+            null,
+            Map.of()
+        );
+        var chatModel = new StubChatModel(proposal);
+        var request = new DiscoveryRequest(
+            chatModel,
+            List.of(new Chunk("c1", "doc1", "借款人申请住房公积金贷款。", 10, 0, Map.of())),
+            baseOntology,
+            new DiscoveryRequest.DiscoveryOptions(10, 10, 5, 1, 0, 0L)
+        );
+
+        new OntologyDiscovery().execute(request);
+
+        assertThat(chatModel.requests.get(0).systemPrompt())
+            .contains("same language as the input text")
+            .contains("Existing Ontology Vocabulary")
+            .contains("缴存人")
+            .contains("申请");
+    }
+
+    @Test
+    void rejectsEnglishLabelsForChineseInputAndRetriesWithLanguageFeedback() {
+        var englishProposal = """
+            {
+              "entityTypes": [
+                {"label": "Borrower", "description": "A borrower", "properties": []}
+              ],
+              "relationTypes": [
+                {"label": "appliesFor", "patterns": [], "properties": []}
+              ]
+            }
+            """;
+        var chineseProposal = """
+            {
+              "entityTypes": [
+                {"label": "借款人", "description": "申请贷款的个人", "properties": []}
+              ],
+              "relationTypes": [
+                {"label": "申请", "patterns": [], "properties": []}
+              ]
+            }
+            """;
+        var chatModel = new StubChatModel(List.of(englishProposal, chineseProposal));
+        var request = new DiscoveryRequest(
+            chatModel,
+            List.of(new Chunk("c1", "doc1", "借款人申请住房公积金贷款。", 10, 0, Map.of())),
+            new DiscoveryRequest.DiscoveryOptions(10, 10, 5, 1, 1, 0L)
+        );
+
+        var result = new OntologyDiscovery().execute(request);
+
+        assertThat(result.draft().entityTypes())
+            .extracting(OntologyEntityType::label)
+            .containsExactly("借款人");
+        assertThat(chatModel.requests).hasSize(2);
+        assertThat(chatModel.requests.get(1).userPrompt())
+            .contains("same language as the input text")
+            .contains("Borrower");
+    }
+
+    @Test
+    void rejectsEnglishLabelsForChineseInputWithoutRetry() {
+        var englishProposal = """
+            {
+              "entityTypes": [
+                {"label": "Borrower", "description": "A borrower", "properties": []}
+              ],
+              "relationTypes": []
+            }
+            """;
+        var chatModel = new StubChatModel(englishProposal);
+        var request = new DiscoveryRequest(
+            chatModel,
+            List.of(new Chunk("c1", "doc1", "借款人申请住房公积金贷款。", 10, 0, Map.of())),
+            new DiscoveryRequest.DiscoveryOptions(10, 10, 5, 1, 0, 0L)
+        );
+
+        assertThatThrownBy(() -> new OntologyDiscovery().execute(request))
+            .isInstanceOf(IllegalStateException.class)
+            .hasMessageContaining("no parseable proposals");
+    }
+
+    @Test
+    void allowsBaselineAndAcronymLabelsForChineseInput() {
+        var proposal = """
+            {
+              "entityTypes": [
+                {"label": "API", "description": "接口", "properties": []},
+                {"label": "Person", "description": "人员", "properties": []}
+              ],
+              "relationTypes": []
+            }
+            """;
+        var baseOntology = new Ontology(
+            List.of(new OntologyEntityType("Person", "人员", List.of(), null)),
+            List.of(),
+            null,
+            Map.of()
+        );
+        var request = new DiscoveryRequest(
+            new StubChatModel(proposal),
+            List.of(new Chunk("c1", "doc1", "人员可以调用 API。", 10, 0, Map.of())),
+            baseOntology,
+            new DiscoveryRequest.DiscoveryOptions(10, 10, 5, 1, 0, 0L)
+        );
+
+        var result = new OntologyDiscovery().execute(request);
+
+        assertThat(result.draft().entityTypes())
+            .extracting(OntologyEntityType::label)
+            .containsExactly("API");
+    }
+
+    @Test
     void interruptDuringLastChunkResponseStillThrowsCancellationException() {
         var proposal = """
             {
