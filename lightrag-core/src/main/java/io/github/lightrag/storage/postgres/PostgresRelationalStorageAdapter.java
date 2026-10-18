@@ -130,12 +130,15 @@ public final class PostgresRelationalStorageAdapter implements RelationalStorage
         this.ownedDataSource = dataSource instanceof HikariDataSource hikari ? hikari : null;
         this.ownsDataSource = ownsDataSource;
         this.exposeTransactionalVectorStore = exposeTransactionalVectorStore;
-        this.config = ownsDataSource
+        var alignedConfig = ownsDataSource
             ? Objects.requireNonNull(config, "config")
             : PostgresSchemaResolver.alignWithDataSourceSchema(
                 dataSource,
                 Objects.requireNonNull(config, "config")
             );
+        this.config = exposeTransactionalVectorStore
+            ? PostgresVectorDialectResolver.resolve(dataSource, alignedConfig)
+            : alignedConfig;
         this.snapshotStore = Objects.requireNonNull(snapshotStore, "snapshotStore");
         this.workspaceId = new WorkspaceScope(Objects.requireNonNull(workspaceId, "workspaceId")).workspaceId();
         new PostgresMilvusNeo4jSchemaManager(this.dataSource, this.config).bootstrap();

@@ -21,7 +21,8 @@ final class PostgresSchemaResolver {
             input.password(),
             schema,
             input.vectorDimensions(),
-            input.tablePrefix()
+            input.tablePrefix(),
+            input.vectorDialect()
         );
     }
 

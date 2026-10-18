@@ -15,6 +15,7 @@ public final class PostgresVectorStore implements VectorStore {
     private final JdbcConnectionAccess connectionAccess;
     private final String tableName;
     private final int vectorDimensions;
+    private final PostgresVectorDialect vectorDialect;
     private final List<String> workspaceIds;
     private final String workspaceId;
 
@@ -47,6 +48,7 @@ public final class PostgresVectorStore implements VectorStore {
         var storageConfig = Objects.requireNonNull(config, "config");
         this.tableName = storageConfig.qualifiedTableName("vectors");
         this.vectorDimensions = storageConfig.vectorDimensions();
+        this.vectorDialect = storageConfig.vectorDialect().resolved();
         this.workspaceIds = normalized;
         this.workspaceId = normalized.get(0);
     }
@@ -86,21 +88,21 @@ public final class PostgresVectorStore implements VectorStore {
         requireSingleWorkspace("saveAll");
 
         connectionAccess.withConnection(connection -> {
-            PGvector.registerTypes(connection);
+            registerVectorTypes(connection);
             try (var statement = connection.prepareStatement(
                 """
                 INSERT INTO %s (workspace_id, namespace, vector_id, embedding)
-                VALUES (?, ?, ?, ?)
+                VALUES (?, ?, ?, %s)
                 ON CONFLICT (workspace_id, namespace, vector_id) DO UPDATE
                 SET embedding = EXCLUDED.embedding
-                """.formatted(tableName)
+                """.formatted(tableName, vectorPlaceholder())
             )) {
                 for (var vector : vectors) {
                     var record = Objects.requireNonNull(vector, "vector");
                     statement.setString(1, workspaceId);
                     statement.setString(2, targetNamespace);
                     statement.setString(3, record.id());
-                    statement.setObject(4, toPgVector(record.vector()));
+                    bindVector(statement, 4, record.vector());
                     statement.addBatch();
                 }
                 statement.executeBatch();
@@ -121,22 +123,29 @@ public final class PostgresVectorStore implements VectorStore {
                 return List.of();
             }
 
-            PGvector.registerTypes(connection);
-            var query = toPgVector(Objects.requireNonNull(queryVector, "queryVector"));
+            registerVectorTypes(connection);
+            var query = Objects.requireNonNull(queryVector, "queryVector");
+            validateDimensions(query);
+            var queryPlaceholder = vectorPlaceholder();
             try (var statement = connection.prepareStatement(
                 """
-                SELECT vector_id, -(embedding <#> ?) AS score
+                SELECT vector_id, -(embedding <#> %s) AS score
                 FROM %s
                 WHERE workspace_id IN (%s)
                   AND namespace = ?
-                ORDER BY embedding <#> ?, vector_id
+                ORDER BY embedding <#> %s, vector_id
                 LIMIT ?
-                """.formatted(tableName, placeholders(workspaceIds.size()))
+                """.formatted(
+                    queryPlaceholder,
+                    tableName,
+                    placeholders(workspaceIds.size()),
+                    queryPlaceholder
+                )
             )) {
-                statement.setObject(1, query);
+                bindVector(statement, 1, query);
                 int parameterIndex = bindWorkspaces(statement, 2);
                 statement.setString(parameterIndex++, targetNamespace);
-                statement.setObject(parameterIndex++, query);
+                bindVector(statement, parameterIndex++, query);
                 statement.setInt(parameterIndex, topK);
 
                 try (var resultSet = statement.executeQuery()) {
@@ -157,7 +166,7 @@ public final class PostgresVectorStore implements VectorStore {
     public List<VectorRecord> list(String namespace) {
         var targetNamespace = Objects.requireNonNull(namespace, "namespace");
         return connectionAccess.withConnection(connection -> {
-            PGvector.registerTypes(connection);
+            registerVectorTypes(connection);
             try (var statement = connection.prepareStatement(
                 """
                 SELECT vector_id, embedding
@@ -232,7 +241,14 @@ public final class PostgresVectorStore implements VectorStore {
     }
 
     private VectorRecord readVector(ResultSet resultSet) throws SQLException {
-        var vector = new PGvector(resultSet.getString("embedding"));
+        var embedding = resultSet.getString("embedding");
+        if (vectorDialect == PostgresVectorDialect.VASTBASE) {
+            return new VectorRecord(
+                resultSet.getString("vector_id"),
+                parseVectorLiteral(embedding)
+            );
+        }
+        var vector = new PGvector(embedding);
         return new VectorRecord(
             resultSet.getString("vector_id"),
             toDoubleList(vector.toArray())
@@ -257,12 +273,63 @@ public final class PostgresVectorStore implements VectorStore {
         }
     }
 
-    private PGvector toPgVector(List<Double> vector) {
+    private void registerVectorTypes(java.sql.Connection connection) throws SQLException {
+        if (vectorDialect == PostgresVectorDialect.PGVECTOR) {
+            PGvector.registerTypes(connection);
+        }
+    }
+
+    private String vectorPlaceholder() {
+        return vectorDialect == PostgresVectorDialect.VASTBASE ? "CAST(? AS floatvector)" : "?";
+    }
+
+    private void bindVector(PreparedStatement statement, int parameterIndex, List<Double> vector)
+        throws SQLException {
         var values = Objects.requireNonNull(vector, "vector");
-        if (values.size() != vectorDimensions) {
+        validateDimensions(values);
+        if (vectorDialect == PostgresVectorDialect.VASTBASE) {
+            statement.setString(parameterIndex, toVectorLiteral(values));
+            return;
+        }
+        statement.setObject(parameterIndex, new PGvector(values));
+    }
+
+    private void validateDimensions(List<Double> vector) {
+        if (vector.size() != vectorDimensions) {
             throw new IllegalArgumentException("vector dimensions must match configured dimensions");
         }
-        return new PGvector(values);
+    }
+
+    private static String toVectorLiteral(List<Double> vector) {
+        var builder = new StringBuilder(vector.size() * 8 + 2);
+        builder.append('[');
+        for (int index = 0; index < vector.size(); index++) {
+            if (index > 0) {
+                builder.append(',');
+            }
+            var value = Objects.requireNonNull(vector.get(index), "vector component");
+            builder.append(value);
+        }
+        return builder.append(']').toString();
+    }
+
+    private static List<Double> parseVectorLiteral(String literal) {
+        var text = Objects.requireNonNull(literal, "embedding").strip();
+        if (text.startsWith("[")) {
+            text = text.substring(1);
+        }
+        if (text.endsWith("]")) {
+            text = text.substring(0, text.length() - 1);
+        }
+        if (text.isBlank()) {
+            return List.of();
+        }
+        var parts = text.split(",");
+        var values = new java.util.ArrayList<Double>(parts.length);
+        for (var part : parts) {
+            values.add(Double.parseDouble(part.strip()));
+        }
+        return List.copyOf(values);
     }
 
     private static List<Double> toDoubleList(float[] vector) {

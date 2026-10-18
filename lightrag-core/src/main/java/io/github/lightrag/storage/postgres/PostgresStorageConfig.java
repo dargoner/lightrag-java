@@ -9,9 +9,29 @@ public record PostgresStorageConfig(
     String password,
     String schema,
     int vectorDimensions,
-    String tablePrefix
+    String tablePrefix,
+    PostgresVectorDialect vectorDialect
 ) {
     private static final Pattern IDENTIFIER_PATTERN = Pattern.compile("[A-Za-z_][A-Za-z0-9_]*");
+
+    public PostgresStorageConfig(
+        String jdbcUrl,
+        String username,
+        String password,
+        String schema,
+        int vectorDimensions,
+        String tablePrefix
+    ) {
+        this(
+            jdbcUrl,
+            username,
+            password,
+            schema,
+            vectorDimensions,
+            tablePrefix,
+            PostgresVectorDialect.AUTO
+        );
+    }
 
     public PostgresStorageConfig {
         jdbcUrl = requireNonBlank(jdbcUrl, "jdbcUrl");
@@ -22,6 +42,19 @@ public record PostgresStorageConfig(
             throw new IllegalArgumentException("vectorDimensions must be positive");
         }
         tablePrefix = validatePrefix(tablePrefix);
+        vectorDialect = vectorDialect == null ? PostgresVectorDialect.AUTO : vectorDialect;
+    }
+
+    public PostgresStorageConfig withVectorDialect(PostgresVectorDialect dialect) {
+        return new PostgresStorageConfig(
+            jdbcUrl,
+            username,
+            password,
+            schema,
+            vectorDimensions,
+            tablePrefix,
+            dialect
+        );
     }
 
     public String tableName(String baseName) {

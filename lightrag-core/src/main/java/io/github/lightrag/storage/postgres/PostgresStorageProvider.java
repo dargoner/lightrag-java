@@ -159,12 +159,13 @@ public final class PostgresStorageProvider implements AtomicStorageProvider, Aut
         String workspaceId,
         PostgresGraphBackend graphBackend
     ) {
-        var resolvedConfig = ownsDataSource
+        var alignedConfig = ownsDataSource
             ? Objects.requireNonNull(config, "config")
             : PostgresSchemaResolver.alignWithDataSourceSchema(
                 Objects.requireNonNull(dataSource, "dataSource"),
                 Objects.requireNonNull(config, "config")
             );
+        var resolvedConfig = PostgresVectorDialectResolver.resolve(dataSource, alignedConfig);
         this.config = resolvedConfig;
         this.snapshotStore = Objects.requireNonNull(snapshotStore, "snapshotStore");
         this.workspaceId = new WorkspaceScope(workspaceId).workspaceId();

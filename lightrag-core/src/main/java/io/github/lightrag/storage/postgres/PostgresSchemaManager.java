@@ -35,7 +35,9 @@ public final class PostgresSchemaManager {
                 try {
                     statement.execute("CREATE SCHEMA IF NOT EXISTS " + config.schemaName());
                     ensureSchemaVersionTable(statement);
-                    vectorExtensionSchema = resolveVectorExtensionSchema(connection, statement);
+                    vectorExtensionSchema = config.vectorDialect().requiresVectorExtension()
+                        ? resolveVectorExtensionSchema(connection, statement)
+                        : null;
 
                     Optional<Integer> currentVersion = loadCurrentVersion(connection);
                     if (currentVersion.isEmpty()) {
@@ -121,8 +123,11 @@ public final class PostgresSchemaManager {
         if (bootstrapStatements != null) {
             return bootstrapStatements;
         }
-        return List.of(
-            "CREATE EXTENSION IF NOT EXISTS vector",
+        var statements = new java.util.ArrayList<String>();
+        if (config.vectorDialect().requiresVectorExtension()) {
+            statements.add("CREATE EXTENSION IF NOT EXISTS vector");
+        }
+        statements.addAll(List.of(
             """
                 CREATE TABLE IF NOT EXISTS %s (
                     workspace_id TEXT NOT NULL,
@@ -207,10 +212,13 @@ public final class PostgresSchemaManager {
                     workspace_id TEXT NOT NULL,
                     namespace TEXT NOT NULL,
                     vector_id TEXT NOT NULL,
-                    embedding vector(%d) NOT NULL,
+                    embedding %s NOT NULL,
                     PRIMARY KEY (workspace_id, namespace, vector_id)
                 )
-                """.formatted(config.qualifiedTableName("vectors"), config.vectorDimensions()),
+                """.formatted(
+                    config.qualifiedTableName("vectors"),
+                    config.vectorDialect().columnType(config.vectorDimensions())
+                ),
             """
                 CREATE TABLE IF NOT EXISTS %s (
                     workspace_id TEXT NOT NULL,
@@ -222,7 +230,8 @@ public final class PostgresSchemaManager {
                     PRIMARY KEY (workspace_id, document_id)
                 )
                 """.formatted(config.qualifiedTableName("document_status"))
-        );
+        ));
+        return List.copyOf(statements);
     }
 
     private List<String> versionFourStatements() {
@@ -393,10 +402,13 @@ public final class PostgresSchemaManager {
      * unqualified name fails on connections whose {@code search_path} excludes the extension schema.
      */
     private String vectorInnerProductOperatorClass() {
-        if (vectorExtensionSchema == null || vectorExtensionSchema.isBlank()) {
-            return "vector_ip_ops";
+        var operatorClass = config.vectorDialect().innerProductOperatorClass();
+        if (!config.vectorDialect().requiresVectorExtension()
+            || vectorExtensionSchema == null
+            || vectorExtensionSchema.isBlank()) {
+            return operatorClass;
         }
-        return quoteIdentifier(vectorExtensionSchema) + ".vector_ip_ops";
+        return quoteIdentifier(vectorExtensionSchema) + "." + operatorClass;
     }
 
     private String resolveVectorExtensionSchema(Connection connection, Statement statement) throws SQLException {
@@ -548,7 +560,7 @@ public final class PostgresSchemaManager {
                 }
 
                 String actualType = resultSet.getString(1);
-                String expectedType = "vector(" + config.vectorDimensions() + ")";
+                String expectedType = config.vectorDialect().columnType(config.vectorDimensions());
                 if (!expectedType.equals(normalizeTypeName(actualType))) {
                     throw new IllegalStateException(
                         "Configured vector dimensions do not match existing schema: expected "
