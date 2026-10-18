@@ -112,7 +112,8 @@ class LightRagOntologyUnmatchedCallbackTest {
         ));
         assertThat(storage.graphStore().loadEntity("alice")).isPresent();
         assertThat(storage.graphStore().loadEntity("blob")).isPresent();
-        assertThat(storage.graphStore().loadEntity("zorg")).isEmpty();
+        assertThat(storage.graphStore().loadEntity("zorg"))
+            .hasValueSatisfying(entity -> assertThat(entity.type()).isEqualTo("Other"));
     }
 
     @Test
@@ -240,7 +241,8 @@ class LightRagOntologyUnmatchedCallbackTest {
         ));
         assertThat(storage.graphStore().loadEntity("alice")).isPresent();
         assertThat(storage.graphStore().loadEntity("bob")).isPresent();
-        assertThat(storage.graphStore().loadEntity("zorg")).isEmpty();
+        assertThat(storage.graphStore().loadEntity("zorg"))
+            .hasValueSatisfying(entity -> assertThat(entity.type()).isEqualTo("Other"));
     }
 
     @Test
@@ -273,7 +275,8 @@ class LightRagOntologyUnmatchedCallbackTest {
 
         assertThat(task.status()).isEqualTo(TaskStatus.SUCCEEDED);
         assertThat(storage.graphStore().loadEntity("alice")).isPresent();
-        assertThat(storage.graphStore().loadEntity("zorg")).isEmpty();
+        assertThat(storage.graphStore().loadEntity("zorg"))
+            .hasValueSatisfying(entity -> assertThat(entity.type()).isEqualTo("Other"));
     }
 
     private static Ontology entityTypeOntology(String label) {
