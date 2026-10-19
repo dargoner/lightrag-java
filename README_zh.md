@@ -28,9 +28,13 @@
 发布到 Maven Central 的产物坐标是：
 
 - `io.github.dargoner:lightrag-core`
+- `io.github.dargoner:lightrag-rdf`（可选 RDF/OWL 互操作模块，依赖 RDF4J 5.3.2）
 - `io.github.dargoner:lightrag-spring-boot-starter`
 
 `lightrag-spring-boot-demo` 只用于本地演示，不会发布到 Maven Central。
+
+升级前请阅读[本体二期发行说明](docs/release-notes/2026-10-19-java-lightrag-ontology-phase2.md)：
+既有图需要 REBUILD 才能获得属性，含非空属性的新快照不能被旧 SDK 读取。
 
 正式发布由 GitHub Actions 的 `Release` 工作流完成。
 
@@ -63,6 +67,8 @@ git push origin v0.2.1
 
 - `lightrag-core`
   - 核心 SDK，包含模型适配、存储、索引、查询、评测 runner 等基础能力
+- `lightrag-rdf`
+  - 可选模块：导入 RDF/XML、Turtle、JSON-LD 格式的 OWL/RDF 本体
 - `lightrag-spring-boot-starter`
   - Spring Boot 自动装配模块
 - `lightrag-spring-boot-demo`
@@ -166,6 +172,31 @@ var result = rag.query(QueryRequest.builder()
 
 System.out.println(result.answer());
 ```
+
+## 本体 RDF 互操作（可选）
+
+`lightrag-rdf` 将 RDF/XML、Turtle、JSON-LD 格式的 OWL/RDF 本体导入为框架无关的 `Ontology`
+模型。导入器不分配版本、不写存储，返回的是草稿；读取有上限（默认 10 MiB / 20 万条语句），
+并拒绝远程 context。
+
+```java
+import io.github.lightrag.ontology.Ontology;
+import io.github.lightrag.ontology.rdf.OntologyRdfExporter;
+import io.github.lightrag.ontology.rdf.RdfExportOptions;
+import io.github.lightrag.rdf.OntologyRdfImporter;
+import io.github.lightrag.rdf.RdfImportOptions;
+
+import java.nio.file.Path;
+
+Ontology ontology = OntologyRdfImporter
+    .importOntology(Path.of("ontology.ttl"), RdfImportOptions.defaults())
+    .ontology();
+
+String turtle = OntologyRdfExporter.exportTurtle(
+    ontology, RdfExportOptions.defaults("https://example.com/ontology"));
+```
+
+`lightrag-core` 自身即可导出确定性 Turtle 与 SHACL shapes；只有导入 RDF 文档时才需要这个可选模块。
 
 ## Spring Boot Starter
 

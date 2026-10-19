@@ -19,9 +19,14 @@ Standalone Java SDK for a LightRAG-style indexing and retrieval pipeline.
 Published artifacts use the `io.github.dargoner` group:
 
 - `io.github.dargoner:lightrag-core`
+- `io.github.dargoner:lightrag-rdf` (optional RDF/OWL interop; brings in RDF4J 5.3.2)
 - `io.github.dargoner:lightrag-spring-boot-starter`
 
 The `lightrag-spring-boot-demo` module is for local demo usage and is not a Maven Central artifact.
+
+Read the [ontology Phase 2 upgrade notes](docs/release-notes/2026-10-19-java-lightrag-ontology-phase2.md)
+before upgrading: existing graphs need a REBUILD to gain typed attributes, and snapshots
+containing non-empty attributes cannot be read by older SDK versions.
 
 Releases are published by the GitHub Actions `Release` workflow.
 
@@ -161,6 +166,33 @@ Rules in this model:
 - the same `LightRag` instance can serve multiple workspaces
 - storage isolation stays behind `WorkspaceStorageProvider`; `workspaceId` is not added to the public store SPI
 - `loadFromSnapshot(...)` remains a legacy single-workspace builder feature and is blocked for `workspaceStorage(...)`
+
+## Ontology RDF interop (optional)
+
+`lightrag-rdf` imports OWL/RDF ontologies from RDF/XML, Turtle, or JSON-LD into the
+framework-neutral `Ontology` model. The importer never assigns a version or writes to a
+store, so the returned ontology is a draft. Reads are bounded (10 MiB / 200,000 statements
+by default) and remote contexts are rejected.
+
+```java
+import io.github.lightrag.ontology.Ontology;
+import io.github.lightrag.ontology.rdf.OntologyRdfExporter;
+import io.github.lightrag.ontology.rdf.RdfExportOptions;
+import io.github.lightrag.rdf.OntologyRdfImporter;
+import io.github.lightrag.rdf.RdfImportOptions;
+
+import java.nio.file.Path;
+
+Ontology ontology = OntologyRdfImporter
+    .importOntology(Path.of("ontology.ttl"), RdfImportOptions.defaults())
+    .ontology();
+
+String turtle = OntologyRdfExporter.exportTurtle(
+    ontology, RdfExportOptions.defaults("https://example.com/ontology"));
+```
+
+`lightrag-core` exports deterministic Turtle and SHACL shapes on its own; the optional
+module is only needed for importing RDF documents.
 
 ## Spring Boot
 

@@ -1006,7 +1006,7 @@ record ImportResult(Ontology ontology, List<String> warnings) {}
 ### A.2 与版本约束的关系（用户硬约束不变）
 
 - 版本仍是**不可变、追加式、永久保留**；每次审批通过的 schema 变更产生一个新版本，回填操作本身**不产生版本**，只记录 `operationId`。
-- **禁止定时/自动删除**；SDK 不提供删除 API。宿主可对误创建/合规场景做显式、审计化删除——这与"不得定时删除"不矛盾。
+- **禁止任何定时/自动/后台删除**；SDK 不提供删除 API，也不设"误创建/合规"删除例外；版本库永久追加。
 - `current_version` 指针与 KB `pinned_version` 仍归宿主；回填运行在指定 `ontologyVersion` 上，不对历史版本回写。
 
 ### A.3 操作矩阵（草案）
@@ -1029,6 +1029,8 @@ record ImportResult(Ontology ontology, List<String> warnings) {}
 3. **逐 chunk 操作标记的落点**：GraphRAG-SDK 把 `extracted_ops` 放在 chunk 节点（`backfill.py:19`）；lightrag-java 的 chunk record 需要可扩展 metadata 或宿主侧操作表。二期不改 chunk record 形状，三期由宿主表或新增可选字段承载。
 4. **逐属性来源/版本可追溯**：三期回填需要知道"实体当前属性来自哪个 ontologyVersion / 哪次 operation"；二期不引入逐属性来源（§3.4、§12.1-7），三期需另立来源字段或旁路表。
 5. **六后端一致性**：回填需要按类型扫描实体/关系（Neo4j/AGE/FalkorDB/ArcadeDB/Nebula/PostgreSQL）并处理快照兼容；二期只保证 attributes 字符串读写一致，不提供扫描/迁移原语。
+
+**当前裁定（2026-10-19）**：上述 1–5 均推迟到三期立项时定案，不阻塞二期发布；逐项推荐方向、最晚定案时点与前置条件见 `docs/superpowers/specs/2026-10-19-java-lightrag-ontology-phase3-boundaries-and-decision-timing.md`。
 
 ### A.5 成本与风险
 
