@@ -21,12 +21,13 @@ import java.util.stream.Collectors;
  * <p>Entities whose type is not declared in the ontology are dropped in
  * {@link ExtractionMode#STRICT} and coerced to the fallback {@code Other} in
  * {@link ExtractionMode#PREFER}. Relations are validated with the universal
- * predicate from the ontology plan: every relation keyword that hits a declared
- * relation type must satisfy that type's patterns (tolerating both directions).
- * A relation is rejected only when none of its matching pattern-bearing relation
- * types accepts the endpoint pair. STRICT drops non-conforming relations; PREFER
- * keeps evidence-backed relations and reports them through the unmatched
- * consumer; OPEN returns the extraction unchanged.
+ * predicate from the ontology plan: every pattern-bearing relation type matched
+ * by the keyword list must accept the endpoint pair (tolerating both
+ * directions). Unconstrained relation types (no patterns) do not constrain the
+ * pair, but they never excuse a constrained type that fails to match. STRICT
+ * drops non-conforming relations; PREFER keeps evidence-backed relations and
+ * reports them through the unmatched consumer; OPEN returns the extraction
+ * unchanged.
  */
 public final class OntologyConformanceValidator implements KgExtractionValidator {
 
@@ -74,6 +75,18 @@ public final class OntologyConformanceValidator implements KgExtractionValidator
                 rel -> rel,
                 (first, second) -> first
             ));
+    }
+
+    @Override
+    public void onAttributeDiagnostics(List<UnmatchedLabel> diagnostics) {
+        if (diagnostics == null) {
+            return;
+        }
+        for (UnmatchedLabel diagnostic : diagnostics) {
+            if (diagnostic != null) {
+                unmatchedConsumer.accept(diagnostic);
+            }
+        }
     }
 
     @Override
@@ -219,19 +232,19 @@ public final class OntologyConformanceValidator implements KgExtractionValidator
         }
 
         boolean patternConstrained = false;
-        boolean patternMatched = false;
+        boolean everyPatternMatched = true;
         for (String typeId : matchedTypeIds) {
             OntologyRelationType relationType = relationTypesById.get(typeId);
             if (relationType == null || relationType.patterns().isEmpty()) {
                 continue;
             }
             patternConstrained = true;
-            if (OntologyGovernance.relationTypeMatchesPatterns(relationType, sourceTypeId, targetTypeId)) {
-                patternMatched = true;
+            if (!OntologyGovernance.relationTypeMatchesPatterns(relationType, sourceTypeId, targetTypeId)) {
+                everyPatternMatched = false;
                 break;
             }
         }
-        if (patternConstrained && !patternMatched) {
+        if (patternConstrained && !everyPatternMatched) {
             unmatchedConsumer.accept(new UnmatchedLabel(
                 UnmatchedLabel.Kind.RELATION,
                 relation.keywords(),

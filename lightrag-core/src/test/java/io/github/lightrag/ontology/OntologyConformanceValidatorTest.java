@@ -388,8 +388,138 @@ class OntologyConformanceValidatorTest {
     }
 
     @Test
-    void keepsRelationWhenAnyMatchingRelationTypePatternMatches() {
+    void dropsRelationWhenAnyMatchingRelationTypePatternMismatches() {
+        var unmatched = new ArrayList<UnmatchedLabel>();
+        var validator = new OntologyConformanceValidator(multiPatternOntology(), unmatched::add, false);
+        var result = validator.validate(
+            "c1",
+            "text",
+            new ExtractionResult(
+                List.of(
+                    new ExtractedEntity("Alice", "Person", "", List.of()),
+                    new ExtractedEntity("Acme", "Organization", "", List.of())
+                ),
+                List.of(new ExtractedRelation("Alice", "Acme", "works at, owns", "", 1.0)),
+                List.of()
+            )
+        );
+
+        assertThat(result.relations()).isEmpty();
+        assertThat(unmatched).anyMatch(u ->
+            u.reason() == UnmatchedLabel.Reason.PATTERN_MISMATCH);
+    }
+
+    @Test
+    void keepsRelationWhenEveryMatchingRelationTypePatternMatches() {
         Ontology ontology = new Ontology(
+            List.of(
+                new OntologyEntityType("Person", "A person", List.of(), null),
+                new OntologyEntityType("Organization", "An organization", List.of(), null)
+            ),
+            List.of(
+                new OntologyRelationType(
+                    "works at",
+                    "employment",
+                    List.of(new OntologyPattern("Person", "Organization")),
+                    List.of(),
+                    null
+                ),
+                new OntologyRelationType(
+                    "employed by",
+                    "employment",
+                    List.of(new OntologyPattern("Person", "Organization")),
+                    List.of(),
+                    null
+                )
+            ),
+            null,
+            java.util.Map.of()
+        );
+        var unmatched = new ArrayList<UnmatchedLabel>();
+        var validator = new OntologyConformanceValidator(ontology, unmatched::add, false);
+        var result = validator.validate(
+            "c1",
+            "text",
+            new ExtractionResult(
+                List.of(
+                    new ExtractedEntity("Alice", "Person", "", List.of()),
+                    new ExtractedEntity("Acme", "Organization", "", List.of())
+                ),
+                List.of(new ExtractedRelation("Alice", "Acme", "works at, employed by", "", 1.0)),
+                List.of()
+            )
+        );
+
+        assertThat(result.relations()).hasSize(1);
+        assertThat(unmatched).noneMatch(u ->
+            u.reason() == UnmatchedLabel.Reason.PATTERN_MISMATCH);
+    }
+
+    @Test
+    void unconstrainedMatchingTypeDoesNotExcuseAConstrainedMismatch() {
+        Ontology ontology = new Ontology(
+            List.of(
+                new OntologyEntityType("Person", "A person", List.of(), null),
+                new OntologyEntityType("Organization", "An organization", List.of(), null)
+            ),
+            List.of(
+                new OntologyRelationType("mentions", "mention", List.of(), List.of(), null),
+                new OntologyRelationType(
+                    "owns",
+                    "ownership",
+                    List.of(new OntologyPattern("Organization", "Organization")),
+                    List.of(),
+                    null
+                )
+            ),
+            null,
+            java.util.Map.of()
+        );
+        var unmatched = new ArrayList<UnmatchedLabel>();
+        var validator = new OntologyConformanceValidator(ontology, unmatched::add, false);
+        var result = validator.validate(
+            "c1",
+            "text",
+            new ExtractionResult(
+                List.of(
+                    new ExtractedEntity("Alice", "Person", "", List.of()),
+                    new ExtractedEntity("Acme", "Organization", "", List.of())
+                ),
+                List.of(new ExtractedRelation("Alice", "Acme", "mentions, owns", "", 1.0)),
+                List.of()
+            )
+        );
+
+        assertThat(result.relations()).isEmpty();
+        assertThat(unmatched).anyMatch(u ->
+            u.reason() == UnmatchedLabel.Reason.PATTERN_MISMATCH);
+    }
+
+    @Test
+    void preferKeepsUniversalPatternMismatchAndReportsIt() {
+        var unmatched = new ArrayList<UnmatchedLabel>();
+        var validator = new OntologyConformanceValidator(
+            multiPatternOntology(), unmatched::add, false, ExtractionMode.PREFER);
+        var result = validator.validate(
+            "c1",
+            "text",
+            new ExtractionResult(
+                List.of(
+                    new ExtractedEntity("Alice", "Person", "", List.of()),
+                    new ExtractedEntity("Acme", "Organization", "", List.of())
+                ),
+                List.of(new ExtractedRelation("Alice", "Acme", "works at, owns", "", 1.0)),
+                List.of()
+            )
+        );
+
+        assertThat(result.relations()).hasSize(1);
+        assertThat(unmatched).anyMatch(u ->
+            u.reason() == UnmatchedLabel.Reason.PATTERN_MISMATCH);
+    }
+
+    private static Ontology multiPatternOntology() {
+        return new Ontology(
             List.of(
                 new OntologyEntityType("Person", "A person", List.of(), null),
                 new OntologyEntityType("Organization", "An organization", List.of(), null)
@@ -413,24 +543,6 @@ class OntologyConformanceValidatorTest {
             null,
             java.util.Map.of()
         );
-        var unmatched = new ArrayList<UnmatchedLabel>();
-        var validator = new OntologyConformanceValidator(ontology, unmatched::add, false);
-        var result = validator.validate(
-            "c1",
-            "text",
-            new ExtractionResult(
-                List.of(
-                    new ExtractedEntity("Alice", "Person", "", List.of()),
-                    new ExtractedEntity("Acme", "Organization", "", List.of())
-                ),
-                List.of(new ExtractedRelation("Alice", "Acme", "works at, owns", "", 1.0)),
-                List.of()
-            )
-        );
-
-        assertThat(result.relations()).hasSize(1);
-        assertThat(unmatched).noneMatch(u ->
-            u.reason() == UnmatchedLabel.Reason.PATTERN_MISMATCH);
     }
 
     @Test
