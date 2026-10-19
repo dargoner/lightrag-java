@@ -263,10 +263,41 @@ public final class OntologyJsonCodec {
      * @return hex-encoded SHA-256 digest
      */
     public static String contentHash(Ontology ontology) {
-        String canonical = canonicalJson(ontology);
+        return sha256Hex(canonicalJson(ontology));
+    }
+
+    /**
+     * Computes the SHA-256 hash of the complete ontology document, including the
+     * {@code version} field and every metadata entry.
+     *
+     * <p>Unlike {@link #contentHash(Ontology)} this hash identifies the full
+     * serialized base, so two bases that differ only in audit metadata or
+     * version do not collide.
+     *
+     * @param ontology the ontology to hash
+     * @return hex-encoded SHA-256 digest
+     */
+    public static String fullContentHash(Ontology ontology) {
+        Objects.requireNonNull(ontology, "ontology");
+        Ontology canonical = ontology.toCanonical();
+        ObjectNode content = CANONICAL_MAPPER.createObjectNode();
+        content.put("schemaVersion", SCHEMA_VERSION);
+        content.put("kind", KIND);
+        content.set("entityTypes", CANONICAL_MAPPER.valueToTree(canonical.entityTypes()));
+        content.set("relationTypes", CANONICAL_MAPPER.valueToTree(canonical.relationTypes()));
+        if (canonical.version() == null) {
+            content.putNull("version");
+        } else {
+            content.put("version", canonical.version());
+        }
+        content.set("metadata", CANONICAL_MAPPER.valueToTree(canonical.metadata()));
+        return sha256Hex(writeJson(normalizeAndSort(content), CANONICAL_MAPPER));
+    }
+
+    private static String sha256Hex(String value) {
         try {
             MessageDigest digest = MessageDigest.getInstance("SHA-256");
-            byte[] hash = digest.digest(canonical.getBytes(StandardCharsets.UTF_8));
+            byte[] hash = digest.digest(value.getBytes(StandardCharsets.UTF_8));
             return bytesToHex(hash);
         } catch (NoSuchAlgorithmException exception) {
             throw new IllegalStateException("SHA-256 algorithm not available", exception);
