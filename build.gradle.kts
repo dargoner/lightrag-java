@@ -45,6 +45,7 @@ subprojects {
 configure(
     listOf(
         project(":lightrag-core"),
+        project(":lightrag-rdf"),
         project(":lightrag-spring-boot-starter"),
     ),
 ) {

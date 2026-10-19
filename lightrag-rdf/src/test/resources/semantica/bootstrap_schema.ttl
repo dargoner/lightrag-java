@@ -1,0 +1,25 @@
+@prefix : <https://example.com/semantica/> .
+@prefix owl: <http://www.w3.org/2002/07/owl#> .
+@prefix rdfs: <http://www.w3.org/2000/01/rdf-schema#> .
+
+: a owl:Ontology ;
+    rdfs:label "GeneratedOntology" ;
+    owl:versionInfo "1.0" .
+
+:knows a owl:ObjectProperty ;
+    rdfs:label "knows" ;
+    rdfs:domain :Person ;
+    rdfs:range :Person .
+
+:worksAt a owl:ObjectProperty ;
+    rdfs:label "worksAt" ;
+    rdfs:domain :Person ;
+    rdfs:range :Organization .
+
+:Organization a owl:Class ;
+    rdfs:label "Organization" ;
+    rdfs:comment "Class representing organization entities" .
+
+:Person a owl:Class ;
+    rdfs:label "Person" ;
+    rdfs:comment "Class representing person entities" .

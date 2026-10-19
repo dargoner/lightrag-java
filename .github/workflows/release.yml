@@ -87,6 +87,7 @@ jobs:
           ./gradlew --no-daemon --console=plain
           -PreleaseVersion=${{ steps.version.outputs.value }}
           :lightrag-core:publishAndReleaseToMavenCentral
+          :lightrag-rdf:publishAndReleaseToMavenCentral
           :lightrag-spring-boot-starter:publishAndReleaseToMavenCentral
 
       - name: Create or update GitHub Release
