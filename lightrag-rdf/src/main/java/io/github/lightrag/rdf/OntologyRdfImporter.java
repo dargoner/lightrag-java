@@ -173,28 +173,30 @@ public final class OntologyRdfImporter {
 
     private static String readBounded(Path path, long maxBytes) {
         try (InputStream input = Files.newInputStream(path)) {
-            ByteArrayOutputStream buffer = new ByteArrayOutputStream();
-            byte[] chunk = new byte[8192];
-            long total = 0;
-            int read;
-            while ((read = input.read(chunk)) != -1) {
-                total += read;
-                if (total > maxBytes) {
-                    throw new OntologyImportException(
-                        "RDF input exceeds the maximum of " + maxBytes
-                            + " UTF-8 bytes: " + path
-                    );
-                }
-                buffer.write(chunk, 0, read);
-            }
-            return new String(buffer.toByteArray(), StandardCharsets.UTF_8);
-        } catch (OntologyImportException e) {
-            throw e;
+            return readBounded(input, maxBytes, path);
         } catch (IOException e) {
             throw new OntologyImportException(
                 "Failed to read RDF document " + path + ": " + e.getMessage(), e
             );
         }
+    }
+
+    static String readBounded(InputStream input, long maxBytes, Path source) throws IOException {
+        ByteArrayOutputStream buffer = new ByteArrayOutputStream();
+        byte[] chunk = new byte[8192];
+        long total = 0;
+        int read;
+        while ((read = input.read(chunk)) != -1) {
+            total += read;
+            if (total > maxBytes) {
+                throw new OntologyImportException(
+                    "RDF input exceeds the maximum of " + maxBytes
+                        + " UTF-8 bytes: " + source
+                );
+            }
+            buffer.write(chunk, 0, read);
+        }
+        return new String(buffer.toByteArray(), StandardCharsets.UTF_8);
     }
 
     /**

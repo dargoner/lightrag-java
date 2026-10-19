@@ -4,8 +4,10 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 
 import java.io.IOException;
+import java.io.InputStream;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.util.Arrays;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
@@ -54,6 +56,63 @@ class OntologyRdfImportLimitsTest {
         ))
             .isInstanceOf(OntologyImportException.class)
             .hasMessageContaining("exceeds the maximum");
+    }
+
+    @Test
+    void boundedReaderStopsAtTheFirstChunkThatExceedsTheLimit() throws IOException {
+        byte[] payload = new byte[64 * 1024];
+        Arrays.fill(payload, (byte) ' ');
+        CountingInputStream input = new CountingInputStream(payload);
+
+        assertThatThrownBy(() -> OntologyRdfImporter.readBounded(
+            input,
+            20,
+            Path.of("large.ttl")
+        ))
+            .isInstanceOf(OntologyImportException.class)
+            .hasMessageContaining("exceeds the maximum");
+
+        assertThat(input.bytesRead())
+            .isEqualTo(8192)
+            .isLessThan(payload.length);
+        assertThat(input.exhausted()).isFalse();
+    }
+
+    private static final class CountingInputStream extends InputStream {
+
+        private final byte[] data;
+        private int position;
+
+        private CountingInputStream(byte[] data) {
+            this.data = data;
+        }
+
+        @Override
+        public int read() {
+            if (position == data.length) {
+                return -1;
+            }
+            return data[position++] & 0xFF;
+        }
+
+        @Override
+        public int read(byte[] target, int offset, int length) {
+            if (position == data.length) {
+                return -1;
+            }
+            int count = Math.min(length, data.length - position);
+            System.arraycopy(data, position, target, offset, count);
+            position += count;
+            return count;
+        }
+
+        private int bytesRead() {
+            return position;
+        }
+
+        private boolean exhausted() {
+            return position == data.length;
+        }
     }
 
     @Test
