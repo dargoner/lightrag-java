@@ -1,13 +1,17 @@
 package io.github.lightrag.storage;
 
+import com.fasterxml.jackson.annotation.JsonInclude;
 import io.github.lightrag.api.ChunkExtractStatus;
 import io.github.lightrag.api.SnapshotSource;
 import io.github.lightrag.api.SnapshotStatus;
 
 import java.time.Instant;
+import java.util.Collections;
 import java.util.List;
+import java.util.Map;
 import java.util.Objects;
 import java.util.Optional;
+import java.util.TreeMap;
 
 public interface DocumentGraphSnapshotStore {
     void saveDocument(DocumentGraphSnapshot snapshot);
@@ -76,13 +80,24 @@ public interface DocumentGraphSnapshotStore {
         String name,
         String type,
         String description,
-        List<String> aliases
+        List<String> aliases,
+        @JsonInclude(JsonInclude.Include.NON_EMPTY) Map<String, Object> attributes
     ) {
+        public ExtractedEntityRecord(
+            String name,
+            String type,
+            String description,
+            List<String> aliases
+        ) {
+            this(name, type, description, aliases, Map.of());
+        }
+
         public ExtractedEntityRecord {
             name = requireNonBlank(name, "name");
             type = requireNonBlank(type, "type");
             description = normalizeNullable(description);
             aliases = List.copyOf(Objects.requireNonNull(aliases, "aliases"));
+            attributes = normalizeAttributes(attributes);
         }
     }
 
@@ -91,8 +106,19 @@ public interface DocumentGraphSnapshotStore {
         String targetEntityName,
         String keywords,
         String description,
-        double weight
+        double weight,
+        @JsonInclude(JsonInclude.Include.NON_EMPTY) Map<String, Object> attributes
     ) {
+        public ExtractedRelationRecord(
+            String sourceEntityName,
+            String targetEntityName,
+            String keywords,
+            String description,
+            double weight
+        ) {
+            this(sourceEntityName, targetEntityName, keywords, description, weight, Map.of());
+        }
+
         public ExtractedRelationRecord {
             sourceEntityName = requireNonBlank(sourceEntityName, "sourceEntityName");
             targetEntityName = requireNonBlank(targetEntityName, "targetEntityName");
@@ -101,7 +127,39 @@ public interface DocumentGraphSnapshotStore {
             if (!Double.isFinite(weight)) {
                 throw new IllegalArgumentException("weight must be finite");
             }
+            attributes = normalizeAttributes(attributes);
         }
+    }
+
+    private static Map<String, Object> normalizeAttributes(Map<String, Object> attributes) {
+        if (attributes == null || attributes.isEmpty()) {
+            return Map.of();
+        }
+        var sorted = new TreeMap<String, Object>();
+        for (var entry : attributes.entrySet()) {
+            var key = entry.getKey();
+            if (key == null) {
+                throw new IllegalArgumentException("attribute key must not be null");
+            }
+            var value = entry.getValue();
+            if (value == null) {
+                throw new IllegalArgumentException("attribute value must not be null: " + key);
+            }
+            sorted.put(key, copyAttributeValue(key, value));
+        }
+        return Collections.unmodifiableMap(sorted);
+    }
+
+    private static Object copyAttributeValue(String key, Object value) {
+        if (!(value instanceof List<?> values)) {
+            return value;
+        }
+        for (var element : values) {
+            if (element == null) {
+                throw new IllegalArgumentException("attribute list value must not contain null: " + key);
+            }
+        }
+        return List.copyOf(values);
     }
 
     private static String requireNonBlank(String value, String fieldName) {

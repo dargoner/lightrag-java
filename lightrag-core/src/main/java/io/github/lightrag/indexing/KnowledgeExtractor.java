@@ -1,6 +1,7 @@
 package io.github.lightrag.indexing;
 
 import com.fasterxml.jackson.core.JsonProcessingException;
+import com.fasterxml.jackson.databind.DeserializationFeature;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.ArrayNode;
@@ -22,9 +23,15 @@ import io.github.lightrag.model.ChatModel.ChatRequest;
 import io.github.lightrag.model.ChatRequestOptions;
 import io.github.lightrag.model.HeuristicTokenCounter;
 import io.github.lightrag.model.TokenCounter;
+import io.github.lightrag.ontology.AttributeValues;
+import io.github.lightrag.ontology.BoundAttributes;
 import io.github.lightrag.ontology.ExtractionMode;
+import io.github.lightrag.ontology.OntologyAttributeBinder;
+import io.github.lightrag.ontology.OntologyAttributeSchema;
 import io.github.lightrag.ontology.OntologyExtractionOverlay;
 import io.github.lightrag.ontology.OntologyPattern;
+import io.github.lightrag.ontology.OntologyProperty;
+import io.github.lightrag.ontology.UnmatchedLabel;
 import io.github.lightrag.types.Chunk;
 import io.github.lightrag.types.ExtractedEntity;
 import io.github.lightrag.types.ExtractedRelation;
@@ -33,6 +40,7 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import java.util.ArrayList;
+import java.util.Comparator;
 import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
@@ -40,9 +48,11 @@ import java.util.Locale;
 import java.util.Map;
 import java.util.Objects;
 import java.util.Optional;
+import java.util.Set;
 
 public final class KnowledgeExtractor {
-    private static final ObjectMapper OBJECT_MAPPER = new ObjectMapper();
+    private static final ObjectMapper OBJECT_MAPPER = new ObjectMapper()
+        .enable(DeserializationFeature.USE_BIG_DECIMAL_FOR_FLOATS);
     private static final Logger log = LoggerFactory.getLogger(KnowledgeExtractor.class);
     public static final int DEFAULT_ENTITY_EXTRACT_MAX_GLEANING = 1;
     public static final int DEFAULT_MAX_EXTRACT_INPUT_TOKENS = 20_480;
@@ -97,7 +107,7 @@ public final class KnowledgeExtractor {
                    "name": "Entity name",
                    "type": "Entity type",
                    "description": "Entity description",
-                   "aliases": ["Alias if explicitly stated"]
+                   "aliases": ["Alias if explicitly stated"]%7$s
                  }
                ],
                "relations": [
@@ -105,7 +115,7 @@ public final class KnowledgeExtractor {
                    "source_entity": "Source entity",
                    "target_entity": "Target entity",
                    "relationship_keywords": "keyword1, keyword2",
-                   "relationship_description": "Relationship description"
+                   "relationship_description": "Relationship description"%8$s
                  }
                ]
              }
@@ -164,6 +174,27 @@ public final class KnowledgeExtractor {
         If a candidate is valid but you cannot determine exact chunk indexes, you may return the candidate with an empty supportingChunkIndexes array.
         The indexes must reference the chunk order in the user prompt.
         """;
+    private static final Set<String> RESERVED_ENTITY_ATTRIBUTES =
+        Set.of("name", "type", "description", "aliases");
+    private static final Set<String> RESERVED_RELATION_ATTRIBUTES =
+        Set.of("source_entity", "target_entity", "relationship_keywords", "relationship_description", "weight");
+    private static final String ENTITY_ATTRIBUTES_OUTPUT_SHAPE =
+        ",\n           \"attributes\": {\"property\": \"value\"}";
+    private static final String RELATION_ATTRIBUTES_OUTPUT_SHAPE =
+        ",\n           \"attributes\": {\"property\": \"value\"}";
+    private static final Comparator<UnmatchedLabel> ATTRIBUTE_DIAGNOSTIC_ORDER = Comparator
+        .comparing((UnmatchedLabel diagnostic) ->
+            OntologyAttributeBinder.diagnosticSortKey(diagnostic.ownerLabel()))
+        .thenComparing((UnmatchedLabel diagnostic) ->
+            OntologyAttributeBinder.diagnosticSortKey(diagnostic.rawLabel()))
+        .thenComparing((UnmatchedLabel diagnostic) ->
+            diagnostic.reason() == null ? "" : diagnostic.reason().name())
+        .thenComparing((UnmatchedLabel diagnostic) ->
+            diagnostic.kind() == null ? "" : diagnostic.kind().name())
+        .thenComparing((UnmatchedLabel diagnostic) ->
+            diagnostic.rawLabel() == null ? "" : diagnostic.rawLabel())
+        .thenComparing((UnmatchedLabel diagnostic) ->
+            diagnostic.chunkId() == null ? "" : diagnostic.chunkId());
 
     private final ChatModel chatModel;
     private final int entityExtractMaxGleaning;
@@ -178,6 +209,8 @@ public final class KnowledgeExtractor {
     private final List<GraphExtractionExample> examples;
     private final boolean allowDeterministicAttributionFallback;
     private final OntologyExtractionOverlay ontologyExtractionOverlay;
+    private final OntologyAttributeSchema attributeSchema;
+    private final OntologyAttributeBinder attributeBinder = new OntologyAttributeBinder();
 
     public KnowledgeExtractor(ChatModel chatModel) {
         this(
@@ -322,6 +355,40 @@ public final class KnowledgeExtractor {
         boolean sectionContextEnabled,
         OntologyExtractionOverlay ontologyExtractionOverlay
     ) {
+        this(
+            chatModel,
+            entityExtractMaxGleaning,
+            maxExtractInputTokens,
+            language,
+            entityTypes,
+            relationTypes,
+            examples,
+            allowDeterministicAttributionFallback,
+            entityExtractMaxRecords,
+            entityExtractMaxEntities,
+            kgExtractionValidator,
+            sectionContextEnabled,
+            ontologyExtractionOverlay,
+            OntologyAttributeSchema.empty()
+        );
+    }
+
+    public KnowledgeExtractor(
+        ChatModel chatModel,
+        int entityExtractMaxGleaning,
+        int maxExtractInputTokens,
+        String language,
+        List<String> entityTypes,
+        List<String> relationTypes,
+        List<GraphExtractionExample> examples,
+        boolean allowDeterministicAttributionFallback,
+        int entityExtractMaxRecords,
+        int entityExtractMaxEntities,
+        KgExtractionValidator kgExtractionValidator,
+        boolean sectionContextEnabled,
+        OntologyExtractionOverlay ontologyExtractionOverlay,
+        OntologyAttributeSchema attributeSchema
+    ) {
         this.chatModel = Objects.requireNonNull(chatModel, "chatModel");
         if (entityExtractMaxGleaning < 0) {
             throw new IllegalArgumentException("entityExtractMaxGleaning must not be negative");
@@ -359,6 +426,9 @@ public final class KnowledgeExtractor {
         this.ontologyExtractionOverlay = ontologyExtractionOverlay == null
             ? OntologyExtractionOverlay.empty()
             : ontologyExtractionOverlay;
+        this.attributeSchema = attributeSchema == null || attributeSchema.isEmpty()
+            ? OntologyAttributeSchema.empty()
+            : attributeSchema;
     }
 
     public ExtractionResult extract(Chunk chunk) {
@@ -370,12 +440,13 @@ public final class KnowledgeExtractor {
 
         var warnings = new ArrayList<String>();
         var cacheIds = new ArrayList<String>();
+        var attributeDiagnostics = new ArrayList<UnmatchedLabel>();
         var userPrompt = buildUserPrompt(chunk);
         var systemPrompt = buildSystemPrompt();
         var request = new ChatRequest(systemPrompt, userPrompt, ChatRequestOptions.JSON_OBJECT);
         cacheIds.add(CachedChatModel.cacheId("extract", chatModel.cacheIdentity(), request));
         var response = chatModel.generate(request);
-        var current = sanitizeAliasConflicts(parseOrEmpty(response, chunk, warnings,
+        var current = sanitizeAliasConflicts(parseOrEmpty(response, chunk, warnings, attributeDiagnostics,
             "primary extraction response was empty or unrecoverable; continuing with an empty extraction"));
 
         var history = new ArrayList<ChatRequest.ConversationMessage>();
@@ -391,7 +462,7 @@ public final class KnowledgeExtractor {
             var gleanRequest = new ChatRequest(systemPrompt, continuePrompt, history, ChatRequestOptions.JSON_OBJECT);
             cacheIds.add(CachedChatModel.cacheId("extract", chatModel.cacheIdentity(), gleanRequest));
             var gleanResponse = chatModel.generate(gleanRequest);
-            var gleaned = sanitizeAliasConflicts(parseOrEmpty(gleanResponse, chunk, warnings,
+            var gleaned = sanitizeAliasConflicts(parseOrEmpty(gleanResponse, chunk, warnings, attributeDiagnostics,
                 "gleaning extraction response was empty or unrecoverable; keeping the accumulated extraction"));
             current = sanitizeAliasConflicts(merge(current, gleaned));
             history.add(new ChatRequest.ConversationMessage("user", continuePrompt));
@@ -405,6 +476,7 @@ public final class KnowledgeExtractor {
             }
             current = validated;
         }
+        forwardAttributeDiagnostics(attributeDiagnostics);
 
         return new ExtractionRun(
             new ExtractionResult(current.entities(), current.relations(), List.copyOf(warnings)),
@@ -417,7 +489,7 @@ public final class KnowledgeExtractor {
 
         var response = chatModel.generate(new ChatRequest(
             buildWindowSystemPrompt(), buildWindowPrompt(window), ChatRequestOptions.JSON_OBJECT));
-        var parsed = parseWindowExtractionResponse(response);
+        var parsed = parseWindowExtractionResponse(response, window);
         var warnings = new ArrayList<String>(parsed.warnings());
         var entityPatches = new ArrayList<RefinedEntityPatch>();
         for (var candidate : parsed.entities()) {
@@ -427,6 +499,7 @@ public final class KnowledgeExtractor {
         for (var candidate : parsed.relations()) {
             toRelationPatch(candidate, window, warnings, allowDeterministicAttributionFallback).ifPresent(relationPatches::add);
         }
+        forwardAttributeDiagnostics(parsed.attributeDiagnostics());
         return new RefinedWindowExtraction(
             List.copyOf(entityPatches),
             List.copyOf(relationPatches),
@@ -435,9 +508,15 @@ public final class KnowledgeExtractor {
         );
     }
 
-    private static ExtractionResult parseOrEmpty(String response, Chunk chunk, List<String> warnings, String unrecoverableMessage) {
+    private ExtractionResult parseOrEmpty(
+        String response,
+        Chunk chunk,
+        List<String> warnings,
+        List<UnmatchedLabel> attributeDiagnostics,
+        String unrecoverableMessage
+    ) {
         try {
-            return parseExtractionResult(response, chunk.id(), warnings);
+            return parseExtractionResult(response, chunk.id(), warnings, attributeDiagnostics);
         } catch (ExtractionException failure) {
             // Upstream degrades an unrecoverable extraction payload to a warning plus an empty
             // result (operate.py:948-953) instead of failing the chunk; mirror that here so one
@@ -448,7 +527,12 @@ public final class KnowledgeExtractor {
         }
     }
 
-    private static ExtractionResult parseExtractionResult(String response, String context, List<String> warnings) {
+    private ExtractionResult parseExtractionResult(
+        String response,
+        String context,
+        List<String> warnings,
+        List<UnmatchedLabel> attributeDiagnostics
+    ) {
         var root = parseResponse(response);
         // Models quoting LaTeX in descriptions routinely under-escape backslashes ("\frac" is
         // valid JSON meaning form feed + "rac"); restore the zero-risk cases before field
@@ -457,8 +541,8 @@ public final class KnowledgeExtractor {
         // (operate.py:960); covers initial extraction and gleaning, which both parse here.
         repairLatexEscapeDamage(root, context);
         return new ExtractionResult(
-            parseEntities(tolerantArray(root, "entities", context, warnings)),
-            parseRelations(tolerantArray(root, "relations", context, warnings)),
+            parseEntities(tolerantArray(root, "entities", context, warnings), context, attributeDiagnostics),
+            parseRelations(tolerantArray(root, "relations", context, warnings), context, attributeDiagnostics),
             List.of()
         );
     }
@@ -505,12 +589,19 @@ public final class KnowledgeExtractor {
         }
     }
 
-    private static WindowExtractionResponse parseWindowExtractionResponse(String response) {
+    private WindowExtractionResponse parseWindowExtractionResponse(String response, RefinementWindow window) {
         var root = parseResponse(response);
+        var anchorChunkId = window.chunks().get(window.anchorChunkIndex()).id();
+        var attributeDiagnostics = new ArrayList<UnmatchedLabel>();
+        var entities = parseWindowEntities(
+            topLevelArray(root, "entities"), anchorChunkId, attributeDiagnostics);
+        var relations = parseWindowRelations(
+            topLevelArray(root, "relations"), anchorChunkId, attributeDiagnostics);
         return new WindowExtractionResponse(
-            parseWindowEntities(topLevelArray(root, "entities")),
-            parseWindowRelations(topLevelArray(root, "relations")),
-            parseWarnings(root.get("warnings"))
+            entities,
+            relations,
+            parseWarnings(root.get("warnings")),
+            normalizeAttributeDiagnostics(attributeDiagnostics)
         );
     }
 
@@ -655,7 +746,11 @@ public final class KnowledgeExtractor {
         return field;
     }
 
-    private static List<ExtractedEntity> parseEntities(JsonNode entitiesNode) {
+    private List<ExtractedEntity> parseEntities(
+        JsonNode entitiesNode,
+        String chunkId,
+        List<UnmatchedLabel> attributeDiagnostics
+    ) {
         if (!entitiesNode.isArray()) {
             return List.of();
         }
@@ -667,12 +762,16 @@ public final class KnowledgeExtractor {
                 continue;
             }
 
+            var type = normalizedText(entityNode.get("type"));
+            var bound = bindEntityAttributes(chunkId, type, entityNode.get("attributes"));
+            attributeDiagnostics.addAll(bound.diagnostics());
             try {
                 entities.add(new ExtractedEntity(
                     name,
-                    normalizedText(entityNode.get("type")),
+                    type,
                     normalizedText(entityNode.get("description")),
-                    parseAliases(entityNode.get("aliases"))
+                    parseAliases(entityNode.get("aliases")),
+                    bound.values()
                 ));
             } catch (IllegalArgumentException ignored) {
                 // Skip malformed entity rows while preserving valid rows.
@@ -696,7 +795,11 @@ public final class KnowledgeExtractor {
         return List.copyOf(aliases);
     }
 
-    private static List<ExtractedRelation> parseRelations(JsonNode relationsNode) {
+    private List<ExtractedRelation> parseRelations(
+        JsonNode relationsNode,
+        String chunkId,
+        List<UnmatchedLabel> attributeDiagnostics
+    ) {
         if (!relationsNode.isArray()) {
             return List.of();
         }
@@ -711,6 +814,8 @@ public final class KnowledgeExtractor {
                 continue;
             }
 
+            var bound = bindRelationAttributes(chunkId, keywords, relationNode.get("attributes"));
+            attributeDiagnostics.addAll(bound.diagnostics());
             try {
                 relations.add(new ExtractedRelation(
                     sourceEntityName,
@@ -719,7 +824,8 @@ public final class KnowledgeExtractor {
                     normalizedText(relationNode.get("relationship_description")),
                     // Upstream fixes the extraction-path weight at 1.0 (operate.py:1084): a model-supplied
                     // weight is ignored and the storage merge re-derives growth from the source ids.
-                    1.0d
+                    1.0d,
+                    bound.values()
                 ));
             } catch (IllegalArgumentException ignored) {
                 // Skip malformed relation rows while preserving valid rows.
@@ -728,7 +834,11 @@ public final class KnowledgeExtractor {
         return List.copyOf(relations);
     }
 
-    private static List<WindowEntityCandidate> parseWindowEntities(JsonNode entitiesNode) {
+    private List<WindowEntityCandidate> parseWindowEntities(
+        JsonNode entitiesNode,
+        String chunkId,
+        List<UnmatchedLabel> attributeDiagnostics
+    ) {
         if (!entitiesNode.isArray()) {
             return List.of();
         }
@@ -740,18 +850,26 @@ public final class KnowledgeExtractor {
                 continue;
             }
 
+            var type = normalizedText(entityNode.get("type"));
+            var bound = bindEntityAttributes(chunkId, type, entityNode.get("attributes"));
+            attributeDiagnostics.addAll(bound.diagnostics());
             entities.add(new WindowEntityCandidate(
                 name,
-                normalizedText(entityNode.get("type")),
+                type,
                 normalizedText(entityNode.get("description")),
                 parseAliases(entityNode.get("aliases")),
-                parseSupportingChunkIndexes(entityNode.get("supportingChunkIndexes"))
+                parseSupportingChunkIndexes(entityNode.get("supportingChunkIndexes")),
+                bound.values()
             ));
         }
         return List.copyOf(entities);
     }
 
-    private static List<WindowRelationCandidate> parseWindowRelations(JsonNode relationsNode) {
+    private List<WindowRelationCandidate> parseWindowRelations(
+        JsonNode relationsNode,
+        String chunkId,
+        List<UnmatchedLabel> attributeDiagnostics
+    ) {
         if (!relationsNode.isArray()) {
             return List.of();
         }
@@ -766,13 +884,16 @@ public final class KnowledgeExtractor {
                 continue;
             }
 
+            var bound = bindRelationAttributes(chunkId, keywords, relationNode.get("attributes"));
+            attributeDiagnostics.addAll(bound.diagnostics());
             relations.add(new WindowRelationCandidate(
                 sourceEntityName,
                 targetEntityName,
                 keywords,
                 normalizedText(relationNode.get("relationship_description")),
                 1.0d,
-                parseSupportingChunkIndexes(relationNode.get("supportingChunkIndexes"))
+                parseSupportingChunkIndexes(relationNode.get("supportingChunkIndexes")),
+                bound.values()
             ));
         }
         return List.copyOf(relations);
@@ -821,6 +942,61 @@ public final class KnowledgeExtractor {
         return node.asText("").strip();
     }
 
+    private BoundAttributes bindEntityAttributes(String chunkId, String type, JsonNode attributesNode) {
+        if (attributeSchema.isEmpty()) {
+            return new BoundAttributes(Map.of(), List.of());
+        }
+        return attributeBinder.bindEntity(attributeSchema, chunkId, type, attributesNode);
+    }
+
+    private BoundAttributes bindRelationAttributes(String chunkId, String keywords, JsonNode attributesNode) {
+        if (attributeSchema.isEmpty()) {
+            return new BoundAttributes(Map.of(), List.of());
+        }
+        return attributeBinder.bindRelation(attributeSchema, chunkId, keywords, attributesNode);
+    }
+
+    private void forwardAttributeDiagnostics(List<UnmatchedLabel> diagnostics) {
+        var normalized = normalizeAttributeDiagnostics(diagnostics);
+        if (normalized.isEmpty()) {
+            return;
+        }
+        if (kgExtractionValidator == null) {
+            log.warn(
+                "attribute_diagnostics_discarded_without_validator count={}",
+                normalized.size()
+            );
+            return;
+        }
+        kgExtractionValidator.onAttributeDiagnostics(normalized);
+    }
+
+    private static List<UnmatchedLabel> normalizeAttributeDiagnostics(List<UnmatchedLabel> diagnostics) {
+        if (diagnostics == null || diagnostics.isEmpty()) {
+            return List.of();
+        }
+        var sorted = new ArrayList<UnmatchedLabel>(diagnostics);
+        sorted.sort(ATTRIBUTE_DIAGNOSTIC_ORDER);
+        var unique = new ArrayList<UnmatchedLabel>(sorted.size());
+        String previousKey = null;
+        for (var diagnostic : sorted) {
+            String key = diagnosticKey(diagnostic);
+            if (!key.equals(previousKey)) {
+                unique.add(diagnostic);
+                previousKey = key;
+            }
+        }
+        return List.copyOf(unique);
+    }
+
+    private static String diagnosticKey(UnmatchedLabel diagnostic) {
+        return OntologyAttributeBinder.diagnosticSortKey(diagnostic.ownerLabel())
+            + '\u0000'
+            + OntologyAttributeBinder.diagnosticSortKey(diagnostic.rawLabel())
+            + '\u0000'
+            + (diagnostic.reason() == null ? "" : diagnostic.reason().name());
+    }
+
     private String buildUserPrompt(Chunk chunk) {
         return """
             ---Task---
@@ -864,7 +1040,9 @@ public final class KnowledgeExtractor {
             renderEntityTypeFallbackInstruction(),
             language,
             entityExtractMaxRecords,
-            entityExtractMaxEntities
+            entityExtractMaxEntities,
+            hasEntityAttributeDeclarations() ? ENTITY_ATTRIBUTES_OUTPUT_SHAPE : "",
+            hasRelationAttributeDeclarations() ? RELATION_ATTRIBUTES_OUTPUT_SHAPE : ""
         );
     }
 
@@ -925,7 +1103,9 @@ public final class KnowledgeExtractor {
             }
             guidance.append("\n           - Patterns are directional guidance; if direction is not explicitly stated in the text, both directions are acceptable.");
         }
-        if (!ontologyExtractionOverlay.attributeBlocks().isEmpty()) {
+        if (hasAttributeDeclarations()) {
+            guidance.append(renderAttributeDeclarations());
+        } else if (attributeSchema.isEmpty() && !ontologyExtractionOverlay.attributeBlocks().isEmpty()) {
             guidance.append("\n\n        Ontology Attributes:");
             for (var block : ontologyExtractionOverlay.attributeBlocks().values()) {
                 for (String line : block.split("\n", -1)) {
@@ -959,6 +1139,87 @@ public final class KnowledgeExtractor {
             guidance.append("\n           Use these examples as extraction hints, but still return the JSON schema below.");
         }
         return guidance.toString();
+    }
+
+    private boolean hasAttributeDeclarations() {
+        return hasEntityAttributeDeclarations() || hasRelationAttributeDeclarations();
+    }
+
+    private boolean hasEntityAttributeDeclarations() {
+        for (var properties : attributeSchema.entityTypes().values()) {
+            if (!renderableProperties(properties, RESERVED_ENTITY_ATTRIBUTES).isEmpty()) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    private boolean hasRelationAttributeDeclarations() {
+        for (var properties : attributeSchema.relationTypes().values()) {
+            if (!renderableProperties(properties, RESERVED_RELATION_ATTRIBUTES).isEmpty()) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    private String renderAttributeDeclarations() {
+        var guidance = new StringBuilder();
+        guidance.append("\n\n        Ontology Attributes:");
+        guidance.append("\n           - Extract only the attributes declared below; omit any attribute the input text does not state and never invent undeclared attributes.");
+        guidance.append("\n           - Emit each declared attribute inside the \"attributes\" object of the corresponding entity or relationship, using the declared value type (LIST as a JSON array, DATE as ISO 8601 yyyy-MM-dd).");
+        if (hasEntityAttributeDeclarations()) {
+            guidance.append("\n           Entity type attribute declarations (match the entity \"type\" identity):");
+            for (var entry : attributeSchema.entityTypes().entrySet()) {
+                var properties = renderableProperties(entry.getValue(), RESERVED_ENTITY_ATTRIBUTES);
+                if (properties.isEmpty()) {
+                    continue;
+                }
+                guidance.append("\n             - ").append(entry.getKey()).append(':');
+                appendPropertyDeclarations(guidance, properties);
+            }
+        }
+        if (hasRelationAttributeDeclarations()) {
+            guidance.append("\n           Relation type attribute declarations (match the relationship_keywords identities):");
+            for (var entry : attributeSchema.relationTypes().entrySet()) {
+                var properties = renderableProperties(entry.getValue(), RESERVED_RELATION_ATTRIBUTES);
+                if (properties.isEmpty()) {
+                    continue;
+                }
+                guidance.append("\n             - ").append(entry.getKey()).append(':');
+                appendPropertyDeclarations(guidance, properties);
+            }
+        }
+        return guidance.toString();
+    }
+
+    private static void appendPropertyDeclarations(
+        StringBuilder guidance,
+        List<OntologyProperty> properties
+    ) {
+        for (var property : properties) {
+            guidance.append("\n               - ")
+                .append(property.identityId())
+                .append(" (")
+                .append(property.type().name().toLowerCase(Locale.ROOT))
+                .append(')');
+            if (property.description() != null && !property.description().isEmpty()) {
+                guidance.append(": ").append(property.description());
+            }
+        }
+    }
+
+    private static List<OntologyProperty> renderableProperties(
+        List<OntologyProperty> properties,
+        Set<String> reservedIdentities
+    ) {
+        var renderable = new ArrayList<OntologyProperty>();
+        for (var property : properties) {
+            if (!reservedIdentities.contains(property.identityId())) {
+                renderable.add(property);
+            }
+        }
+        return List.copyOf(renderable);
     }
 
     private String buildWindowSystemPrompt() {
@@ -1014,7 +1275,8 @@ public final class KnowledgeExtractor {
                     candidate.name(),
                     candidate.type(),
                     candidate.description(),
-                    candidate.aliases()
+                    candidate.aliases(),
+                    candidate.attributes()
                 ),
                 supportingChunkIds
             ));
@@ -1043,7 +1305,8 @@ public final class KnowledgeExtractor {
                     candidate.targetEntityName(),
                     canonicalKeywords(candidate.keywords()),
                     candidate.description(),
-                    candidate.weight()
+                    candidate.weight(),
+                    candidate.attributes()
                 ),
                 supportingChunkIds
             ));
@@ -1094,7 +1357,8 @@ public final class KnowledgeExtractor {
             left.name(),
             preferredText(left.type(), right.type()),
             longerText(left.description(), right.description()),
-            List.copyOf(aliases)
+            List.copyOf(aliases),
+            AttributeValues.merge(left.attributes(), right.attributes())
         );
     }
 
@@ -1113,7 +1377,8 @@ public final class KnowledgeExtractor {
             longerText(left.description(), right.description()),
             // Rows merged here come from the same chunk (gleaning rounds), so both operands are the
             // fixed 1.0 extraction weight; summing would double-count one chunk's evidence.
-            Math.max(left.weight(), right.weight())
+            Math.max(left.weight(), right.weight()),
+            AttributeValues.merge(left.attributes(), right.attributes())
         );
     }
 
@@ -1136,7 +1401,8 @@ public final class KnowledgeExtractor {
                     return !entityKey.equals(aliasKey) && !relationPairs.contains(relationPairKey(entityKey, aliasKey));
                 })
                 .toList();
-            sanitizedEntities.add(new ExtractedEntity(entity.name(), entity.type(), entity.description(), aliases));
+            sanitizedEntities.add(new ExtractedEntity(
+                entity.name(), entity.type(), entity.description(), aliases, entity.attributes()));
         }
 
         return new ExtractionResult(List.copyOf(sanitizedEntities), result.relations(), result.warnings());

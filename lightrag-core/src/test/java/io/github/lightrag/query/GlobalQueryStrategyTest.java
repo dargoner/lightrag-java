@@ -4,6 +4,7 @@ import io.github.lightrag.api.KgChunkPickMethod;
 import io.github.lightrag.api.QueryMode;
 import io.github.lightrag.api.QueryRequest;
 import io.github.lightrag.indexing.ParentChildChunkBuilder;
+import io.github.lightrag.indexing.RelationCanonicalizer;
 import io.github.lightrag.model.EmbeddingModel;
 import io.github.lightrag.model.HeuristicTokenCounter;
 import io.github.lightrag.model.TokenCounter;
@@ -409,6 +410,62 @@ class GlobalQueryStrategyTest {
 
         assertThat(context.matchedRelations()).isNotEmpty();
         assertThat(context.matchedChunks()).isEmpty();
+    }
+
+    @Test
+    void globalPropagatesAttributesToMatchedRelationsAndEntities() {
+        var storage = InMemoryStorageProvider.create();
+        LocalQueryStrategyTest.seedGraph(storage);
+        LocalQueryStrategyTest.seedVectors(storage);
+        var entityAttributes = Map.<String, Object>of("Age", 33L, "tags", List.of("researcher"));
+        var relationAttributes = Map.<String, Object>of("since", 2020L);
+        storage.graphStore().saveEntity(new GraphStore.EntityRecord(
+            "alice",
+            "Alice",
+            "person",
+            "Researcher",
+            List.of(),
+            List.of("chunk-1"),
+            "",
+            entityAttributes
+        ));
+        storage.graphStore().saveEntity(new GraphStore.EntityRecord(
+            "bob",
+            "Bob",
+            "person",
+            "Engineer",
+            List.of("Robert"),
+            List.of("chunk-2", "chunk-3"),
+            "",
+            entityAttributes
+        ));
+        storage.graphStore().saveRelation(new GraphStore.RelationRecord(
+            relationId("alice", "bob"),
+            "alice",
+            "bob",
+            "works_with",
+            "Alice collaborates with Bob",
+            0.8d,
+            RelationCanonicalizer.joinValues(List.of("chunk-1", "chunk-2")),
+            "",
+            relationAttributes
+        ));
+        var strategy = new GlobalQueryStrategy(
+            new FakeEmbeddingModel(Map.of("alice theme", List.of(1.0d, 0.0d))),
+            storage,
+            new ContextAssembler(), TOKEN_COUNTER
+        );
+
+        var context = strategy.retrieve(QueryRequest.builder()
+            .query("alice theme")
+            .mode(QueryMode.GLOBAL)
+            .topK(1)
+            .chunkTopK(2)
+            .build());
+
+        assertThat(context.matchedRelations().get(0).relation().attributes()).isEqualTo(relationAttributes);
+        assertThat(context.matchedEntities())
+            .allSatisfy(match -> assertThat(match.entity().attributes()).isEqualTo(entityAttributes));
     }
 
     private record FakeEmbeddingModel(Map<String, List<Double>> vectorsByText) implements EmbeddingModel {

@@ -3,6 +3,7 @@ package io.github.lightrag.storage.mysql;
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import io.github.lightrag.ontology.AttributeJsonCodec;
 import io.github.lightrag.storage.DocumentGraphSnapshotStore;
 
 import java.io.IOException;
@@ -57,7 +58,15 @@ public final class MySqlJsonCodec {
     }
 
     public static List<DocumentGraphSnapshotStore.ExtractedEntityRecord> readExtractedEntityList(String value) {
-        return readJson(value, EXTRACTED_ENTITY_LIST);
+        return readJson(value, EXTRACTED_ENTITY_LIST).stream()
+            .map(entity -> new DocumentGraphSnapshotStore.ExtractedEntityRecord(
+                entity.name(),
+                entity.type(),
+                entity.description(),
+                entity.aliases(),
+                canonicalAttributes(entity.attributes())
+            ))
+            .toList();
     }
 
     public static String writeExtractedRelationList(List<DocumentGraphSnapshotStore.ExtractedRelationRecord> value) {
@@ -65,7 +74,27 @@ public final class MySqlJsonCodec {
     }
 
     public static List<DocumentGraphSnapshotStore.ExtractedRelationRecord> readExtractedRelationList(String value) {
-        return readJson(value, EXTRACTED_RELATION_LIST);
+        return readJson(value, EXTRACTED_RELATION_LIST).stream()
+            .map(relation -> new DocumentGraphSnapshotStore.ExtractedRelationRecord(
+                relation.sourceEntityName(),
+                relation.targetEntityName(),
+                relation.keywords(),
+                relation.description(),
+                relation.weight(),
+                canonicalAttributes(relation.attributes())
+            ))
+            .toList();
+    }
+
+    /**
+     * Attribute bags are canonical JSON values: integral numbers are {@link Long}
+     * and fractional numbers are {@link Double}. Plain JSON deserialization yields
+     * {@link Integer} for small integrals, so re-encoding through the codec keeps
+     * reloaded bags identical to the saved values. Other maps (document status
+     * metadata, for example) keep their plain JSON types.
+     */
+    private static Map<String, Object> canonicalAttributes(Map<String, Object> attributes) {
+        return AttributeJsonCodec.fromJson(AttributeJsonCodec.toJson(attributes));
     }
 
     private static String writeJson(Object value) {

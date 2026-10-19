@@ -2,6 +2,7 @@ package io.github.lightrag.api;
 
 import io.github.lightrag.indexing.RelationCanonicalizer;
 
+import java.util.Map;
 import java.util.Objects;
 
 public record UpdateRelationRequest(
@@ -11,8 +12,21 @@ public record UpdateRelationRequest(
     String description,
     Double weight,
     String sourceId,
-    String filePath
+    String filePath,
+    Map<String, Object> attributes
 ) {
+    public UpdateRelationRequest(
+        String sourceEntityName,
+        String targetEntityName,
+        String keywords,
+        String description,
+        Double weight,
+        String sourceId,
+        String filePath
+    ) {
+        this(sourceEntityName, targetEntityName, keywords, description, weight, sourceId, filePath, null);
+    }
+
     public UpdateRelationRequest {
         sourceEntityName = CreateRelationRequest.normalizeEndpoint(sourceEntityName, "sourceEntityName");
         targetEntityName = CreateRelationRequest.normalizeEndpoint(targetEntityName, "targetEntityName");
@@ -23,9 +37,15 @@ public record UpdateRelationRequest(
         if (weight != null && !Double.isFinite(weight)) {
             throw new IllegalArgumentException("weight must be finite");
         }
-        if (keywords == null && description == null && weight == null && sourceId == null && filePath == null) {
+        if (keywords == null
+            && description == null
+            && weight == null
+            && sourceId == null
+            && filePath == null
+            && attributes == null) {
             throw new IllegalArgumentException("at least one mutable relation field must be provided");
         }
+        attributes = AttributeRequestMaps.optional(attributes);
     }
 
     public static Builder builder() {
@@ -40,6 +60,7 @@ public record UpdateRelationRequest(
         private Double weight;
         private String sourceId;
         private String filePath;
+        private Map<String, Object> attributes;
 
         public Builder sourceEntityName(String sourceEntityName) {
             this.sourceEntityName = sourceEntityName;
@@ -76,8 +97,22 @@ public record UpdateRelationRequest(
             return this;
         }
 
+        public Builder attributes(Map<String, Object> attributes) {
+            this.attributes = attributes;
+            return this;
+        }
+
         public UpdateRelationRequest build() {
-            return new UpdateRelationRequest(sourceEntityName, targetEntityName, keywords, description, weight, sourceId, filePath);
+            return new UpdateRelationRequest(
+                sourceEntityName,
+                targetEntityName,
+                keywords,
+                description,
+                weight,
+                sourceId,
+                filePath,
+                attributes
+            );
         }
     }
 

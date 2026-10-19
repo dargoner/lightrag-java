@@ -615,12 +615,17 @@ public final class PostgresRelationalStorageAdapter implements RelationalStorage
                         type TEXT NOT NULL,
                         description TEXT NOT NULL,
                         file_path VARCHAR(32768) NOT NULL DEFAULT '',
+                        attributes TEXT NOT NULL DEFAULT '{}',
                         PRIMARY KEY (workspace_id, id)
                     )
                     """.formatted(config.qualifiedTableName("entities")),
                 """
                     ALTER TABLE %s
                     ADD COLUMN IF NOT EXISTS file_path VARCHAR(32768) NOT NULL DEFAULT ''
+                    """.formatted(config.qualifiedTableName("entities")),
+                """
+                    ALTER TABLE %s
+                    ADD COLUMN IF NOT EXISTS attributes TEXT NOT NULL DEFAULT '{}'
                     """.formatted(config.qualifiedTableName("entities")),
                 """
                     CREATE TABLE IF NOT EXISTS %s (
@@ -649,8 +654,13 @@ public final class PostgresRelationalStorageAdapter implements RelationalStorage
                         weight DOUBLE PRECISION NOT NULL,
                         source_id TEXT NOT NULL DEFAULT '',
                         file_path VARCHAR(32768) NOT NULL DEFAULT '',
+                        attributes TEXT NOT NULL DEFAULT '{}',
                         PRIMARY KEY (workspace_id, id)
                     )
+                    """.formatted(config.qualifiedTableName("relations")),
+                """
+                    ALTER TABLE %s
+                    ADD COLUMN IF NOT EXISTS attributes TEXT NOT NULL DEFAULT '{}'
                     """.formatted(config.qualifiedTableName("relations")),
                 """
                     CREATE TABLE IF NOT EXISTS %s (

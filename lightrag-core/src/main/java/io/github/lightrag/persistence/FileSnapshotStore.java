@@ -2,6 +2,8 @@ package io.github.lightrag.persistence;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 import io.github.lightrag.exception.StorageException;
+import io.github.lightrag.storage.DocumentGraphSnapshotStore;
+import io.github.lightrag.storage.GraphStore;
 import io.github.lightrag.storage.SnapshotStore;
 
 import java.io.IOException;
@@ -12,6 +14,7 @@ import java.nio.file.Path;
 import java.nio.file.StandardCopyOption;
 import java.time.Instant;
 import java.util.List;
+import java.util.Map;
 import java.util.NoSuchElementException;
 import java.util.Objects;
 import java.util.concurrent.ConcurrentNavigableMap;
@@ -48,14 +51,114 @@ public final class FileSnapshotStore implements SnapshotStore {
         var manifestPath = normalize(path);
         try {
             var manifest = readManifest(manifestPath);
+            requireSupportedVersion(manifest, manifestPath);
             var payload = readPayload(manifestPath.resolveSibling(manifest.payloadFile()));
             knownSnapshots.put(manifestPath.toString(), manifestPath);
-            return payload.toSnapshot();
-        } catch (NoSuchElementException exception) {
+            var snapshot = payload.toSnapshot();
+            return SnapshotManifest.carriesAttributes(manifest.schemaVersion())
+                ? snapshot
+                : withoutAttributes(snapshot);
+        } catch (NoSuchElementException | StorageException exception) {
             throw exception;
-        } catch (IOException exception) {
+        } catch (IOException | RuntimeException exception) {
             throw new StorageException("Failed to load snapshot: " + manifestPath, exception);
         }
+    }
+
+    private static void requireSupportedVersion(SnapshotManifest manifest, Path manifestPath) {
+        if (manifest.schemaVersion() > SnapshotManifest.CURRENT_SCHEMA_VERSION) {
+            throw new StorageException(
+                "Unsupported snapshot schema version " + manifest.schemaVersion()
+                    + " (supported: " + SnapshotManifest.LEGACY_SCHEMA_VERSION
+                    + ".." + SnapshotManifest.CURRENT_SCHEMA_VERSION + "): " + manifestPath
+                    + ". Upgrade the SDK to read this snapshot."
+            );
+        }
+    }
+
+    /**
+     * Rebuilds a legacy (schema version 1) snapshot with empty attribute maps.
+     *
+     * <p>Version 1 payloads predate attributes. Records written by this SDK always normalize a
+     * missing map to empty, but ignoring any attributes present in a hand-edited or downgraded
+     * version 1 payload keeps the loaded shape identical to what the writer promised.
+     */
+    private static Snapshot withoutAttributes(Snapshot snapshot) {
+        var entities = snapshot.entities().stream()
+            .map(entity -> new GraphStore.EntityRecord(
+                entity.id(),
+                entity.name(),
+                entity.type(),
+                entity.description(),
+                entity.aliases(),
+                entity.sourceChunkIds(),
+                entity.filePath(),
+                Map.of()
+            ))
+            .toList();
+        var relations = snapshot.relations().stream()
+            .map(relation -> new GraphStore.RelationRecord(
+                relation.id(),
+                relation.srcId(),
+                relation.tgtId(),
+                relation.keywords(),
+                relation.description(),
+                relation.weight(),
+                relation.sourceId(),
+                relation.filePath(),
+                Map.of()
+            ))
+            .toList();
+        var chunkGraphSnapshots = snapshot.chunkGraphSnapshots().stream()
+            .map(FileSnapshotStore::withoutExtractedAttributes)
+            .toList();
+        return new Snapshot(
+            snapshot.documents(),
+            snapshot.chunks(),
+            entities,
+            relations,
+            snapshot.vectors(),
+            snapshot.documentStatuses(),
+            snapshot.documentGraphSnapshots(),
+            chunkGraphSnapshots,
+            snapshot.documentGraphJournals(),
+            snapshot.chunkGraphJournals()
+        );
+    }
+
+    private static DocumentGraphSnapshotStore.ChunkGraphSnapshot withoutExtractedAttributes(
+        DocumentGraphSnapshotStore.ChunkGraphSnapshot chunk
+    ) {
+        var entities = chunk.entities().stream()
+            .map(entity -> new DocumentGraphSnapshotStore.ExtractedEntityRecord(
+                entity.name(),
+                entity.type(),
+                entity.description(),
+                entity.aliases(),
+                Map.of()
+            ))
+            .toList();
+        var relations = chunk.relations().stream()
+            .map(relation -> new DocumentGraphSnapshotStore.ExtractedRelationRecord(
+                relation.sourceEntityName(),
+                relation.targetEntityName(),
+                relation.keywords(),
+                relation.description(),
+                relation.weight(),
+                Map.of()
+            ))
+            .toList();
+        return new DocumentGraphSnapshotStore.ChunkGraphSnapshot(
+            chunk.documentId(),
+            chunk.chunkId(),
+            chunk.chunkOrder(),
+            chunk.contentHash(),
+            chunk.extractStatus(),
+            entities,
+            relations,
+            chunk.updatedAt(),
+            chunk.errorMessage()
+        );
     }
 
     @Override
@@ -69,7 +172,7 @@ public final class FileSnapshotStore implements SnapshotStore {
             return OBJECT_MAPPER.readValue(inputStream, SnapshotManifest.class);
         } catch (NoSuchElementException exception) {
             throw new NoSuchElementException("No snapshot stored for path: " + manifestPath);
-        } catch (IOException exception) {
+        } catch (IOException | RuntimeException exception) {
             throw new StorageException("Failed to read snapshot manifest: " + manifestPath, exception);
         }
     }

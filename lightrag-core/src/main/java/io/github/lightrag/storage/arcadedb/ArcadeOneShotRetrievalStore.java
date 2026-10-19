@@ -1,8 +1,8 @@
 package io.github.lightrag.storage.arcadedb;
 
+import io.github.lightrag.ontology.AttributeJsonCodec;
 import io.github.lightrag.storage.OneShotRetrievalStore;
 import io.github.lightrag.storage.VectorStore;
-import io.github.lightrag.indexing.RelationCanonicalizer;
 import io.github.lightrag.types.Chunk;
 import io.github.lightrag.types.Entity;
 import io.github.lightrag.types.Relation;
@@ -160,7 +160,7 @@ final class ArcadeOneShotRetrievalStore extends ArcadeStoreSupport implements On
         }
         return query(
             """
-            SELECT id, name, type, description, aliases, sourceChunkIds
+            SELECT id, name, type, description, aliases, sourceChunkIds, filePath, attributes
             FROM Entity
             WHERE workspaceId = :workspaceId
               AND id IN :ids
@@ -178,7 +178,7 @@ final class ArcadeOneShotRetrievalStore extends ArcadeStoreSupport implements On
         }
         return query(
             """
-            SELECT id, srcId, tgtId, keywords, description, weight, sourceId, filePath
+            SELECT id, srcId, tgtId, keywords, description, weight, sourceId, filePath, attributes
             FROM Relation
             WHERE workspaceId = :workspaceId
               AND id IN :ids
@@ -196,7 +196,7 @@ final class ArcadeOneShotRetrievalStore extends ArcadeStoreSupport implements On
         }
         return query(
             """
-            SELECT id, srcId, tgtId, keywords, description, weight, sourceId, filePath
+            SELECT id, srcId, tgtId, keywords, description, weight, sourceId, filePath, attributes
             FROM Relation
             WHERE workspaceId = :workspaceId
               AND (srcId IN :ids OR tgtId IN :ids)
@@ -248,7 +248,8 @@ final class ArcadeOneShotRetrievalStore extends ArcadeStoreSupport implements On
             ArcadeRecordMapper.string(row, "description"),
             ArcadeRecordMapper.stringList(row, "aliases"),
             ArcadeRecordMapper.stringList(row, "sourceChunkIds"),
-            ArcadeRecordMapper.string(row, "filePath")
+            ArcadeRecordMapper.string(row, "filePath"),
+            AttributeJsonCodec.fromJson(ArcadeRecordMapper.nullableString(row, "attributes"))
         );
     }
 
@@ -260,7 +261,9 @@ final class ArcadeOneShotRetrievalStore extends ArcadeStoreSupport implements On
             ArcadeRecordMapper.string(row, "keywords"),
             ArcadeRecordMapper.string(row, "description"),
             ArcadeRecordMapper.decimal(row, "weight"),
-            RelationCanonicalizer.splitValues(ArcadeRecordMapper.string(row, "sourceId"))
+            ArcadeRecordMapper.string(row, "sourceId"),
+            ArcadeRecordMapper.string(row, "filePath"),
+            AttributeJsonCodec.fromJson(ArcadeRecordMapper.nullableString(row, "attributes"))
         );
     }
 

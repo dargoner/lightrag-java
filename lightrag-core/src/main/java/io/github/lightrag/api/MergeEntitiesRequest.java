@@ -5,6 +5,7 @@ import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Locale;
+import java.util.Map;
 import java.util.Objects;
 
 public record MergeEntitiesRequest(
@@ -12,14 +13,26 @@ public record MergeEntitiesRequest(
     String targetEntityName,
     String targetType,
     String targetDescription,
-    List<String> targetAliases
+    List<String> targetAliases,
+    Map<String, Object> targetAttributes
 ) {
+    public MergeEntitiesRequest(
+        List<String> sourceEntityNames,
+        String targetEntityName,
+        String targetType,
+        String targetDescription,
+        List<String> targetAliases
+    ) {
+        this(sourceEntityNames, targetEntityName, targetType, targetDescription, targetAliases, null);
+    }
+
     public MergeEntitiesRequest {
         sourceEntityNames = normalizeSourceEntityNames(sourceEntityNames);
         targetEntityName = requireNonBlank(targetEntityName, "targetEntityName");
         targetType = normalizeNullable(targetType);
         targetDescription = normalizeNullable(targetDescription);
         targetAliases = targetAliases == null ? null : normalizeAliases(targetAliases);
+        targetAttributes = AttributeRequestMaps.optional(targetAttributes);
     }
 
     public static Builder builder() {
@@ -32,6 +45,7 @@ public record MergeEntitiesRequest(
         private String targetType;
         private String targetDescription;
         private List<String> targetAliases;
+        private Map<String, Object> targetAttributes;
 
         public Builder sourceEntityNames(List<String> sourceEntityNames) {
             this.sourceEntityNames = sourceEntityNames;
@@ -58,8 +72,20 @@ public record MergeEntitiesRequest(
             return this;
         }
 
+        public Builder targetAttributes(Map<String, Object> targetAttributes) {
+            this.targetAttributes = targetAttributes;
+            return this;
+        }
+
         public MergeEntitiesRequest build() {
-            return new MergeEntitiesRequest(sourceEntityNames, targetEntityName, targetType, targetDescription, targetAliases);
+            return new MergeEntitiesRequest(
+                sourceEntityNames,
+                targetEntityName,
+                targetType,
+                targetDescription,
+                targetAliases,
+                targetAttributes
+            );
         }
     }
 

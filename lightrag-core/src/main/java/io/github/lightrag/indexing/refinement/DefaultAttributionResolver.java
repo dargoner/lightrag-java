@@ -1,5 +1,6 @@
 package io.github.lightrag.indexing.refinement;
 
+import io.github.lightrag.ontology.AttributeValues;
 import io.github.lightrag.types.ExtractedEntity;
 import io.github.lightrag.types.ExtractedRelation;
 
@@ -103,11 +104,11 @@ public final class DefaultAttributionResolver implements AttributionResolver {
         }
 
         private void addEntity(ExtractedEntity entity) {
-            entities.putIfAbsent(normalize(entity.name()), entity);
+            entities.merge(normalize(entity.name()), entity, DefaultAttributionResolver::mergeEntity);
         }
 
         private void addRelation(ExtractedRelation relation) {
-            relations.putIfAbsent(relationKey(relation), relation);
+            relations.merge(relationKey(relation), relation, DefaultAttributionResolver::mergeRelation);
         }
 
         private boolean hasContent() {
@@ -117,6 +118,27 @@ public final class DefaultAttributionResolver implements AttributionResolver {
         private ChunkExtractionPatch toPatch() {
             return new ChunkExtractionPatch(chunkId, List.copyOf(entities.values()), List.copyOf(relations.values()));
         }
+    }
+
+    private static ExtractedEntity mergeEntity(ExtractedEntity first, ExtractedEntity incoming) {
+        return new ExtractedEntity(
+            first.name(),
+            first.type(),
+            first.description(),
+            first.aliases(),
+            AttributeValues.merge(first.attributes(), incoming.attributes())
+        );
+    }
+
+    private static ExtractedRelation mergeRelation(ExtractedRelation first, ExtractedRelation incoming) {
+        return new ExtractedRelation(
+            first.sourceEntityName(),
+            first.targetEntityName(),
+            first.keywords(),
+            first.description(),
+            first.weight(),
+            AttributeValues.merge(first.attributes(), incoming.attributes())
+        );
     }
 
     private static String normalize(String value) {

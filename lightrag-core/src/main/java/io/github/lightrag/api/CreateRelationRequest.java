@@ -2,6 +2,7 @@ package io.github.lightrag.api;
 
 import io.github.lightrag.indexing.RelationCanonicalizer;
 
+import java.util.Map;
 import java.util.Objects;
 
 public record CreateRelationRequest(
@@ -11,12 +12,25 @@ public record CreateRelationRequest(
     String description,
     double weight,
     String sourceId,
-    String filePath
+    String filePath,
+    Map<String, Object> attributes
 ) {
     public static final String DEFAULT_DESCRIPTION = "";
     public static final double DEFAULT_WEIGHT = 1.0d;
     public static final String DEFAULT_SOURCE_ID = "";
     public static final String DEFAULT_FILE_PATH = "";
+
+    public CreateRelationRequest(
+        String sourceEntityName,
+        String targetEntityName,
+        String keywords,
+        String description,
+        double weight,
+        String sourceId,
+        String filePath
+    ) {
+        this(sourceEntityName, targetEntityName, keywords, description, weight, sourceId, filePath, Map.of());
+    }
 
     public CreateRelationRequest {
         sourceEntityName = normalizeEndpoint(sourceEntityName, "sourceEntityName");
@@ -28,6 +42,7 @@ public record CreateRelationRequest(
         if (!Double.isFinite(weight)) {
             throw new IllegalArgumentException("weight must be finite");
         }
+        attributes = AttributeRequestMaps.required(attributes);
     }
 
     public static Builder builder() {
@@ -42,6 +57,7 @@ public record CreateRelationRequest(
         private double weight = DEFAULT_WEIGHT;
         private String sourceId = DEFAULT_SOURCE_ID;
         private String filePath = DEFAULT_FILE_PATH;
+        private Map<String, Object> attributes = Map.of();
 
         public Builder sourceEntityName(String sourceEntityName) {
             this.sourceEntityName = sourceEntityName;
@@ -78,8 +94,22 @@ public record CreateRelationRequest(
             return this;
         }
 
+        public Builder attributes(Map<String, Object> attributes) {
+            this.attributes = attributes;
+            return this;
+        }
+
         public CreateRelationRequest build() {
-            return new CreateRelationRequest(sourceEntityName, targetEntityName, keywords, description, weight, sourceId, filePath);
+            return new CreateRelationRequest(
+                sourceEntityName,
+                targetEntityName,
+                keywords,
+                description,
+                weight,
+                sourceId,
+                filePath,
+                attributes
+            );
         }
     }
 

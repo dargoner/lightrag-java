@@ -63,6 +63,7 @@ public final class PostgresSchemaManager {
                     }
                     ensureDocumentStatusMetadataColumn(connection, statement);
                     ensureEntityFilePathColumn(connection, statement);
+                    ensureAttributesColumn(statement);
                     validateWorkspaceColumns(connection);
                     validateVectorDimensions(connection);
                     connection.commit();
@@ -158,6 +159,7 @@ public final class PostgresSchemaManager {
                     type TEXT NOT NULL,
                     description TEXT NOT NULL,
                     file_path VARCHAR(32768) NOT NULL DEFAULT '',
+                    attributes TEXT NOT NULL DEFAULT '{}',
                     PRIMARY KEY (workspace_id, id)
                 )
                 """.formatted(config.qualifiedTableName("entities")),
@@ -188,6 +190,7 @@ public final class PostgresSchemaManager {
                     weight DOUBLE PRECISION NOT NULL,
                     source_id TEXT NOT NULL DEFAULT '',
                     file_path VARCHAR(32768) NOT NULL DEFAULT '',
+                    attributes TEXT NOT NULL DEFAULT '{}',
                     PRIMARY KEY (workspace_id, id)
                 )
                 """.formatted(config.qualifiedTableName("relations")),
@@ -510,6 +513,36 @@ public final class PostgresSchemaManager {
                 ALTER TABLE %s
                 ADD COLUMN file_path VARCHAR(32768) NOT NULL DEFAULT ''
                 """.formatted(config.qualifiedTableName("entities"))
+        );
+    }
+
+    /**
+     * Adds the materialized attribute bag column to entity and relation tables created before the
+     * column existed. Both statements are replay-safe: {@code ALTER TABLE IF EXISTS} skips a table
+     * a custom bootstrap never created and {@code ADD COLUMN IF NOT EXISTS} skips a table that
+     * already has the column, so every bootstrap (new or upgraded schema) converges in one pass.
+     * Existing rows read back the {@code '{}'} default, i.e. the empty attribute map.
+     */
+    private void ensureAttributesColumn(Statement statement) throws SQLException {
+        if (bootstrapStatements != null) {
+            return;
+        }
+        for (String sql : attributesColumnStatements(config)) {
+            statement.execute(sql);
+        }
+    }
+
+    static List<String> attributesColumnStatements(PostgresStorageConfig config) {
+        Objects.requireNonNull(config, "config");
+        return List.of(
+            """
+                ALTER TABLE IF EXISTS %s
+                ADD COLUMN IF NOT EXISTS attributes TEXT NOT NULL DEFAULT '{}'
+                """.formatted(config.qualifiedTableName("entities")),
+            """
+                ALTER TABLE IF EXISTS %s
+                ADD COLUMN IF NOT EXISTS attributes TEXT NOT NULL DEFAULT '{}'
+                """.formatted(config.qualifiedTableName("relations"))
         );
     }
 

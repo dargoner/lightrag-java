@@ -1,6 +1,7 @@
 package io.github.lightrag.indexing.refinement;
 
 import io.github.lightrag.indexing.GraphAssembler;
+import io.github.lightrag.ontology.AttributeValues;
 import io.github.lightrag.types.ExtractedEntity;
 import io.github.lightrag.types.ExtractedRelation;
 import io.github.lightrag.types.ExtractionResult;
@@ -60,7 +61,8 @@ public final class DefaultExtractionMergePolicy implements ExtractionMergePolicy
             left.name(),
             preferredText(left.type(), right.type()),
             longerText(left.description(), right.description()),
-            List.copyOf(aliases)
+            List.copyOf(aliases),
+            AttributeValues.merge(left.attributes(), right.attributes())
         );
     }
 
@@ -70,7 +72,8 @@ public final class DefaultExtractionMergePolicy implements ExtractionMergePolicy
             left.targetEntityName(),
             mergeKeywords(left.keywords(), right.keywords()),
             longerText(left.description(), right.description()),
-            Math.max(left.weight(), right.weight())
+            Math.max(left.weight(), right.weight()),
+            AttributeValues.merge(left.attributes(), right.attributes())
         );
     }
 

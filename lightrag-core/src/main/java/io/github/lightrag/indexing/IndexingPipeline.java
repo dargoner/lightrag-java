@@ -21,6 +21,10 @@ import io.github.lightrag.indexing.refinement.ExtractionRefinementPipeline;
 import io.github.lightrag.indexing.refinement.PrimaryChunkExtraction;
 import io.github.lightrag.model.ChatModel;
 import io.github.lightrag.model.EmbeddingModel;
+import io.github.lightrag.ontology.AttributeValues;
+import io.github.lightrag.ontology.Ontology;
+import io.github.lightrag.ontology.OntologyAttributeProjector;
+import io.github.lightrag.ontology.OntologyAttributeSchema;
 import io.github.lightrag.ontology.OntologyExtractionOverlay;
 import io.github.lightrag.storage.AtomicStorageProvider;
 import io.github.lightrag.storage.ChunkStore;
@@ -89,6 +93,7 @@ public final class IndexingPipeline {
     private final KgExtractionValidator kgExtractionValidator;
     private final boolean sectionContextEnabled;
     private final OntologyExtractionOverlay ontologyExtractionOverlay;
+    private final Ontology attributeProjectionOntology;
     private final Object storageMutationMonitor = new Object();
 
     public IndexingPipeline(
@@ -676,6 +681,85 @@ public final class IndexingPipeline {
         boolean sectionContextEnabled,
         OntologyExtractionOverlay ontologyExtractionOverlay
     ) {
+        this(
+            extractionModel,
+            summaryModel,
+            embeddingModel,
+            storageProvider,
+            snapshotPath,
+            chunker,
+            documentParsingOrchestrator,
+            embeddingBatchSize,
+            maxParallelInsert,
+            chunkExtractParallelism,
+            entityExtractMaxGleaning,
+            maxExtractInputTokens,
+            entityExtractionLanguage,
+            entityTypes,
+            graphExtractionEnabled,
+            relationTypes,
+            graphExtractionExamples,
+            embeddingSemanticMergeEnabled,
+            embeddingSemanticMergeThreshold,
+            extractionRefinementOptions,
+            progressListener,
+            descriptionSummarizer,
+            maxSourceIdsPerEntity,
+            maxSourceIdsPerRelation,
+            sourceIdsLimitMethod,
+            maxFilePaths,
+            entityExtractMaxRecords,
+            entityExtractMaxEntities,
+            kgExtractionValidator,
+            sectionContextEnabled,
+            ontologyExtractionOverlay,
+            null
+        );
+    }
+
+    /**
+     * Creates the pipeline, optionally projecting materialized attributes onto the
+     * declarations of an ontology at the final entity/relation save boundary.
+     *
+     * @param attributeProjectionOntology the ontology used for extraction; {@code null}
+     *                                    materializes no attributes. It is derived into
+     *                                    a typed schema once and handed to the extractor.
+     */
+    public IndexingPipeline(
+        ChatModel extractionModel,
+        ChatModel summaryModel,
+        EmbeddingModel embeddingModel,
+        AtomicStorageProvider storageProvider,
+        Path snapshotPath,
+        Chunker chunker,
+        DocumentParsingOrchestrator documentParsingOrchestrator,
+        int embeddingBatchSize,
+        int maxParallelInsert,
+        int chunkExtractParallelism,
+        int entityExtractMaxGleaning,
+        int maxExtractInputTokens,
+        String entityExtractionLanguage,
+        List<String> entityTypes,
+        boolean graphExtractionEnabled,
+        List<String> relationTypes,
+        List<GraphExtractionExample> graphExtractionExamples,
+        boolean embeddingSemanticMergeEnabled,
+        double embeddingSemanticMergeThreshold,
+        ExtractionRefinementOptions extractionRefinementOptions,
+        IndexingProgressListener progressListener,
+        DescriptionSummarizer descriptionSummarizer,
+        int maxSourceIdsPerEntity,
+        int maxSourceIdsPerRelation,
+        SourceIdLimits.Method sourceIdsLimitMethod,
+        int maxFilePaths,
+        int entityExtractMaxRecords,
+        int entityExtractMaxEntities,
+        KgExtractionValidator kgExtractionValidator,
+        boolean sectionContextEnabled,
+        OntologyExtractionOverlay ontologyExtractionOverlay,
+        Ontology attributeProjectionOntology
+    ) {
+        this.attributeProjectionOntology = attributeProjectionOntology;
         this.kgExtractionValidator = kgExtractionValidator;
         this.sectionContextEnabled = sectionContextEnabled;
         this.ontologyExtractionOverlay = ontologyExtractionOverlay == null
@@ -730,6 +814,9 @@ public final class IndexingPipeline {
         this.descriptionSummarizer = descriptionSummarizer != null
             ? descriptionSummarizer
             : DescriptionSummarizer.forModel(this.summaryModel, this.entityExtractionLanguage);
+        var attributeSchema = this.attributeProjectionOntology == null
+            ? OntologyAttributeSchema.empty()
+            : OntologyAttributeSchema.from(this.attributeProjectionOntology);
         this.knowledgeExtractor = new KnowledgeExtractor(
             Objects.requireNonNull(extractionModel, "extractionModel"),
             this.entityExtractMaxGleaning,
@@ -743,7 +830,8 @@ public final class IndexingPipeline {
             this.entityExtractMaxEntities,
             this.kgExtractionValidator,
             this.sectionContextEnabled,
-            this.ontologyExtractionOverlay
+            this.ontologyExtractionOverlay,
+            attributeSchema
         );
         this.graphAssembler = new GraphAssembler();
         this.extractionRefinementPipeline = new ExtractionRefinementPipeline(
@@ -1625,7 +1713,8 @@ public final class IndexingPipeline {
         return storageProvider.vectorStore() instanceof NoopVectorStore;
     }
 
-    private void saveGraph(GraphAssembler.Graph graph, AtomicStorageProvider.AtomicStorageView storage) {
+    // Package-private so attribute-conservation tests can drive the real save boundary.
+    void saveGraph(GraphAssembler.Graph graph, AtomicStorageProvider.AtomicStorageView storage) {
         long startedAtNanos = System.nanoTime();
         var graphStore = storage.graphStore();
         var entities = graph.entities();
@@ -1635,7 +1724,10 @@ public final class IndexingPipeline {
             for (var entity : graphStore.loadEntities(distinctIds(entities.stream().map(Entity::id).toList()))) {
                 existingEntitiesById.put(entity.id(), entity);
             }
-            graphStore.saveEntities(mergeEntitiesByKey(entities, graph.entityTypeCounts(), existingEntitiesById));
+            // All entity merge/vote branches converge here: project once, right before persistence.
+            graphStore.saveEntities(projectEntityRecords(
+                mergeEntitiesByKey(entities, graph.entityTypeCounts(), existingEntitiesById)
+            ));
         }
 
         if (!relations.isEmpty()) {
@@ -1643,7 +1735,10 @@ public final class IndexingPipeline {
             for (var relation : graphStore.loadRelations(distinctIds(relations.stream().map(Relation::id).toList()))) {
                 existingRelationsById.put(relation.id(), relation);
             }
-            graphStore.saveRelations(mergeRelationsByKey(relations, existingRelationsById));
+            // All relation merge branches (new/existing/merged/early-return) converge here.
+            graphStore.saveRelations(projectRelationRecords(
+                mergeRelationsByKey(relations, existingRelationsById)
+            ));
         }
         if (log.isDebugEnabled()) {
             log.debug(
@@ -1654,6 +1749,64 @@ public final class IndexingPipeline {
                 TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - startedAtNanos)
             );
         }
+    }
+
+    /**
+     * Final, once-per-record attribute projection for entities. Runs after every
+     * merge and type-vote branch, immediately before persistence: with no ontology
+     * the attributes pass through unchanged, and with an ontology the declared keys
+     * of the final type are kept while undeclared keys are dropped.
+     */
+    List<GraphStore.EntityRecord> projectEntityRecords(List<GraphStore.EntityRecord> records) {
+        return records.stream().map(record -> {
+            var projected = OntologyAttributeProjector.projectEntity(
+                record.type(),
+                record.attributes(),
+                attributeProjectionOntology
+            );
+            if (projected.equals(record.attributes())) {
+                return record;
+            }
+            return new GraphStore.EntityRecord(
+                record.id(),
+                record.name(),
+                record.type(),
+                record.description(),
+                record.aliases(),
+                record.sourceChunkIds(),
+                record.filePath(),
+                projected
+            );
+        }).toList();
+    }
+
+    /**
+     * Final, once-per-record attribute projection for relations. Runs after the
+     * final relation merge and immediately before persistence; keywords are the
+     * final relation keyword list, so a re-voted keyword set re-projects.
+     */
+    List<GraphStore.RelationRecord> projectRelationRecords(List<GraphStore.RelationRecord> records) {
+        return records.stream().map(record -> {
+            var projected = OntologyAttributeProjector.projectRelation(
+                record.keywords(),
+                record.attributes(),
+                attributeProjectionOntology
+            );
+            if (projected.equals(record.attributes())) {
+                return record;
+            }
+            return new GraphStore.RelationRecord(
+                record.id(),
+                record.srcId(),
+                record.tgtId(),
+                record.keywords(),
+                record.description(),
+                record.weight(),
+                record.sourceId(),
+                record.filePath(),
+                projected
+            );
+        }).toList();
     }
 
     private List<GraphStore.EntityRecord> mergeEntitiesByKey(
@@ -2006,7 +2159,8 @@ public final class IndexingPipeline {
             summary.description(),
             union(existing.aliases(), incoming.aliases()),
             sourceChunkIds,
-            RelationCanonicalizer.joinValues(filePaths)
+            RelationCanonicalizer.joinValues(filePaths),
+            AttributeValues.merge(existing.attributes(), incoming.attributes())
         );
     }
 
@@ -2059,7 +2213,7 @@ public final class IndexingPipeline {
         return votedType.equals(merged.type())
             ? merged
             : new GraphStore.EntityRecord(merged.id(), merged.name(), votedType, merged.description(),
-                merged.aliases(), merged.sourceChunkIds(), merged.filePath());
+                merged.aliases(), merged.sourceChunkIds(), merged.filePath(), merged.attributes());
     }
 
     static Map<String, Integer> countEntityTypes(List<Entity> entities) {
@@ -2140,7 +2294,8 @@ public final class IndexingPipeline {
             summary.description(),
             weight,
             RelationCanonicalizer.joinValues(chunkIds),
-            RelationCanonicalizer.joinValues(filePaths)
+            RelationCanonicalizer.joinValues(filePaths),
+            AttributeValues.merge(existing.attributes(), incoming.attributes())
         );
     }
 
@@ -2178,7 +2333,8 @@ public final class IndexingPipeline {
             summary.description(),
             weight,
             RelationCanonicalizer.joinValues(sourceChunkIds),
-            RelationCanonicalizer.joinValues(filePaths)
+            RelationCanonicalizer.joinValues(filePaths),
+            relation.attributes()
         );
     }
 
@@ -2206,7 +2362,8 @@ public final class IndexingPipeline {
             summary.description(),
             entity.aliases(),
             sourceChunkIds,
-            RelationCanonicalizer.joinValues(filePaths)
+            RelationCanonicalizer.joinValues(filePaths),
+            entity.attributes()
         );
     }
 
@@ -2360,7 +2517,8 @@ public final class IndexingPipeline {
                             entity.name(),
                             normalizedEntityType(entity.type()),
                             entity.description(),
-                            entity.aliases()
+                            entity.aliases(),
+                            entity.attributes()
                         ))
                         .toList(),
                     extraction.extraction().relations().stream()
@@ -2369,7 +2527,8 @@ public final class IndexingPipeline {
                             relation.targetEntityName(),
                             relation.keywords(),
                             relation.description(),
-                            relation.weight()
+                            relation.weight(),
+                            relation.attributes()
                         ))
                         .toList(),
                     now,

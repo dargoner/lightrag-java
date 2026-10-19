@@ -377,7 +377,8 @@ public final class MySqlMilvusNeo4jStorageProvider implements AtomicStorageProvi
             entityRecord.description(),
             entityRecord.aliases(),
             entityRecord.sourceChunkIds(),
-            entityRecord.filePath()
+            entityRecord.filePath(),
+            entityRecord.attributes()
         );
     }
 
@@ -390,7 +391,8 @@ public final class MySqlMilvusNeo4jStorageProvider implements AtomicStorageProvi
             relationRecord.description(),
             relationRecord.weight(),
             relationRecord.sourceId(),
-            relationRecord.filePath()
+            relationRecord.filePath(),
+            relationRecord.attributes()
         );
     }
 

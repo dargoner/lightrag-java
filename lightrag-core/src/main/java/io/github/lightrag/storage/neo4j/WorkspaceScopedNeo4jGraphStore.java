@@ -3,6 +3,7 @@ package io.github.lightrag.storage.neo4j;
 import io.github.lightrag.api.KnowledgeGraphView;
 import io.github.lightrag.api.WorkspaceScope;
 import io.github.lightrag.exception.StorageException;
+import io.github.lightrag.ontology.AttributeJsonCodec;
 import io.github.lightrag.storage.GraphStore;
 import io.github.lightrag.storage.GraphViewTraversal;
 import io.github.lightrag.storage.MutableGraphStore;
@@ -1265,6 +1266,7 @@ public class WorkspaceScopedNeo4jGraphStore implements MutableGraphStore, AutoCl
                 entity.aliases = $aliases,
                 entity.sourceChunkIds = $sourceChunkIds,
                 entity.filePath = $filePath,
+                entity.attributes = $attributes,
                 entity.materialized = true
             """.formatted(ENTITY_LABEL),
             org.neo4j.driver.Values.parameters(
@@ -1276,7 +1278,8 @@ public class WorkspaceScopedNeo4jGraphStore implements MutableGraphStore, AutoCl
                 "description", record.description(),
                 "aliases", record.aliases(),
                 "sourceChunkIds", record.sourceChunkIds(),
-                "filePath", record.filePath()
+                "filePath", record.filePath(),
+                "attributes", AttributeJsonCodec.toJson(record.attributes())
             )
         );
     }
@@ -1297,6 +1300,7 @@ public class WorkspaceScopedNeo4jGraphStore implements MutableGraphStore, AutoCl
                 entity.aliases = row.aliases,
                 entity.sourceChunkIds = row.sourceChunkIds,
                 entity.filePath = row.filePath,
+                entity.attributes = row.attributes,
                 entity.materialized = true
             """.formatted(ENTITY_LABEL),
             org.neo4j.driver.Values.parameters(
@@ -1310,7 +1314,8 @@ public class WorkspaceScopedNeo4jGraphStore implements MutableGraphStore, AutoCl
                         "description", record.description(),
                         "aliases", record.aliases(),
                         "sourceChunkIds", record.sourceChunkIds(),
-                        "filePath", record.filePath()
+                        "filePath", record.filePath(),
+                        "attributes", AttributeJsonCodec.toJson(record.attributes())
                     ))
                     .toList()
             )
@@ -1345,7 +1350,8 @@ public class WorkspaceScopedNeo4jGraphStore implements MutableGraphStore, AutoCl
                           source.description = '',
                           source.aliases = [],
                           source.sourceChunkIds = [],
-                          source.filePath = ''
+                          source.filePath = '',
+                          source.attributes = '{}'
             MERGE (target:%s {scopedId: $scopedTargetEntityId})
             ON CREATE SET target.workspaceId = $workspaceId,
                           target.id = $tgtId,
@@ -1355,7 +1361,8 @@ public class WorkspaceScopedNeo4jGraphStore implements MutableGraphStore, AutoCl
                           target.description = '',
                           target.aliases = [],
                           target.sourceChunkIds = [],
-                          target.filePath = ''
+                          target.filePath = '',
+                          target.attributes = '{}'
             MERGE (source)-[relation:%s {scopedId: $scopedRelationId}]->(target)
             SET relation.workspaceId = $workspaceId,
                 relation.relation_id = $relationId,
@@ -1365,7 +1372,8 @@ public class WorkspaceScopedNeo4jGraphStore implements MutableGraphStore, AutoCl
                 relation.description = $description,
                 relation.weight = $weight,
                 relation.source_id = $sourceId,
-                relation.file_path = $filePath
+                relation.file_path = $filePath,
+                relation.attributes = $attributes
             """.formatted(ENTITY_LABEL, ENTITY_LABEL, RELATION_TYPE),
             org.neo4j.driver.Values.parameters(
                 "workspaceId", workspaceId,
@@ -1379,7 +1387,8 @@ public class WorkspaceScopedNeo4jGraphStore implements MutableGraphStore, AutoCl
                 "description", record.description(),
                 "weight", record.weight(),
                 "sourceId", record.sourceId(),
-                "filePath", record.filePath()
+                "filePath", record.filePath(),
+                "attributes", AttributeJsonCodec.toJson(record.attributes())
             )
         );
     }
@@ -1400,6 +1409,7 @@ public class WorkspaceScopedNeo4jGraphStore implements MutableGraphStore, AutoCl
                 row.put("weight", record.weight());
                 row.put("sourceId", record.sourceId());
                 row.put("filePath", record.filePath());
+                row.put("attributes", AttributeJsonCodec.toJson(record.attributes()));
                 return Map.copyOf(row);
             })
             .toList();
@@ -1430,7 +1440,8 @@ public class WorkspaceScopedNeo4jGraphStore implements MutableGraphStore, AutoCl
                           source.description = '',
                           source.aliases = [],
                           source.sourceChunkIds = [],
-                          source.filePath = ''
+                          source.filePath = '',
+                          source.attributes = '{}'
             MERGE (target:%s {scopedId: row.scopedTargetEntityId})
             ON CREATE SET target.workspaceId = $workspaceId,
                           target.id = row.tgtId,
@@ -1440,7 +1451,8 @@ public class WorkspaceScopedNeo4jGraphStore implements MutableGraphStore, AutoCl
                           target.description = '',
                           target.aliases = [],
                           target.sourceChunkIds = [],
-                          target.filePath = ''
+                          target.filePath = '',
+                          target.attributes = '{}'
             """.formatted(ENTITY_LABEL, ENTITY_LABEL),
             org.neo4j.driver.Values.parameters(
                 "workspaceId", workspaceId,
@@ -1476,7 +1488,8 @@ public class WorkspaceScopedNeo4jGraphStore implements MutableGraphStore, AutoCl
                 relation.description = row.description,
                 relation.weight = row.weight,
                 relation.source_id = row.sourceId,
-                relation.file_path = row.filePath
+                relation.file_path = row.filePath,
+                relation.attributes = row.attributes
             """.formatted(ENTITY_LABEL, ENTITY_LABEL, RELATION_TYPE),
             org.neo4j.driver.Values.parameters(
                 "workspaceId", workspaceId,
@@ -1526,7 +1539,8 @@ public class WorkspaceScopedNeo4jGraphStore implements MutableGraphStore, AutoCl
             entity.get("description").asString(""),
             stringList(entity.get("aliases")),
             stringList(entity.get("sourceChunkIds")),
-            entity.get("filePath").asString("")
+            entity.get("filePath").asString(""),
+            AttributeJsonCodec.fromJson(entity.get("attributes").asString(""))
         );
     }
 
@@ -1540,7 +1554,8 @@ public class WorkspaceScopedNeo4jGraphStore implements MutableGraphStore, AutoCl
             relation.get("description").asString(""),
             relation.get("weight").asDouble(0.0d),
             relation.get("source_id").asString(""),
-            relation.get("file_path").asString("")
+            relation.get("file_path").asString(""),
+            AttributeJsonCodec.fromJson(relation.get("attributes").asString(""))
         );
     }
 

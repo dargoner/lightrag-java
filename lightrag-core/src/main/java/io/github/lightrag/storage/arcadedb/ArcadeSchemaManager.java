@@ -84,6 +84,7 @@ public final class ArcadeSchemaManager {
             "CREATE PROPERTY IF NOT EXISTS Entity.aliases STRING",
             "CREATE PROPERTY IF NOT EXISTS Entity.sourceChunkIds STRING",
             "CREATE PROPERTY IF NOT EXISTS Entity.filePath STRING",
+            "CREATE PROPERTY IF NOT EXISTS Entity.attributes STRING",
             "CREATE INDEX IF NOT EXISTS ON Entity (workspaceId, id) UNIQUE",
 
             "CREATE DOCUMENT TYPE IF NOT EXISTS Relation",
@@ -96,6 +97,7 @@ public final class ArcadeSchemaManager {
             "CREATE PROPERTY IF NOT EXISTS Relation.weight DOUBLE",
             "CREATE PROPERTY IF NOT EXISTS Relation.sourceId STRING",
             "CREATE PROPERTY IF NOT EXISTS Relation.filePath STRING",
+            "CREATE PROPERTY IF NOT EXISTS Relation.attributes STRING",
             "CREATE INDEX IF NOT EXISTS ON Relation (workspaceId, id) UNIQUE",
             "CREATE INDEX IF NOT EXISTS ON Relation (workspaceId, srcId) NOTUNIQUE",
             "CREATE INDEX IF NOT EXISTS ON Relation (workspaceId, tgtId) NOTUNIQUE",

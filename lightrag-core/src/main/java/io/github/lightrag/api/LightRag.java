@@ -1482,7 +1482,8 @@ public final class LightRag implements AutoCloseable {
             graphExtractionOptions.resolvedEntityExtractMaxEntities(),
             kgExtractionValidator,
             config.sectionContextEnabled(),
-            ontologyExtractionOverlay
+            ontologyExtractionOverlay,
+            ontologyContext.ontology()
         );
     }
 
@@ -1634,7 +1635,8 @@ public final class LightRag implements AutoCloseable {
             graphExtractionOptions.resolvedEntityExtractMaxEntities(),
             kgExtractionValidator,
             config.sectionContextEnabled(),
-            ontologyExtractionOverlay
+            ontologyExtractionOverlay,
+            ontologyContext.ontology()
         );
     }
 

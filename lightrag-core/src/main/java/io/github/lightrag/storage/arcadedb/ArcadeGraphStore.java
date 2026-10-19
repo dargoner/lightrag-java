@@ -23,6 +23,7 @@ public final class ArcadeGraphStore extends ArcadeStoreSupport implements GraphS
         properties.put("aliases", ArcadeJsonCodec.writeStringList(record.aliases()));
         properties.put("sourceChunkIds", ArcadeJsonCodec.writeStringList(record.sourceChunkIds()));
         properties.put("filePath", record.filePath());
+        properties.put("attributes", ArcadeJsonCodec.writeAttributes(record.attributes()));
         upsertByWorkspaceId("Entity", "id", record.id(), properties);
     }
 
@@ -37,12 +38,13 @@ public final class ArcadeGraphStore extends ArcadeStoreSupport implements GraphS
         properties.put("weight", record.weight());
         properties.put("sourceId", record.sourceId());
         properties.put("filePath", record.filePath());
+        properties.put("attributes", ArcadeJsonCodec.writeAttributes(record.attributes()));
         upsertByWorkspaceId("Relation", "id", record.id(), properties);
     }
 
     @Override
     public Optional<EntityRecord> loadEntity(String entityId) {
-        return first("SELECT id, name, type, description, aliases, sourceChunkIds, filePath FROM Entity WHERE workspaceId = ? AND id = ? LIMIT 1", workspaceId, entityId)
+        return first("SELECT id, name, type, description, aliases, sourceChunkIds, filePath, attributes FROM Entity WHERE workspaceId = ? AND id = ? LIMIT 1", workspaceId, entityId)
             .map(this::readEntity);
     }
 
@@ -54,7 +56,7 @@ public final class ArcadeGraphStore extends ArcadeStoreSupport implements GraphS
 
     @Override
     public List<EntityRecord> allEntities() {
-        return query("SELECT id, name, type, description, aliases, sourceChunkIds, filePath FROM Entity WHERE workspaceId = ? ORDER BY id", workspaceId)
+        return query("SELECT id, name, type, description, aliases, sourceChunkIds, filePath, attributes FROM Entity WHERE workspaceId = ? ORDER BY id", workspaceId)
             .stream()
             .map(this::readEntity)
             .toList();
@@ -84,7 +86,7 @@ public final class ArcadeGraphStore extends ArcadeStoreSupport implements GraphS
     }
 
     private String selectRelationBase() {
-        return "SELECT id, srcId, tgtId, keywords, description, weight, sourceId, filePath FROM Relation";
+        return "SELECT id, srcId, tgtId, keywords, description, weight, sourceId, filePath, attributes FROM Relation";
     }
 
     private EntityRecord readEntity(Map<String, Object> row) {
@@ -95,7 +97,8 @@ public final class ArcadeGraphStore extends ArcadeStoreSupport implements GraphS
             ArcadeRecordMapper.string(row, "description"),
             ArcadeRecordMapper.stringList(row, "aliases"),
             ArcadeRecordMapper.stringList(row, "sourceChunkIds"),
-            ArcadeRecordMapper.string(row, "filePath")
+            ArcadeRecordMapper.string(row, "filePath"),
+            ArcadeJsonCodec.readAttributes(row.get("attributes"))
         );
     }
 
@@ -108,7 +111,8 @@ public final class ArcadeGraphStore extends ArcadeStoreSupport implements GraphS
             ArcadeRecordMapper.string(row, "description"),
             ArcadeRecordMapper.decimal(row, "weight"),
             ArcadeRecordMapper.string(row, "sourceId"),
-            ArcadeRecordMapper.string(row, "filePath")
+            ArcadeRecordMapper.string(row, "filePath"),
+            ArcadeJsonCodec.readAttributes(row.get("attributes"))
         );
     }
 }

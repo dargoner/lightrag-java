@@ -392,6 +392,63 @@ class OntologyStructureValidatorTest {
     }
 
     @Test
+    void reservedEntityPropertyNamesWarnWithoutFailing() {
+        var ontology = new Ontology(
+            List.of(new OntologyEntityType(
+                "Person",
+                "A person",
+                List.of(
+                    new OntologyProperty("Name", OntologyPropertyType.STRING, null, null),
+                    new OntologyProperty("description", OntologyPropertyType.STRING, null, null),
+                    new OntologyProperty("Age", OntologyPropertyType.INTEGER, null, null)
+                ),
+                null
+            )),
+            List.of(),
+            null,
+            Map.of()
+        );
+
+        var result = OntologyStructureValidator.validate(ontology, OntologyStructureValidator.Options.defaults());
+
+        assertThat(result.ontology()).isSameAs(ontology);
+        assertThat(result.warnings())
+            .anyMatch(warning -> warning.contains("Reserved property 'name'"))
+            .anyMatch(warning -> warning.contains("Reserved property 'description'"))
+            .noneMatch(warning -> warning.contains("Reserved property 'age'"));
+    }
+
+    @Test
+    void reservedRelationPropertyNamesWarnWithoutFailing() {
+        var ontology = new Ontology(
+            List.of(
+                new OntologyEntityType("Person", "A person", List.of(), null),
+                new OntologyEntityType("Organization", "An organization", List.of(), null)
+            ),
+            List.of(new OntologyRelationType(
+                "works at",
+                "employment",
+                List.of(new OntologyPattern("Person", "Organization")),
+                List.of(
+                    new OntologyProperty("Weight", OntologyPropertyType.FLOAT, null, null),
+                    new OntologyProperty("source_entity", OntologyPropertyType.STRING, null, null),
+                    new OntologyProperty("Score", OntologyPropertyType.FLOAT, null, null)
+                ),
+                null
+            )),
+            null,
+            Map.of()
+        );
+
+        var result = OntologyStructureValidator.validate(ontology, OntologyStructureValidator.Options.defaults());
+
+        assertThat(result.warnings())
+            .anyMatch(warning -> warning.contains("Reserved property 'weight'"))
+            .anyMatch(warning -> warning.contains("Reserved property 'source_entity'"))
+            .noneMatch(warning -> warning.contains("Reserved property 'score'"));
+    }
+
+    @Test
     void cleanOntologyProducesNoWarnings() {
         var ontology = new Ontology(
             List.of(

@@ -1,5 +1,6 @@
 package io.github.lightrag.persistence;
 
+import io.github.lightrag.ontology.AttributeJsonCodec;
 import io.github.lightrag.storage.ChunkStore;
 import io.github.lightrag.storage.DocumentGraphJournalStore;
 import io.github.lightrag.storage.DocumentGraphSnapshotStore;
@@ -64,14 +65,85 @@ public record SnapshotPayload(
         return new SnapshotStore.Snapshot(
             documents,
             chunks,
-            entities,
-            relations,
+            entities.stream().map(SnapshotPayload::canonicalEntity).toList(),
+            relations.stream().map(SnapshotPayload::canonicalRelation).toList(),
             vectors,
             documentStatuses,
             documentGraphSnapshots,
-            chunkGraphSnapshots,
+            chunkGraphSnapshots.stream().map(SnapshotPayload::canonicalChunkGraph).toList(),
             documentGraphJournals,
             chunkGraphJournals
+        );
+    }
+
+    /**
+     * Attribute bags are canonical JSON values: integral numbers are {@link Long}
+     * and fractional numbers are {@link Double}. JSON deserialization yields
+     * {@link Integer} for small integrals, so re-encoding through the codec makes
+     * a reloaded bag identical to the value that was saved. Other snapshot maps
+     * (for example document-status metadata) keep their plain JSON types.
+     */
+    private static Map<String, Object> canonicalAttributes(Map<String, Object> attributes) {
+        return AttributeJsonCodec.fromJson(AttributeJsonCodec.toJson(attributes));
+    }
+
+    private static GraphStore.EntityRecord canonicalEntity(GraphStore.EntityRecord entity) {
+        return new GraphStore.EntityRecord(
+            entity.id(),
+            entity.name(),
+            entity.type(),
+            entity.description(),
+            entity.aliases(),
+            entity.sourceChunkIds(),
+            entity.filePath(),
+            canonicalAttributes(entity.attributes())
+        );
+    }
+
+    private static GraphStore.RelationRecord canonicalRelation(GraphStore.RelationRecord relation) {
+        return new GraphStore.RelationRecord(
+            relation.id(),
+            relation.srcId(),
+            relation.tgtId(),
+            relation.keywords(),
+            relation.description(),
+            relation.weight(),
+            relation.sourceId(),
+            relation.filePath(),
+            canonicalAttributes(relation.attributes())
+        );
+    }
+
+    private static DocumentGraphSnapshotStore.ChunkGraphSnapshot canonicalChunkGraph(
+        DocumentGraphSnapshotStore.ChunkGraphSnapshot chunk
+    ) {
+        return new DocumentGraphSnapshotStore.ChunkGraphSnapshot(
+            chunk.documentId(),
+            chunk.chunkId(),
+            chunk.chunkOrder(),
+            chunk.contentHash(),
+            chunk.extractStatus(),
+            chunk.entities().stream()
+                .map(entity -> new DocumentGraphSnapshotStore.ExtractedEntityRecord(
+                    entity.name(),
+                    entity.type(),
+                    entity.description(),
+                    entity.aliases(),
+                    canonicalAttributes(entity.attributes())
+                ))
+                .toList(),
+            chunk.relations().stream()
+                .map(relation -> new DocumentGraphSnapshotStore.ExtractedRelationRecord(
+                    relation.sourceEntityName(),
+                    relation.targetEntityName(),
+                    relation.keywords(),
+                    relation.description(),
+                    relation.weight(),
+                    canonicalAttributes(relation.attributes())
+                ))
+                .toList(),
+            chunk.updatedAt(),
+            chunk.errorMessage()
         );
     }
 }

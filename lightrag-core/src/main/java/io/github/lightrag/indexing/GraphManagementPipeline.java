@@ -8,6 +8,8 @@ import io.github.lightrag.api.GraphEntity;
 import io.github.lightrag.api.GraphRelation;
 import io.github.lightrag.api.MergeEntitiesRequest;
 import io.github.lightrag.api.UpdateRelationRequest;
+import io.github.lightrag.ontology.AttributeJsonCodec;
+import io.github.lightrag.ontology.AttributeValues;
 import io.github.lightrag.storage.AtomicStorageProvider;
 import io.github.lightrag.storage.GraphStore;
 import io.github.lightrag.storage.HybridVectorStore;
@@ -16,6 +18,7 @@ import io.github.lightrag.storage.VectorStore;
 import io.github.lightrag.types.Entity;
 import io.github.lightrag.types.Relation;
 
+import java.nio.charset.StandardCharsets;
 import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
@@ -51,7 +54,9 @@ public final class GraphManagementPipeline {
                 createRequest.type(),
                 createRequest.description(),
                 createRequest.aliases(),
-                List.of()
+                List.of(),
+                "",
+                createRequest.attributes()
             );
             storage.graphStore().saveEntity(created);
             saveEntityVectors(storage.vectorStore(), List.of(toEntity(created)));
@@ -75,7 +80,8 @@ public final class GraphManagementPipeline {
                 createRequest.description(),
                 createRequest.weight(),
                 createRequest.sourceId(),
-                createRequest.filePath()
+                createRequest.filePath(),
+                createRequest.attributes()
             );
             validateCreateRelation(storage.graphStore().allRelations(), created);
             storage.graphStore().saveRelation(created);
@@ -109,7 +115,8 @@ public final class GraphManagementPipeline {
             editRequest.description() == null ? existing.description() : editRequest.description(),
             aliases,
             existing.sourceChunkIds(),
-            existing.filePath()
+            existing.filePath(),
+            editRequest.attributes() == null ? existing.attributes() : editRequest.attributes()
         );
 
         var updatedRelations = renamed
@@ -180,7 +187,8 @@ public final class GraphManagementPipeline {
             editRequest.description() == null ? existing.description() : editRequest.description(),
             editRequest.weight() == null ? existing.weight() : editRequest.weight(),
             editRequest.sourceId() == null ? existing.sourceId() : editRequest.sourceId(),
-            editRequest.filePath() == null ? existing.filePath() : editRequest.filePath()
+            editRequest.filePath() == null ? existing.filePath() : editRequest.filePath(),
+            editRequest.attributes() == null ? existing.attributes() : editRequest.attributes()
         );
         RelationEvidence.validateManualWeight(updatedRelation.weight(), updatedRelation.sourceChunkIds());
 
@@ -263,7 +271,8 @@ public final class GraphManagementPipeline {
                 ? mergedAliases(target, sources)
                 : normalizeAliasesForName(target.name(), mergeRequest.targetAliases()),
             mergeSourceChunkIds(target, sources),
-            mergeFilePaths(target, sources)
+            mergeFilePaths(target, sources),
+            mergeEntityAttributes(target, sources, mergeRequest.targetAttributes())
         );
         validateEntityIdentityNamespace(
             snapshot.entities().stream()
@@ -494,6 +503,56 @@ public final class GraphManagementPipeline {
         return RelationCanonicalizer.joinValues(List.copyOf(filePaths));
     }
 
+    /**
+     * Source attributes are merged first in request order (later sources override earlier ones),
+     * then the target layer overrides them. A non-null {@code targetAttributes} replaces the
+     * target's current attributes before merging; {@code null} keeps them.
+     */
+    private static Map<String, Object> mergeEntityAttributes(
+        GraphStore.EntityRecord target,
+        List<GraphStore.EntityRecord> sources,
+        Map<String, Object> targetAttributes
+    ) {
+        var merged = new LinkedHashMap<String, Object>();
+        for (var source : sources) {
+            merged.putAll(source.attributes());
+        }
+        merged.putAll(targetAttributes == null ? target.attributes() : targetAttributes);
+        return requireAttributeCaps(Map.copyOf(merged));
+    }
+
+    private static Map<String, Object> requireAttributeCaps(Map<String, Object> attributes) {
+        if (attributes.size() > AttributeValues.MAX_KEYS) {
+            throw new IllegalArgumentException(
+                "merged attributes exceed the per-record limit of "
+                    + AttributeValues.MAX_KEYS + " keys: " + attributes.size()
+            );
+        }
+        int bytes = AttributeJsonCodec.toJson(attributes).getBytes(StandardCharsets.UTF_8).length;
+        if (bytes > AttributeValues.MAX_CANONICAL_JSON_BYTES) {
+            throw new IllegalArgumentException(
+                "merged attributes exceed the per-record limit of "
+                    + AttributeValues.MAX_CANONICAL_JSON_BYTES + " UTF-8 bytes: " + bytes
+            );
+        }
+        return attributes;
+    }
+
+    private static Map<String, Object> mergeAttributes(
+        Map<String, Object> current,
+        Map<String, Object> incoming
+    ) {
+        if (current.isEmpty()) {
+            return incoming;
+        }
+        if (incoming.isEmpty()) {
+            return current;
+        }
+        var merged = new LinkedHashMap<>(current);
+        merged.putAll(incoming);
+        return requireAttributeCaps(Map.copyOf(merged));
+    }
+
     private static List<GraphStore.EntityRecord> mergeEntities(
         List<GraphStore.EntityRecord> entities,
         String targetEntityId,
@@ -535,7 +594,8 @@ public final class GraphManagementPipeline {
                 relation.description(),
                 relation.weight(),
                 relation.sourceId(),
-                relation.filePath()
+                relation.filePath(),
+                relation.attributes()
             );
             merged.merge(rewritten.id(), rewritten, GraphManagementPipeline::mergeRelationRecord);
         }
@@ -561,7 +621,8 @@ public final class GraphManagementPipeline {
             mergeDescriptions(List.of(current.description(), incoming.description())),
             weight,
             RelationCanonicalizer.joinValues(mergedSourceChunkIds),
-            RelationCanonicalizer.joinValues(mergeSourceChunkIds(current.filePaths(), incoming.filePaths()))
+            RelationCanonicalizer.joinValues(mergeSourceChunkIds(current.filePaths(), incoming.filePaths())),
+            mergeAttributes(current.attributes(), incoming.attributes())
         );
     }
 
@@ -597,7 +658,8 @@ public final class GraphManagementPipeline {
             entityRecord.description(),
             entityRecord.aliases(),
             entityRecord.sourceChunkIds(),
-            entityRecord.filePath()
+            entityRecord.filePath(),
+            entityRecord.attributes()
         );
     }
 
@@ -610,7 +672,8 @@ public final class GraphManagementPipeline {
             relationRecord.description(),
             relationRecord.weight(),
             relationRecord.sourceId(),
-            relationRecord.filePath()
+            relationRecord.filePath(),
+            relationRecord.attributes()
         );
     }
 
@@ -622,7 +685,8 @@ public final class GraphManagementPipeline {
             entityRecord.description(),
             entityRecord.aliases(),
             entityRecord.sourceChunkIds(),
-            entityRecord.filePath()
+            entityRecord.filePath(),
+            entityRecord.attributes()
         );
     }
 
@@ -635,7 +699,8 @@ public final class GraphManagementPipeline {
             relationRecord.description(),
             relationRecord.weight(),
             relationRecord.sourceId(),
-            relationRecord.filePath()
+            relationRecord.filePath(),
+            relationRecord.attributes()
         );
     }
 
@@ -690,7 +755,8 @@ public final class GraphManagementPipeline {
                     relation.description(),
                     relation.weight(),
                     relation.sourceId(),
-                    relation.filePath()
+                    relation.filePath(),
+                    relation.attributes()
                 );
             })
             .toList();

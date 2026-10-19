@@ -213,7 +213,8 @@ public final class GraphViewTraversal {
                     entity.description(),
                     entity.aliases(),
                     entity.sourceChunkIds(),
-                    entity.filePath()
+                    entity.filePath(),
+                    entity.attributes()
                 ));
             }
         }
@@ -234,7 +235,8 @@ public final class GraphViewTraversal {
                 relation.description(),
                 relation.weight(),
                 relation.sourceId(),
-                relation.filePath()
+                relation.filePath(),
+                relation.attributes()
             ));
         }
         return new KnowledgeGraphView(nodes, edges, truncated);

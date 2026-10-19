@@ -4,6 +4,7 @@ import io.github.lightrag.api.KnowledgeGraphView;
 import io.github.lightrag.api.WorkspaceScope;
 import io.github.lightrag.exception.StorageException;
 import io.github.lightrag.indexing.HybridVectorPayloads;
+import io.github.lightrag.indexing.RelationCanonicalizer;
 import io.github.lightrag.storage.AtomicStorageProvider;
 import io.github.lightrag.storage.ChunkStore;
 import io.github.lightrag.storage.DocumentGraphJournalStore;
@@ -908,7 +909,8 @@ public final class PostgresMilvusNeo4jStorageProvider implements AtomicStoragePr
             entityRecord.description(),
             entityRecord.aliases(),
             entityRecord.sourceChunkIds(),
-            entityRecord.filePath()
+            entityRecord.filePath(),
+            entityRecord.attributes()
         );
     }
 
@@ -921,7 +923,8 @@ public final class PostgresMilvusNeo4jStorageProvider implements AtomicStoragePr
             relationRecord.description(),
             relationRecord.weight(),
             relationRecord.sourceId(),
-            relationRecord.filePath()
+            relationRecord.filePath(),
+            relationRecord.attributes()
         );
     }
 
@@ -960,7 +963,8 @@ public final class PostgresMilvusNeo4jStorageProvider implements AtomicStoragePr
                 entity.description(),
                 entity.aliases(),
                 retainedChunkIds,
-                entity.filePath()
+                entity.filePath(),
+                entity.attributes()
             ));
         }
 
@@ -996,7 +1000,9 @@ public final class PostgresMilvusNeo4jStorageProvider implements AtomicStoragePr
                 relation.keywords(),
                 relation.description(),
                 relation.weight(),
-                retainedChunkIds
+                RelationCanonicalizer.joinValues(retainedChunkIds),
+                relation.filePath(),
+                relation.attributes()
             ));
         }
         return new GraphMutation(

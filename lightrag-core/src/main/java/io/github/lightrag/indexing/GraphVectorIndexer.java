@@ -152,7 +152,8 @@ public final class GraphVectorIndexer {
             record.description(),
             record.aliases(),
             record.sourceChunkIds(),
-            record.filePath()
+            record.filePath(),
+            record.attributes()
         );
     }
 
@@ -165,7 +166,8 @@ public final class GraphVectorIndexer {
             record.description(),
             record.weight(),
             record.sourceId(),
-            record.filePath()
+            record.filePath(),
+            record.attributes()
         );
     }
 

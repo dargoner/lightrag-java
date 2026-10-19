@@ -4,6 +4,7 @@ import io.github.lightrag.api.KnowledgeGraphView;
 import io.github.lightrag.indexing.RelationCanonicalizer;
 
 import java.util.ArrayList;
+import java.util.Collections;
 import java.util.Comparator;
 import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
@@ -12,6 +13,7 @@ import java.util.Locale;
 import java.util.Map;
 import java.util.Objects;
 import java.util.Optional;
+import java.util.TreeMap;
 import java.util.TreeSet;
 
 public interface GraphStore {
@@ -250,8 +252,21 @@ public interface GraphStore {
         String description,
         List<String> aliases,
         List<String> sourceChunkIds,
-        String filePath
+        String filePath,
+        Map<String, Object> attributes
     ) {
+        public EntityRecord(
+            String id,
+            String name,
+            String type,
+            String description,
+            List<String> aliases,
+            List<String> sourceChunkIds,
+            String filePath
+        ) {
+            this(id, name, type, description, aliases, sourceChunkIds, filePath, Map.of());
+        }
+
         public EntityRecord(
             String id,
             String name,
@@ -260,7 +275,7 @@ public interface GraphStore {
             List<String> aliases,
             List<String> sourceChunkIds
         ) {
-            this(id, name, type, description, aliases, sourceChunkIds, "");
+            this(id, name, type, description, aliases, sourceChunkIds, "", Map.of());
         }
 
         public EntityRecord {
@@ -271,6 +286,7 @@ public interface GraphStore {
             aliases = List.copyOf(Objects.requireNonNull(aliases, "aliases"));
             sourceChunkIds = List.copyOf(Objects.requireNonNull(sourceChunkIds, "sourceChunkIds"));
             filePath = filePath == null ? "" : filePath.strip();
+            attributes = normalizeAttributes(attributes);
         }
 
         public List<String> filePaths() {
@@ -286,8 +302,22 @@ public interface GraphStore {
         String description,
         double weight,
         String sourceId,
-        String filePath
+        String filePath,
+        Map<String, Object> attributes
     ) {
+        public RelationRecord(
+            String relationId,
+            String srcId,
+            String tgtId,
+            String keywords,
+            String description,
+            double weight,
+            String sourceId,
+            String filePath
+        ) {
+            this(relationId, srcId, tgtId, keywords, description, weight, sourceId, filePath, Map.of());
+        }
+
         public RelationRecord(
             String relationId,
             String srcId,
@@ -305,7 +335,8 @@ public interface GraphStore {
                 description,
                 weight,
                 RelationCanonicalizer.joinValues(sourceChunkIds),
-                ""
+                "",
+                Map.of()
             );
         }
 
@@ -317,6 +348,7 @@ public interface GraphStore {
             description = Objects.requireNonNull(description, "description");
             sourceId = sourceId == null ? "" : sourceId;
             filePath = filePath == null ? "" : filePath.strip();
+            attributes = normalizeAttributes(attributes);
         }
 
         public String id() {
@@ -330,6 +362,37 @@ public interface GraphStore {
         public List<String> filePaths() {
             return RelationCanonicalizer.splitValues(filePath);
         }
+    }
+
+    private static Map<String, Object> normalizeAttributes(Map<String, Object> attributes) {
+        if (attributes == null || attributes.isEmpty()) {
+            return Map.of();
+        }
+        var sorted = new TreeMap<String, Object>();
+        for (var entry : attributes.entrySet()) {
+            var key = entry.getKey();
+            if (key == null) {
+                throw new IllegalArgumentException("attribute key must not be null");
+            }
+            var value = entry.getValue();
+            if (value == null) {
+                throw new IllegalArgumentException("attribute value must not be null: " + key);
+            }
+            sorted.put(key, copyAttributeValue(key, value));
+        }
+        return Collections.unmodifiableMap(sorted);
+    }
+
+    private static Object copyAttributeValue(String key, Object value) {
+        if (!(value instanceof List<?> values)) {
+            return value;
+        }
+        for (var element : values) {
+            if (element == null) {
+                throw new IllegalArgumentException("attribute list value must not contain null: " + key);
+            }
+        }
+        return List.copyOf(values);
     }
 
     /**

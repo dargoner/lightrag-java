@@ -3,22 +3,29 @@ package io.github.lightrag.api;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Locale;
+import java.util.Map;
 import java.util.Objects;
 
 public record CreateEntityRequest(
     String name,
     String type,
     String description,
-    List<String> aliases
+    List<String> aliases,
+    Map<String, Object> attributes
 ) {
     public static final String DEFAULT_TYPE = "";
     public static final String DEFAULT_DESCRIPTION = "";
+
+    public CreateEntityRequest(String name, String type, String description, List<String> aliases) {
+        this(name, type, description, aliases, Map.of());
+    }
 
     public CreateEntityRequest {
         name = requireNonBlank(name, "name");
         type = normalizeOptional(type);
         description = normalizeOptional(description);
         aliases = normalizeAliases(name, aliases);
+        attributes = AttributeRequestMaps.required(attributes);
     }
 
     public static Builder builder() {
@@ -30,6 +37,7 @@ public record CreateEntityRequest(
         private String type = DEFAULT_TYPE;
         private String description = DEFAULT_DESCRIPTION;
         private List<String> aliases = List.of();
+        private Map<String, Object> attributes = Map.of();
 
         public Builder name(String name) {
             this.name = name;
@@ -51,8 +59,13 @@ public record CreateEntityRequest(
             return this;
         }
 
+        public Builder attributes(Map<String, Object> attributes) {
+            this.attributes = attributes;
+            return this;
+        }
+
         public CreateEntityRequest build() {
-            return new CreateEntityRequest(name, type, description, aliases);
+            return new CreateEntityRequest(name, type, description, aliases, attributes);
         }
     }
 

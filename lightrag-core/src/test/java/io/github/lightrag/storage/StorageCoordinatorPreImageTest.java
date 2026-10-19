@@ -429,6 +429,81 @@ class StorageCoordinatorPreImageTest {
         assertThat(graph.storedEntity("e1")).contains(entity("e1", "one"));
     }
 
+    @Test
+    void preservesAttributesThroughPreImageCompensation() {
+        var seedEntity = entityWithAttributes("e1", "old", Map.of("Age", 33L, "tags", List.of("seed")));
+        var seedRelation = relationWithAttributes("r1", "e1", "e1", "old", Map.of("since", 2020L));
+        graph.seedEntity(seedEntity);
+        graph.seedRelation(seedRelation);
+        vector.failOnNthWrite(1);
+
+        assertThatThrownBy(() -> provider().writeAtomically(storage -> {
+            storage.graphStore().saveEntity(entityWithAttributes("e1", "new", Map.of("Age", 44L)));
+            storage.graphStore().saveRelation(relationWithAttributes(
+                "r1", "e1", "e1", "new", Map.of("since", 2021L)
+            ));
+            enrichedSave(storage, enriched("c1", "new", 0.5d));
+            return null;
+        }))
+            .isInstanceOf(IllegalStateException.class)
+            .hasMessageContaining("write #1");
+
+        assertThat(graph.storedEntity("e1")).contains(seedEntity);
+        assertThat(graph.storedRelation("r1")).contains(seedRelation);
+    }
+
+    @Test
+    void preservesAttributesThroughFallbackRollback() {
+        var legacyRelational = new StorageAssemblyTestDoubles.FakeRelationalStorageAdapter();
+        var legacyGraph = new StorageAssemblyTestDoubles.FakeGraphStorageAdapter();
+        var legacyVector = new StorageAssemblyTestDoubles.FakeVectorStorageAdapter();
+        var provider = StorageAssembly.builder()
+            .relationalAdapter(legacyRelational)
+            .graphAdapter(legacyGraph)
+            .vectorAdapter(legacyVector)
+            .build()
+            .toStorageProvider();
+        var seedEntity = entityWithAttributes("e1", "old", Map.of("Age", 33L));
+        var seedRelation = relationWithAttributes("r1", "e1", "e1", "old", Map.of("since", 2020L));
+        legacyGraph.graphStore().saveEntity(seedEntity);
+        legacyGraph.graphStore().saveRelation(seedRelation);
+        legacyVector.failOnApply(new IllegalStateException("vector-apply-failed"));
+
+        assertThatThrownBy(() -> provider.writeAtomically(storage -> {
+            storage.graphStore().saveEntity(entityWithAttributes("e1", "new", Map.of("Age", 44L)));
+            storage.graphStore().saveRelation(relationWithAttributes(
+                "r1", "e1", "e1", "new", Map.of("since", 2021L)
+            ));
+            enrichedSave(storage, enriched("c1", "new", 0.5d));
+            return null;
+        })).isInstanceOf(IllegalStateException.class);
+
+        assertThat(legacyGraph.captureSnapshotCount()).isEqualTo(1);
+        assertThat(legacyGraph.restoreCount()).isEqualTo(1);
+        assertThat(legacyGraph.graphStore().allEntities()).containsExactly(seedEntity);
+        assertThat(legacyGraph.graphStore().allRelations()).containsExactly(seedRelation);
+    }
+
+    @Test
+    void preservesAttributesThroughRestore() {
+        var restoredEntity = entityWithAttributes("e9", "restored", Map.of("Age", 33L, "tags", List.of("a")));
+        var restoredRelation = relationWithAttributes(
+            "r9", "e9", "e9", "restored", Map.of("since", 2020L)
+        );
+        var snapshot = new SnapshotStore.Snapshot(
+            List.of(),
+            List.of(),
+            List.of(restoredEntity),
+            List.of(restoredRelation),
+            Map.of()
+        );
+
+        provider().restore(snapshot);
+
+        assertThat(graph.storedEntity("e9")).contains(restoredEntity);
+        assertThat(graph.storedRelation("r9")).contains(restoredRelation);
+    }
+
     private AtomicStorageProvider provider() {
         return StorageAssembly.builder()
             .relationalAdapter(relational)
@@ -462,6 +537,43 @@ class StorageCoordinatorPreImageTest {
             "description-" + marker,
             1.0d,
             List.of("chunk-" + marker)
+        );
+    }
+
+    private static GraphStore.EntityRecord entityWithAttributes(
+        String id,
+        String marker,
+        Map<String, Object> attributes
+    ) {
+        return new GraphStore.EntityRecord(
+            id,
+            "name-" + marker,
+            "type-" + marker,
+            "description-" + marker,
+            List.of("alias-" + marker),
+            List.of("chunk-" + marker),
+            "",
+            attributes
+        );
+    }
+
+    private static GraphStore.RelationRecord relationWithAttributes(
+        String id,
+        String srcId,
+        String tgtId,
+        String marker,
+        Map<String, Object> attributes
+    ) {
+        return new GraphStore.RelationRecord(
+            id,
+            srcId,
+            tgtId,
+            "keywords-" + marker,
+            "description-" + marker,
+            1.0d,
+            "chunk-" + marker,
+            "",
+            attributes
         );
     }
 

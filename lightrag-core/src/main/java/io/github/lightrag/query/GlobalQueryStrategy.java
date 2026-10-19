@@ -230,7 +230,8 @@ public final class GlobalQueryStrategy implements QueryStrategy {
             entity.description(),
             entity.aliases(),
             entity.sourceChunkIds(),
-            entity.filePath()
+            entity.filePath(),
+            entity.attributes()
         );
     }
 
@@ -242,7 +243,9 @@ public final class GlobalQueryStrategy implements QueryStrategy {
             relation.keywords(),
             relation.description(),
             relation.weight(),
-            relation.sourceChunkIds()
+            relation.sourceId(),
+            relation.filePath(),
+            relation.attributes()
         );
     }
 

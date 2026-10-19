@@ -26,6 +26,9 @@ import io.github.lightrag.indexing.refinement.ExtractionRefinementPipeline;
 import io.github.lightrag.indexing.refinement.PrimaryChunkExtraction;
 import io.github.lightrag.model.ChatModel;
 import io.github.lightrag.model.EmbeddingModel;
+import io.github.lightrag.ontology.Ontology;
+import io.github.lightrag.ontology.OntologyAttributeProjector;
+import io.github.lightrag.ontology.OntologyAttributeSchema;
 import io.github.lightrag.ontology.OntologyExtractionOverlay;
 import io.github.lightrag.storage.AtomicStorageProvider;
 import io.github.lightrag.storage.DocumentGraphJournalStore;
@@ -122,6 +125,7 @@ public final class GraphMaterializationPipeline {
     private final KgExtractionValidator kgExtractionValidator;
     private final boolean sectionContextEnabled;
     private final OntologyExtractionOverlay ontologyExtractionOverlay;
+    private final Ontology attributeProjectionOntology;
 
     public GraphMaterializationPipeline(
         ChatModel extractionModel,
@@ -447,6 +451,73 @@ public final class GraphMaterializationPipeline {
         boolean sectionContextEnabled,
         OntologyExtractionOverlay ontologyExtractionOverlay
     ) {
+        this(
+            extractionModel,
+            embeddingModel,
+            storageProvider,
+            extractionRefinementOptions,
+            snapshotPath,
+            metadataReporter,
+            progressListener,
+            chunkExtractParallelism,
+            entityExtractMaxGleaning,
+            maxExtractInputTokens,
+            entityExtractionLanguage,
+            entityTypes,
+            relationTypes,
+            graphExtractionExamples,
+            cancellationCheckpoint,
+            descriptionSummarizer,
+            maxSourceIdsPerEntity,
+            maxSourceIdsPerRelation,
+            sourceIdsLimitMethod,
+            maxFilePaths,
+            entityExtractMaxRecords,
+            entityExtractMaxEntities,
+            kgExtractionValidator,
+            sectionContextEnabled,
+            ontologyExtractionOverlay,
+            null
+        );
+    }
+
+    /**
+     * Creates the pipeline, optionally projecting materialized attributes onto the
+     * declarations of an ontology at the final entity/relation save boundary.
+     *
+     * @param attributeProjectionOntology the ontology used for extraction; {@code null}
+     *                                    materializes no attributes. It is derived into
+     *                                    a typed schema once and handed to the extractor.
+     */
+    public GraphMaterializationPipeline(
+        ChatModel extractionModel,
+        EmbeddingModel embeddingModel,
+        AtomicStorageProvider storageProvider,
+        ExtractionRefinementOptions extractionRefinementOptions,
+        Path snapshotPath,
+        TaskMetadataReporter metadataReporter,
+        IndexingProgressListener progressListener,
+        int chunkExtractParallelism,
+        int entityExtractMaxGleaning,
+        int maxExtractInputTokens,
+        String entityExtractionLanguage,
+        List<String> entityTypes,
+        List<String> relationTypes,
+        List<GraphExtractionExample> graphExtractionExamples,
+        CancellationCheckpoint cancellationCheckpoint,
+        DescriptionSummarizer descriptionSummarizer,
+        int maxSourceIdsPerEntity,
+        int maxSourceIdsPerRelation,
+        SourceIdLimits.Method sourceIdsLimitMethod,
+        int maxFilePaths,
+        int entityExtractMaxRecords,
+        int entityExtractMaxEntities,
+        KgExtractionValidator kgExtractionValidator,
+        boolean sectionContextEnabled,
+        OntologyExtractionOverlay ontologyExtractionOverlay,
+        Ontology attributeProjectionOntology
+    ) {
+        this.attributeProjectionOntology = attributeProjectionOntology;
         this.kgExtractionValidator = kgExtractionValidator;
         this.sectionContextEnabled = sectionContextEnabled;
         this.ontologyExtractionOverlay = ontologyExtractionOverlay == null
@@ -478,6 +549,9 @@ public final class GraphMaterializationPipeline {
             : DescriptionSummarizer.forModel(Objects.requireNonNull(extractionModel, "extractionModel"), entityExtractionLanguage);
         this.metadataReporter = metadataReporter == null ? TaskMetadataReporter.noop() : metadataReporter;
         this.progressListener = progressListener == null ? IndexingProgressListener.noop() : progressListener;
+        var attributeSchema = this.attributeProjectionOntology == null
+            ? OntologyAttributeSchema.empty()
+            : OntologyAttributeSchema.from(this.attributeProjectionOntology);
         this.knowledgeExtractor = new KnowledgeExtractor(
             Objects.requireNonNull(extractionModel, "extractionModel"),
             entityExtractMaxGleaning,
@@ -491,7 +565,8 @@ public final class GraphMaterializationPipeline {
             this.entityExtractMaxEntities,
             this.kgExtractionValidator,
             this.sectionContextEnabled,
-            this.ontologyExtractionOverlay
+            this.ontologyExtractionOverlay,
+            attributeSchema
         );
         this.embeddingBatcher = new EmbeddingBatcher(Objects.requireNonNull(embeddingModel, "embeddingModel"), Integer.MAX_VALUE);
         this.graphAssembler = new GraphAssembler();
@@ -1176,7 +1251,8 @@ public final class GraphMaterializationPipeline {
         throw new IllegalStateException("chunk extraction failed", failure);
     }
 
-    private List<DocumentGraphSnapshotStore.ChunkGraphSnapshot> toChunkSnapshots(
+    // Package-private so attribute-conservation tests can prove the snapshot save/restore round-trip.
+    List<DocumentGraphSnapshotStore.ChunkGraphSnapshot> toChunkSnapshots(
         String documentId,
         List<GraphAssembler.ChunkExtraction> extractions,
         List<Chunk> chunks,
@@ -1197,7 +1273,8 @@ public final class GraphMaterializationPipeline {
                             entity.name(),
                             normalizedEntityType(entity.type()),
                             entity.description(),
-                            entity.aliases()
+                            entity.aliases(),
+                            entity.attributes()
                         ))
                         .toList(),
                     extraction.extraction().relations().stream()
@@ -1206,7 +1283,8 @@ public final class GraphMaterializationPipeline {
                             relation.targetEntityName(),
                             relation.keywords(),
                             relation.description(),
-                            relation.weight()
+                            relation.weight(),
+                            relation.attributes()
                         ))
                         .toList(),
                     now,
@@ -1234,7 +1312,8 @@ public final class GraphMaterializationPipeline {
                             entity.name(),
                             entity.type(),
                             entity.description() == null ? "" : entity.description(),
-                            entity.aliases()
+                            entity.aliases(),
+                            entity.attributes()
                         ))
                         .toList(),
                     snapshot.relations().stream()
@@ -1243,7 +1322,8 @@ public final class GraphMaterializationPipeline {
                             relation.targetEntityName(),
                             relation.keywords(),
                             relation.description() == null ? "" : relation.description(),
-                            relation.weight()
+                            relation.weight(),
+                            relation.attributes()
                         ))
                         .toList(),
                     List.of()
@@ -1273,7 +1353,8 @@ public final class GraphMaterializationPipeline {
         return graphAssembler.assemble(toChunkExtractions(List.of(chunkSnapshot), filePathsByChunkId));
     }
 
-    private void saveGraph(GraphAssembler.Graph graph, AtomicStorageProvider.AtomicStorageView storage) {
+    // Package-private so attribute-conservation tests can drive the real save boundary.
+    void saveGraph(GraphAssembler.Graph graph, AtomicStorageProvider.AtomicStorageView storage) {
         var entities = graph.entities();
         var relations = graph.relations();
         var graphStore = storage.graphStore();
@@ -1300,7 +1381,8 @@ public final class GraphMaterializationPipeline {
                 );
             }
             long entityMergedAt = System.nanoTime();
-            graphStore.saveEntities(List.copyOf(mergedEntities.values()));
+            // All entity merge/vote branches converge here: project once, right before persistence.
+            graphStore.saveEntities(projectEntityRecords(List.copyOf(mergedEntities.values())));
             long entitySavedAt = System.nanoTime();
             log.info(
                 "LightRAG graph saveGraph entities completed: inputEntities={}, distinctEntities={}, existingEntities={}, loadMs={}, mergeMs={}, saveMs={}, totalMs={}",
@@ -1332,7 +1414,8 @@ public final class GraphMaterializationPipeline {
                 mergedRelations.put(relation.id(), mergedRelation);
             }
             long relationMergedAt = System.nanoTime();
-            graphStore.saveRelations(List.copyOf(mergedRelations.values()));
+            // All relation merge branches (new/existing/merged/early-return) converge here.
+            graphStore.saveRelations(projectRelationRecords(List.copyOf(mergedRelations.values())));
             long relationSavedAt = System.nanoTime();
             log.info(
                 "LightRAG graph saveGraph relations completed: inputRelations={}, distinctRelations={}, existingRelations={}, loadMs={}, mergeMs={}, saveMs={}, totalMs={}",
@@ -1603,6 +1686,61 @@ public final class GraphMaterializationPipeline {
         return Math.max(0L, (endedNanos - startedNanos) / 1_000_000L);
     }
 
+    /**
+     * Final, once-per-record attribute projection for entities, applied after the
+     * merge/type-vote and immediately before {@code saveGraph}'s entity save.
+     */
+    List<GraphStore.EntityRecord> projectEntityRecords(List<GraphStore.EntityRecord> records) {
+        return records.stream().map(record -> {
+            var projected = OntologyAttributeProjector.projectEntity(
+                record.type(),
+                record.attributes(),
+                attributeProjectionOntology
+            );
+            if (projected.equals(record.attributes())) {
+                return record;
+            }
+            return new GraphStore.EntityRecord(
+                record.id(),
+                record.name(),
+                record.type(),
+                record.description(),
+                record.aliases(),
+                record.sourceChunkIds(),
+                record.filePath(),
+                projected
+            );
+        }).toList();
+    }
+
+    /**
+     * Final, once-per-record attribute projection for relations, applied after the
+     * final relation merge and immediately before {@code saveGraph}'s relation save.
+     */
+    List<GraphStore.RelationRecord> projectRelationRecords(List<GraphStore.RelationRecord> records) {
+        return records.stream().map(record -> {
+            var projected = OntologyAttributeProjector.projectRelation(
+                record.keywords(),
+                record.attributes(),
+                attributeProjectionOntology
+            );
+            if (projected.equals(record.attributes())) {
+                return record;
+            }
+            return new GraphStore.RelationRecord(
+                record.id(),
+                record.srcId(),
+                record.tgtId(),
+                record.keywords(),
+                record.description(),
+                record.weight(),
+                record.sourceId(),
+                record.filePath(),
+                projected
+            );
+        }).toList();
+    }
+
     private GraphStore.EntityRecord mergeEntity(GraphStore.EntityRecord existing, Entity incoming) {
         return IndexingPipeline.mergeEntityWithCaps(
             existing,
@@ -1631,7 +1769,7 @@ public final class GraphMaterializationPipeline {
         return votedType.equals(merged.type())
             ? merged
             : new GraphStore.EntityRecord(merged.id(), merged.name(), votedType, merged.description(),
-                merged.aliases(), merged.sourceChunkIds(), merged.filePath());
+                merged.aliases(), merged.sourceChunkIds(), merged.filePath(), merged.attributes());
     }
 
     private GraphStore.RelationRecord mergeRelation(GraphStore.RelationRecord existing, Relation incoming) {

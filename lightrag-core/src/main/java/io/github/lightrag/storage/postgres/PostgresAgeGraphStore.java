@@ -2,6 +2,7 @@ package io.github.lightrag.storage.postgres;
 
 import io.github.lightrag.exception.StorageException;
 import io.github.lightrag.indexing.RelationCanonicalizer;
+import io.github.lightrag.ontology.AttributeJsonCodec;
 import io.github.lightrag.storage.GraphStore;
 import io.github.lightrag.storage.MutableGraphStore;
 import org.slf4j.Logger;
@@ -716,6 +717,7 @@ public final class PostgresAgeGraphStore implements MutableGraphStore {
         properties.put("aliases", entity.aliases());
         properties.put("source_id", RelationCanonicalizer.joinValues(entity.sourceChunkIds()));
         properties.put("file_path", entity.filePath());
+        properties.put("attributes", AttributeJsonCodec.toJson(entity.attributes()));
         return properties;
     }
 
@@ -729,6 +731,7 @@ public final class PostgresAgeGraphStore implements MutableGraphStore {
         properties.put("weight", relation.weight());
         properties.put("source_id", relation.sourceId());
         properties.put("file_path", relation.filePath());
+        properties.put("attributes", AttributeJsonCodec.toJson(relation.attributes()));
         return properties;
     }
 
@@ -744,7 +747,8 @@ public final class PostgresAgeGraphStore implements MutableGraphStore {
             textOrDefault(properties.get("description"), ""),
             stringList(properties.get("aliases")),
             RelationCanonicalizer.splitValues(textOrDefault(properties.get("source_id"), "")),
-            textOrDefault(properties.get("file_path"), "")
+            textOrDefault(properties.get("file_path"), ""),
+            attributes(properties)
         );
     }
 
@@ -766,8 +770,19 @@ public final class PostgresAgeGraphStore implements MutableGraphStore {
             textOrDefault(properties.get("description"), ""),
             number(properties.get("weight")),
             textOrDefault(properties.get("source_id"), ""),
-            textOrDefault(properties.get("file_path"), "")
+            textOrDefault(properties.get("file_path"), ""),
+            attributes(properties)
         );
+    }
+
+    /**
+     * Decodes the canonical attribute JSON stored in the schemaless {@code attributes} vertex/edge
+     * property. Vertices and edges written before the property existed simply omit it, which reads
+     * as an empty map; the JSON bag needs no graph DDL, so the existing idempotent bootstrap stays
+     * unchanged.
+     */
+    private static Map<String, Object> attributes(Map<String, Object> properties) {
+        return AttributeJsonCodec.fromJson(textOrDefault(properties.get("attributes"), ""));
     }
 
     private Map<String, Object> parseProperties(String propertiesText) {

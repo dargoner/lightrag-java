@@ -3,6 +3,7 @@ package io.github.lightrag.api;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Locale;
+import java.util.Map;
 import java.util.Objects;
 
 public record EditEntityRequest(
@@ -10,14 +11,26 @@ public record EditEntityRequest(
     String newName,
     String type,
     String description,
-    List<String> aliases
+    List<String> aliases,
+    Map<String, Object> attributes
 ) {
+    public EditEntityRequest(
+        String entityName,
+        String newName,
+        String type,
+        String description,
+        List<String> aliases
+    ) {
+        this(entityName, newName, type, description, aliases, null);
+    }
+
     public EditEntityRequest {
         entityName = requireNonBlank(entityName, "entityName");
         newName = normalizeOptional(newName, "newName");
         type = normalizeNullable(type);
         description = normalizeNullable(description);
         aliases = aliases == null ? null : normalizeAliases(aliases);
+        attributes = AttributeRequestMaps.optional(attributes);
     }
 
     public static Builder builder() {
@@ -30,6 +43,7 @@ public record EditEntityRequest(
         private String type;
         private String description;
         private List<String> aliases;
+        private Map<String, Object> attributes;
 
         public Builder entityName(String entityName) {
             this.entityName = entityName;
@@ -56,8 +70,13 @@ public record EditEntityRequest(
             return this;
         }
 
+        public Builder attributes(Map<String, Object> attributes) {
+            this.attributes = attributes;
+            return this;
+        }
+
         public EditEntityRequest build() {
-            return new EditEntityRequest(entityName, newName, type, description, aliases);
+            return new EditEntityRequest(entityName, newName, type, description, aliases, attributes);
         }
     }
 

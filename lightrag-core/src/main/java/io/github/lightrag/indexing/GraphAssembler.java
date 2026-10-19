@@ -1,5 +1,6 @@
 package io.github.lightrag.indexing;
 
+import io.github.lightrag.ontology.AttributeValues;
 import io.github.lightrag.types.Entity;
 import io.github.lightrag.types.ExtractedEntity;
 import io.github.lightrag.types.ExtractedRelation;
@@ -14,6 +15,7 @@ import java.util.Locale;
 import java.util.Map;
 import java.util.Objects;
 import java.util.Set;
+import java.util.TreeMap;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -296,7 +298,8 @@ public final class GraphAssembler {
             if (aliases.equals(entity.aliases())) {
                 return entity;
             }
-            return new ExtractedEntity(entity.name(), entity.type(), entity.description(), aliases);
+            return new ExtractedEntity(
+                entity.name(), entity.type(), entity.description(), aliases, entity.attributes());
         }
 
         private boolean blocksMerge(ExtractedEntity incoming, MutableEntity existing) {
@@ -331,6 +334,7 @@ public final class GraphAssembler {
         private final LinkedHashSet<String> sourceChunkIds = new LinkedHashSet<>();
         private final LinkedHashSet<String> filePaths = new LinkedHashSet<>();
         private final LinkedHashSet<String> mergeKeys = new LinkedHashSet<>();
+        private final TreeMap<String, Object> attributes = new TreeMap<>();
 
         private MutableEntity(String id, String name, LinkedHashMap<String, String> aliasesByKey) {
             this.id = id;
@@ -344,6 +348,7 @@ public final class GraphAssembler {
             mutable.countType(entity.type());
             mutable.addDescriptionFragment(entity.description());
             mutable.addAliases(entity.aliases());
+            mutable.mergeAttributes(entity.attributes());
             mutable.registerMergeKeys(entityMergeKeys(entity));
             return mutable;
         }
@@ -356,6 +361,7 @@ public final class GraphAssembler {
             countType(entity.type());
             addDescriptionFragment(entity.description());
             addAliases(entity.aliases());
+            mergeAttributes(entity.attributes());
             registerMergeKeys(entityMergeKeys(entity));
         }
 
@@ -370,6 +376,18 @@ public final class GraphAssembler {
             sourceChunkIds.addAll(entity.sourceChunkIds);
             filePaths.addAll(entity.filePaths);
             mergeKeys.addAll(entity.mergeKeys);
+            mergeAttributes(entity.attributes);
+        }
+
+        private void mergeAttributes(Map<String, Object> incoming) {
+            if (incoming == null || incoming.isEmpty()) {
+                return;
+            }
+            for (var entry : incoming.entrySet()) {
+                if (entry.getKey() != null && entry.getValue() != null) {
+                    attributes.put(entry.getKey(), entry.getValue());
+                }
+            }
         }
 
         private void addAliases(List<String> aliases) {
@@ -438,7 +456,8 @@ public final class GraphAssembler {
                 joinDescriptionFragments(descriptionFragments),
                 new ArrayList<>(aliasesByKey.values()),
                 new ArrayList<>(sourceChunkIds),
-                RelationCanonicalizer.joinValues(new ArrayList<>(filePaths))
+                RelationCanonicalizer.joinValues(new ArrayList<>(filePaths)),
+                AttributeValues.merge(Map.of(), attributes)
             );
         }
     }
@@ -452,6 +471,7 @@ public final class GraphAssembler {
         private double weight;
         private final LinkedHashSet<String> sourceChunkIds = new LinkedHashSet<>();
         private final LinkedHashSet<String> filePaths = new LinkedHashSet<>();
+        private final TreeMap<String, Object> attributes = new TreeMap<>();
 
         private MutableRelation(String id, String srcId, String tgtId, String keywords, double weight) {
             this.id = id;
@@ -475,6 +495,7 @@ public final class GraphAssembler {
                 relation.weight()
             );
             created.addDescriptionFragment(relation.description());
+            created.mergeAttributes(relation.attributes());
             return created;
         }
 
@@ -482,6 +503,18 @@ public final class GraphAssembler {
             keywords = mergeKeywords(keywords, relation.keywords());
             addDescriptionFragment(relation.description());
             weight += relation.weight();
+            mergeAttributes(relation.attributes());
+        }
+
+        private void mergeAttributes(Map<String, Object> incoming) {
+            if (incoming == null || incoming.isEmpty()) {
+                return;
+            }
+            for (var entry : incoming.entrySet()) {
+                if (entry.getKey() != null && entry.getValue() != null) {
+                    attributes.put(entry.getKey(), entry.getValue());
+                }
+            }
         }
 
         private void addDescriptionFragment(String description) {
@@ -510,7 +543,8 @@ public final class GraphAssembler {
                 joinDescriptionFragments(descriptionFragments),
                 weight,
                 RelationCanonicalizer.joinValues(new ArrayList<>(sourceChunkIds)),
-                RelationCanonicalizer.joinValues(new ArrayList<>(filePaths))
+                RelationCanonicalizer.joinValues(new ArrayList<>(filePaths)),
+                AttributeValues.merge(Map.of(), attributes)
             );
         }
     }

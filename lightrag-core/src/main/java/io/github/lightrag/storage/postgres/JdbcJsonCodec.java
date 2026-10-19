@@ -3,6 +3,7 @@ package io.github.lightrag.storage.postgres;
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import io.github.lightrag.ontology.AttributeJsonCodec;
 import io.github.lightrag.storage.DocumentGraphSnapshotStore;
 
 import java.io.IOException;
@@ -64,7 +65,15 @@ public final class JdbcJsonCodec {
     }
 
     public static List<DocumentGraphSnapshotStore.ExtractedEntityRecord> readExtractedEntityRecordList(String value) {
-        return readJson(value, EXTRACTED_ENTITY_LIST);
+        return readJson(value, EXTRACTED_ENTITY_LIST).stream()
+            .map(entity -> new DocumentGraphSnapshotStore.ExtractedEntityRecord(
+                entity.name(),
+                entity.type(),
+                entity.description(),
+                entity.aliases(),
+                canonicalAttributes(entity.attributes())
+            ))
+            .toList();
     }
 
     public static String writeExtractedRelationRecordList(List<DocumentGraphSnapshotStore.ExtractedRelationRecord> value) {
@@ -72,7 +81,20 @@ public final class JdbcJsonCodec {
     }
 
     public static List<DocumentGraphSnapshotStore.ExtractedRelationRecord> readExtractedRelationRecordList(String value) {
-        return readJson(value, EXTRACTED_RELATION_LIST);
+        return readJson(value, EXTRACTED_RELATION_LIST).stream()
+            .map(relation -> new DocumentGraphSnapshotStore.ExtractedRelationRecord(
+                relation.sourceEntityName(),
+                relation.targetEntityName(),
+                relation.keywords(),
+                relation.description(),
+                relation.weight(),
+                canonicalAttributes(relation.attributes())
+            ))
+            .toList();
+    }
+
+    private static Map<String, Object> canonicalAttributes(Map<String, Object> attributes) {
+        return AttributeJsonCodec.fromJson(AttributeJsonCodec.toJson(attributes));
     }
 
     private static String writeJson(Object value) {

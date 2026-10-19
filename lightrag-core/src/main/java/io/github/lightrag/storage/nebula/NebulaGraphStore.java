@@ -10,6 +10,7 @@ import com.vesoft.nebula.client.graph.exception.IOErrorException;
 import com.vesoft.nebula.client.graph.exception.InvalidValueException;
 import io.github.lightrag.exception.StorageException;
 import io.github.lightrag.indexing.RelationCanonicalizer;
+import io.github.lightrag.ontology.AttributeJsonCodec;
 import io.github.lightrag.storage.GraphStore;
 import io.github.lightrag.storage.MutableGraphStore;
 
@@ -19,6 +20,7 @@ import java.util.Comparator;
 import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
+import java.util.Locale;
 import java.util.Map;
 import java.util.Objects;
 import java.util.Optional;
@@ -66,7 +68,10 @@ public final class NebulaGraphStore implements MutableGraphStore, AutoCloseable 
     public void saveEntity(EntityRecord entity) {
         var record = Objects.requireNonNull(entity, "entity");
         inSpace("save entity '%s'".formatted(record.id()), () -> {
-            execute("save entity '%s'".formatted(record.id()), saveEntityStatement(record));
+            executeRecordWrite(
+                "save entity '%s'".formatted(record.id()),
+                saveEntityStatement(workspaceId, record)
+            );
             return null;
         });
     }
@@ -78,28 +83,12 @@ public final class NebulaGraphStore implements MutableGraphStore, AutoCloseable 
             var description = "save relation '%s'".formatted(record.id());
             var srcVid = NebulaSupport.scopedVid(workspaceId, record.srcId());
             var tgtVid = NebulaSupport.scopedVid(workspaceId, record.tgtId());
-            execute(description, placeholderStatement(record, srcVid, tgtVid));
-            execute(
-                description,
-                "INSERT EDGE directed(relation_id, src_id, tgt_id, keywords, description, weight, source_id, file_path, workspace_id) VALUES "
-                    + NebulaSupport.quoted(srcVid) + "->" + NebulaSupport.quoted(tgtVid) + ":"
-                    + tuple(
-                        record.id(),
-                        record.srcId(),
-                        record.tgtId(),
-                        record.keywords(),
-                        record.description(),
-                        record.weight(),
-                        record.sourceId(),
-                        record.filePath(),
-                        workspaceId
-                    )
-                    + ";"
-            );
+            executeRecordWrite(description, placeholderStatement(record, srcVid, tgtVid));
+            executeRecordWrite(description, saveRelationStatement(workspaceId, record, srcVid, tgtVid));
             if (!srcVid.equals(tgtVid)) {
                 // Upstream keeps at most one edge per endpoint pair: a save whose endpoints match an
                 // existing edge in the opposite direction replaces it instead of leaving two.
-                execute(
+                executeRecordWrite(
                     description,
                     "DELETE EDGE directed " + NebulaSupport.quoted(tgtVid) + "->" + NebulaSupport.quoted(srcVid) + ";"
                 );
@@ -283,8 +272,13 @@ public final class NebulaGraphStore implements MutableGraphStore, AutoCloseable 
         }
     }
 
-    private String saveEntityStatement(EntityRecord record) {
-        return "INSERT VERTEX entity(entity_id, name, entity_type, description, aliases, source_id, file_path, workspace_id, materialized) VALUES "
+    /**
+     * The vertex INSERT, including the canonical-JSON {@code attributes} column. Every save writes
+     * the bag ({@code "{}"} when empty) so a re-save replaces the previous value instead of leaving
+     * stale keys behind.
+     */
+    static String saveEntityStatement(String workspaceId, EntityRecord record) {
+        return "INSERT VERTEX entity(entity_id, name, entity_type, description, aliases, source_id, file_path, workspace_id, materialized, attributes) VALUES "
             + NebulaSupport.quoted(NebulaSupport.scopedVid(workspaceId, record.id()))
             + ":"
             + tuple(
@@ -296,7 +290,32 @@ public final class NebulaGraphStore implements MutableGraphStore, AutoCloseable 
                 RelationCanonicalizer.joinValues(record.sourceChunkIds()),
                 record.filePath(),
                 workspaceId,
-                true
+                true,
+                AttributeJsonCodec.toJson(record.attributes())
+            )
+            + ";";
+    }
+
+    /** The edge INSERT, mirroring {@link #saveEntityStatement(String, EntityRecord)}. */
+    static String saveRelationStatement(
+        String workspaceId,
+        RelationRecord record,
+        String srcVid,
+        String tgtVid
+    ) {
+        return "INSERT EDGE directed(relation_id, src_id, tgt_id, keywords, description, weight, source_id, file_path, workspace_id, attributes) VALUES "
+            + NebulaSupport.quoted(srcVid) + "->" + NebulaSupport.quoted(tgtVid) + ":"
+            + tuple(
+                record.id(),
+                record.srcId(),
+                record.tgtId(),
+                record.keywords(),
+                record.description(),
+                record.weight(),
+                record.sourceId(),
+                record.filePath(),
+                workspaceId,
+                AttributeJsonCodec.toJson(record.attributes())
             )
             + ";";
     }
@@ -351,6 +370,42 @@ public final class NebulaGraphStore implements MutableGraphStore, AutoCloseable 
         }
     }
 
+    /**
+     * Writes through {@link #execute(String, String)} but turns a missing-attribute-column failure
+     * into an actionable message. This covers borrowed session pools constructed without the
+     * bootstrap: the write fails loudly with the exact {@code ALTER} statements instead of dropping
+     * the attribute bag.
+     */
+    private void executeRecordWrite(String description, String statement) {
+        try {
+            execute(description, statement);
+        } catch (StorageException failure) {
+            throw attributeColumnHint(description, failure);
+        }
+    }
+
+    static StorageException attributeColumnHint(String description, StorageException failure) {
+        var message = failure.getMessage() == null ? "" : failure.getMessage().toLowerCase(Locale.ROOT);
+        var mentionsAttributes = message.contains(NebulaSupport.ATTRIBUTES_COLUMN);
+        var mentionsColumn = message.contains("column")
+            || message.contains("property")
+            || message.contains("field");
+        if (!mentionsAttributes || !mentionsColumn) {
+            return failure;
+        }
+        return new StorageException(
+            ("NebulaGraph %s failed because the space schema has no '%s' column on tag 'entity'/"
+                + "edge 'directed'. Upgrade the space with: %s (original error: %s)")
+                .formatted(
+                    description,
+                    NebulaSupport.ATTRIBUTES_COLUMN,
+                    NebulaSupport.attributesUpgradeInstruction(),
+                    failure.getMessage()
+                ),
+            failure
+        );
+    }
+
     private static Map<String, Object> propertyMap(ValueWrapper wrapper) {
         if (wrapper == null || !wrapper.isMap()) {
             throw new StorageException("NebulaGraph returned a non-map properties value: " + wrapper);
@@ -394,7 +449,7 @@ public final class NebulaGraphStore implements MutableGraphStore, AutoCloseable 
         return !Boolean.FALSE.equals(properties.get("materialized"));
     }
 
-    private static EntityRecord toEntityRecord(Map<String, Object> properties) {
+    static EntityRecord toEntityRecord(Map<String, Object> properties) {
         var id = requiredText(properties, "entity_id");
         return new EntityRecord(
             id,
@@ -405,11 +460,12 @@ public final class NebulaGraphStore implements MutableGraphStore, AutoCloseable 
             textOrDefault(properties.get("description"), ""),
             RelationCanonicalizer.splitValues(textOrDefault(properties.get("aliases"), "")),
             RelationCanonicalizer.splitValues(textOrDefault(properties.get("source_id"), "")),
-            textOrDefault(properties.get("file_path"), "")
+            textOrDefault(properties.get("file_path"), ""),
+            attributes(properties.get("attributes"))
         );
     }
 
-    private static RelationRecord toRelationRecord(Map<String, Object> properties) {
+    static RelationRecord toRelationRecord(Map<String, Object> properties) {
         var srcId = requiredText(properties, "src_id");
         var tgtId = requiredText(properties, "tgt_id");
         var relationId = textOrDefault(properties.get("relation_id"), "");
@@ -426,8 +482,18 @@ public final class NebulaGraphStore implements MutableGraphStore, AutoCloseable 
             textOrDefault(properties.get("description"), ""),
             number(properties.get("weight")),
             textOrDefault(properties.get("source_id"), ""),
-            textOrDefault(properties.get("file_path"), "")
+            textOrDefault(properties.get("file_path"), ""),
+            attributes(properties.get("attributes"))
         );
+    }
+
+    /**
+     * Decodes the canonical-JSON attribute bag. Missing values (rows written before the column was
+     * materialized, or default {@code NULL} after an {@code ALTER}) and malformed JSON both map to
+     * an empty bag; {@link AttributeJsonCodec} logs the malformed case instead of failing the read.
+     */
+    private static Map<String, Object> attributes(Object value) {
+        return AttributeJsonCodec.fromJson(textOrDefault(value, ""));
     }
 
     private static String requiredText(Map<String, Object> properties, String key) {

@@ -387,7 +387,8 @@ public final class DeletionPipeline {
         return List.copyOf(retained);
     }
 
-    private static GraphStore.EntityRecord removeEntityChunkReferences(
+    // Package-private so attribute-conservation tests can drive the chunk-reference rebuild directly.
+    static GraphStore.EntityRecord removeEntityChunkReferences(
         GraphStore.EntityRecord entity,
         Set<String> targetChunkIds
     ) {
@@ -398,11 +399,13 @@ public final class DeletionPipeline {
             entity.description(),
             entity.aliases(),
             entity.sourceChunkIds().stream().filter(chunkId -> !targetChunkIds.contains(chunkId)).toList(),
-            entity.filePath()
+            entity.filePath(),
+            entity.attributes()
         );
     }
 
-    private static GraphStore.RelationRecord removeRelationChunkReferences(
+    // Package-private so attribute-conservation tests can drive the chunk-reference rebuild directly.
+    static GraphStore.RelationRecord removeRelationChunkReferences(
         GraphStore.RelationRecord relation,
         Set<String> targetChunkIds
     ) {
@@ -418,7 +421,8 @@ public final class DeletionPipeline {
             ),
             // The rewrite must not drop the accumulated file paths (upstream keeps file_path when a
             // delete trims source ids).
-            relation.filePath()
+            relation.filePath(),
+            relation.attributes()
         );
     }
 

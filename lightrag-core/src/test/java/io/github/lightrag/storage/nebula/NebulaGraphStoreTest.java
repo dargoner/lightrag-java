@@ -449,6 +449,47 @@ class NebulaGraphStoreTest {
     }
 
     @Test
+    void upgradesALegacySpaceWithoutAttributesAndKeepsMultibyteBagsAcrossRestarts() {
+        var space = "upgrade_" + UUID.randomUUID().toString().replace("-", "").substring(0, 12);
+        var config = newConfig(space);
+        var workspace = newWorkspaceId();
+        try {
+            createLegacySpace(space);
+            withBootstrapSession(session -> {
+                execute(session, "USE `" + space + "`;");
+                writeLegacyRows(session, workspace);
+                return null;
+            });
+
+            var largeText = "知".repeat(4000);
+            var entityAttributes = Map.<String, Object>of("note", largeText, "标签", List.of("甲", "乙"));
+            var relationAttributes = Map.<String, Object>of("备注", largeText);
+
+            try (var store = new NebulaGraphStore(config, workspace)) {
+                assertThat(store.loadEntity("legacy-1").orElseThrow().attributes()).isEmpty();
+                assertThat(store.loadRelation("legacy-rel-1").orElseThrow().attributes()).isEmpty();
+
+                store.saveEntity(new EntityRecord(
+                    "entity-1", "Alice", "person", "researcher", List.of(), List.of("chunk-1"),
+                    "", entityAttributes));
+                store.saveRelation(new RelationRecord(
+                    "relation-1", "entity-1", "entity-2", "knows", "linked", 0.5d,
+                    "chunk-1", "", relationAttributes));
+            }
+
+            // A second bootstrap over the upgraded space must be idempotent and keep the bags.
+            try (var restarted = new NebulaGraphStore(config, workspace)) {
+                assertThat(restarted.loadEntity("entity-1").orElseThrow().attributes())
+                    .isEqualTo(entityAttributes);
+                assertThat(restarted.loadRelation("relation-1").orElseThrow().attributes())
+                    .isEqualTo(relationAttributes);
+            }
+        } finally {
+            dropSpace(space);
+        }
+    }
+
+    @Test
     void knowledgeGraphViewsMatchTheDefaultImplementationOnTheNebulaGraphBackend() {
         try (var store = newStore()) {
             store.saveEntities(GraphViewParity.ENTITIES);
@@ -497,18 +538,120 @@ class NebulaGraphStoreTest {
     }
 
     private static NebulaGraphConfig newConfig() {
+        return newConfig(SPACE);
+    }
+
+    private static NebulaGraphConfig newConfig(String space) {
         return new NebulaGraphConfig(
             CLUSTER.host(),
             CLUSTER.port(),
             NebulaGraphConfig.DEFAULT_USERNAME,
             NebulaGraphConfig.DEFAULT_PASSWORD,
-            SPACE,
+            space,
             1,
             1
         );
     }
 
+    private static void createLegacySpace(String space) {
+        withBootstrapSession(session -> {
+            execute(session, "CREATE SPACE IF NOT EXISTS `" + space + "` "
+                + "(partition_num = 1, replica_factor = 1, vid_type = FIXED_STRING(64));");
+            awaitSpaceUsable(session, space);
+            execute(session, "USE `" + space + "`;");
+            execute(session, "CREATE TAG IF NOT EXISTS entity("
+                + "entity_id string, name string, entity_type string, description string, aliases string, "
+                + "source_id string, file_path string, workspace_id string, materialized bool);");
+            execute(session, "CREATE EDGE IF NOT EXISTS directed("
+                + "relation_id string, src_id string, tgt_id string, keywords string, description string, "
+                + "weight double, source_id string, file_path string, workspace_id string);");
+            execute(session, "CREATE TAG INDEX IF NOT EXISTS idx_entity_workspace_id "
+                + "ON entity(workspace_id(64));");
+            execute(session, "CREATE EDGE INDEX IF NOT EXISTS idx_directed_workspace_id "
+                + "ON directed(workspace_id(64));");
+            execute(session, "CREATE EDGE INDEX IF NOT EXISTS idx_directed_workspace_relation_id "
+                + "ON directed(workspace_id(64), relation_id(64));");
+            return null;
+        });
+    }
+
+    private static void writeLegacyRows(Session session, String workspace) {
+        var alice = NebulaSupport.quoted(NebulaSupport.scopedVid(workspace, "legacy-1"));
+        var bob = NebulaSupport.quoted(NebulaSupport.scopedVid(workspace, "legacy-2"));
+        retryUntilSchemaWritable(session, "INSERT VERTEX entity(entity_id, name, entity_type, description, "
+            + "aliases, source_id, file_path, workspace_id, materialized) VALUES "
+            + alice + ":(\"legacy-1\", \"Legacy Alice\", \"person\", \"before attributes\", \"\", \"chunk-1\", "
+            + "\"\", " + NebulaSupport.quoted(workspace) + ", true);");
+        retryUntilSchemaWritable(session, "INSERT VERTEX entity(entity_id, name, entity_type, description, "
+            + "aliases, source_id, file_path, workspace_id, materialized) VALUES "
+            + bob + ":(\"legacy-2\", \"Legacy Bob\", \"person\", \"before attributes\", \"\", \"chunk-2\", "
+            + "\"\", " + NebulaSupport.quoted(workspace) + ", true);");
+        retryUntilSchemaWritable(session, "INSERT EDGE directed(relation_id, src_id, tgt_id, keywords, description, "
+            + "weight, source_id, file_path, workspace_id) VALUES " + alice + "->" + bob
+            + ":(\"legacy-rel-1\", \"legacy-1\", \"legacy-2\", \"knows\", \"before attributes\", 0.5, "
+            + "\"chunk-1\", \"\", " + NebulaSupport.quoted(workspace) + ");");
+    }
+
+    private static void awaitSpaceUsable(Session session, String space) {
+        var deadline = System.currentTimeMillis() + 60_000;
+        while (true) {
+            try {
+                if (session.execute("USE `" + space + "`;").isSucceeded()) {
+                    return;
+                }
+            } catch (IOErrorException exception) {
+                throw new IllegalStateException("USE " + space + " failed", exception);
+            }
+            if (System.currentTimeMillis() >= deadline) {
+                throw new IllegalStateException("space " + space + " did not become usable");
+            }
+            sleep();
+        }
+    }
+
+    private static void retryUntilSchemaWritable(Session session, String statement) {
+        var deadline = System.currentTimeMillis() + 60_000;
+        while (true) {
+            try {
+                if (session.execute(statement).isSucceeded()) {
+                    return;
+                }
+            } catch (IOErrorException exception) {
+                throw new IllegalStateException("legacy schema probe failed", exception);
+            }
+            if (System.currentTimeMillis() >= deadline) {
+                throw new IllegalStateException("legacy schema did not accept writes: " + statement);
+            }
+            sleep();
+        }
+    }
+
+    private static void sleep() {
+        try {
+            Thread.sleep(500);
+        } catch (InterruptedException interruptedException) {
+            Thread.currentThread().interrupt();
+            throw new IllegalStateException("interrupted while waiting for the legacy schema", interruptedException);
+        }
+    }
+
+    private static void dropSpace(String space) {
+        try {
+            withBootstrapSession(session -> execute(session, "DROP SPACE `" + space + "`;"));
+        } catch (RuntimeException ignored) {
+            // Cleanup must not mask the assertion outcome; the test cluster is disposable.
+        }
+    }
+
     private static <T> T withRawSession(Function<Session, T> work) {
+        return withSession(SPACE, work);
+    }
+
+    private static <T> T withBootstrapSession(Function<Session, T> work) {
+        return withSession(null, work);
+    }
+
+    private static <T> T withSession(String space, Function<Session, T> work) {
         var pool = new NebulaPool();
         try {
             if (!pool.init(List.of(new HostAddress(CLUSTER.host(), CLUSTER.port())), new NebulaPoolConfig())) {
@@ -520,7 +663,9 @@ class NebulaGraphStoreTest {
                 true
             );
             try {
-                execute(session, "USE `" + SPACE + "`;");
+                if (space != null) {
+                    execute(session, "USE `" + space + "`;");
+                }
                 return work.apply(session);
             } finally {
                 session.release();

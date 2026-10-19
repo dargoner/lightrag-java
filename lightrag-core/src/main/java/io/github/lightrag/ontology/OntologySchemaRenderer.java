@@ -16,10 +16,14 @@ import java.util.function.Function;
  * appends them from a {@link PhysicalGraphProfile} so the logical and
  * physical views stay separate and do not substitute for each other.
  *
- * <p>Declared-but-not-materialized properties are not rendered while
- * {@link RenderOptions#includeDeclaredProperties()} is {@code false}
- * (phase A keeps properties declarative only, so the segment lists exactly
- * the fields that can be queried today).
+ * <p>Declared properties are materialized on each entity or relation as a
+ * canonical JSON attribute bag; they are <em>not</em> physical fields, columns,
+ * or independently indexed values. Rendering them as queryable paths would
+ * invite Cypher predicates that cannot work. That is why
+ * {@link RenderOptions#includeDeclaredProperties()} still defaults to
+ * {@code false}: properties are materialized into a bag, not made physically
+ * queryable. The option only adds descriptive lines when a host explicitly asks
+ * for them; it never changes the physical schema contract.
  */
 public final class OntologySchemaRenderer {
 
@@ -28,13 +32,15 @@ public final class OntologySchemaRenderer {
     /**
      * Render options.
      *
-     * <p>{@code includeDeclaredProperties} stays {@code false} until properties
-     * are materialized into the graph (phase B); turning it on then adds
-     * declared-property lines for entity and relation types.
+     * <p>{@code includeDeclaredProperties} defaults to {@code false} and stays
+     * that way after attribute materialization: declared properties live in a
+     * JSON bag and cannot be filtered physically. When enabled, the renderer
+     * only adds descriptive property lines for humans and prompts; it does not
+     * imply that a property is a queryable field.
      */
     public record RenderOptions(boolean includeDeclaredProperties) {
 
-        /** Phase-A defaults: no declared-property lines. */
+        /** Defaults: no declared-property lines. */
         public static RenderOptions defaults() {
             return new RenderOptions(false);
         }

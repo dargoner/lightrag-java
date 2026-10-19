@@ -17,8 +17,14 @@ import java.util.Set;
  * labels, duplicate identities, kernel or fallback reserved labels, duplicate
  * property identities, duplicate patterns, and multiple labels bound to the
  * same normalized source table or column signature. Warnings are advisory
- * diagnostics: relation patterns that reference undeclared entity types and
- * entity types that no declared pattern references.
+ * diagnostics: relation patterns that reference undeclared entity types,
+ * entity types that no declared pattern references, and property names that
+ * collide with kernel fields already carried by every entity or relation
+ * ({@code name}/{@code type}/{@code description}/{@code aliases},
+ * {@code source_entity}/{@code target_entity}/{@code relationship_keywords}/
+ * {@code relationship_description}/{@code weight}). Reserved property
+ * declarations are accepted for compatibility - they are never materialized,
+ * and they never fail validation.
  *
  * <p>Every identity comparison goes through {@link Identity#identityId(String)};
  * table and column signatures are normalized (trimmed, lower-cased, unquoted)
@@ -27,6 +33,31 @@ import java.util.Set;
 public final class OntologyStructureValidator {
 
     private static final Set<String> NO_STANDALONE_LABELS = Set.of();
+
+    /**
+     * Kernel fields already carried by every extracted entity. Declaring them as
+     * ontology properties is accepted for compatibility, but they are never
+     * materialized into the attribute bag.
+     */
+    private static final Set<String> RESERVED_ENTITY_PROPERTIES = Set.of(
+        "name",
+        "type",
+        "description",
+        "aliases"
+    );
+
+    /**
+     * Kernel fields already carried by every extracted relation. Declaring them
+     * as ontology properties is accepted for compatibility, but they are never
+     * materialized into the attribute bag.
+     */
+    private static final Set<String> RESERVED_RELATION_PROPERTIES = Set.of(
+        "sourceentity",
+        "targetentity",
+        "relationshipkeywords",
+        "relationshipdescription",
+        "weight"
+    );
 
     private OntologyStructureValidator() {}
 
@@ -87,7 +118,8 @@ public final class OntologyStructureValidator {
                 continue;
             }
             checkReserved("entity", id, errors);
-            validateProperties("entity", id, entity.properties(), errors);
+            validateProperties(
+                "entity", id, entity.properties(), RESERVED_ENTITY_PROPERTIES, errors, warnings);
         }
 
         Set<String> relationIds = new LinkedHashSet<>();
@@ -98,7 +130,8 @@ public final class OntologyStructureValidator {
                 continue;
             }
             checkReserved("relation", id, errors);
-            validateProperties("relation", id, relation.properties(), errors);
+            validateProperties(
+                "relation", id, relation.properties(), RESERVED_RELATION_PROPERTIES, errors, warnings);
             validatePatterns(id, relation, errors);
         }
 
@@ -127,13 +160,21 @@ public final class OntologyStructureValidator {
         String ownerKind,
         String ownerId,
         List<OntologyProperty> properties,
-        List<String> errors
+        Set<String> reservedNames,
+        List<String> errors,
+        List<String> warnings
     ) {
         Set<String> seen = new HashSet<>();
         for (OntologyProperty property : properties) {
             String id = property.identityId();
             if (!seen.add(id)) {
                 errors.add("Duplicate property identity '" + id + "' on " + ownerKind + " '" + ownerId + "'");
+                continue;
+            }
+            if (reservedNames.contains(Identity.separatorFree(id))) {
+                warnings.add(
+                    "Reserved property '" + id + "' is declared on " + ownerKind + " '" + ownerId
+                        + "' and is not materialized");
             }
         }
     }

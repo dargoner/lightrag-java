@@ -24,6 +24,19 @@ class ArcadeOneShotRetrievalStoreTest {
     }
 
     @Test
+    void retrievesAttributesFromStoredGraphRows() {
+        var store = new ArcadeOneShotRetrievalStore(new FakeArcadeClient(), "default");
+
+        var result = store.retrieveLocal(List.of(new VectorStore.VectorMatch("alice", 0.9d)));
+
+        assertThat(result.entities()).allSatisfy(match -> assertThat(match.entity().attributes())
+            .containsEntry("Age", 33L)
+            .containsEntry("tags", List.of("researcher")));
+        assertThat(result.relations()).singleElement()
+            .satisfies(match -> assertThat(match.relation().attributes()).containsEntry("since", 2020L));
+    }
+
+    @Test
     void retrievesGlobalGraphAndChunksFromRelationMatches() {
         var store = new ArcadeOneShotRetrievalStore(new FakeArcadeClient(), "default");
 
@@ -100,7 +113,8 @@ class ArcadeOneShotRetrievalStoreTest {
                     "type", "person",
                     "description", id + " description",
                     "aliases", "[]",
-                    "sourceChunkIds", "[\"chunk-1\"]"
+                    "sourceChunkIds", "[\"chunk-1\"]",
+                    "attributes", "{\"Age\":33,\"tags\":[\"researcher\"]}"
                 ))
                 .toList();
         }
@@ -114,7 +128,8 @@ class ArcadeOneShotRetrievalStoreTest {
                 "description", "Alice works with Bob",
                 "weight", 1.0d,
                 "sourceId", "chunk-1",
-                "filePath", ""
+                "filePath", "",
+                "attributes", "{\"since\":2020}"
             ));
         }
 

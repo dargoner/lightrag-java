@@ -57,4 +57,23 @@ public final class Identity {
         }
         return Normalizer.normalize(collapsed, Normalizer.Form.NFC);
     }
+
+    /**
+     * Returns the identity without whitespace, underscores, or hyphens so
+     * multi-word kernel names compare equal regardless of spelling: both
+     * {@code "relationship description"} and
+     * {@code "relationship_description"} collapse to
+     * {@code "relationshipdescription"}.
+     */
+    static String separatorFree(String identity) {
+        StringBuilder compact = new StringBuilder(identity.length());
+        for (int index = 0; index < identity.length(); index++) {
+            char character = identity.charAt(index);
+            if (Character.isWhitespace(character) || character == '_' || character == '-') {
+                continue;
+            }
+            compact.append(character);
+        }
+        return compact.toString();
+    }
 }

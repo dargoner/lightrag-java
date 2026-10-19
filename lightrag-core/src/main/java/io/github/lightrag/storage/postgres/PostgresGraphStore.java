@@ -2,6 +2,7 @@ package io.github.lightrag.storage.postgres;
 
 import io.github.lightrag.api.KnowledgeGraphView;
 import io.github.lightrag.exception.StorageException;
+import io.github.lightrag.ontology.AttributeJsonCodec;
 import io.github.lightrag.storage.GraphStore;
 import io.github.lightrag.storage.GraphViewTraversal;
 import io.github.lightrag.storage.MutableGraphStore;
@@ -118,7 +119,7 @@ public final class PostgresGraphStore implements MutableGraphStore {
             var chunkIdsByEntityId = selectStringLists(connection, entityChunksTable, "entity_id", "chunk_id");
             try (var statement = connection.prepareStatement(
                 """
-                SELECT id, name, type, description, file_path
+                SELECT id, name, type, description, file_path, attributes
                 FROM %s
                 WHERE workspace_id = ?
                 ORDER BY id
@@ -141,7 +142,7 @@ public final class PostgresGraphStore implements MutableGraphStore {
         return connectionAccess.withConnection(connection -> {
             try (var statement = connection.prepareStatement(
                 """
-                SELECT id, src_id, tgt_id, keywords, description, weight, source_id, file_path
+                SELECT id, src_id, tgt_id, keywords, description, weight, source_id, file_path, attributes
                 FROM %s
                 WHERE workspace_id = ?
                 ORDER BY id
@@ -199,7 +200,7 @@ public final class PostgresGraphStore implements MutableGraphStore {
         return connectionAccess.withConnection(connection -> {
             try (var statement = connection.prepareStatement(
                 """
-                SELECT id, src_id, tgt_id, keywords, description, weight, source_id, file_path
+                SELECT id, src_id, tgt_id, keywords, description, weight, source_id, file_path, attributes
                 FROM %s
                 WHERE workspace_id = ?
                   AND (src_id = ? OR tgt_id = ?)
@@ -230,7 +231,7 @@ public final class PostgresGraphStore implements MutableGraphStore {
         return connectionAccess.withConnection(connection -> {
             try (var statement = connection.prepareStatement(
                 """
-                SELECT id, src_id, tgt_id, keywords, description, weight, source_id, file_path
+                SELECT id, src_id, tgt_id, keywords, description, weight, source_id, file_path, attributes
                 FROM %s
                 WHERE workspace_id = ?
                   AND (src_id IN (%s) OR tgt_id IN (%s))
@@ -403,7 +404,7 @@ public final class PostgresGraphStore implements MutableGraphStore {
                 var chunkIdsByEntityId = selectStringLists(connection, entityChunksTable, "entity_id", "chunk_id", requested);
                 try (var statement = connection.prepareStatement(
                     """
-                    SELECT id, name, type, description, file_path
+                    SELECT id, name, type, description, file_path, attributes
                     FROM %s
                     WHERE workspace_id = ?
                       AND id = ANY (?)
@@ -435,7 +436,7 @@ public final class PostgresGraphStore implements MutableGraphStore {
             return connectionAccess.withConnection(connection -> {
                 try (var statement = connection.prepareStatement(
                     """
-                    SELECT id, src_id, tgt_id, keywords, description, weight, source_id, file_path
+                    SELECT id, src_id, tgt_id, keywords, description, weight, source_id, file_path, attributes
                     FROM %s
                     WHERE workspace_id = ?
                       AND src_id = ANY (?)
@@ -461,7 +462,7 @@ public final class PostgresGraphStore implements MutableGraphStore {
     private Optional<EntityRecord> loadEntity(Connection connection, String entityId) throws SQLException {
         try (var statement = connection.prepareStatement(
             """
-            SELECT id, name, type, description, file_path
+            SELECT id, name, type, description, file_path, attributes
             FROM %s
             WHERE workspace_id = ?
               AND id = ?
@@ -481,7 +482,7 @@ public final class PostgresGraphStore implements MutableGraphStore {
     private Optional<RelationRecord> loadRelation(Connection connection, String relationId) throws SQLException {
         try (var statement = connection.prepareStatement(
             """
-            SELECT id, src_id, tgt_id, keywords, description, weight, source_id, file_path
+            SELECT id, src_id, tgt_id, keywords, description, weight, source_id, file_path, attributes
             FROM %s
             WHERE workspace_id = ?
               AND id = ?
@@ -507,7 +508,8 @@ public final class PostgresGraphStore implements MutableGraphStore {
             resultSet.getString("description"),
             selectStringList(connection, entityAliasesTable, "entity_id", entityId, "alias"),
             selectStringList(connection, entityChunksTable, "entity_id", entityId, "chunk_id"),
-            resultSet.getString("file_path")
+            resultSet.getString("file_path"),
+            readAttributes(resultSet)
         );
     }
 
@@ -524,7 +526,8 @@ public final class PostgresGraphStore implements MutableGraphStore {
             resultSet.getString("description"),
             aliasesByEntityId.getOrDefault(entityId, List.of()),
             chunkIdsByEntityId.getOrDefault(entityId, List.of()),
-            resultSet.getString("file_path")
+            resultSet.getString("file_path"),
+            readAttributes(resultSet)
         );
     }
 
@@ -537,8 +540,18 @@ public final class PostgresGraphStore implements MutableGraphStore {
             resultSet.getString("description"),
             resultSet.getDouble("weight"),
             resultSet.getString("source_id"),
-            resultSet.getString("file_path")
+            resultSet.getString("file_path"),
+            readAttributes(resultSet)
         );
+    }
+
+    /**
+     * Reads the stored canonical-JSON attribute bag: a legacy row with {@code NULL} or a blank
+     * column reads as an empty map, and a malformed value degrades to an empty map with a warning
+     * (the same tolerance {@link AttributeJsonCodec} applies everywhere else).
+     */
+    private static Map<String, Object> readAttributes(ResultSet resultSet) throws SQLException {
+        return AttributeJsonCodec.fromJson(resultSet.getString("attributes"));
     }
 
     private List<String> selectStringList(
@@ -665,13 +678,14 @@ public final class PostgresGraphStore implements MutableGraphStore {
     private void upsertEntity(Connection connection, EntityRecord entity) throws SQLException {
         try (var statement = connection.prepareStatement(
             """
-            INSERT INTO %s (workspace_id, id, name, type, description, file_path)
-            VALUES (?, ?, ?, ?, ?, ?)
+            INSERT INTO %s (workspace_id, id, name, type, description, file_path, attributes)
+            VALUES (?, ?, ?, ?, ?, ?, ?)
             ON CONFLICT (workspace_id, id) DO UPDATE
             SET name = EXCLUDED.name,
                 type = EXCLUDED.type,
                 description = EXCLUDED.description,
-                file_path = EXCLUDED.file_path
+                file_path = EXCLUDED.file_path,
+                attributes = EXCLUDED.attributes
             """.formatted(entitiesTable)
         )) {
             statement.setString(1, workspaceId);
@@ -680,6 +694,7 @@ public final class PostgresGraphStore implements MutableGraphStore {
             statement.setString(4, entity.type());
             statement.setString(5, entity.description());
             statement.setString(6, entity.filePath());
+            statement.setString(7, AttributeJsonCodec.toJson(entity.attributes()));
             statement.executeUpdate();
         }
     }
@@ -697,8 +712,8 @@ public final class PostgresGraphStore implements MutableGraphStore {
     private void upsertRelation(Connection connection, RelationRecord relation) throws SQLException {
         try (var statement = connection.prepareStatement(
             """
-            INSERT INTO %s (workspace_id, id, src_id, tgt_id, keywords, description, weight, source_id, file_path)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+            INSERT INTO %s (workspace_id, id, src_id, tgt_id, keywords, description, weight, source_id, file_path, attributes)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             ON CONFLICT (workspace_id, id) DO UPDATE
             SET src_id = EXCLUDED.src_id,
                 tgt_id = EXCLUDED.tgt_id,
@@ -706,7 +721,8 @@ public final class PostgresGraphStore implements MutableGraphStore {
                 description = EXCLUDED.description,
                 weight = EXCLUDED.weight,
                 source_id = EXCLUDED.source_id,
-                file_path = EXCLUDED.file_path
+                file_path = EXCLUDED.file_path,
+                attributes = EXCLUDED.attributes
             """.formatted(relationsTable)
         )) {
             statement.setString(1, workspaceId);
@@ -718,6 +734,7 @@ public final class PostgresGraphStore implements MutableGraphStore {
             statement.setDouble(7, relation.weight());
             statement.setString(8, relation.sourceId());
             statement.setString(9, relation.filePath());
+            statement.setString(10, AttributeJsonCodec.toJson(relation.attributes()));
             statement.executeUpdate();
         }
     }

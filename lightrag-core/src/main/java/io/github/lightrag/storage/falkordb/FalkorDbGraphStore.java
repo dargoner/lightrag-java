@@ -8,6 +8,7 @@ import com.falkordb.graph_entities.GraphEntity;
 import com.falkordb.graph_entities.Node;
 import io.github.lightrag.exception.StorageException;
 import io.github.lightrag.indexing.RelationCanonicalizer;
+import io.github.lightrag.ontology.AttributeJsonCodec;
 import io.github.lightrag.storage.GraphStore;
 import io.github.lightrag.storage.MutableGraphStore;
 import org.slf4j.Logger;
@@ -443,7 +444,7 @@ public final class FalkorDbGraphStore implements MutableGraphStore, AutoCloseabl
         return properties;
     }
 
-    private static EntityRecord toEntityRecord(Map<String, Object> properties) {
+    static EntityRecord toEntityRecord(Map<String, Object> properties) {
         var id = requiredText(properties, "entity_id");
         return new EntityRecord(
             id,
@@ -454,11 +455,12 @@ public final class FalkorDbGraphStore implements MutableGraphStore, AutoCloseabl
             textOrDefault(properties.get("description"), ""),
             stringList(properties.get("aliases")),
             RelationCanonicalizer.splitValues(textOrDefault(properties.get("source_id"), "")),
-            textOrDefault(properties.get("file_path"), "")
+            textOrDefault(properties.get("file_path"), ""),
+            attributes(properties.get("attributes"))
         );
     }
 
-    private static RelationRecord toRelationRecord(Map<String, Object> properties) {
+    static RelationRecord toRelationRecord(Map<String, Object> properties) {
         var srcId = requiredText(properties, "src_id");
         var tgtId = requiredText(properties, "tgt_id");
         var relationId = textOrDefault(properties.get("relation_id"), "");
@@ -475,8 +477,18 @@ public final class FalkorDbGraphStore implements MutableGraphStore, AutoCloseabl
             textOrDefault(properties.get("description"), ""),
             number(properties.get("weight")),
             textOrDefault(properties.get("source_id"), ""),
-            textOrDefault(properties.get("file_path"), "")
+            textOrDefault(properties.get("file_path"), ""),
+            attributes(properties.get("attributes"))
         );
+    }
+
+    /**
+     * Decodes the stored canonical-JSON attribute bag. Missing or blank values mean "no
+     * attributes" for graphs written before the property existed; malformed JSON is tolerated by
+     * {@link AttributeJsonCodec} (empty map plus a warning) so one bad row cannot block reads.
+     */
+    private static Map<String, Object> attributes(Object value) {
+        return AttributeJsonCodec.fromJson(textOrDefault(value, ""));
     }
 
     private static String requiredText(Map<String, Object> properties, String key) {
@@ -526,7 +538,12 @@ public final class FalkorDbGraphStore implements MutableGraphStore, AutoCloseabl
         return List.copyOf(batches);
     }
 
-    private static Map<String, Object> entityProperties(EntityRecord entity) {
+    /**
+     * The vertex property bag written with {@code SET n += $properties}. Attributes are stored as
+     * one canonical-JSON STRING property ({@code "{}"} when empty) so re-saving always replaces the
+     * bag instead of leaving stale keys behind.
+     */
+    static Map<String, Object> entityProperties(EntityRecord entity) {
         var properties = new LinkedHashMap<String, Object>();
         properties.put("name", entity.name());
         properties.put("entity_type", entity.type());
@@ -534,10 +551,12 @@ public final class FalkorDbGraphStore implements MutableGraphStore, AutoCloseabl
         properties.put("aliases", entity.aliases());
         properties.put("source_id", RelationCanonicalizer.joinValues(entity.sourceChunkIds()));
         properties.put("file_path", entity.filePath());
+        properties.put("attributes", AttributeJsonCodec.toJson(entity.attributes()));
         return properties;
     }
 
-    private static Map<String, Object> relationProperties(RelationRecord relation) {
+    /** The edge property bag, mirroring {@link #entityProperties(EntityRecord)}. */
+    static Map<String, Object> relationProperties(RelationRecord relation) {
         var properties = new LinkedHashMap<String, Object>();
         properties.put("relation_id", relation.id());
         properties.put("src_id", relation.srcId());
@@ -547,6 +566,7 @@ public final class FalkorDbGraphStore implements MutableGraphStore, AutoCloseabl
         properties.put("weight", relation.weight());
         properties.put("source_id", relation.sourceId());
         properties.put("file_path", relation.filePath());
+        properties.put("attributes", AttributeJsonCodec.toJson(relation.attributes()));
         return properties;
     }
 
